@@ -1845,6 +1845,19 @@ the time the body is reaped there is no pose left to copy. Break it and bodies
 quietly stop leaving corpses — there is no error. There is a test at the
 bottom of `ragdoll.rs` that assembles both plugins for exactly this reason.
 
+**A direct hit that kills leaves gibs.** When the fatal `Damage` is
+`How::Direct` (a projectile striking the body), `apply_damage` marks it
+`BlownApart` at the hit, and `raise_ragdolls` calls `Ragdoll::blown_apart`:
+whichever of the hips (the root), torso (`Anatomy::carry`) and head is
+nearest the hit is lost with its parent and children, and each
+connected piece left is a corpse of its own. A piece is a `Ragdoll` over the
+whole rig that keeps only its own bones (`Ragdoll::keeps`) and hangs from the
+one bone whose parent it lacks, so the wire, the build and the mesh cache are
+unchanged; `build_body_meshes` hides the parts it lacks. The blast's own
+`RagdollShove` throws every piece, as it would have the whole corpse. Only the
+largest piece carries `CorpseOf`, so the death cam follows one. A splash kill
+leaves a whole corpse.
+
 **A corpse is replicated, not raised locally** — see "Corpses are props" below.
 The authority makes one and everybody else is sent the seed.
 

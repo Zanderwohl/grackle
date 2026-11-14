@@ -37,6 +37,16 @@
 //! the radius are shoved and the joints drag the rest, so one message serves a
 //! bullet and an explosion. [`fire_hitscan`] writes one for every hit; the
 //! fatal one lands on the corpse raised earlier in the same tick.
+//!
+//! # Gibs
+//!
+//! A body killed by a projectile's direct hit is [`BlownApart`]: whichever of
+//! its hips, torso and head is nearest the blast goes, with its parent and
+//! children, and each piece left
+//! is a corpse of its own ([`Ragdoll::blown_apart`]). A piece is a `Ragdoll`
+//! over the whole rig that keeps only its own bones, so the solver, the wire
+//! and the mesh cache need nothing new; the blast's own shove throws each
+//! piece. A splash kill leaves a whole corpse.
 
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -44,7 +54,7 @@ use serde::{Deserialize, Serialize};
 use crate::common::app_mode::AppMode;
 use crate::common::net::has_authority;
 use crate::common::class::ClassBuilds;
-use crate::common::skeleton::rig::{humanoid, Build, Scratch, BONES_ON_THE_STACK};
+use crate::common::skeleton::rig::{humanoid, Build, PosedBone, Scratch, BONES_ON_THE_STACK};
 use crate::common::damage::{falloff, PlayerId};
 use crate::common::movement_rules::MovementRules;
 use crate::common::skeleton::{Bone, Pose, Skeleton};
@@ -141,7 +151,8 @@ pub struct RagdollShove {
 #[derive(Component, Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CorpseBuild(pub Build);
 
-/// So the death cam can find its own. Only a player's corpse has one.
+/// So the death cam can find its own. Only a player's corpse has one; of a
+/// body blown apart, only its largest piece.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CorpseOf(pub PlayerId);
 
@@ -171,6 +182,23 @@ pub struct Ragdoll {
     anchor: Vec<Vec3>,
     /// Settled, and no longer being solved.
     asleep: bool,
+    /// Per bone, in [`Skeleton::bones`] order: whether this corpse has it. All
+    /// of them unless it is a piece of a body [`BlownApart`]; the points of a
+    /// bone it lacks are never moved.
+    kept: Vec<bool>,
+    /// The bone every kept bone hangs from: 0 for a whole body, and for a
+    /// piece the one bone whose parent it lacks. `root_seed` is this bone's.
+    root: usize,
+}
+
+/// The fatal hit was a projectile's direct hit at `at`, so the body is torn
+/// into pieces rather than left whole. Written by
+/// [`apply_damage`](crate::game::damage::apply_damage), read by
+/// [`raise_ragdolls`]; never sent, since the pieces are.
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub struct BlownApart {
+    /// World space.
+    pub at: Vec3,
 }
 
 /// A body that has already had its corpse made.
@@ -201,10 +229,65 @@ impl Ragdoll {
     /// `root` is the skeleton root (the feet) in world space. `carried` is the
     /// last tick's displacement, so a corpse keeps a runner's momentum.
     pub fn from_body(skeleton: &Skeleton, pose: &Pose, root: &Transform, carried: Vec3) -> Ragdoll {
+        Ragdoll::from_posed(&skeleton.posed_bones(pose, root), carried)
+    }
+
+    /// [`Ragdoll::from_body`], torn apart by a blast at `at`: whichever of the
+    /// hips, torso and head ([`deletable`]) is nearest it is lost with its
+    /// parent and children, and every connected piece left is a corpse. Empty
+    /// if nothing is left.
+    ///
+    /// Each piece keeps the whole body's masses, so a hand is as light as it
+    /// was on the arm.
+    pub fn blown_apart(skeleton: &Skeleton, pose: &Pose, root: &Transform, carried: Vec3, at: Vec3) -> Vec<Ragdoll> {
         let posed = skeleton.posed_bones(pose, root);
+        let bones = skeleton.bones();
+        let Some(struck) = deletable(skeleton)
+            .min_by(|&a, &b| distance_to_bone(at, &posed[a]).total_cmp(&distance_to_bone(at, &posed[b])))
+        else {
+            return Vec::new();
+        };
+
+        let mut kept = vec![true; bones.len()];
+        kept[struck] = false;
+        if let Some(parent) = bones[struck].parent {
+            kept[parent] = false;
+        }
+        for (index, bone) in bones.iter().enumerate() {
+            if bone.parent == Some(struck) {
+                kept[index] = false;
+            }
+        }
+
+        // Parents first, so a bone's piece is its parent's unless the parent
+        // is gone, in which case it starts a piece of its own.
+        let mut piece = vec![usize::MAX; bones.len()];
+        for (index, bone) in bones.iter().enumerate() {
+            if !kept[index] {
+                continue;
+            }
+            piece[index] = match bone.parent {
+                Some(parent) if kept[parent] => piece[parent],
+                _ => index,
+            };
+        }
+
+        let whole = Ragdoll::from_posed(&posed, carried);
+        (0..bones.len())
+            .filter(|&index| piece[index] == index)
+            .map(|root| Ragdoll {
+                root_seed: posed[root].rotation,
+                kept: piece.iter().map(|&of| of == root).collect(),
+                root,
+                ..whole.clone()
+            })
+            .collect()
+    }
+
+    fn from_posed(posed: &[PosedBone], carried: Vec3) -> Ragdoll {
         let mut points = Vec::with_capacity(posed.len() * 2);
 
-        for bone in &posed {
+        for bone in posed {
             // A bone's own volume, halved between its ends.
             let mass = (bone.thickness.x * bone.thickness.y * bone.length).max(1.0e-5) * 0.5;
             let radius = (bone.thickness.min_element() * 0.5).clamp(POINT_RADIUS.0, POINT_RADIUS.1);
@@ -232,6 +315,8 @@ impl Ragdoll {
             age: 0.0,
             resting: 0.0,
             asleep: false,
+            kept: vec![true; posed.len()],
+            root: 0,
         }
     }
 
@@ -254,7 +339,11 @@ impl Ragdoll {
         let mut touching = Scratch::<Touched, POINTS_ON_THE_STACK>::new(self.points.len(), Touched::default());
 
         let fall = Vec3::Y * fall * dt * dt;
-        for (point, contact) in self.points.iter_mut().zip(touching.iter_mut()) {
+        let kept = &self.kept;
+        for (index, (point, contact)) in self.points.iter_mut().zip(touching.iter_mut()).enumerate() {
+            if !kept[index / 2] {
+                continue;
+            }
             let carried = (point.at - point.previous) * (1.0 - DRAG);
             // Swept: a point thrown by an explosion can cover more than a wall's
             // thickness in a tick.
@@ -280,7 +369,11 @@ impl Ragdoll {
 
         self.settle(dt);
 
-        for ((point, was), contact) in self.points.iter_mut().zip(started.iter()).zip(touching.iter()) {
+        let kept = &self.kept;
+        for (index, ((point, was), contact)) in self.points.iter_mut().zip(started.iter()).zip(touching.iter()).enumerate() {
+            if !kept[index / 2] {
+                continue;
+            }
             let mut velocity = point.at - *was;
             // Into the surface and off it alike: a bounce is not wanted.
             for normal in contact.iter() {
@@ -308,7 +401,11 @@ impl Ragdoll {
         }
 
         let mut touched = false;
-        for point in &mut self.points {
+        let kept = &self.kept;
+        for (index, point) in self.points.iter_mut().enumerate() {
+            if !kept[index / 2] {
+                continue;
+            }
             let reach = falloff(point.at.distance(at), radius);
             if reach <= 0.0 {
                 continue;
@@ -338,9 +435,21 @@ impl Ragdoll {
         self.age
     }
 
-    /// The root bone's head, in world space.
+    /// The root bone's head, in world space; for a piece of a body, the head
+    /// of the bone it hangs from.
     pub fn pelvis(&self) -> Vec3 {
-        self.points[0].at
+        self.points[self.root * 2].at
+    }
+
+    /// Whether this corpse has bone `index`: false only for what a piece of a
+    /// body [`BlownApart`] lost or left to another piece.
+    pub fn keeps(&self, index: usize) -> bool {
+        self.kept.get(index).copied().unwrap_or(false)
+    }
+
+    /// How many bones this corpse has.
+    pub fn bones_kept(&self) -> usize {
+        self.kept.iter().filter(|&&kept| kept).count()
     }
 
     /// Where the solver has bone `index`'s two ends, in world space.
@@ -383,6 +492,12 @@ impl Ragdoll {
         let root = self.root_frame();
 
         for (index, bone) in bones.iter().enumerate() {
+            if !self.kept[index] {
+                // Left at rest: only its frame matters, as what a piece
+                // hanging from it is placed through.
+                frames[index] = loose_frame(bone, &frames[..index]);
+                continue;
+            }
             let (rest, world, _) = self.frame(index, bone, &frames[..index], root);
             // A bone's global rotation is `parent * bone.rest * pose`; `rest`
             // here is the first two.
@@ -392,7 +507,19 @@ impl Ragdoll {
 
         // Forward kinematics puts the root's head at
         // `root.translation + root.rotation * bone.head` with identity rotation.
-        Transform::from_translation(self.points[0].at - bones[0].head)
+        if self.root == 0 {
+            return Transform::from_translation(self.points[0].at - bones[0].head);
+        }
+        // A piece's root hangs from bones it lacks, so its head is wherever
+        // their rest frames put it; the transform takes up the difference.
+        let mut heads = Scratch::<Vec3, BONES_ON_THE_STACK>::new(bones.len(), Vec3::ZERO);
+        for (index, bone) in bones.iter().enumerate().take(self.root + 1) {
+            heads[index] = match bone.parent {
+                Some(parent) => heads[parent] + frames[parent] * bone.head,
+                None => bone.head,
+            };
+        }
+        Transform::from_translation(self.points[self.root * 2].at - heads[self.root])
     }
 
     /// Bone lengths, and the offsets that hold one bone onto the next.
@@ -403,9 +530,12 @@ impl Ragdoll {
     fn hold_together(&mut self, skeleton: &Skeleton) {
         let bones = skeleton.bones();
         for (index, bone) in bones.iter().enumerate() {
+            if !self.kept[index] {
+                continue;
+            }
             self.pull(index * 2, index * 2 + 1, bone.length);
 
-            let Some(parent) = bone.parent else { continue };
+            let Some(parent) = bone.parent.filter(|&parent| self.kept[parent]) else { continue };
             // `bone.head` is in the parent's rest frame; distance is frame-free.
             self.pull(parent * 2, index * 2, bone.head.length());
             let from_tail = bone.head - Vec3::Y * bones[parent].length;
@@ -422,6 +552,10 @@ impl Ragdoll {
         let mut frames = Scratch::<Quat, BONES_ON_THE_STACK>::new(bones.len(), Quat::IDENTITY);
 
         for (index, bone) in bones.iter().enumerate() {
+            if !self.kept[index] {
+                frames[index] = loose_frame(bone, &frames[..index]);
+                continue;
+            }
             let (_, world, direction) = self.frame(index, bone, &frames[..index], root);
             let head = self.points[index * 2].at;
 
@@ -443,11 +577,15 @@ impl Ragdoll {
     fn frame(&self, index: usize, bone: &Bone, frames: &[Quat], root: Quat) -> (Quat, Quat, Vec3) {
         let along = self.points[index * 2 + 1].at - self.points[index * 2].at;
 
-        let Some(parent) = bone.parent else {
+        let Some(parent) = bone.parent.filter(|&parent| self.kept[parent]) else {
             // A root has no joint. A limit against the world would weld the
-            // body upright.
+            // body upright. A piece's root is one too, its parent being gone.
             let direction = along.try_normalize().unwrap_or(root * Vec3::Y);
-            return (bone.rest, root, direction);
+            let rest = match bone.parent {
+                Some(parent) => frames[parent] * bone.rest,
+                None => bone.rest,
+            };
+            return (rest, root, direction);
         };
 
         // Limits are in the bone's own rest frame, which is why one table
@@ -460,7 +598,7 @@ impl Ragdoll {
     /// The root bone's frame now: [`Ragdoll::root_seed`] swung onto wherever its
     /// two points point. Derived from the seed each time, so nothing drifts.
     fn root_frame(&self) -> Quat {
-        let along = self.points[1].at - self.points[0].at;
+        let along = self.points[self.root * 2 + 1].at - self.points[self.root * 2].at;
         let direction = along.try_normalize().unwrap_or(self.root_seed * Vec3::Y);
         Quat::from_rotation_arc(self.root_seed * Vec3::Y, direction) * self.root_seed
     }
@@ -469,7 +607,11 @@ impl Ragdoll {
     /// [`CollisionWorld::depenetrate`], because the shortest way out of a floor
     /// is downwards, out of the level.
     fn clear_walls(&mut self, world: &CollisionWorld, touching: &mut [Touched]) {
-        for (point, contact) in self.points.iter_mut().zip(touching) {
+        let kept = &self.kept;
+        for (index, (point, contact)) in self.points.iter_mut().zip(touching).enumerate() {
+            if !kept[index / 2] {
+                continue;
+            }
             let out = world.depenetrate(point.at, point.half);
 
             // Being pushed out counts as contact. Otherwise a foot the rig
@@ -504,6 +646,7 @@ impl Ragdoll {
     }
 
     fn settle(&mut self, dt: f32) {
+        // A lacked bone's points never move, so they never count as drift.
         let drifted = self
             .points
             .iter()
@@ -527,6 +670,30 @@ impl Ragdoll {
 
 /// Solver points kept on the stack: two per bone.
 const POINTS_ON_THE_STACK: usize = BONES_ON_THE_STACK * 2;
+
+/// The frame of a bone a corpse lacks: its parent's with the joint at rest.
+fn loose_frame(bone: &Bone, frames: &[Quat]) -> Quat {
+    bone.parent.map_or(Quat::IDENTITY, |parent| frames[parent]) * bone.rest
+}
+
+/// The bones a blast may take: the hips (the root), the torso (the anatomy's
+/// `carry`) and the head. Asked of the anatomy, so a rig file's are its own;
+/// a rig naming one bone twice offers it once.
+fn deletable(skeleton: &Skeleton) -> impl Iterator<Item = usize> {
+    let anatomy = skeleton.anatomy();
+    let (torso, head) = (anatomy.carry, anatomy.head);
+    let hips = (!skeleton.bones().is_empty()).then_some(0);
+    let head = head.filter(|&head| Some(head) != torso && Some(head) != hips);
+    let torso = torso.filter(|&torso| Some(torso) != hips);
+    hips.into_iter().chain(torso).chain(head)
+}
+
+/// How far `at` is from the segment between a bone's two ends.
+fn distance_to_bone(at: Vec3, bone: &PosedBone) -> f32 {
+    let along = bone.tail - bone.head;
+    let t = ((at - bone.head).dot(along) / along.length_squared().max(1.0e-12)).clamp(0.0, 1.0);
+    at.distance(bone.head + along * t)
+}
 
 pub struct RagdollPlugin;
 
@@ -590,47 +757,67 @@ pub fn raise_ragdolls(
             Option<&PhysicsBody>,
             Option<&Name>,
             Option<&PlayerId>,
+            Option<&BlownApart>,
         ),
         (Added<Dying>, Without<Ragdolled>),
     >,
 ) {
-    for (entity, skeleton, pose, global, offset, tint, team, player, physics, name, id) in &bodies {
+    for (entity, skeleton, pose, global, offset, tint, team, player, physics, name, id, blown) in &bodies {
         // Per-tick displacement, which is the unit the solver keeps.
         let carried = physics.map_or(Vec3::ZERO, |body| body.current - body.previous);
-        let ragdoll = Ragdoll::from_body(skeleton, pose, &skeleton_root(global, offset), carried);
+        let root = skeleton_root(global, offset);
+        let pieces = match blown {
+            Some(blown) => Ragdoll::blown_apart(skeleton, pose, &root, carried, blown.at),
+            None => vec![Ragdoll::from_body(skeleton, pose, &root, carried)],
+        };
+        // The death cam follows one piece: the biggest, the first of equals.
+        let largest = pieces
+            .iter()
+            .enumerate()
+            .fold(None::<(usize, usize)>, |best, (index, piece)| match best {
+                Some((_, most)) if most >= piece.bones_kept() => best,
+                _ => Some((index, piece.bones_kept())),
+            })
+            .map(|(index, _)| index);
 
-        // Posed now, so the corpse is never drawn for a frame at the origin in
-        // its rest pose.
-        let (transform, pose) = ragdoll.pose(skeleton);
+        for (index, ragdoll) in pieces.into_iter().enumerate() {
+            // Posed now, so the corpse is never drawn for a frame at the origin
+            // in its rest pose.
+            let (transform, pose) = ragdoll.pose(skeleton);
 
-        let mut corpse = commands.spawn((
-            ragdoll,
-            // Not a `SkeletonAnimator`: the solver owns this pose.
-            skeleton.clone(),
-            pose,
-            transform,
-            Name::new(match name {
-                Some(name) => format!("Ragdoll of {name}"),
-                None => "Ragdoll".to_string(),
-            }),
-        ));
-        if let Some(tint) = tint {
-            corpse.insert(*tint);
-        }
-        if let Some(team) = team {
-            // Corpses keep their team color, so a pile of them shows which way
-            // a fight went.
-            corpse.insert(*team);
-        }
-        if let Some(player) = player {
-            corpse.insert(*player);
-        }
-        if let Some(id) = id {
-            corpse.insert(CorpseOf(*id));
-        }
+            let mut corpse = commands.spawn((
+                ragdoll,
+                // Not a `SkeletonAnimator`: the solver owns this pose.
+                skeleton.clone(),
+                pose,
+                transform,
+                Name::new(match (name, blown.is_some()) {
+                    (Some(name), false) => format!("Ragdoll of {name}"),
+                    (Some(name), true) => format!("Gib of {name}"),
+                    (None, false) => "Ragdoll".to_string(),
+                    (None, true) => "Gib".to_string(),
+                }),
+            ));
+            if let Some(tint) = tint {
+                corpse.insert(*tint);
+            }
+            if let Some(team) = team {
+                // Corpses keep their team color, so a pile of them shows which
+                // way a fight went.
+                corpse.insert(*team);
+            }
+            if let Some(player) = player {
+                corpse.insert(*player);
+            }
+            if let Some(id) = id
+                && Some(index) == largest
+            {
+                corpse.insert(CorpseOf(*id));
+            }
 
-        // Read off the rig the body actually had.
-        corpse.insert(CorpseBuild(skeleton.build().clone()));
+            // Read off the rig the body actually had.
+            corpse.insert(CorpseBuild(skeleton.build().clone()));
+        }
 
         commands.entity(entity).insert(Ragdolled);
     }
@@ -1503,6 +1690,223 @@ mod tests {
 
         world.run_system_once(clear_ragdolls).unwrap();
         assert_eq!(corpses(&mut world), 0);
+    }
+
+    /// Where the middle of a named bone stands in a body at rest at the origin.
+    fn middle_of(skeleton: &Skeleton, name: &str) -> Vec3 {
+        let placed = skeleton.posed_bones(&Pose::rest(), &Transform::IDENTITY)[skeleton.index_of(name).unwrap()];
+        (placed.head + placed.tail) * 0.5
+    }
+
+    fn kept_names(piece: &Ragdoll, skeleton: &Skeleton) -> Vec<&'static str> {
+        skeleton.bones().iter().enumerate().filter(|(index, _)| piece.keeps(*index)).map(|(_, bone)| bone.name).collect()
+    }
+
+    /// Fails if a blast at the chest keeps the chest or a bone touching it, or
+    /// leaves the head, the arms and the legs joined in fewer or more pieces
+    /// than five.
+    #[test]
+    fn a_body_blown_apart_at_the_chest_loses_it_and_its_neighbors() {
+        let skeleton = rig();
+        let at = middle_of(&skeleton, bone::CHEST);
+        let pieces = Ragdoll::blown_apart(&skeleton, &Pose::rest(), &Transform::IDENTITY, Vec3::ZERO, at);
+
+        let lost = [bone::CHEST, bone::PELVIS, bone::NECK, bone::CLAVICLE_L, bone::CLAVICLE_R];
+        let mut owners = vec![0; skeleton.bones().len()];
+        for piece in &pieces {
+            for (index, owned) in owners.iter_mut().enumerate() {
+                *owned += usize::from(piece.keeps(index));
+            }
+        }
+        for (bone, owned) in skeleton.bones().iter().zip(&owners) {
+            let expected = usize::from(!lost.contains(&bone.name));
+            assert_eq!(*owned, expected, "{} is in {owned} pieces", bone.name);
+        }
+
+        let mut shapes: Vec<Vec<&str>> = pieces.iter().map(|piece| kept_names(piece, &skeleton)).collect();
+        shapes.sort();
+        assert_eq!(shapes.len(), 5, "pieces: {shapes:?}");
+        assert!(shapes.contains(&vec![bone::HEAD]), "pieces: {shapes:?}");
+        assert!(shapes.contains(&vec![bone::THIGH_L, bone::SHIN_L, bone::FOOT_L]), "pieces: {shapes:?}");
+    }
+
+    /// Fails if a blast at a limb takes the limb rather than the nearest of
+    /// the hips, torso and head, or if a blast at the face takes anything but
+    /// the head.
+    #[test]
+    fn only_the_hips_torso_or_head_are_blown_away() {
+        let skeleton = rig();
+        let lost = |at: Vec3| -> Vec<&'static str> {
+            let pieces = Ragdoll::blown_apart(&skeleton, &Pose::rest(), &Transform::IDENTITY, Vec3::ZERO, at);
+            skeleton
+                .bones()
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| !pieces.iter().any(|piece| piece.keeps(*index)))
+                .map(|(_, bone)| bone.name)
+                .collect()
+        };
+
+        // A foot is nearest the hips; a hand, held at the side, the torso.
+        let by_the_foot = lost(middle_of(&skeleton, bone::FOOT_L));
+        assert!(by_the_foot.contains(&bone::PELVIS) && !by_the_foot.contains(&bone::FOOT_L), "{by_the_foot:?}");
+        let by_the_hand = lost(middle_of(&skeleton, bone::HAND_R));
+        assert!(!by_the_hand.contains(&bone::HAND_R), "{by_the_hand:?}");
+        assert!(by_the_hand.contains(&bone::CHEST) || by_the_hand.contains(&bone::PELVIS), "{by_the_hand:?}");
+
+        let by_the_face = lost(middle_of(&skeleton, bone::HEAD) + Vec3::new(0.0, 0.0, -0.3));
+        assert_eq!(by_the_face, vec![bone::NECK, bone::HEAD]);
+    }
+
+    /// Fails if a piece twitches at the moment it is torn off: each kept bone
+    /// is drawn where the body had it.
+    #[test]
+    fn a_piece_starts_where_its_bones_were() {
+        let skeleton = rig();
+        let pose = Pose::rest()
+            .with(bone::CHEST, Quat::from_rotation_x(0.4))
+            .with(bone::SHIN_L, Quat::from_rotation_x(-0.9))
+            .with(bone::UPPER_ARM_R, Quat::from_rotation_z(0.7));
+        let root = Transform::from_translation(Vec3::new(3.0, 0.0, -2.0)).with_rotation(Quat::from_rotation_y(1.1));
+        let was = skeleton.posed_bones(&pose, &root);
+        let at = (was[skeleton.index_of(bone::CHEST).unwrap()].head + was[skeleton.index_of(bone::CHEST).unwrap()].tail) * 0.5;
+
+        let pieces = Ragdoll::blown_apart(&skeleton, &pose, &root, Vec3::ZERO, at);
+        assert!(pieces.len() > 1);
+        for piece in &pieces {
+            let (placed, held) = piece.pose(&skeleton);
+            let now = skeleton.posed_bones(&held, &placed);
+            for (index, (before, after)) in was.iter().zip(&now).enumerate() {
+                if !piece.keeps(index) {
+                    continue;
+                }
+                assert!(
+                    before.head.abs_diff_eq(after.head, 1.0e-3) && before.tail.abs_diff_eq(after.tail, 1.0e-3),
+                    "{} moved: {} -> {}",
+                    before.name,
+                    before.head,
+                    after.head
+                );
+            }
+        }
+    }
+
+    /// Fails if a piece falls through the floor, stretches, never settles, or
+    /// moves the points of bones it lacks.
+    #[test]
+    fn every_piece_lands_and_settles_in_one_piece() {
+        let skeleton = rig();
+        let world = a_room();
+        for name in [bone::CHEST, bone::HEAD, bone::FOREARM_L, bone::SHIN_R, bone::PELVIS] {
+            let at = middle_of(&skeleton, name) + Vec3::new(0.0, 0.0, 0.1);
+            for mut piece in Ragdoll::blown_apart(&skeleton, &Pose::rest(), &Transform::IDENTITY, Vec3::ZERO, at) {
+                let lacked: Vec<(Vec3, Vec3)> = (0..skeleton.bones().len()).map(|index| piece.bone_points(index)).collect();
+                piece.shove(at, Push::Outward(9.0), 2.8, DT);
+                run(&mut piece, &skeleton, &world, 64 * 12);
+
+                let shape = kept_names(&piece, &skeleton);
+                assert!(piece.is_asleep(), "{shape:?} torn at {name} still moving");
+                for (index, bone) in skeleton.bones().iter().enumerate() {
+                    let (head, tail) = piece.bone_points(index);
+                    if !piece.keeps(index) {
+                        assert_eq!((head, tail), lacked[index], "{shape:?} moved {}, which it lacks", bone.name);
+                        continue;
+                    }
+                    assert!(head.y > -0.05 && tail.y > -0.05, "{shape:?}: {} went through the floor", bone.name);
+                    assert!((head.distance(tail) - bone.length).abs() < bone.length * 0.02, "{shape:?}: {} stretched", bone.name);
+                }
+            }
+        }
+    }
+
+    /// Fails if the blast that tore a body apart does not throw each piece
+    /// away from it.
+    #[test]
+    fn the_blast_throws_every_piece_away_from_it() {
+        let skeleton = rig();
+        let at = middle_of(&skeleton, bone::CHEST) + Vec3::new(0.0, 0.0, -0.2);
+        for mut piece in Ragdoll::blown_apart(&skeleton, &Pose::rest(), &Transform::IDENTITY, Vec3::ZERO, at) {
+            let before = piece.pelvis();
+            piece.shove(at, Push::Outward(9.0), 2.8, DT);
+            run(&mut piece, &skeleton, &CollisionWorld::default(), 3);
+            let after = piece.pelvis();
+            // Measured across the fall, which takes the vertical.
+            let flat = |v: Vec3| Vec3::new(v.x, 0.0, v.z);
+            assert!(
+                flat(after - at).length() > flat(before - at).length() + 0.01,
+                "{:?} was not thrown: {before} -> {after}",
+                kept_names(&piece, &skeleton)
+            );
+        }
+    }
+
+    /// The running game, killing a body with one hit of `how` at its chest:
+    /// how many corpses it leaves, and how many of them the death cam knows.
+    fn corpses_left_by(how: crate::common::damage::How) -> (usize, usize) {
+        use crate::common::damage::{Cause, Damage, DamageSource};
+        use crate::game::damage::DamagePlugin;
+        use crate::game::GamePlugin;
+
+        let mut app = App::new();
+        app.add_plugins(bevy::state::app::StatesPlugin);
+        app.add_plugins(bevy::input::InputPlugin);
+        app.add_plugins(bevy::time::TimePlugin);
+        app.add_plugins(GamePlugin);
+        app.add_plugins(DamagePlugin);
+        app.world_mut().resource_mut::<NextState<AppMode>>().set(AppMode::Play);
+        app.update();
+
+        let body = app
+            .world_mut()
+            .spawn((rig(), Pose::rest(), Transform::IDENTITY, GlobalTransform::IDENTITY, Damageable::with_health(100), DamageLog::default(), PlayerId(11)))
+            .id();
+        app.update();
+
+        app.world_mut().write_message(Damage {
+            target: body,
+            source: DamageSource::World,
+            amount: 500,
+            point: middle_of(&rig(), bone::CHEST),
+            from: None,
+            kill_shove: None,
+            cause: Cause::of(None, how),
+        });
+        app.world_mut().run_schedule(FixedUpdate);
+
+        let corpses = app.world_mut().query::<&Ragdoll>().iter(app.world()).count();
+        let followed = app.world_mut().query::<&CorpseOf>().iter(app.world()).count();
+        (corpses, followed)
+    }
+
+    /// Fails if a direct hit's kill leaves a whole corpse, or the death cam is
+    /// given more than one piece to follow.
+    #[test]
+    fn a_direct_hit_that_kills_blows_the_body_apart() {
+        let (corpses, followed) = corpses_left_by(crate::common::damage::How::Direct);
+        assert!(corpses > 1, "{corpses} corpse left");
+        assert_eq!(followed, 1);
+    }
+
+    /// Fails if splash, or a bullet, tears a body apart.
+    #[test]
+    fn any_other_kill_leaves_the_body_whole() {
+        for how in [crate::common::damage::How::Splash, crate::common::damage::How::Hitscan] {
+            assert_eq!(corpses_left_by(how), (1, 1), "{how:?}");
+        }
+    }
+
+    /// Fails if a piece crosses the wire as a whole body, or posed elsewhere
+    /// somewhere other than where the authority has it.
+    #[test]
+    fn a_piece_crosses_the_wire_as_the_piece_it_is() {
+        let skeleton = rig();
+        let pieces = Ragdoll::blown_apart(&skeleton, &Pose::rest(), &Transform::IDENTITY, Vec3::ZERO, middle_of(&skeleton, bone::CHEST));
+        for piece in &pieces {
+            let wire = postcard::to_allocvec(piece).expect("a piece goes on the wire");
+            let back: Ragdoll = postcard::from_bytes(&wire).expect("and comes back off it");
+            assert_eq!(kept_names(&back, &skeleton), kept_names(piece, &skeleton));
+            assert_eq!(back.pose(&skeleton).0, piece.pose(&skeleton).0);
+        }
     }
 
     /// Radius zero does nothing, rather than dividing by zero.
