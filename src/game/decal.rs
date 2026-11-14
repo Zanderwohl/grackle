@@ -120,7 +120,22 @@ impl TransientKind {
     fn pictures(self) -> &'static [&'static str] {
         match self {
             TransientKind::BulletHole => &["bullet_hole_1.png", "bullet_hole_2.png"],
-            TransientKind::Blood => &["blood_1.png", "blood_2.png", "blood_3.png", "blood_4.png"],
+            TransientKind::Blood => &[
+                "blood_1.png",
+                "blood_2.png",
+                "blood_3.png",
+                "blood_4.png",
+                "blood_5.png",
+                "blood_6.png",
+                "blood_7.png",
+                "blood_8.png",
+                "blood_9.png",
+                "blood_10.png",
+                "blood_11.png",
+                "blood_12.png",
+                "blood_13.png",
+                "blood_14.png",
+            ],
             TransientKind::Scorch => &["scorch_1.png", "scorch_2.png"],
         }
     }
