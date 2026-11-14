@@ -15,15 +15,14 @@ use crate::common::world_surface::Face;
 /// Meters per lightmap texel.
 pub const TEXEL: f32 = 0.25;
 
-/// A map's default [`Brightness`](crate::common::sky::Brightness): what a texel no light reaches is
-/// lit with, in `GlobalAmbientLight::brightness` units, since a lightmap replaces the ambient term on
-/// the meshes that carry one.
+/// The default [`Brightness`](crate::common::sky::Brightness) ambient, in
+/// `GlobalAmbientLight::brightness` units: a lightmap replaces the ambient term on its meshes.
 pub const BASE_AMBIENT: f32 = 100.0;
 
-/// The default for what the sun adds to a surface square on to it, in the same units.
+/// The default sun brightness, in the same units.
 pub const SUN_BRIGHTNESS: f32 = 1500.0;
 
-/// The default for what a sky color of 1 is worth, in the same units.
+/// The default sky brightness, in the same units.
 pub const SKY_BRIGHTNESS: f32 = 600.0;
 
 /// Of every surface, for the bounce.
@@ -45,8 +44,7 @@ const PADDING: i32 = 1;
 /// where a ray would start inside the wall it meets.
 const INSET: f32 = 0.08;
 
-/// Every constant a bake's output depends on, for keying the lightmap cache. The map's brightness
-/// is keyed with the rest of its settings.
+/// Every constant a bake's output depends on, for keying the lightmap cache.
 pub fn tuning() -> [u32; 5] {
     [TEXEL, ALBEDO, AMBIENT_STEP, PADDING as f32, INSET].map(f32::to_bits)
 }
@@ -433,7 +431,6 @@ mod tests {
         );
     }
 
-    /// A closed room is lit by the map's ambient and nothing else, whatever that is set to.
     #[test]
     fn a_closed_room_is_the_maps_ambient() {
         let rooms = [Room::new(Vec3::ZERO, Vec3::new(4.0, 3.0, 4.0))];

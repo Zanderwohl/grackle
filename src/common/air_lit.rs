@@ -1,8 +1,6 @@
-//! The material for things that move, which carry no lightmap: the standard one, lit by where the
-//! thing stands. [`crate::game::sunlit`] packs that into each mesh's `MeshTag`
-//! ([`crate::common::air_light::pack`]): the light in the air, which scales the ambient term, and
-//! whether it is in the sun, which adds the sun. A mesh with no tag draws as plain standard. See
-//! "Things that move" in documentation/sun.md.
+//! The material for things with no lightmap: standard, with the ambient scaled and the sun added
+//! from the mesh's `MeshTag` ([`crate::common::air_light::pack`]). A mesh with no tag draws as plain
+//! standard. See documentation/sun.md.
 
 use bevy::asset::embedded_asset;
 use bevy::pbr::{ExtendedMaterial, MaterialExtension};
@@ -14,8 +12,7 @@ pub type LitMaterial = ExtendedMaterial<StandardMaterial, AirLit>;
 
 #[derive(Asset, AsBindGroup, Reflect, Debug, Clone, Default)]
 pub struct AirLit {
-    /// Unit, toward the sun, and its illuminance in `w`. The same on every lit material, kept so
-    /// by `game::sunlit`.
+    /// Unit, toward the sun, and its illuminance in `w`.
     #[uniform(100)]
     pub sun: Vec4,
 }
@@ -30,8 +27,8 @@ pub fn lit(base: StandardMaterial) -> LitMaterial {
     ExtendedMaterial { base, extension: AirLit::default() }
 }
 
-/// Registers the material. Every plugin that makes one adds this through [`ensure`], since bodies
-/// and props are made by plugins that also stand alone in tests.
+/// Added through [`ensure`] by every plugin that makes the material, since those plugins also run
+/// alone in tests.
 pub struct AirLitPlugin;
 
 impl Plugin for AirLitPlugin {

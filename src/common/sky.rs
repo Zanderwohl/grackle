@@ -125,15 +125,13 @@ impl SunPosition {
     }
 }
 
-/// How strong the light from outside is, in `GlobalAmbientLight::brightness` units, which a
-/// lightmap texel shares. Set by the mapper, so a night map can have a dim moon and dim corners.
+/// In `GlobalAmbientLight::brightness` units, which a lightmap texel shares.
 #[derive(Resource, Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Brightness {
-    /// What every surface and body gets with no sun or sky reaching it. Above zero: a body's
-    /// ambient is drawn as a multiple of it.
+    /// What a surface gets with no sun or sky reaching it. At least [`LEAST_AMBIENT`].
     pub ambient: f32,
-    /// What the sun adds to a surface square on to it.
+    /// On a surface square on to the sun.
     pub sun: f32,
     /// What a sky color of 1 is worth.
     pub sky: f32,
@@ -145,11 +143,10 @@ impl Default for Brightness {
     }
 }
 
-/// The least [`Brightness::ambient`]: a body's ambient is drawn as a multiple of it.
+/// A body's ambient is drawn as a multiple of the ambient, so it cannot be zero.
 pub const LEAST_AMBIENT: f32 = 1.0;
 
 impl Brightness {
-    /// Within what can be drawn, whatever a file said.
     pub fn clamped(self) -> Self {
         Self { ambient: self.ambient.max(LEAST_AMBIENT), sun: self.sun.max(0.0), sky: self.sky.max(0.0) }
     }
@@ -200,7 +197,6 @@ mod tests {
         }
     }
 
-    /// A file can say anything; what is published can be drawn.
     #[test]
     fn a_brightness_from_a_file_is_kept_drawable() {
         let clamped = Brightness { ambient: 0.0, sun: -5.0, sky: 300.0 }.clamped();

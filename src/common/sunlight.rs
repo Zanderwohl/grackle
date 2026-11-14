@@ -37,7 +37,6 @@ pub fn tuning() -> [u32; 5] {
 pub struct Daylight {
     /// Unit, toward the sun.
     pub toward: Vec3,
-    /// What a surface no light reaches gets.
     pub base: f32,
     /// On a surface square on to the sun.
     pub sun: f32,
@@ -106,8 +105,7 @@ impl LitSurface {
         None
     }
 
-    /// Whether a point in the air sees the sun: one ray at the sun's center, cheap enough for every
-    /// body every frame.
+    /// One ray at the sun's center, cheap enough for every body every frame.
     pub fn sees_sun(&self, point: Vec3, toward: Vec3) -> bool {
         self.first_hit(point, toward).is_some_and(|(face, _)| self.sky[face])
     }
@@ -151,15 +149,13 @@ impl LitSurface {
         total / GATHER_RAYS as f32
     }
 
-    /// [`Self::ambient`] for a point in the air, averaged over the whole sphere rather than a
-    /// hemisphere: what a surface facing any way at that point would get, on average.
+    /// [`Self::ambient`] averaged over the whole sphere: what a surface facing any way there gets on
+    /// average.
     pub fn ambient_in_air(&self, point: Vec3, light: &Daylight) -> Vec3 {
         let total: Vec3 = (0..AIR_RAYS).map(|i| self.incoming(point, spiral(i, AIR_RAYS), light)).sum();
         total / AIR_RAYS as f32
     }
 
-    /// What arrives at `origin` from `direction`: the sky's color where the ray escapes, the sun off
-    /// the surface it hits at the bounce's albedo, or nothing.
     fn incoming(&self, origin: Vec3, direction: Vec3, light: &Daylight) -> Vec3 {
         let Some((face, t)) = self.first_hit(origin, direction) else { return Vec3::ZERO };
         if self.sky[face] {
@@ -175,15 +171,14 @@ impl LitSurface {
         if sunlit { Vec3::splat(light.sun * facing * light.albedo) } else { Vec3::ZERO }
     }
 
-    /// Whether `point` is inside the map: a ray straight up and one straight down both meet a face
-    /// from its air side. Not watertight — a point in the slab between two stacked rooms passes —
-    /// which costs a sample a body standing in a room never reads.
+    /// A ray up and a ray down both meet a face from its air side. A point in the slab between two
+    /// stacked rooms passes too, which costs a sample no body reads.
     pub fn encloses(&self, point: Vec3) -> bool {
         self.first_hit(point, Vec3::Y).is_some() && self.first_hit(point, Vec3::NEG_Y).is_some()
     }
 }
 
-/// The `i`th of `n` directions spread evenly over the unit sphere, the same every time.
+/// The `i`th of `n` directions spread evenly over the unit sphere.
 fn spiral(i: usize, n: usize) -> Vec3 {
     const GOLDEN_ANGLE: f32 = 2.399_963;
     let y = 1.0 - 2.0 * (i as f32 + 0.5) / n as f32;

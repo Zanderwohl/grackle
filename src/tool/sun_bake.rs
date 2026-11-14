@@ -50,7 +50,7 @@ const CACHE_FOLDER: &str = "lightmap";
 pub struct SunBake {
     /// The light standing now, by `Room` entity. May since have been carried onto new layouts.
     lit: HashMap<Entity, RoomLight>,
-    /// The light in the air, kept like `lit` until a bake replaces it.
+    /// Kept like `lit` until a bake replaces it.
     air: AirLight,
     bake: BackgroundBake<Job>,
     /// The last snapshot looked for on disk, so a miss is not read again every frame.
@@ -133,9 +133,8 @@ impl SunBake {
     }
 }
 
-/// The map's surface as it stands, for asking whether a point in the air is in the sun. Rebuilt the
-/// moment the faces or what is sky change, without waiting for a bake: things that move are lit
-/// live (see `game::sunlit`).
+/// The map's surface for the sun on things that move, rebuilt when the faces or the sky paint
+/// change rather than waiting for a bake.
 #[derive(Resource, Default)]
 pub struct OpenSky {
     surface: Option<LitSurface>,
@@ -173,7 +172,6 @@ impl OpenSky {
     }
 }
 
-/// Whether each face is sky, from whether its slot is.
 fn sky_per_face(faces: &[Face], is_sky: [bool; 3]) -> Vec<bool> {
     faces
         .iter()
@@ -184,7 +182,6 @@ fn sky_per_face(faces: &[Face], is_sky: [bool; 3]) -> Vec<bool> {
         .collect()
 }
 
-/// A bake as written to disk.
 #[derive(serde::Serialize, serde::Deserialize)]
 struct CachedSun {
     rooms: Vec<CachedRoom>,
@@ -215,7 +212,6 @@ struct RoomLight {
     image: Handle<Image>,
 }
 
-/// What a bake hands back.
 struct BakedSun {
     rooms: Vec<BakedLight>,
     air: AirLight,
@@ -468,16 +464,15 @@ fn auto_bake_sunlight(
     if let Some(baked) = state.bake.poll() {
         state.landed(baked, &mut images);
     }
-    // Half-rebuilt rooms leave holes for light to come through, so the bake waits for them; the sun
-    // on things that move is drawn live and follows the rooms as they are rebuilt.
+    // Half-rebuilt rooms leave holes for light to come through, so the bake waits for them. The sun
+    // on things that move is drawn live and does not wait.
     if !rooms.is_settled() {
         if inputs_changed {
             open_sky.refresh(&Snapshot::take(&bakes, &paint, &palette, &sun, *sky, *brightness), &bakes);
         }
         return;
     }
-    // With nothing to bake, a snapshot only tells stale from up to date, so it is taken only on a
-    // change.
+    // With nothing to bake, a snapshot only says whether the light is stale.
     if !(state.bake.would_bake() || inputs_changed) {
         return;
     }
@@ -658,7 +653,6 @@ mod tests {
         assert_eq!(lightmaps(&app), first);
     }
 
-    /// The map's brightness is part of what was baked, so changing it between rounds bakes again.
     #[test]
     fn a_round_after_the_brightness_changed_bakes_again() {
         let mut app = headless();

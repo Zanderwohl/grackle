@@ -423,8 +423,8 @@ pub struct BakedRoomGeometry {
     pub faces: Vec<world_surface::Face>,
     /// [`lightmap::faces_hash`] of `faces`: which lightmap layout its meshes' `UV_1` is.
     pub faces_hash: u64,
-    /// The bounds of the air it holds, or `None` for a solid. Not its faces' bounds: a room whose
-    /// walls neighbors opened up has faces covering little of its air.
+    /// `None` for a solid. Not its faces' bounds, which miss the air of a room whose walls
+    /// neighbors opened up.
     pub air: Option<(Vec3, Vec3)>,
 }
 

@@ -1,9 +1,6 @@
-//! The light in the air, for things that carry no lightmap: what a point sees all round it, baked
-//! with the lightmaps on a lattice fixed in the world, so neighboring rooms share samples and a
-//! body crossing a threshold sees no step. See "Things that move" in documentation/sun.md.
-//!
-//! The lattice sits half a step off the meter grid rooms are laid out on, so no sample lands on a
-//! wall.
+//! The light in the air for things with no lightmap, baked with the lightmaps on a lattice fixed
+//! in the world, so neighboring rooms share samples. The lattice sits half a step off the meter
+//! grid rooms are laid out on, so no sample lands on a wall. See documentation/sun.md.
 
 use std::collections::HashMap;
 
@@ -11,7 +8,7 @@ use bevy::prelude::*;
 
 use crate::common::sunlight::{Daylight, LitSurface};
 
-/// Meters between samples. Coarse on purpose: ambient light is smooth, and a body is a meter wide.
+/// Meters between samples. Ambient light is smooth and a body is a meter wide.
 pub const AIR_STEP: f32 = 2.0;
 
 /// In lightmap units: the map's ambient plus sky and one bounce, as a texel is.
@@ -21,7 +18,6 @@ pub struct AirLight {
 }
 
 impl AirLight {
-    /// Every lattice point inside some room's bounds and inside the map, gathered.
     pub fn bake(rooms: &[(Vec3, Vec3)], surface: &LitSurface, light: &Daylight) -> AirLight {
         let mut samples = HashMap::new();
         for &(min, max) in rooms {
@@ -44,8 +40,7 @@ impl AirLight {
         AirLight { samples }
     }
 
-    /// Trilinear between the samples round `point`, over whichever of the eight exist — one inside
-    /// a wall does not — or `None` with none near.
+    /// Trilinear over whichever of the eight samples round `point` exist; one inside a wall does not.
     pub fn at(&self, point: Vec3) -> Option<Vec3> {
         let f = lattice(point);
         let base = f.floor();
@@ -89,10 +84,9 @@ fn world(cell: IVec3) -> Vec3 {
 }
 
 
-/// How a thing that moves is lit where it stands, as a `MeshTag`: `ambient` (a multiple of the
-/// global ambient) as three 8-bit mantissas and a 7-bit exponent biased by 64, and whether it is in
-/// the sun in the top bit. Never 0, so a mesh with no tag can mean "unchanged". `air_lit.wesl`
-/// decodes it.
+/// As a `MeshTag`: `ambient`, a multiple of the global ambient, as three 8-bit mantissas and a
+/// 7-bit exponent biased by 64, and `sunlit` in the top bit. Never 0, which means no tag.
+/// `air_lit.wesl` decodes it.
 pub fn pack(ambient: Vec3, sunlit: bool) -> u32 {
     let sun = u32::from(sunlit) << 31;
     let ambient = ambient.max(Vec3::ZERO);
@@ -160,8 +154,7 @@ mod tests {
         assert!(!air.is_empty());
     }
 
-    /// One sky over two rooms side by side: walking across the threshold, the light changes no
-    /// more in the step across it than in the steps either side.
+    /// Fails if the light steps at a threshold more than along the rest of the walk.
     #[test]
     fn the_air_runs_on_across_a_threshold() {
         let air = bake(&courtyard(), &[0, 1]);

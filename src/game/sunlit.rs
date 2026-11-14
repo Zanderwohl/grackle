@@ -1,11 +1,7 @@
-//! How things that move are lit, since they carry no lightmap: bodies, corpses, placed props and
-//! projectiles. Each one's meshes get a `MeshTag` ([`air_light::pack`]) holding the light in the
-//! air where it stands ([`AirLight`]) and whether a ray from it reaches sky ([`OpenSky`]), and their
-//! material ([`LitMaterial`]) scales its ambient by the first and adds the sun by the second. See
-//! "Things that move" in documentation/sun.md.
-//!
-//! The sun is a switch, not a fade: a body half out of a doorway is one or the other. It is not a
-//! `DirectionalLight`, which Bevy would apply to every mesh a camera draws, walls included.
+//! Lighting for things that carry no lightmap: bodies, corpses, placed props and projectiles. Each
+//! one's meshes get a `MeshTag` ([`air_light::pack`]) with the air's light where it stands and
+//! whether one ray from it reaches sky, which [`LitMaterial`] reads. Not a `DirectionalLight`:
+//! Bevy applies one to every mesh a camera draws, walls included. See documentation/sun.md.
 
 use std::f32::consts::PI;
 
@@ -25,15 +21,13 @@ use crate::game::projectile::Projectile;
 use crate::game::world_prop::WorldProp;
 use crate::tool::sun_bake::{OpenSky, SunBake};
 
-/// Where a body's sun ray starts, above its feet: about its chest.
+/// Meters above a body's feet that its sun ray starts.
 const CHEST: f32 = 1.2;
 
-/// Where any other moving thing's sun ray starts, above its origin, so a prop standing on a
-/// floor does not start its ray in the floor.
+/// Meters above any other thing's origin, so a prop's ray does not start in the floor.
 const ABOVE_ORIGIN: f32 = 0.1;
 
-/// Every lit material carries the sun, so one made since it last moved is caught too. Read before
-/// it is written, so a material already right is not marked changed.
+/// Read before written, so a material already right is not marked changed.
 fn keep_the_sun_on_lit_materials(
     position: Res<SunPosition>,
     brightness: Res<Brightness>,
@@ -44,8 +38,8 @@ fn keep_the_sun_on_lit_materials(
     if !(added || position.is_changed() || brightness.is_changed()) {
         return;
     }
-    // Bevy's diffuse is albedo over π times illuminance, and a lightmap texel is albedo times its
-    // value, so this makes a body facing the sun as bright as a wall facing it.
+    // Bevy's diffuse is albedo / π × illuminance and a texel is albedo × value, so × π matches a
+    // body facing the sun to a wall facing it.
     let sun = position.toward().extend(brightness.sun * PI);
     let stale: Vec<AssetId<LitMaterial>> =
         materials.iter().filter(|(_, material)| material.extension.sun != sun).map(|(id, _)| id).collect();
@@ -56,7 +50,6 @@ fn keep_the_sun_on_lit_materials(
     }
 }
 
-/// Writes `tag` onto one mesh if it differs, or takes the tag off for `None`.
 fn retag(entity: Entity, tag: Option<u32>, current: Option<&MeshTag>, commands: &mut Commands) {
     match (tag, current.map(|current| current.value)) {
         (Some(wanted), current) if current != Some(wanted) => {
@@ -69,8 +62,7 @@ fn retag(entity: Entity, tag: Option<u32>, current: Option<&MeshTag>, commands: 
     }
 }
 
-/// The global ambient is the map's while the map is shown, which lightmapped walls ignore and
-/// things that move scale. The other modes light their own scenes, so they keep the default.
+/// The other modes light their own scenes, so they keep the default.
 fn follow_the_map_ambient(mode: Res<State<AppMode>>, brightness: Res<Brightness>, mut ambient: ResMut<GlobalAmbientLight>) {
     let wanted = if mode.get().shows_the_world() { brightness.ambient } else { BASE_AMBIENT };
     if ambient.brightness != wanted {
@@ -78,15 +70,13 @@ fn follow_the_map_ambient(mode: Res<State<AppMode>>, brightness: Res<Brightness>
     }
 }
 
-/// How a thing standing at `probe` is lit, as its tag. Its ambient is over the global one, which is
-/// the map's.
+/// The ambient is a multiple of `base`, the global ambient.
 fn tag_at(probe: Vec3, toward: Vec3, open_sky: &OpenSky, air: &AirLight, base: f32) -> u32 {
     let ambient = air.at(probe).map_or(Vec3::ONE, |light| light / base);
     air_light::pack(ambient, open_sky.sees_sun(probe, toward))
 }
 
-/// Every frame, since a body walks out of a doorway without anything about it changing but where
-/// it is. A mesh's tag is written only when it changes. The viewmodel's meshes take the viewed body's.
+/// Every frame: a body can walk into the sun with nothing changing but its position.
 #[allow(clippy::type_complexity)]
 fn light_what_moves(
     mode: Res<State<AppMode>>,
@@ -107,7 +97,7 @@ fn light_what_moves(
     for (root, at, body, local, watched) in &roots {
         let probe = at.translation() + Vec3::Y * if body { CHEST } else { ABOVE_ORIGIN };
         let tag = shows_the_world.then(|| tag_at(probe, toward, &open_sky, sun_bake.air(), brightness.ambient));
-        // The viewmodel shows whichever body is viewed: ours, or the one being spectated.
+        // The viewmodel shows ours, or the one being spectated.
         if local || watched {
             ours = tag;
         }
