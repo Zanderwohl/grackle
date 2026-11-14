@@ -1041,6 +1041,8 @@ impl AnimTabs<'_> {
 
     /// Tracks are picked, added, reordered and removed on the strip.
     fn track_section(&mut self, ui: &mut Ui, clip: &Clip) {
+        // The rig on screen, as the Problems panel uses.
+        let rig = crate::common::skeleton::humanoid(self.builds.of(self.figure.0.unwrap_or(Class::Mercenary)));
         if clip.tracks.is_empty() {
             ui.label(get!("anim.no_tracks"));
             return;
@@ -1133,7 +1135,7 @@ impl AnimTabs<'_> {
                     egui::ComboBox::from_id_salt("anim_bone")
                         .selected_text(bone.clone())
                         .show_ui(ui, |ui| {
-                            for name in default_humanoid().bones().iter().map(|b| b.name) {
+                            for name in rig.bones().iter().map(|b| b.name) {
                                 if ui.selectable_label(bone == name, name).clicked()
                                     && bone != name
                                 {
@@ -1150,7 +1152,7 @@ impl AnimTabs<'_> {
                     let mut set = pole.is_some();
                     if ui.checkbox(&mut set, get!("anim.label.pole")).changed() {
                         // Seeded with the default, so switching the override on changes nothing until edited.
-                        let seed = crate::common::skeleton::default_humanoid()
+                        let seed = rig
                             .anatomy()
                             .limb(chain.key())
                             .map_or(Vec3::NEG_Z, |limb| limb.pole);
@@ -1417,6 +1419,17 @@ impl AnimTabs<'_> {
         let mut problems = clip.problems(|bone| rig.index_of(bone).is_some());
         for track in self.played_as().1.uncovered_tracks(clip, rig) {
             problems.push(ClipProblem { track: Some(track), message: get!("anim.problem.unclaimed") });
+        }
+        // `Timing::LeftFoot` and `RightFoot` name the rig's first two feet.
+        for (index, track) in clip.tracks.iter().enumerate() {
+            let needs = match track.timing {
+                Timing::Clip => 0,
+                Timing::LeftFoot => 1,
+                Timing::RightFoot => 2,
+            };
+            if rig.anatomy().feet.len() < needs {
+                problems.push(ClipProblem { track: Some(index), message: get!("anim.problem.no_foot") });
+            }
         }
         problems
     }

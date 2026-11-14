@@ -172,6 +172,8 @@ pub struct Bone {
 /// A rig: bones in dependency order, plus the numbers they were built from.
 #[derive(Component, Clone, Debug)]
 pub struct Skeleton {
+    /// Which builder made it: two rigs of one build are still different bodies.
+    kind: &'static str,
     bones: Vec<Bone>,
     proportions: Proportions,
     anatomy: super::anatomy::Anatomy,
@@ -194,6 +196,10 @@ impl Skeleton {
 
     pub fn anatomy(&self) -> &super::anatomy::Anatomy {
         &self.anatomy
+    }
+
+    pub fn kind(&self) -> &'static str {
+        self.kind
     }
 
     /// Forward kinematics into world space. `root` places the feet, the same
@@ -495,7 +501,10 @@ pub fn humanoid(proportions: Proportions) -> Skeleton {
     }
 
     let anatomy = humanoid_anatomy(&builder.bones, proportions);
-    Skeleton { bones: builder.bones, proportions, anatomy }
+    for problem in anatomy.problems(&builder.bones) {
+        warn!("The humanoid rig: {problem}");
+    }
+    Skeleton { kind: "humanoid", bones: builder.bones, proportions, anatomy }
 }
 
 /// How much of the aim's pitch the neck takes; the head takes the rest. A head alone at eighty
@@ -518,12 +527,14 @@ fn humanoid_anatomy(bones: &[Bone], proportions: Proportions) -> super::anatomy:
     };
     // Knees bend forwards, even in a sidestep.
     let leg = |name, chain, side| Limb { name, chain, side, pole: Vec3::NEG_Z, region: Regions::LEGS, straightens: true };
+    use super::clip::ChainRef;
     let limbs = vec![
-        arm("right_arm", ik::RIGHT_ARM, 1.0, Regions::ARM_R),
-        arm("left_arm", ik::LEFT_ARM, -1.0, Regions::ARM_L),
-        leg("right_leg", ik::RIGHT_LEG, 1.0),
-        leg("left_leg", ik::LEFT_LEG, -1.0),
+        arm(ChainRef::RightArm.key(), ik::RIGHT_ARM, 1.0, Regions::ARM_R),
+        arm(ChainRef::LeftArm.key(), ik::LEFT_ARM, -1.0, Regions::ARM_L),
+        leg(ChainRef::RightLeg.key(), ik::RIGHT_LEG, 1.0),
+        leg(ChainRef::LeftLeg.key(), ik::LEFT_LEG, -1.0),
     ];
+    let limb = |chain: ChainRef| limbs.iter().position(|limb| limb.name == chain.key());
     let leg_meters = [ik::LEFT_LEG.upper, ik::LEFT_LEG.lower]
         .iter()
         .filter_map(|name| index(name))
@@ -531,9 +542,11 @@ fn humanoid_anatomy(bones: &[Bone], proportions: Proportions) -> super::anatomy:
         .sum();
 
     Anatomy {
-        feet: vec![Foot { limb: 3, phase: 0.0 }, Foot { limb: 2, phase: 0.5 }],
-        hands: [Some(0), Some(1)],
-        limbs,
+        feet: [(ChainRef::LeftLeg, 0.0), (ChainRef::RightLeg, 0.5)]
+            .into_iter()
+            .filter_map(|(chain, phase)| Some(Foot { limb: limb(chain)?, phase }))
+            .collect(),
+        hands: [limb(ChainRef::RightArm), limb(ChainRef::LeftArm)],
         carry: index(bone::CHEST),
         head: index(bone::HEAD),
         look: [(bone::NECK, NECK_SHARE), (bone::HEAD, 1.0 - NECK_SHARE)]
@@ -550,6 +563,7 @@ fn humanoid_anatomy(bones: &[Bone], proportions: Proportions) -> super::anatomy:
         leg: leg_meters,
         arm: proportions.arm_meters(),
         hip: proportions.hip_meters(),
+        limbs,
     }
 }
 
@@ -687,14 +701,12 @@ mod tests {
         for class in Class::iter() {
             let skeleton = humanoid(crate::common::class::ClassBuilds::shipped().of(class));
             let anatomy = skeleton.anatomy();
-            assert_eq!(anatomy.regions.len(), skeleton.bones().len(), "{class:?}: a region per bone");
-            for limb in &anatomy.limbs {
-                for name in [limb.chain.upper, limb.chain.lower].into_iter().chain(limb.chain.tip) {
-                    assert!(skeleton.index_of(name).is_some(), "{class:?}: {} names {name}", limb.name);
-                }
-            }
-            assert!(anatomy.feet.iter().all(|foot| foot.limb < anatomy.limbs.len()), "{class:?}: a foot names no limb");
-            assert!(anatomy.hand(0).is_some() && anatomy.hand(1).is_some(), "{class:?}: a hand is missing");
+            assert_eq!(anatomy.problems(skeleton.bones()), Vec::<String>::new(), "{class:?}");
+            let named = |limb: Option<&super::super::anatomy::Limb>| limb.map(|limb| limb.name);
+            assert_eq!(named(anatomy.hand(0)), Some("right_arm"), "{class:?}: the trigger hand");
+            assert_eq!(named(anatomy.hand(1)), Some("left_arm"), "{class:?}: the support hand");
+            let feet: Vec<_> = anatomy.feet.iter().map(|foot| anatomy.limbs[foot.limb].name).collect();
+            assert_eq!(feet, ["left_leg", "right_leg"], "{class:?}: the feet");
             assert!(anatomy.carry.is_some() && anatomy.head.is_some(), "{class:?}: no carry or head");
             let shares: f32 = anatomy.look.iter().map(|(_, share)| share).sum();
             assert!((shares - 1.0).abs() < 1e-6, "{class:?}: the look shares come to {shares}");

@@ -272,7 +272,7 @@ pub fn pose_the_figure(
                 footfalls: corrections.as_deref().and_then(|c| c.0).or(beneath.state).and_then(|(state, inputs)| {
                     state
                         .stance(&inputs)
-                        .map(|stance| crate::common::skeleton::gait::footfalls(inputs.stride, stance, skeleton.anatomy()))
+                        .and_then(|stance| crate::common::skeleton::gait::footfalls(inputs.stride, stance, skeleton.anatomy()))
                 }),
             };
             let weapon = holding.then_some(&mut placed);

@@ -111,7 +111,8 @@ impl BodyMaterials {
 }
 
 #[derive(Resource, Default)]
-pub struct BodyMeshCache(HashMap<BuildKey, Vec<Handle<Mesh>>>);
+/// By rig and build: two rigs of one build are shaped differently.
+pub struct BodyMeshCache(HashMap<(&'static str, BuildKey), Vec<Handle<Mesh>>>);
 
 impl BodyMeshCache {
     /// One handle per bone, in [`Skeleton::bones`] order, built on first ask.
@@ -121,7 +122,7 @@ impl BodyMeshCache {
         skeleton: &Skeleton,
         meshes: &mut Assets<Mesh>,
     ) -> &Vec<Handle<Mesh>> {
-        self.0.entry(BuildKey::of(&skeleton.proportions())).or_insert_with(|| {
+        self.0.entry((skeleton.kind(), BuildKey::of(&skeleton.proportions()))).or_insert_with(|| {
             body_meshes(skeleton).into_iter().map(|mesh| meshes.add(mesh)).collect()
         })
     }

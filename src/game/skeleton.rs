@@ -510,20 +510,24 @@ pub(crate) fn stand_where_claimed(
     stack: &ClipStack,
     still: impl FnOnce() -> Pose,
 ) {
-    let regions = [Regions::LEGS, Regions::TORSO, Regions::HEAD, Regions::ARM_L, Regions::ARM_R];
-    let cover = regions.map(|region| stack.cover(region, Layer::Weapon));
-    if cover.iter().all(|cover| *cover <= 0.0) {
+    let anatomy = skeleton.anatomy();
+    let cover_of = |region: Regions| stack.cover(region, Layer::Weapon);
+    if anatomy.bone_regions().all(|region| cover_of(region) <= 0.0) {
         return;
     }
     let still = still();
-    for (bone_index, bone) in skeleton.bones().iter().enumerate() {
-        let region = skeleton.anatomy().region_of(bone_index);
-        let Some(index) = regions.iter().position(|claimed| *claimed == region) else { continue };
-        if cover[index] > 0.0 {
-            pose.set(bone.name, pose.joint(bone.name).slerp(still.joint(bone.name), cover[index]));
+    for region in anatomy.bone_regions() {
+        let cover = cover_of(region);
+        if cover <= 0.0 {
+            continue;
+        }
+        for (index, bone) in skeleton.bones().iter().enumerate() {
+            if anatomy.region_of(index) == region {
+                pose.set(bone.name, pose.joint(bone.name).slerp(still.joint(bone.name), cover));
+            }
         }
     }
-    let legs = cover[0];
+    let legs = cover_of(Regions::LEGS);
     if legs > 0.0 {
         pose.root_offset = pose.root_offset.lerp(still.root_offset, legs);
     }

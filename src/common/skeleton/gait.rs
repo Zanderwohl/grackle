@@ -467,10 +467,10 @@ pub fn footfall(phase: f32, stance: f32) -> f32 {
 }
 
 /// The [`footfall`]s of the rig's first two feet, the ones `Timing::LeftFoot` and `RightFoot` name,
-/// for a body at `stride` in a gait of this stance.
-pub fn footfalls(stride: f32, stance: f32, anatomy: &Anatomy) -> [f32; 2] {
-    let phase = |foot: usize| anatomy.feet.get(foot).map_or(foot as f32 * 0.5, |foot| foot.phase);
-    [footfall(stride + phase(0), stance), footfall(stride + phase(1), stance)]
+/// for a body at `stride` in a gait of this stance. `None` for a rig with fewer.
+pub fn footfalls(stride: f32, stance: f32, anatomy: &Anatomy) -> Option<[f32; 2]> {
+    let [left, right, ..] = anatomy.feet[..] else { return None };
+    Some([footfall(stride + left.phase, stance), footfall(stride + right.phase, stance)])
 }
 
 /// Which way a state's feet travel, in the body's own frame. Only for bodies

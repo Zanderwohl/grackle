@@ -388,7 +388,7 @@ pub fn animation_pose(
     };
     let footfalls = state
         .stance(inputs)
-        .map(|stance| super::gait::footfalls(inputs.stride, stance, skeleton.anatomy()));
+        .and_then(|stance| super::gait::footfalls(inputs.stride, stance, skeleton.anatomy()));
     let pose = clip_pose(first, inputs, footfalls, skeleton, root);
     match second {
         Some((other, t)) => Pose::lerp(&pose, &clip_pose(other, inputs, footfalls, skeleton, root), t),

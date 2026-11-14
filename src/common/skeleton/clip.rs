@@ -135,8 +135,9 @@ impl Timing {
 /// Which two-bone chain an effector track drives.
 ///
 /// An enum rather than bone names because `Pose::set` takes a `&'static str`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, strum_macros::IntoStaticStr)]
 #[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
 pub enum ChainRef {
     LeftArm,
     RightArm,
@@ -155,12 +156,7 @@ impl ChainRef {
 
     /// The [`Limb`](super::anatomy::Limb) it names, as the file writes it.
     pub fn key(self) -> &'static str {
-        match self {
-            ChainRef::LeftArm => "left_arm",
-            ChainRef::RightArm => "right_arm",
-            ChainRef::LeftLeg => "left_leg",
-            ChainRef::RightLeg => "right_leg",
-        }
+        self.into()
     }
 
     pub fn name_key(self) -> &'static str {

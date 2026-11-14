@@ -69,6 +69,46 @@ impl Anatomy {
     pub fn region_of(&self, bone: usize) -> Regions {
         self.regions.get(bone).copied().unwrap_or(Regions::NONE)
     }
+
+    /// What is wrong with it against its own bones: each would make something do nothing, with
+    /// no error where it happens.
+    pub fn problems(&self, bones: &[super::rig::Bone]) -> Vec<String> {
+        let mut problems = Vec::new();
+        let has = |name: &str| bones.iter().any(|bone| bone.name == name);
+        for limb in &self.limbs {
+            for name in [limb.chain.upper, limb.chain.lower].into_iter().chain(limb.chain.tip) {
+                if !has(name) {
+                    problems.push(format!("limb {} names a bone it does not have, {name}", limb.name));
+                }
+            }
+        }
+        if self.feet.len() > MOST_FEET {
+            problems.push(format!("{} feet, but only {MOST_FEET} are planted", self.feet.len()));
+        }
+        if self.feet.iter().any(|foot| foot.limb >= self.limbs.len()) {
+            problems.push("a foot names no limb".into());
+        }
+        if self.hands.iter().flatten().any(|hand| *hand >= self.limbs.len()) {
+            problems.push("a hand names no limb".into());
+        }
+        if self.regions.len() != bones.len() {
+            problems.push(format!("{} regions for {} bones", self.regions.len(), bones.len()));
+        }
+        let shares: f32 = self.look.iter().map(|(_, share)| share).sum();
+        if !self.look.is_empty() && (shares - 1.0).abs() > 1e-4 {
+            problems.push(format!("the look shares come to {shares}, not 1"));
+        }
+        problems
+    }
+
+    /// Each region a bone is in, once, in bone order.
+    pub fn bone_regions(&self) -> impl Iterator<Item = Regions> + '_ {
+        self.regions
+            .iter()
+            .enumerate()
+            .filter(|(index, region)| **region != Regions::NONE && !self.regions[..*index].contains(region))
+            .map(|(_, region)| *region)
+    }
 }
 
 /// Most feet a rig may plant, so a per-body list of them stays off the heap.
