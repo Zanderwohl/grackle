@@ -16,6 +16,7 @@ pub struct EditorParams {
     pub start_modeling: bool,
     pub start_texturing: bool,
     pub start_arming: bool,
+    pub start_translating: bool,
     /// `--profile N`, 1–9; `None` is the usual player.
     pub profile: Option<u8>,
     /// `--map PATH`: the blueprint opened in place of the new-map template.
@@ -100,8 +101,15 @@ impl EditorParams {
                 Arg::new("weapon")
                     .long("weapon")
                     .action(ArgAction::SetTrue)
-                    .conflicts_with_all(["play", "prop", "anim", "material"])
+                    .conflicts_with_all(["play", "prop", "anim", "material", "lang-editor"])
                     .help("Open the weapon editor rather than the map editor.")
+            )
+            .arg(
+                Arg::new("lang-editor")
+                    .long("lang-editor")
+                    .action(ArgAction::SetTrue)
+                    .conflicts_with_all(["play", "prop", "anim", "material"])
+                    .help("Open the lang editor rather than the map editor.")
             )
             .arg(
                 Arg::new("connect")
@@ -197,6 +205,7 @@ impl EditorParams {
             start_animating: matches.get_flag("anim"),
             start_texturing: matches.get_flag("material"),
             start_arming: matches.get_flag("weapon"),
+            start_translating: matches.get_flag("lang-editor"),
             profile: matches.get_one::<u8>("profile").copied(),
             map,
             server,
@@ -281,6 +290,8 @@ mod tests {
         assert!(parse(&["--weapon"]).unwrap().start_arming);
         assert!(!parse(&[]).unwrap().start_texturing);
         assert!(parse(&["--material"]).unwrap().start_texturing);
+        assert!(!parse(&[]).unwrap().start_translating);
+        assert!(parse(&["--lang-editor"]).unwrap().start_translating);
     }
 
     /// A process cannot open in two modes; silently picking one makes a flag

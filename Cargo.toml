@@ -35,7 +35,7 @@ half = "2"
 typetag = "0.2"
 # `preserve_order`: `G` plays the first taunt in its file.
 toml = { version = "0.8.20", features = ["preserve_order"] }
-# The weapon editor edits weapons.toml in place, keeping its comments.
+# The weapon and lang editors edit TOML in place, keeping its order, comments and layout.
 toml_edit = "0.22.27"
 
 rfd = "0.15"
