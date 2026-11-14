@@ -27,8 +27,9 @@ impl Plugin for FlamePlugin {
     fn build(&self, app: &mut App) {
         app
             .add_systems(FixedUpdate, (fire_flame, burn).in_set(DamageSystems::Deal))
-            .add_systems(PostUpdate, draw_flame_cone.run_if(in_state(AppMode::Play)))
+            .add_systems(PostUpdate, draw_flame_cone.run_if(crate::common::app_mode::simulating).run_if(resource_exists::<GizmoConfigStore>))
             .add_systems(OnExit(AppMode::Play), put_out_fires)
+            .add_systems(OnExit(AppMode::Weapon), put_out_fires)
         ;
     }
 }

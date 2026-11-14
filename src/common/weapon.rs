@@ -40,14 +40,18 @@ impl WeaponId {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Reflect, Serialize, Deserialize)]
+#[reflect(Default)]
 pub struct HitscanSpec {
     #[serde(rename = "range")]
+    #[reflect(@Unit::Meters)]
     pub range_m: f32,
     pub damage: u32,
     pub headshot_multiplier: u32,
     /// Meters per second of corpse shove, per point of damage.
+    #[reflect(@Unit::MetersPerSecondPerDamage)]
     pub shove_per_damage: f32,
     #[serde(rename = "shove_radius")]
+    #[reflect(@Unit::Meters)]
     pub shove_radius_m: f32,
     /// `None` is one bullet down the aim.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -63,13 +67,42 @@ pub struct HitscanSpec {
     pub falloff: Option<DistanceScale>,
 }
 
+/// What the weapon editor starts a new one from.
+impl Default for HitscanSpec {
+    fn default() -> Self {
+        Self {
+            range_m: 100.0,
+            damage: 10,
+            headshot_multiplier: 1,
+            shove_per_damage: 0.15,
+            shove_radius_m: 0.3,
+            pellets: None,
+            kill_shove: None,
+            ramp_up: None,
+            falloff: None,
+        }
+    }
+}
+
 /// A straight line in damage over distance from the shooter, flat beyond either end.
 #[derive(Clone, Copy, Debug, PartialEq, Reflect, Serialize, Deserialize)]
+#[reflect(Default)]
 pub struct DistanceScale {
     /// Meters.
+    #[reflect(@Unit::Meters)]
     pub near: f32,
+    #[reflect(@Unit::Meters)]
     pub far: f32,
+    #[reflect(@Unit::Times)]
     pub scale: f32,
+}
+
+/// What the weapon editor starts a new one from.
+impl Default for DistanceScale {
+    fn default() -> Self {
+        // Flat until edited, so turning one on changes nothing by itself.
+        Self { near: 0.0, far: 10.0, scale: 1.0 }
+    }
 }
 
 impl DistanceScale {
@@ -92,27 +125,47 @@ impl HitscanSpec {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Reflect, Serialize, Deserialize)]
+#[reflect(Default)]
 pub struct KillShoveSpec {
     /// Meters per second along the aim, at the hit.
+    #[reflect(@Unit::MetersPerSecond)]
     pub speed: f32,
     /// Up on top of `speed`, in meters per second, so the body leaves the floor
     /// rather than sliding along it.
     #[serde(default)]
+    #[reflect(@Unit::MetersPerSecond)]
     pub lift: f32,
     /// Wide enough to take in most of the body, so it goes as one.
     #[serde(rename = "radius")]
+    #[reflect(@Unit::Meters)]
     pub radius_m: f32,
+}
+
+/// What the weapon editor starts a new one from.
+impl Default for KillShoveSpec {
+    fn default() -> Self {
+        Self { speed: 10.0, lift: 3.0, radius_m: 1.2 }
+    }
 }
 
 /// A square of pellets, the same every shot: an RNG spread cannot be
 /// reconciled, and a fixed pattern is one a player can learn.
 #[derive(Clone, Copy, Debug, PartialEq, Reflect, Serialize, Deserialize)]
+#[reflect(Default)]
 pub struct PelletGrid {
     /// Pellets along each side, so 3 is nine.
     pub across: u32,
     /// Meters traveled per meter of pattern width, corner pellet to corner
     /// pellet: 30 is a square one meter wide at thirty meters.
+    #[reflect(@Unit::Ratio)]
     pub spread: f32,
+}
+
+/// What the weapon editor starts a new one from.
+impl Default for PelletGrid {
+    fn default() -> Self {
+        Self { across: 3, spread: 30.0 }
+    }
 }
 
 impl PelletGrid {
@@ -134,16 +187,21 @@ impl PelletGrid {
 
 /// A cone from the eye that shoves, reflects and extinguishes, each part optional.
 #[derive(Clone, Copy, Debug, PartialEq, Reflect, Serialize, Deserialize)]
+#[reflect(Default)]
 pub struct AirblastSpec {
     /// Meters from the eye.
+    #[reflect(@Unit::Meters)]
     pub range: f32,
     /// Half-angle, radians.
+    #[reflect(@Unit::Radians)]
     pub spread: f32,
     /// Meters per second given to a body it may hurt, along the aim.
     #[serde(default)]
+    #[reflect(@Unit::MetersPerSecond)]
     pub push: f32,
     /// Meters per second up on top of `push`, so a body on the floor leaves it.
     #[serde(default)]
+    #[reflect(@Unit::MetersPerSecond)]
     pub lift: f32,
     /// Whether a projectile somebody hostile fired is turned back along the aim and becomes
     /// the airblaster's.
@@ -151,10 +209,26 @@ pub struct AirblastSpec {
     pub reflect: bool,
     /// Times its speed, a reflected projectile leaves at.
     #[serde(default = "one")]
+    #[reflect(@Unit::Times)]
     pub reflect_speed: f32,
     /// Whether a burning teammate in the cone is put out.
     #[serde(default)]
     pub extinguish: bool,
+}
+
+/// What the weapon editor starts a new one from.
+impl Default for AirblastSpec {
+    fn default() -> Self {
+        Self {
+            range: 5.0,
+            spread: 0.5,
+            push: 9.0,
+            lift: 4.0,
+            reflect: true,
+            reflect_speed: 1.0,
+            extinguish: true,
+        }
+    }
 }
 
 fn one() -> f32 {
@@ -163,22 +237,71 @@ fn one() -> f32 {
 
 /// Stub.
 #[derive(Clone, Copy, Debug, PartialEq, Reflect, Serialize, Deserialize)]
+#[reflect(Default)]
 pub struct HealBeamSpec {
+    #[reflect(@Unit::Meters)]
     pub range: f32,
     pub heal_per_second: u32,
 }
 
-/// Stub.
-#[derive(Clone, Copy, Debug, PartialEq, Reflect, Serialize, Deserialize)]
-pub struct InvulnSpec {
-    pub duration: f32,
-    pub cooldown: f32,
+/// What the weapon editor starts a new one from.
+impl Default for HealBeamSpec {
+    fn default() -> Self {
+        Self { range: 8.0, heal_per_second: 24 }
+    }
 }
 
 /// Stub.
 #[derive(Clone, Copy, Debug, PartialEq, Reflect, Serialize, Deserialize)]
+#[reflect(Default)]
+pub struct InvulnSpec {
+    #[reflect(@Unit::Seconds)]
+    pub duration: f32,
+    #[reflect(@Unit::Seconds)]
+    pub cooldown: f32,
+}
+
+/// What the weapon editor starts a new one from.
+impl Default for InvulnSpec {
+    fn default() -> Self {
+        Self { duration: 8.0, cooldown: 0.0 }
+    }
+}
+
+/// Stub.
+#[derive(Clone, Copy, Debug, PartialEq, Reflect, Serialize, Deserialize)]
+#[reflect(Default)]
 pub struct ScopeSpec {
+    #[reflect(@Unit::Times)]
     pub zoom: f32,
+}
+
+/// What the weapon editor starts a new one from.
+impl Default for ScopeSpec {
+    fn default() -> Self {
+        Self { zoom: 2.5 }
+    }
+}
+
+/// What a number in a weapon's spec is measured in, stated on the field with
+/// `#[reflect(@Unit::...)]` so the weapon editor shows and steps it right.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Reflect)]
+pub enum Unit {
+    Meters,
+    Seconds,
+    MetersPerSecond,
+    /// Stored in radians, shown in degrees.
+    Radians,
+    RadiansPerSecond,
+    /// A share of something lost per second.
+    PerSecond,
+    /// A multiplier.
+    Times,
+    /// A share, 0 to 1.
+    Fraction,
+    /// One to this many, as a pellet pattern's distance to its width.
+    Ratio,
+    MetersPerSecondPerDamage,
 }
 
 /// What one mouse button does.
@@ -223,10 +346,14 @@ pub enum Cadence {
     /// dropped, as one while drawing is.
     Semi {
         #[serde(default)]
+        #[reflect(@Unit::Seconds)]
         interval: f32,
     },
     /// Shots while held, `interval` seconds apart.
-    Automatic { interval: f32 },
+    Automatic {
+        #[reflect(@Unit::Seconds)]
+        interval: f32,
+    },
 }
 
 impl Cadence {
@@ -246,7 +373,10 @@ pub enum Cost {
     /// Out of the clip, or out of the reserve if the weapon has no clip.
     Ammo { rounds: u32 },
     /// `0.0`–`1.0` of the weapon's meter.
-    Charge { fraction: f32 },
+    Charge {
+        #[reflect(@Unit::Fraction)]
+        fraction: f32,
+    },
 }
 
 /// An action mounted on a button. The cadence lives here, not in the spec,
@@ -276,6 +406,7 @@ pub struct Magazine {
     /// Rounds carried beyond what is loaded.
     pub reserve: u32,
     /// Seconds.
+    #[reflect(@Unit::Seconds)]
     pub reload: f32,
     /// One round at a time and interruptible (a shotgun), or the whole clip at
     /// once.
@@ -283,6 +414,7 @@ pub struct Magazine {
     pub reload_one_at_a_time: bool,
     /// Seconds for the first round of a reload, where it differs from the rest.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[reflect(@Unit::Seconds)]
     pub first_reload: Option<f32>,
 }
 

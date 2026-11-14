@@ -58,9 +58,11 @@ impl Plugin for HitscanPlugin {
                     draw_tracers,
                 )
                     .after(TransformSystems::Propagate)
-                    .run_if(in_state(AppMode::Play)),
+                    .run_if(crate::common::app_mode::simulating)
+                    .run_if(resource_exists::<GizmoConfigStore>),
             )
             .add_systems(OnExit(AppMode::Play), clear_tracers)
+            .add_systems(OnExit(AppMode::Weapon), clear_tracers)
         ;
     }
 }

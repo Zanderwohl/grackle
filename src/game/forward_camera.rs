@@ -27,7 +27,6 @@ use bevy::prelude::*;
 use bevy::render::render_resource::{AsBindGroup, ShaderType, TextureFormat};
 use bevy::shader::{Shader, ShaderRef};
 
-use crate::common::app_mode::AppMode;
 use crate::common::render_layers;
 use crate::game::player::{PlayerCamera, ViewMode, PLAY_CAMERA_ORDER};
 use crate::game::viewmodel::{dress_the_viewmodel, ViewmodelPart};
@@ -138,7 +137,7 @@ impl Plugin for ForwardCameraPlugin {
                 (swap_in_the_lenses, give_the_view_a_forward_camera, aim_the_forward_camera)
                     .chain()
                     .after(dress_the_viewmodel)
-                    .run_if(in_state(AppMode::Play)),
+                    .run_if(crate::common::app_mode::simulating),
             );
     }
 }

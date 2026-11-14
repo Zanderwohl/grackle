@@ -169,9 +169,10 @@ impl Plugin for GamePlugin {
             // own copy of the walls. Lightyear re-runs `FixedUpdate` to replay
             // a rollback, so nothing here may consume what it reads.
             .add_systems(FixedUpdate, (
-                rebuild_collision_when_rooms_change,
-                step_player,
-            ).chain().run_if(in_state(AppMode::Play)))
+                // A round's only: the weapon editor's range collides with a stage of its own.
+                rebuild_collision_when_rooms_change.run_if(in_state(AppMode::Play)),
+                step_player.run_if(crate::common::app_mode::simulating),
+            ).chain())
             // `interpolate_bodies` is not gated on Play: a replicated display
             // body in an editor animation grid would otherwise sit at the
             // origin until a round starts.
@@ -182,7 +183,7 @@ impl Plugin for GamePlugin {
                 .chain()
                 .after(interpolate_bodies)
                 .in_set(RunFixedMainLoopSystems::AfterFixedMainLoop)
-                .run_if(in_state(AppMode::Play)))
+                .run_if(crate::common::app_mode::simulating))
         ;
     }
 }
@@ -209,7 +210,7 @@ fn toggle_mode(
         AppMode::Editor => AppMode::Play,
         AppMode::Play => AppMode::Editor,
         // No wildcard: a new mode should have to decide what F5 means to it.
-        mode @ (AppMode::Prop | AppMode::Animation | AppMode::Material | AppMode::Lang) => {
+        mode @ (AppMode::Prop | AppMode::Animation | AppMode::Material | AppMode::Weapon | AppMode::Lang) => {
             info!(
                 "F5 swaps the map editor and Play; use the Mode menu to leave {}.",
                 mode.name(),

@@ -91,7 +91,7 @@ impl Plugin for PropEditorPlugin {
             // Ungated: the save happens here but what must notice it is a
             // body in a round.
             .add_systems(Update, (start_in_the_prop_editor, publish_the_saved_prop))
-            .add_systems(Update, picker::publish_prop_choices.run_if(in_state(AppMode::Editor)));
+            .add_systems(Update, picker::publish_prop_choices.run_if(|mode: Res<State<AppMode>>| matches!(mode.get(), AppMode::Editor | AppMode::Weapon)));
     }
 }
 

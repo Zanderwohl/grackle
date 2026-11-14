@@ -72,6 +72,7 @@ fn main() {
         .insert_resource(StartInPropEditor(editor_params.start_modeling))
         .insert_resource(StartInAnimEditor(editor_params.start_animating))
         .insert_resource(StartInMaterialEditor(editor_params.start_texturing))
+        .insert_resource(grackle::weapon_editor::StartInWeaponEditor(editor_params.start_arming))
         .insert_resource(StartInLangEditor(editor_params.start_translating))
         .insert_resource(editor_params.server.as_ref().map(ServerConfig::round).unwrap_or_default())
         .insert_resource(BotsAtStartup(editor_params.server.as_ref().map_or(0, |server| server.bots)))
@@ -99,7 +100,7 @@ fn main() {
             EditorStepsPlugin,
             ToolPlugin,
             PropEditorPlugin,
-            (AnimPlugin, MaterialEditorPlugin, LangEditorPlugin),
+            (AnimPlugin, MaterialEditorPlugin, grackle::weapon_editor::WeaponEditorPlugin, LangEditorPlugin),
             GamePlugin,
             (WorldPropPlugin, ThumbnailPlugin, ForwardCameraPlugin),
             SkeletonPlugin,

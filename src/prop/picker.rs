@@ -84,8 +84,9 @@ impl PropPreviews<'_, '_> {
     }
 }
 
-/// Highest priority last, as [`PropCache`] reads them, so an overriding pack wins.
-fn source_of(name: &str) -> Option<PathBuf> {
+/// The file a prop is read from: highest priority last, as [`PropCache`] reads them, so an
+/// overriding pack wins.
+pub fn source_of(name: &str) -> Option<PathBuf> {
     default_packs().iter().rev().map(|pack| prop_path(pack, name)).find(|path| path.exists())
 }
 

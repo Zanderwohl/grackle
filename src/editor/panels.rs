@@ -402,7 +402,7 @@ impl EditorPanels {
                 egui::MenuBar::new().ui(ui, |ui| {
                     // The network menu stays live, so a client can leave.
                     ui.add_enabled_ui(net_role.is_authority(), |ui| {
-                        file_menu(ui, true, &mut pending_file_op);
+                        file_menu(ui, crate::common::file_menu::ALL, &mut pending_file_op);
                         edit_menu(ui, edit_available, &mut pending_edit);
                         // `Editor` spelled out: this system is gated on it.
                         mode_menu(ui, AppMode::Editor, Some(&net_role), &mut wanted_mode);

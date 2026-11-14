@@ -12,7 +12,6 @@
 
 use bevy::prelude::*;
 
-use crate::common::app_mode::AppMode;
 use crate::common::net::has_authority;
 use crate::common::weapon::{
     Ammo, Cadence, Cost, Equipped, Magazine, Mounted, WeaponAction, WeaponCatalog, WeaponId,
@@ -138,12 +137,12 @@ impl Plugin for WeaponPlugin {
                     // order the nav bake's rocket jumps are worked out in.
                     .after(crate::game::player::step_player)
                     .before(DamageSystems::Deal)
-                    .run_if(in_state(AppMode::Play))
+                    .run_if(crate::common::app_mode::simulating)
                     .run_if(has_authority),
             )
             .add_systems(
                 Update,
-                note_unimplemented_actions.run_if(in_state(AppMode::Play)),
+                note_unimplemented_actions.run_if(crate::common::app_mode::simulating),
             );
     }
 }

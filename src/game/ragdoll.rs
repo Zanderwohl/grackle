@@ -553,12 +553,13 @@ impl Plugin for RagdollPlugin {
                 // Not on replayed ticks: a corpse is not predicted.
                 step_ragdolls.run_if(not(lightyear::prelude::is_in_rollback)),
                 retire_ragdolls.run_if(has_authority),
-            ).chain().run_if(in_state(AppMode::Play)))
+            ).chain().run_if(crate::common::app_mode::simulating))
             // Ungated: a corpse arrives from the wire whenever, with no rig
             // until this runs.
             .add_systems(Update, dress_corpses_from_elsewhere)
             .add_systems(Update, hide_the_dying)
             .add_systems(OnExit(AppMode::Play), clear_ragdolls.run_if(has_authority))
+            .add_systems(OnExit(AppMode::Weapon), clear_ragdolls.run_if(has_authority))
         ;
     }
 }

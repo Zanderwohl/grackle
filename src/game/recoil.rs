@@ -10,7 +10,6 @@
 
 use bevy::prelude::*;
 
-use crate::common::app_mode::AppMode;
 use crate::common::damage::PlayerId;
 use crate::common::effects::Effect;
 use crate::common::net::{has_authority, is_remote_client, NetRole};
@@ -38,7 +37,7 @@ impl Plugin for RecoilPlugin {
                 FixedUpdate,
                 announce_shots
                     .after(pull_trigger)
-                    .run_if(in_state(AppMode::Play))
+                    .run_if(crate::common::app_mode::simulating)
                     .run_if(has_authority),
             )
             .add_systems(
@@ -49,7 +48,7 @@ impl Plugin for RecoilPlugin {
                 )
                     .chain()
                     .before(perform_weapon_clips)
-                    .run_if(in_state(AppMode::Play)),
+                    .run_if(crate::common::app_mode::simulating),
             );
     }
 }

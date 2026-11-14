@@ -307,7 +307,7 @@ fn panels(
         .resizable(false)
         .show(&mut viewport_ui, |ui| {
             egui::MenuBar::new().ui(ui, |ui| {
-                file_menu(ui, false, &mut tabs.requests.file);
+                file_menu(ui, crate::common::file_menu::DOCUMENT, &mut tabs.requests.file);
                 edit_menu(ui, edit_availability(tabs.editor), &mut tabs.requests.edit);
                 view_menu(ui, workspace, tabs.figure);
                 // This system is gated on `AppMode::Prop`.

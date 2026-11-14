@@ -15,6 +15,7 @@ pub struct EditorParams {
     pub start_animating: bool,
     pub start_modeling: bool,
     pub start_texturing: bool,
+    pub start_arming: bool,
     pub start_translating: bool,
     /// `--profile N`, 1–9; `None` is the usual player.
     pub profile: Option<u8>,
@@ -95,6 +96,13 @@ impl EditorParams {
                     .action(ArgAction::SetTrue)
                     .conflicts_with_all(["play", "prop", "anim"])
                     .help("Open the material editor rather than the map editor.")
+            )
+            .arg(
+                Arg::new("weapon")
+                    .long("weapon")
+                    .action(ArgAction::SetTrue)
+                    .conflicts_with_all(["play", "prop", "anim", "material", "lang-editor"])
+                    .help("Open the weapon editor rather than the map editor.")
             )
             .arg(
                 Arg::new("lang-editor")
@@ -196,6 +204,7 @@ impl EditorParams {
             start_modeling: matches.get_flag("prop"),
             start_animating: matches.get_flag("anim"),
             start_texturing: matches.get_flag("material"),
+            start_arming: matches.get_flag("weapon"),
             start_translating: matches.get_flag("lang-editor"),
             profile: matches.get_one::<u8>("profile").copied(),
             map,
@@ -277,6 +286,8 @@ mod tests {
         assert!(parse(&["--prop"]).unwrap().start_modeling);
         assert!(!parse(&[]).unwrap().start_animating);
         assert!(parse(&["--anim"]).unwrap().start_animating);
+        assert!(!parse(&[]).unwrap().start_arming);
+        assert!(parse(&["--weapon"]).unwrap().start_arming);
         assert!(!parse(&[]).unwrap().start_texturing);
         assert!(parse(&["--material"]).unwrap().start_texturing);
         assert!(!parse(&[]).unwrap().start_translating);

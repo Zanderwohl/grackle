@@ -170,6 +170,7 @@ shape is a new producer and not a rewrite of every consumer — see
 | `src/game/` | Playing the open map: `AppMode` swap, player body, collision, weapons, damage, ragdolls, placed props, hats. |
 | `src/prop/` | The prop editor: a CSG kernel, the modeling feature list, and the mode around it. |
 | `src/material/` | The material editor: texture-graph's panels as an authoring mode. See "Editing a material". |
+| `src/weapon_editor/` | The weapon editor: every pack's `weapons.toml`, edited and written back in place. See "Editing a weapon". |
 | `src/lang_editor/` | The lang editor: a pack's strings for one language. See "Editing a lang file". |
 | `src/common/` | Shared: i18n, geometry, rays, gamemodes, items. |
 | `src/unlock/` | The crate-drop prototype. Orthogonal — see above. |
@@ -258,7 +259,7 @@ is still a gamemode question.
 ## Editor and game in one process
 
 `AppMode` ([`src/common/app_mode.rs`](src/common/app_mode.rs)) is `Editor`,
-`Prop`, `Animation`, `Material`, `Lang` or `Play`, iterable in that order, which is
+`Prop`, `Animation`, `Material`, `Weapon`, `Lang` or `Play`, iterable in that order, which is
 the Mode menu's order. **`F5` swaps between the map editor and Play, and nothing
 else** — the only way back to the editor, as `Escape` belongs to the pause
 menu. From the prop editor it is answered with a line in the log rather than
@@ -1089,6 +1090,68 @@ so the head bone's own odd rest rotation never reaches a hat's numbers. Which
 hat is a class's is `hat` on its entry in `loadouts.toml`. In Fit a hat stays
 at the origin and the figure stands under it, inverted through the same
 `hat_transform` the game uses.
+
+## Editing a weapon
+
+`AppMode::Weapon` ([`src/weapon_editor/`](src/weapon_editor/)) edits every
+pack's `weapons.toml` as one document: a Weapons browser on the left, the
+selected weapon on the right, and the range between them; `--weapon` opens it.
+The plan and what is left is
+[documentation/weapon-editor.md](documentation/weapon-editor.md).
+
+- **The range plays the game, not an animation**
+  ([`range.rs`](src/weapon_editor/range.rs)): puppets are `spawn_player`
+  bodies whose `Inputs` a director writes each tick, as `steer_bots` does, so
+  recoil, reloads, the viewmodel, damage and ragdolls are the match's own.
+  **`AppMode::simulates()`** (the `simulating` run condition, true in Play and
+  Weapon) is what those systems ask instead of `in_state(Play)`; seating,
+  scoring, respawning, telemetry, bots and the map's collision rebuild still
+  ask for Play. A new system the range should show joins by asking it, and
+  one that seats or scores must not.
+- **The stage is 2 km under the map** (`RANGE_ORIGIN`), on its own
+  `CollisionWorld`, swapped in on entry and back on exit, so the map's
+  triggers and pickups never touch a puppet. The map's roots are hidden as
+  they stand on entry and put back on exit: the prop mode's every-frame rule
+  would hide every shot, blast and corpse the range makes.
+- **A beat comes from the weapon** (`beats_for`, `loop_for`): each button's
+  action contributes its own, every puppet is stood up again per beat so a
+  pass is comparable with the last, and the strip under the views logs what
+  each came to. `every_action_kind_contributes_a_beat` fails for a new
+  `WeaponAction` with nothing to show.
+
+- **The draft is the catalog while the mode is open.** Entering stashes the
+  published `WeaponCatalog` (`PublishedCatalog`) and puts `catalog_of` the
+  draft in its place, rebuilt whenever the undo checkpoint moves; leaving puts
+  the stash back. Saving writes and then publishes, so F5 plays what is on
+  disk. Not offered while networked, so a half-edited catalog is never sent.
+- **One loader, two callers.** `weapon_file` reads each pack into `PackWeapon`s
+  (`read_pack_weapons`), and `catalog_of` and `problems` apply one rule
+  (`problem`) to both the startup catalog and the draft, so the editor lists
+  exactly what the loader would drop.
+- **Saving edits the file in place** (`weapon_editor::save`, `toml_edit`): an
+  untouched weapon is not touched, an edited one is merged three ways (the
+  file's tree, what it parsed to, the edit) so only changed values move, a
+  key serde ignores is kept, a deleted weapon takes its leading comment, and
+  floats are written as their `f32`'s shortest decimal.
+  `saving_an_untouched_catalog_changes_no_bytes` is the guard. Each weapon goes
+  back to the pack it came from, and only packs that changed are written.
+- **The catalog has no file to Save As**, so File offers Save and Quit, and
+  `Ctrl+Shift+S` is a save.
+- **The form is reflection** ([`form.rs`](src/weapon_editor/form.rs)): a
+  weapon's `Magazine` and each `Mounted` are walked as structs, enums and
+  options, labeled from `weapon_editor.fields.*` and `variants.*` by name, so a
+  field added to a spec shows up with no UI code — and fails
+  `every_weapon_field_has_a_label` until it has a label. **Every float in a
+  spec carries `#[reflect(@Unit::...)]`** (`every_number_states_its_unit`),
+  which sets its suffix and step; radians are shown in degrees. A variant
+  switched to is built from its fields' `Default`s in the type registry, so
+  every spec has a `Default` and `#[reflect(Default)]`, and what a switch or a
+  cleared option put down is kept per weapon in `FormMemory` for the session.
+- **A rename can carry into the loadouts.** It is staged in the draft (so undo
+  takes it back) and written to every pack's `loadouts.toml` only after the
+  weapons save. Rename and delete list what names the key: loadouts and the
+  open map's pickups (`FeatureTrait::weapon_named`); blueprints on disk are not
+  read.
 
 ## Editing a material
 

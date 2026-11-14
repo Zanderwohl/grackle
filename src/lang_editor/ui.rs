@@ -207,7 +207,7 @@ fn panels(
     let mut requests = Requests::default();
     egui::Panel::top("lang_menu_bar").resizable(false).show(&mut window_ui, |ui| {
         egui::MenuBar::new().ui(ui, |ui| {
-            file_menu(ui, false, &mut requests.file);
+            file_menu(ui, crate::common::file_menu::DOCUMENT, &mut requests.file);
             edit_menu(ui, edit_availability(&editor), &mut requests.edit);
             mode_menu(ui, AppMode::Lang, role.as_deref(), &mut requests.mode);
             ui.separator();
