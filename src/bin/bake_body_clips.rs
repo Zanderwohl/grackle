@@ -14,7 +14,7 @@ use std::path::PathBuf;
 
 use clap::Parser;
 
-use grackle::common::clip_file::{CLIPS_DIR, CLIP_EXTENSION};
+use grackle::common::clip_file::{rig_clips_dir, CLIPS_DIR, CLIP_EXTENSION};
 use grackle::common::skeleton::clip::StateAnimation;
 use grackle::common::skeleton::seed::{bake, Seed, SEEDS};
 
@@ -47,14 +47,16 @@ fn main() {
     } else {
         let mut chosen = Vec::new();
         for name in &args.states {
-            match SEEDS.iter().find(|seed| seed.state.clip_name() == name) {
-                Some(seed) => chosen.push(*seed),
-                None => {
+            // `idle` is every rig's idle; `strider/idle` is one.
+            let named = |seed: &&Seed| seed.file_name() == name || format!("{}/{}", seed.rig, seed.file_name()) == *name;
+            match SEEDS.iter().filter(named).copied().collect::<Vec<_>>() {
+                found if !found.is_empty() => chosen.extend(found),
+                _ => {
                     eprintln!(
                         "'{name}' is not a migrated state. Try one of: {}",
                         SEEDS
                             .iter()
-                            .map(|seed| seed.state.clip_name())
+                            .map(|seed| seed.file_name())
                             .collect::<Vec<_>>()
                             .join(", "),
                     );
@@ -65,14 +67,16 @@ fn main() {
         chosen
     };
 
-    let directory = args.pack.join(CLIPS_DIR);
-    std::fs::create_dir_all(&directory)
-        .unwrap_or_else(|e| panic!("{}: {e}", directory.display()));
-
     let mut kept = 0;
     for seed in chosen {
+        let directory = match seed.rig {
+            grackle::common::skeleton::rig::HUMANOID => args.pack.join(CLIPS_DIR),
+            rig => args.pack.join(rig_clips_dir(rig)),
+        };
+        std::fs::create_dir_all(&directory)
+            .unwrap_or_else(|e| panic!("{}: {e}", directory.display()));
         let clip = bake(seed);
-        let path = directory.join(format!("{}.{CLIP_EXTENSION}", seed.state.clip_name()));
+        let path = directory.join(format!("{}.{CLIP_EXTENSION}", seed.file_name()));
         let text = clip.to_toml().expect("a clip should serialize");
 
         match outcome(&path, &clip, &text, args.force) {

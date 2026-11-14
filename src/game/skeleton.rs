@@ -243,7 +243,12 @@ pub fn advance_gaits(
                 direction_of(animator.state()) * display.copied().unwrap_or_default().0 * leg * dt
             }
         };
-        gait.advance(moved, leg, dt);
+        let state = animator.state();
+        gait.advance_stepping(moved, leg, dt, |gait| {
+            let inputs = PoseInputs { speed: gait.speed(), travel: gait.travel(), ..default() };
+            let (stepped, travel) = crate::common::skeleton::ik::stepping(skeleton, state, &inputs);
+            (stepped.stride_shape(&inputs), travel)
+        });
     }
 }
 

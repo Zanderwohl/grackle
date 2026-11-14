@@ -5,6 +5,10 @@
 //! in a hand-edited file.
 //!
 //! The curve belongs to the key being left, not the one being arrived at.
+//!
+//! Every curve but [`Interpolation::Spline`] is shaped within its own segment, so it either
+//! comes to rest at each key or changes speed there. A spline runs through the keys at an
+//! unbroken speed, reading the keys either side of its segment; see [`through`].
 
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -33,6 +37,8 @@ pub enum Interpolation {
     /// Perlin's `6t⁵ − 15t⁴ + 10t³`: zero second derivative at both ends, so a
     /// loop seam does not kink.
     SmootherStep,
+    /// Through the keys without a change of speed at any: a Catmull-Rom spline.
+    Spline,
 }
 
 impl Interpolation {
@@ -40,6 +46,7 @@ impl Interpolation {
     pub const ALL: &'static [Interpolation] = &[
         Interpolation::Step,
         Interpolation::Linear,
+        Interpolation::Spline,
         Interpolation::SmoothStep,
         Interpolation::SmootherStep,
         Interpolation::QuadraticIn,
@@ -62,6 +69,7 @@ impl Interpolation {
             Interpolation::CubicInOut => "anim.ease.cubic_in_out",
             Interpolation::SmoothStep => "anim.ease.smooth_step",
             Interpolation::SmootherStep => "anim.ease.smoother_step",
+            Interpolation::Spline => "anim.ease.spline",
         }
     }
 
@@ -78,7 +86,8 @@ impl Interpolation {
                     0.0
                 }
             }
-            Interpolation::Linear => t,
+            // Alone, without its neighbors, a spline is a straight line.
+            Interpolation::Linear | Interpolation::Spline => t,
             Interpolation::QuadraticIn => t * t,
             Interpolation::QuadraticOut => t * (2.0 - t),
             Interpolation::QuadraticInOut => {
@@ -121,6 +130,25 @@ impl Interpolation {
     pub fn quat(self, from: Quat, to: Quat, t: f32) -> Quat {
         from.slerp(to, self.ease(t))
     }
+}
+
+/// A spline's value `t` of the way from `p[1]` to `p[2]`, with `p[0]` before and `p[3]` after.
+/// `gaps` are the times between them, in any unit: before, the segment, after. A missing
+/// neighbor is the end itself, with a gap of zero.
+///
+/// The slope at each end is the slope across its two neighbors, so a key spaced unevenly from
+/// its neighbors is still passed through at one speed.
+pub fn through(p: [f32; 4], gaps: [f32; 3], t: f32) -> f32 {
+    let [before, span, after] = gaps;
+    if span <= 0.0 {
+        return p[1];
+    }
+    let slope = |a: f32, b: f32, gap: f32| (b - a) / gap * span;
+    let leaving = slope(p[0], p[2], before + span);
+    let arriving = slope(p[1], p[3], span + after);
+    let t = t.clamp(0.0, 1.0);
+    let (t2, t3) = (t * t, t * t * t);
+    (2.0 * t3 - 3.0 * t2 + 1.0) * p[1] + (t3 - 2.0 * t2 + t) * leaving + (-2.0 * t3 + 3.0 * t2) * p[2] + (t3 - t2) * arriving
 }
 
 #[cfg(test)]

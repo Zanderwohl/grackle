@@ -828,6 +828,7 @@ cubic_out = "Cubic out"
 cubic_in_out = "Cubic in and out"
 smooth_step = "Smooth"
 smoother_step = "Smoother"
+spline = "Spline"
 
 [app_mode]
 editor = "Map Editor"

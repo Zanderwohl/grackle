@@ -226,6 +226,9 @@ body asks `ClassBuilds::rig_for` or `skeleton(build)`, never `humanoid`
 directly, and a `Build` — rig, proportions, scales — is what a skeleton, a
 corpse and the mesh cache remember. Another rig's state clips are
 `animations/<rig>/<state>.gpa`; without one a state stands in rest. The
+strider's, its taunt included, are written by `bake_body_clips` from
+[`strider_seed`](src/common/skeleton/strider_seed.rs), the one place besides
+its rig file that names its bones; a `Seed` names its rig. The
 animation editor lists every rig on disk, each with its states, and previews
 a rig's clip on that rig (`FigureRig`).
 
@@ -246,9 +249,43 @@ taunts it has a clip for. `--class KEY` plays every body as that class until
 a class can be picked (`PlayAs`, read by `publish_game_rules`). The humanoid's
 own tests loop over `ClassBuilds::humanoids()`.
 
+**Legs turn toward where a body is going; the body above takes it back.**
+`ik::ducked_pose` swings the legs 0.75 of the way to the travel (from the
+measured `Gait`, so every viewer agrees; backing up turns them toward the way
+it backs from) and turns each bone in the rig's `twist` list back by its share:
+the humanoid's chest faces halfway, its head the aim, and the grip brings the
+arms to the weapon, which is placed from the aim. On a rig with a `twist`, a
+strafe steps as a run (`with_turned_legs`), so its strafe clips do not play.
+`advance_gaits` measures the stride in the turned legs' frame and the state's
+own shape (`ik::stepping`), or the planted foot slides.
+
+**The gait clips are baked at a run** (`seed::SEED_SPEED`), since a body in a
+match sprints; a clip has one speed, so a walk plays the run's upper body and
+the fidelity test checks that speed only. The legs stay live: a foot rolls
+heel to toe (`FootOffset::pitch`), turning about its toes as the heel rises,
+so `plant_feet` raises the ankle to keep them down, and a slide test watches
+the toes then rather than the ankle (`ik::left_foot_contact`).
+
+**`Interpolation::Spline` is the one ease that reads past its segment**:
+`sample_at` hands it the keys either side (round the seam on a loop), so it
+passes through each key at one speed where every other ease stops or turns a
+corner. The baker keys every looping clip with it (`seed::fit`), and a key
+on an empty track starts as one.
+
+**In the air the legs pedal** (`AIRBORNE_PERIOD`, on the shared clock, so each
+body by its own phase). Ducked in the air the box keeps its head and loses its
+lower half, so after `duck_under` puts the crown at its top,
+`ik::tuck_into_the_box` lifts each foot until the whole leg clears its bottom.
+A rig's `crouched_crown` (in `[measures]`, 1 for the humanoid) puts a planted
+crouch's crown lower than the box needs, so the strider stalks; in the air
+the crown stays at the box's top, since the legs need the room.
+
 A chain of three or more bones (a limb's `between`) is solved by FABRIK within
 each joint's limit, at a fixed round count so every machine agrees; two bones
-stay on the exact solver. A clip's `LookAt` turns a bone toward a target, and
+stay on the exact solver. It starts as an arc bowed toward the limb's pole,
+since a chain left in a bend the other way folds against its limits short of
+a target in reach; `every_rig_clip_reaches_its_targets` samples each rig's
+clips for it. A clip's `LookAt` turns a bone toward a target, and
 its `Weight` tracks turn down the procedural passes — feet planted, head
 following the aim, hands on the weapon (`play::controller_weight`). The look
 yields the head to any layer above the weapon that claims it. A key may name

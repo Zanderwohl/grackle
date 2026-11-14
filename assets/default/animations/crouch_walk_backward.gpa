@@ -4,7 +4,107 @@ name_key = "animation.states.crouch_walk_backward"
 length = 1.0
 clock = "stride"
 looping = true
-note = "Sampled from `gait_pose` at a walk, one stride per clip. Only the upper body and the hips: the legs are the gait's own, planted from the stride. Each arm is timed by the foot on its side, so it is right at any speed."
+note = "Sampled from `gait_pose` at a run, one stride per clip. Only the upper body and the hips: the legs are the gait's own, planted from the stride. Each arm is timed by the foot on its side, so it lands with its foot at any speed."
+
+[[blend.tracks]]
+combine = "replace"
+space = "body"
+unit = "meters"
+enabled = true
+
+[blend.tracks.channel]
+channel = "rotation"
+bone = "pelvis"
+
+[[blend.tracks.channel.keys]]
+at = 0.0
+to = [
+    -0.0,
+    0.045,
+    -0.018753938,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.110416666
+to = [
+    -0.0,
+    0.034597885,
+    0.004477554,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.17395833
+to = [
+    -0.0,
+    0.020691555,
+    0.017618895,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.25
+to = [
+    -0.0000000000000000017347235,
+    -0.0000000019670126,
+    0.02955148,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.36145833
+to = [
+    0.00000000005820766,
+    -0.029000584,
+    0.034682356,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.5
+to = [
+    0.00000000002910383,
+    -0.045,
+    0.018753933,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.61041665
+to = [
+    -0.0,
+    -0.03459789,
+    -0.004477553,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.67395836
+to = [
+    -0.0,
+    -0.020691546,
+    -0.017618906,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.75
+to = [
+    -0.0,
+    0.00000000053661964,
+    -0.029551482,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.86145836
+to = [
+    0.00000000005820766,
+    0.029000588,
+    -0.034682352,
+]
+ease = "spline"
 
 [[blend.tracks]]
 combine = "replace"
@@ -19,11 +119,119 @@ bone = "chest"
 [[blend.tracks.channel.keys]]
 at = 0.0
 to = [
-    0.34868702,
-    -0.030926676,
-    -0.09030041,
+    0.35914484,
+    -0.09897706,
+    -0.07662244,
 ]
-ease = "linear"
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.079166666
+to = [
+    0.3603618,
+    -0.09469848,
+    -0.0889109,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.13645834
+to = [
+    0.35425222,
+    -0.08121113,
+    -0.09800677,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.25
+to = [
+    0.33792046,
+    -0.037233137,
+    -0.111891024,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.31875
+to = [
+    0.33575606,
+    -0.008102393,
+    -0.11561718,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.35729167
+to = [
+    0.33849147,
+    0.006334958,
+    -0.115806654,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.40208334
+to = [
+    0.3443661,
+    0.020079212,
+    -0.11424657,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.5
+to = [
+    0.35830742,
+    0.03518287,
+    -0.104648724,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.5833333
+to = [
+    0.36002657,
+    0.029940838,
+    -0.09177788,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.64375
+to = [
+    0.35369363,
+    0.01618309,
+    -0.081809334,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.75
+to = [
+    0.33915964,
+    -0.022670569,
+    -0.068048686,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.85729164
+to = [
+    0.3399537,
+    -0.06636862,
+    -0.0641746,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.9125
+to = [
+    0.3473283,
+    -0.084174424,
+    -0.06684839,
+]
+ease = "spline"
 
 [[blend.tracks]]
 combine = "replace"
@@ -38,11 +246,74 @@ bone = "neck"
 [[blend.tracks.channel.keys]]
 at = 0.0
 to = [
-    -0.245,
-    0.0,
-    0.0,
+    -0.2520748,
+    0.025550945,
+    0.0058097914,
 ]
-ease = "linear"
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.134375
+to = [
+    -0.24927436,
+    0.018670468,
+    -0.0029819552,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.25
+to = [
+    -0.23791155,
+    0.0021499656,
+    -0.009122409,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.36458334
+to = [
+    -0.23896375,
+    -0.015274705,
+    -0.010678443,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.5
+to = [
+    -0.2520748,
+    -0.025550945,
+    -0.005809789,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.634375
+to = [
+    -0.24927436,
+    -0.018670471,
+    0.0029819547,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.75
+to = [
+    -0.23791155,
+    -0.0021499663,
+    0.009122409,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.8645833
+to = [
+    -0.23896375,
+    0.015274702,
+    0.010678444,
+]
+ease = "spline"
 
 [[blend.tracks]]
 combine = "replace"
@@ -58,83 +329,200 @@ bone = "upper_arm.l"
 [[blend.tracks.channel.keys]]
 at = 0.0
 to = [
-    -0.34665066,
-    0.2497233,
-    -0.6439437,
+    0.19232687,
+    -0.13362187,
+    -0.61290836,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
-at = 0.062806375
+at = 0.032935046
 to = [
-    -0.28951824,
-    0.20523402,
-    -0.630022,
+    0.19739112,
+    -0.13725476,
+    -0.6136118,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
-at = 0.13480392
+at = 0.06050858
 to = [
-    -0.22338864,
-    0.156055,
-    -0.6175385,
+    0.19172461,
+    -0.13319044,
+    -0.61282605,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
-at = 0.25505516
+at = 0.1049326
 to = [
-    -0.111889675,
-    0.076944806,
-    -0.6043113,
+    0.16453195,
+    -0.11383489,
+    -0.60939604,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
-at = 0.36994487
+at = 0.13020833
 to = [
-    -0.0047202776,
-    0.003229345,
-    -0.60000753,
+    0.14032602,
+    -0.09678838,
+    -0.6068075,
 ]
-ease = "linear"
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.18382353
+to = [
+    0.07403217,
+    -0.050762676,
+    -0.6018803,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.22518383
+to = [
+    0.016188703,
+    -0.011076483,
+    -0.60008967,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.23897058
+to = [
+    -0.0029948526,
+    0.0020488962,
+    -0.600003,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.27956495
+to = [
+    -0.055602904,
+    0.038088456,
+    -0.6010593,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.3147978
+to = [
+    -0.09286181,
+    0.063756615,
+    -0.6029634,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.36764705
+to = [
+    -0.12670757,
+    0.08726293,
+    -0.6055393,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.4059436
+to = [
+    -0.13139933,
+    0.090539746,
+    -0.60596114,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.42356002
+to = [
+    -0.12767525,
+    0.087938376,
+    -0.60562503,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.4518995
+to = [
+    -0.114141256,
+    0.07850975,
+    -0.6044878,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.4886642
+to = [
+    -0.083965465,
+    0.05761112,
+    -0.6024208,
+]
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
 at = 0.5003255
 to = [
-    0.11629245,
-    -0.08000588,
-    -0.6046598,
+    -0.07200852,
+    0.049369056,
+    -0.6017787,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
-at = 0.62565106
+at = 0.53938806
 to = [
-    -0.0006079351,
-    0.00041591082,
-    -0.60000014,
+    -0.05081625,
+    0.034802243,
+    -0.60088456,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
-at = 0.7542318
+at = 0.609375
 to = [
-    -0.12053373,
-    0.08295837,
-    -0.6050086,
+    -0.008037074,
+    0.0054986044,
+    -0.6000221,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
-at = 0.8779297
+at = 0.7086588
 to = [
-    -0.23512624,
-    0.16463256,
-    -0.61948776,
+    0.057325896,
+    -0.03927186,
+    -0.6011261,
 ]
-ease = "linear"
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.7460937
+to = [
+    0.08150736,
+    -0.055915132,
+    -0.6022806,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.8567709
+to = [
+    0.14450496,
+    -0.099720284,
+    -0.6072236,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.9446615
+to = [
+    0.17943293,
+    -0.12441199,
+    -0.6112062,
+]
+ease = "spline"
 
 [[blend.tracks]]
 combine = "replace"
@@ -150,11 +538,92 @@ bone = "forearm.l"
 [[blend.tracks.channel.keys]]
 at = 0.0
 to = [
-    1.1000001,
+    1.1053011,
     0.0,
     0.0,
 ]
-ease = "linear"
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.09191176
+to = [
+    1.1017017,
+    0.0,
+    0.0,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.18382353
+to = [
+    1.1222106,
+    0.0,
+    0.0,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.234375
+to = [
+    1.1398304,
+    0.0,
+    0.0,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.36764705
+to = [
+    1.1804132,
+    0.0,
+    0.0,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.4442402
+to = [
+    1.1852212,
+    0.0,
+    0.0,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.50195307
+to = [
+    1.1773303,
+    0.0,
+    0.0,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.609375
+to = [
+    1.1635038,
+    0.0,
+    0.0,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.7363281
+to = [
+    1.1425204,
+    0.0,
+    0.0,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.90722656
+to = [
+    1.1154095,
+    0.0,
+    0.0,
+]
+ease = "spline"
 
 [[blend.tracks]]
 combine = "replace"
@@ -170,83 +639,200 @@ bone = "upper_arm.r"
 [[blend.tracks.channel.keys]]
 at = 0.0
 to = [
-    -0.116595425,
-    -0.08021665,
-    0.6046843,
+    0.19232687,
+    0.13362187,
+    0.61290836,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
-at = 0.13556989
+at = 0.03446691
 to = [
-    0.0098696705,
-    0.0067524766,
-    0.6000334,
+    0.19731271,
+    0.13719842,
+    0.61360073,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
-at = 0.25045958
+at = 0.06127445
 to = [
-    0.11702317,
-    0.0805143,
-    0.604719,
+    0.19144003,
+    0.13298662,
+    0.6127871,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
-at = 0.38296565
+at = 0.10493258
 to = [
-    0.23976372,
-    0.16803809,
-    0.62028885,
+    0.16453192,
+    0.11383487,
+    0.60939604,
 ]
-ease = "linear"
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.13020827
+to = [
+    0.14032602,
+    0.09678838,
+    0.6068075,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.18382353
+to = [
+    0.07403217,
+    0.050762676,
+    0.6018803,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.22365196
+to = [
+    0.018339392,
+    0.01254839,
+    0.6001151,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.23897062
+to = [
+    -0.0029948526,
+    -0.0020488962,
+    0.600003,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.2795649
+to = [
+    -0.055602904,
+    -0.038088456,
+    0.6010593,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.31479782
+to = [
+    -0.092861846,
+    -0.06375663,
+    0.6029634,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.36764705
+to = [
+    -0.12670754,
+    -0.0872629,
+    0.6055393,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.4059436
+to = [
+    -0.13139933,
+    -0.090539746,
+    0.60596114,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.42356005
+to = [
+    -0.12767525,
+    -0.08793836,
+    0.60562503,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.4518995
+to = [
+    -0.114141226,
+    -0.07850973,
+    0.6044878,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.4886642
+to = [
+    -0.083965465,
+    -0.05761112,
+    0.6024208,
+]
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
 at = 0.5003255
 to = [
-    0.34635615,
-    0.24948826,
-    0.64386386,
+    -0.072008535,
+    -0.04936907,
+    0.6017787,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
-at = 0.57682294
+at = 0.53938794
 to = [
-    0.27669203,
-    0.19552198,
-    0.6273089,
+    -0.050816268,
+    -0.034802258,
+    0.60088456,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
-at = 0.6354166
+at = 0.609375
 to = [
-    0.22282347,
-    0.15564343,
-    0.6174474,
+    -0.008037064,
+    -0.005498598,
+    0.6000221,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
-at = 0.7460937
+at = 0.70703125
 to = [
-    0.12023086,
-    0.0827474,
-    0.60498327,
+    0.05625768,
+    0.038538147,
+    0.6010845,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
-at = 0.86328125
+at = 0.74934894
 to = [
-    0.010942376,
-    0.0074864514,
-    0.6000409,
+    0.08356509,
+    0.057334814,
+    0.6023977,
 ]
-ease = "linear"
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.8616537
+to = [
+    0.14685711,
+    0.101372465,
+    0.6074635,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.9283854
+to = [
+    0.17423134,
+    0.120712,
+    0.61055535,
+]
+ease = "spline"
 
 [[blend.tracks]]
 combine = "replace"
@@ -262,11 +848,92 @@ bone = "forearm.r"
 [[blend.tracks.channel.keys]]
 at = 0.0
 to = [
-    1.1000001,
+    1.1053011,
     0.0,
     0.0,
 ]
-ease = "linear"
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.09191176
+to = [
+    1.1017017,
+    0.0,
+    0.0,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.18382353
+to = [
+    1.1222106,
+    0.0,
+    0.0,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.23437501
+to = [
+    1.1398304,
+    0.0,
+    0.0,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.36764705
+to = [
+    1.1804132,
+    0.0,
+    0.0,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.4442402
+to = [
+    1.1852212,
+    0.0,
+    0.0,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.50195307
+to = [
+    1.1773303,
+    0.0,
+    0.0,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.609375
+to = [
+    1.1635038,
+    0.0,
+    0.0,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.7363281
+to = [
+    1.1425204,
+    0.0,
+    0.0,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.90722656
+to = [
+    1.1154095,
+    0.0,
+    0.0,
+]
+ease = "spline"
 
 [[blend.tracks]]
 combine = "replace"
@@ -280,245 +947,164 @@ channel = "root"
 [[blend.tracks.channel.keys]]
 at = 0.0
 to = [
-    0.0,
+    0.008037403,
     -0.45,
     0.0,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
-at = 0.027083334
+at = 0.063541666
 to = [
-    0.0,
-    -0.45086035,
+    0.0024821695,
+    -0.45397213,
     0.0,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
-at = 0.055208333
+at = 0.119791664
 to = [
-    0.0,
-    -0.45346737,
+    -0.0027914282,
+    -0.4461845,
     0.0,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
-at = 0.0875
+at = 0.15104167
 to = [
-    0.0,
-    -0.45819014,
+    -0.005613029,
+    -0.4384693,
     0.0,
 ]
-ease = "linear"
-
-[[blend.tracks.channel.keys]]
-at = 0.15520833
-to = [
-    0.0,
-    -0.47055835,
-    0.0,
-]
-ease = "linear"
-
-[[blend.tracks.channel.keys]]
-at = 0.18541667
-to = [
-    0.0,
-    -0.47532532,
-    0.0,
-]
-ease = "linear"
-
-[[blend.tracks.channel.keys]]
-at = 0.21875
-to = [
-    0.0,
-    -0.47885817,
-    0.0,
-]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
 at = 0.25
 to = [
-    0.0,
-    -0.48,
+    -0.012664919,
+    -0.41359422,
     0.0,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
-at = 0.28125
+at = 0.31458333
 to = [
-    0.0,
-    -0.47885817,
+    -0.014809131,
+    -0.40967387,
     0.0,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
-at = 0.31354168
+at = 0.37083334
 to = [
-    0.0,
-    -0.47546685,
+    -0.014719389,
+    -0.4176374,
     0.0,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
-at = 0.34375
+at = 0.40208334
 to = [
-    0.0,
-    -0.47074023,
+    -0.013873173,
+    -0.42540675,
     0.0,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
-at = 0.41458333
+at = 0.44583333
 to = [
-    0.0,
-    -0.45784262,
+    -0.011804026,
+    -0.43762052,
     0.0,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
-at = 0.45
+at = 0.5
 to = [
-    0.0,
-    -0.45286474,
+    -0.008037401,
+    -0.45,
     0.0,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
-at = 0.48333332
+at = 0.56354165
 to = [
-    0.0,
-    -0.45032778,
+    -0.00248217,
+    -0.45397213,
     0.0,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
-at = 0.51666665
+at = 0.6197917
 to = [
-    0.0,
-    -0.45032778,
+    0.002791433,
+    -0.4461845,
     0.0,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
-at = 0.54375
+at = 0.6510417
 to = [
-    0.0,
-    -0.4522104,
+    0.005613032,
+    -0.4384693,
     0.0,
 ]
-ease = "linear"
-
-[[blend.tracks.channel.keys]]
-at = 0.571875
-to = [
-    0.0,
-    -0.45571357,
-    0.0,
-]
-ease = "linear"
-
-[[blend.tracks.channel.keys]]
-at = 0.659375
-to = [
-    0.0,
-    -0.4712799,
-    0.0,
-]
-ease = "linear"
-
-[[blend.tracks.channel.keys]]
-at = 0.690625
-to = [
-    0.0,
-    -0.47601482,
-    0.0,
-]
-ease = "linear"
-
-[[blend.tracks.channel.keys]]
-at = 0.72083336
-to = [
-    0.0,
-    -0.4790037,
-    0.0,
-]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
 at = 0.75
 to = [
-    0.0,
-    -0.48,
-    0.0,
-]
-ease = "linear"
-
-[[blend.tracks.channel.keys]]
-at = 0.78125
-to = [
-    0.0,
-    -0.47885817,
+    0.01266492,
+    -0.41359422,
     0.0,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
 at = 0.81458336
 to = [
-    0.0,
-    -0.4753253,
+    0.014809131,
+    -0.40967387,
     0.0,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
-at = 0.84479165
+at = 0.87083334
 to = [
-    0.0,
-    -0.47055835,
+    0.014719388,
+    -0.4176374,
     0.0,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
-at = 0.9125
+at = 0.90208334
 to = [
-    0.0,
-    -0.4581901,
+    0.013873171,
+    -0.42540675,
     0.0,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
-at = 0.9447917
+at = 0.9458333
 to = [
-    0.0,
-    -0.45346737,
+    0.011804027,
+    -0.43762052,
     0.0,
 ]
-ease = "linear"
-
-[[blend.tracks.channel.keys]]
-at = 0.97291666
-to = [
-    0.0,
-    -0.45086038,
-    0.0,
-]
-ease = "linear"
+ease = "spline"
 
 [[blend]]
 heading = 0.0
@@ -526,7 +1112,107 @@ name_key = "animation.states.crouch_walk_backward"
 length = 1.0
 clock = "stride"
 looping = true
-note = "Sampled from `gait_pose` at a walk, one stride per clip. Only the upper body and the hips: the legs are the gait's own, planted from the stride. Each arm is timed by the foot on its side, so it is right at any speed."
+note = "Sampled from `gait_pose` at a run, one stride per clip. Only the upper body and the hips: the legs are the gait's own, planted from the stride. Each arm is timed by the foot on its side, so it lands with its foot at any speed."
+
+[[blend.tracks]]
+combine = "replace"
+space = "body"
+unit = "meters"
+enabled = true
+
+[blend.tracks.channel]
+channel = "rotation"
+bone = "pelvis"
+
+[[blend.tracks.channel.keys]]
+at = 0.0
+to = [
+    -0.0,
+    0.045,
+    -0.018753938,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.110416666
+to = [
+    -0.0,
+    0.034597885,
+    0.004477554,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.17395833
+to = [
+    -0.0,
+    0.020691555,
+    0.017618895,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.25
+to = [
+    -0.0000000000000000017347235,
+    -0.0000000019670126,
+    0.02955148,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.36145833
+to = [
+    0.00000000005820766,
+    -0.029000584,
+    0.034682356,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.5
+to = [
+    0.00000000002910383,
+    -0.045,
+    0.018753933,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.61041665
+to = [
+    -0.0,
+    -0.03459789,
+    -0.004477553,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.67395836
+to = [
+    -0.0,
+    -0.020691546,
+    -0.017618906,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.75
+to = [
+    -0.0,
+    0.00000000053661964,
+    -0.029551482,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.86145836
+to = [
+    0.00000000005820766,
+    0.029000588,
+    -0.034682352,
+]
+ease = "spline"
 
 [[blend.tracks]]
 combine = "replace"
@@ -541,11 +1227,110 @@ bone = "chest"
 [[blend.tracks.channel.keys]]
 at = 0.0
 to = [
-    0.35,
-    0.0,
-    0.0,
+    0.36008033,
+    -0.06705718,
+    0.014027415,
 ]
-ease = "linear"
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.061458334
+to = [
+    0.362367,
+    -0.06504147,
+    0.004673646,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.13645834
+to = [
+    0.35581094,
+    -0.04973782,
+    -0.007521706,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.25
+to = [
+    0.33981162,
+    -0.0073141353,
+    -0.021940852,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.3625
+to = [
+    0.34105667,
+    0.038149532,
+    -0.02573836,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.45208332
+to = [
+    0.3541081,
+    0.06185787,
+    -0.019906778,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.5
+to = [
+    0.36008033,
+    0.06705718,
+    -0.014027411,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.56145835
+to = [
+    0.362367,
+    0.065041475,
+    -0.004673638,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.63645834
+to = [
+    0.35581094,
+    0.049737815,
+    0.007521708,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.75
+to = [
+    0.33981162,
+    0.007314138,
+    0.021940853,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.8625
+to = [
+    0.34105667,
+    -0.03814954,
+    0.02573836,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.95208335
+to = [
+    0.3541081,
+    -0.06185789,
+    0.019906776,
+]
+ease = "spline"
 
 [[blend.tracks]]
 combine = "replace"
@@ -560,11 +1345,74 @@ bone = "neck"
 [[blend.tracks.channel.keys]]
 at = 0.0
 to = [
-    -0.245,
-    0.0,
-    0.0,
+    -0.2520748,
+    0.025550945,
+    0.0058097914,
 ]
-ease = "linear"
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.134375
+to = [
+    -0.24927436,
+    0.018670468,
+    -0.0029819552,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.25
+to = [
+    -0.23791155,
+    0.0021499656,
+    -0.009122409,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.36458334
+to = [
+    -0.23896375,
+    -0.015274705,
+    -0.010678443,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.5
+to = [
+    -0.2520748,
+    -0.025550945,
+    -0.005809789,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.634375
+to = [
+    -0.24927436,
+    -0.018670471,
+    0.0029819547,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.75
+to = [
+    -0.23791155,
+    -0.0021499663,
+    0.009122409,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.8645833
+to = [
+    -0.23896375,
+    0.015274702,
+    0.010678444,
+]
+ease = "spline"
 
 [[blend.tracks]]
 combine = "replace"
@@ -580,74 +1428,200 @@ bone = "upper_arm.l"
 [[blend.tracks.channel.keys]]
 at = 0.0
 to = [
-    -0.16471267,
-    0.11396276,
-    -0.60941696,
+    0.19232687,
+    -0.13362187,
+    -0.61290836,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
-at = 0.12408088
+at = 0.032935046
 to = [
-    -0.083095476,
-    0.057010762,
-    -0.6023706,
+    0.19739112,
+    -0.13725476,
+    -0.6136118,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
-at = 0.24739583
+at = 0.06050858
 to = [
-    -0.0017194521,
-    0.0011763419,
-    -0.60000104,
+    0.19172461,
+    -0.13319044,
+    -0.61282605,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
-at = 0.39905024
+at = 0.1049326
 to = [
-    0.098338544,
-    -0.06754608,
-    -0.6033251,
+    0.16453195,
+    -0.11383489,
+    -0.60939604,
 ]
-ease = "linear"
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.13020833
+to = [
+    0.14032602,
+    -0.09678838,
+    -0.6068075,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.18382353
+to = [
+    0.07403217,
+    -0.050762676,
+    -0.6018803,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.22518383
+to = [
+    0.016188703,
+    -0.011076483,
+    -0.60008967,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.23897058
+to = [
+    -0.0029948526,
+    0.0020488962,
+    -0.600003,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.27956495
+to = [
+    -0.055602904,
+    0.038088456,
+    -0.6010593,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.3147978
+to = [
+    -0.09286181,
+    0.063756615,
+    -0.6029634,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.36764705
+to = [
+    -0.12670757,
+    0.08726293,
+    -0.6055393,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.4059436
+to = [
+    -0.13139933,
+    0.090539746,
+    -0.60596114,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.42356002
+to = [
+    -0.12767525,
+    0.087938376,
+    -0.60562503,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.4518995
+to = [
+    -0.114141256,
+    0.07850975,
+    -0.6044878,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.4886642
+to = [
+    -0.083965465,
+    0.05761112,
+    -0.6024208,
+]
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
 at = 0.5003255
 to = [
-    0.16449913,
-    -0.11381168,
-    -0.6093922,
+    -0.07200852,
+    0.049369056,
+    -0.6017787,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
-at = 0.6468099
+at = 0.53938806
 to = [
-    0.068108484,
-    -0.046684653,
-    -0.6015907,
+    -0.05081625,
+    0.034802243,
+    -0.60088456,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
-at = 0.7591146
+at = 0.609375
 to = [
-    -0.0060180817,
-    0.0041172523,
-    -0.60001236,
+    -0.008037074,
+    0.0054986044,
+    -0.6000221,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
-at = 0.9007162
+at = 0.7086588
 to = [
-    -0.09943596,
-    0.06830601,
-    -0.6034002,
+    0.057325896,
+    -0.03927186,
+    -0.6011261,
 ]
-ease = "linear"
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.7460937
+to = [
+    0.08150736,
+    -0.055915132,
+    -0.6022806,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.8567709
+to = [
+    0.14450496,
+    -0.099720284,
+    -0.6072236,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.9446615
+to = [
+    0.17943293,
+    -0.12441199,
+    -0.6112062,
+]
+ease = "spline"
 
 [[blend.tracks]]
 combine = "replace"
@@ -663,11 +1637,92 @@ bone = "forearm.l"
 [[blend.tracks.channel.keys]]
 at = 0.0
 to = [
-    1.1000001,
+    1.1053011,
     0.0,
     0.0,
 ]
-ease = "linear"
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.09191176
+to = [
+    1.1017017,
+    0.0,
+    0.0,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.18382353
+to = [
+    1.1222106,
+    0.0,
+    0.0,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.234375
+to = [
+    1.1398304,
+    0.0,
+    0.0,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.36764705
+to = [
+    1.1804132,
+    0.0,
+    0.0,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.4442402
+to = [
+    1.1852212,
+    0.0,
+    0.0,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.50195307
+to = [
+    1.1773303,
+    0.0,
+    0.0,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.609375
+to = [
+    1.1635038,
+    0.0,
+    0.0,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.7363281
+to = [
+    1.1425204,
+    0.0,
+    0.0,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.90722656
+to = [
+    1.1154095,
+    0.0,
+    0.0,
+]
+ease = "spline"
 
 [[blend.tracks]]
 combine = "replace"
@@ -683,74 +1738,200 @@ bone = "upper_arm.r"
 [[blend.tracks.channel.keys]]
 at = 0.0
 to = [
-    -0.16471267,
-    -0.11396276,
-    0.60941696,
+    0.19232687,
+    0.13362187,
+    0.61290836,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
-at = 0.12408092
+at = 0.03446691
 to = [
-    -0.083095446,
-    -0.05701074,
-    0.6023706,
+    0.19731271,
+    0.13719842,
+    0.61360073,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
-at = 0.24739583
+at = 0.06127445
 to = [
-    -0.0017194521,
-    -0.0011763419,
-    0.60000104,
+    0.19144003,
+    0.13298662,
+    0.6127871,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
-at = 0.39905024
+at = 0.10493258
 to = [
-    0.098338544,
-    0.06754608,
-    0.6033251,
+    0.16453192,
+    0.11383487,
+    0.60939604,
 ]
-ease = "linear"
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.13020827
+to = [
+    0.14032602,
+    0.09678838,
+    0.6068075,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.18382353
+to = [
+    0.07403217,
+    0.050762676,
+    0.6018803,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.22365196
+to = [
+    0.018339392,
+    0.01254839,
+    0.6001151,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.23897062
+to = [
+    -0.0029948526,
+    -0.0020488962,
+    0.600003,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.2795649
+to = [
+    -0.055602904,
+    -0.038088456,
+    0.6010593,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.31479782
+to = [
+    -0.092861846,
+    -0.06375663,
+    0.6029634,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.36764705
+to = [
+    -0.12670754,
+    -0.0872629,
+    0.6055393,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.4059436
+to = [
+    -0.13139933,
+    -0.090539746,
+    0.60596114,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.42356005
+to = [
+    -0.12767525,
+    -0.08793836,
+    0.60562503,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.4518995
+to = [
+    -0.114141226,
+    -0.07850973,
+    0.6044878,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.4886642
+to = [
+    -0.083965465,
+    -0.05761112,
+    0.6024208,
+]
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
 at = 0.5003255
 to = [
-    0.16449913,
-    0.11381168,
-    0.6093922,
+    -0.072008535,
+    -0.04936907,
+    0.6017787,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
-at = 0.6468099
+at = 0.53938794
 to = [
-    0.068108484,
-    0.046684653,
-    0.6015907,
+    -0.050816268,
+    -0.034802258,
+    0.60088456,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
-at = 0.7591145
+at = 0.609375
 to = [
-    -0.0060180225,
-    -0.0041172123,
-    0.60001236,
+    -0.008037064,
+    -0.005498598,
+    0.6000221,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
-at = 0.9007162
+at = 0.70703125
 to = [
-    -0.09943596,
-    -0.06830601,
-    0.6034002,
+    0.05625768,
+    0.038538147,
+    0.6010845,
 ]
-ease = "linear"
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.74934894
+to = [
+    0.08356509,
+    0.057334814,
+    0.6023977,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.8616537
+to = [
+    0.14685711,
+    0.101372465,
+    0.6074635,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.9283854
+to = [
+    0.17423134,
+    0.120712,
+    0.61055535,
+]
+ease = "spline"
 
 [[blend.tracks]]
 combine = "replace"
@@ -766,11 +1947,92 @@ bone = "forearm.r"
 [[blend.tracks.channel.keys]]
 at = 0.0
 to = [
-    1.1000001,
+    1.1053011,
     0.0,
     0.0,
 ]
-ease = "linear"
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.09191176
+to = [
+    1.1017017,
+    0.0,
+    0.0,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.18382353
+to = [
+    1.1222106,
+    0.0,
+    0.0,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.23437501
+to = [
+    1.1398304,
+    0.0,
+    0.0,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.36764705
+to = [
+    1.1804132,
+    0.0,
+    0.0,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.4442402
+to = [
+    1.1852212,
+    0.0,
+    0.0,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.50195307
+to = [
+    1.1773303,
+    0.0,
+    0.0,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.609375
+to = [
+    1.1635038,
+    0.0,
+    0.0,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.7363281
+to = [
+    1.1425204,
+    0.0,
+    0.0,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.90722656
+to = [
+    1.1154095,
+    0.0,
+    0.0,
+]
+ease = "spline"
 
 [[blend.tracks]]
 combine = "replace"
@@ -784,245 +2046,164 @@ channel = "root"
 [[blend.tracks.channel.keys]]
 at = 0.0
 to = [
-    0.0,
+    0.008037403,
     -0.45,
     0.0,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
-at = 0.027083334
+at = 0.063541666
 to = [
-    0.0,
-    -0.45086035,
+    0.0024821695,
+    -0.45397213,
     0.0,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
-at = 0.055208333
+at = 0.119791664
 to = [
-    0.0,
-    -0.45346737,
+    -0.0027914282,
+    -0.4461845,
     0.0,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
-at = 0.0875
+at = 0.15104167
 to = [
-    0.0,
-    -0.45819014,
+    -0.005613029,
+    -0.4384693,
     0.0,
 ]
-ease = "linear"
-
-[[blend.tracks.channel.keys]]
-at = 0.15520833
-to = [
-    0.0,
-    -0.47055835,
-    0.0,
-]
-ease = "linear"
-
-[[blend.tracks.channel.keys]]
-at = 0.18541667
-to = [
-    0.0,
-    -0.47532532,
-    0.0,
-]
-ease = "linear"
-
-[[blend.tracks.channel.keys]]
-at = 0.21875
-to = [
-    0.0,
-    -0.47885817,
-    0.0,
-]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
 at = 0.25
 to = [
-    0.0,
-    -0.48,
+    -0.012664919,
+    -0.41359422,
     0.0,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
-at = 0.28125
+at = 0.31458333
 to = [
-    0.0,
-    -0.47885817,
+    -0.014809131,
+    -0.40967387,
     0.0,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
-at = 0.31354168
+at = 0.37083334
 to = [
-    0.0,
-    -0.47546685,
+    -0.014719389,
+    -0.4176374,
     0.0,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
-at = 0.34375
+at = 0.40208334
 to = [
-    0.0,
-    -0.47074023,
+    -0.013873173,
+    -0.42540675,
     0.0,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
-at = 0.41458333
+at = 0.44583333
 to = [
-    0.0,
-    -0.45784262,
+    -0.011804026,
+    -0.43762052,
     0.0,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
-at = 0.45
+at = 0.5
 to = [
-    0.0,
-    -0.45286474,
+    -0.008037401,
+    -0.45,
     0.0,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
-at = 0.48333332
+at = 0.56354165
 to = [
-    0.0,
-    -0.45032778,
+    -0.00248217,
+    -0.45397213,
     0.0,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
-at = 0.51666665
+at = 0.6197917
 to = [
-    0.0,
-    -0.45032778,
+    0.002791433,
+    -0.4461845,
     0.0,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
-at = 0.54375
+at = 0.6510417
 to = [
-    0.0,
-    -0.4522104,
+    0.005613032,
+    -0.4384693,
     0.0,
 ]
-ease = "linear"
-
-[[blend.tracks.channel.keys]]
-at = 0.571875
-to = [
-    0.0,
-    -0.45571357,
-    0.0,
-]
-ease = "linear"
-
-[[blend.tracks.channel.keys]]
-at = 0.659375
-to = [
-    0.0,
-    -0.4712799,
-    0.0,
-]
-ease = "linear"
-
-[[blend.tracks.channel.keys]]
-at = 0.690625
-to = [
-    0.0,
-    -0.47601482,
-    0.0,
-]
-ease = "linear"
-
-[[blend.tracks.channel.keys]]
-at = 0.72083336
-to = [
-    0.0,
-    -0.4790037,
-    0.0,
-]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
 at = 0.75
 to = [
-    0.0,
-    -0.48,
-    0.0,
-]
-ease = "linear"
-
-[[blend.tracks.channel.keys]]
-at = 0.78125
-to = [
-    0.0,
-    -0.47885817,
+    0.01266492,
+    -0.41359422,
     0.0,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
 at = 0.81458336
 to = [
-    0.0,
-    -0.4753253,
+    0.014809131,
+    -0.40967387,
     0.0,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
-at = 0.84479165
+at = 0.87083334
 to = [
-    0.0,
-    -0.47055835,
+    0.014719388,
+    -0.4176374,
     0.0,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
-at = 0.9125
+at = 0.90208334
 to = [
-    0.0,
-    -0.4581901,
+    0.013873171,
+    -0.42540675,
     0.0,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
-at = 0.9447917
+at = 0.9458333
 to = [
-    0.0,
-    -0.45346737,
+    0.011804027,
+    -0.43762052,
     0.0,
 ]
-ease = "linear"
-
-[[blend.tracks.channel.keys]]
-at = 0.97291666
-to = [
-    0.0,
-    -0.45086038,
-    0.0,
-]
-ease = "linear"
+ease = "spline"
 
 [[blend]]
 heading = 0.7853982
@@ -1030,7 +2211,107 @@ name_key = "animation.states.crouch_walk_backward"
 length = 1.0
 clock = "stride"
 looping = true
-note = "Sampled from `gait_pose` at a walk, one stride per clip. Only the upper body and the hips: the legs are the gait's own, planted from the stride. Each arm is timed by the foot on its side, so it is right at any speed."
+note = "Sampled from `gait_pose` at a run, one stride per clip. Only the upper body and the hips: the legs are the gait's own, planted from the stride. Each arm is timed by the foot on its side, so it lands with its foot at any speed."
+
+[[blend.tracks]]
+combine = "replace"
+space = "body"
+unit = "meters"
+enabled = true
+
+[blend.tracks.channel]
+channel = "rotation"
+bone = "pelvis"
+
+[[blend.tracks.channel.keys]]
+at = 0.0
+to = [
+    -0.0,
+    0.045,
+    -0.018753938,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.110416666
+to = [
+    -0.0,
+    0.034597885,
+    0.004477554,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.17395833
+to = [
+    -0.0,
+    0.020691555,
+    0.017618895,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.25
+to = [
+    -0.0000000000000000017347235,
+    -0.0000000019670126,
+    0.02955148,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.36145833
+to = [
+    0.00000000005820766,
+    -0.029000584,
+    0.034682356,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.5
+to = [
+    0.00000000002910383,
+    -0.045,
+    0.018753933,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.61041665
+to = [
+    -0.0,
+    -0.03459789,
+    -0.004477553,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.67395836
+to = [
+    -0.0,
+    -0.020691546,
+    -0.017618906,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.75
+to = [
+    -0.0,
+    0.00000000053661964,
+    -0.029551482,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.86145836
+to = [
+    0.00000000005820766,
+    0.029000588,
+    -0.034682352,
+]
+ease = "spline"
 
 [[blend.tracks]]
 combine = "replace"
@@ -1045,11 +2326,119 @@ bone = "chest"
 [[blend.tracks.channel.keys]]
 at = 0.0
 to = [
-    0.34868702,
-    0.030926676,
-    0.09030041,
+    0.35830742,
+    -0.03518287,
+    0.104648724,
 ]
-ease = "linear"
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.083333336
+to = [
+    0.36002657,
+    -0.029940838,
+    0.09177788,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.14375
+to = [
+    0.35369363,
+    -0.016183106,
+    0.081809334,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.25
+to = [
+    0.33915964,
+    0.022670573,
+    0.06804869,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.35729167
+to = [
+    0.33995372,
+    0.066368625,
+    0.06417461,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.4125
+to = [
+    0.3473283,
+    0.084174424,
+    0.06684839,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.5
+to = [
+    0.35914484,
+    0.09897706,
+    0.07662244,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.57916665
+to = [
+    0.3603618,
+    0.09469849,
+    0.088910915,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.63645834
+to = [
+    0.35425222,
+    0.08121113,
+    0.09800677,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.75
+to = [
+    0.33792046,
+    0.037233144,
+    0.11189103,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.81875
+to = [
+    0.33575606,
+    0.008102386,
+    0.11561718,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.85729164
+to = [
+    0.33849144,
+    -0.0063349535,
+    0.11580665,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.90208334
+to = [
+    0.3443661,
+    -0.020079223,
+    0.114246555,
+]
+ease = "spline"
 
 [[blend.tracks]]
 combine = "replace"
@@ -1064,11 +2453,74 @@ bone = "neck"
 [[blend.tracks.channel.keys]]
 at = 0.0
 to = [
-    -0.245,
-    0.0,
-    0.0,
+    -0.2520748,
+    0.025550945,
+    0.0058097914,
 ]
-ease = "linear"
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.134375
+to = [
+    -0.24927436,
+    0.018670468,
+    -0.0029819552,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.25
+to = [
+    -0.23791155,
+    0.0021499656,
+    -0.009122409,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.36458334
+to = [
+    -0.23896375,
+    -0.015274705,
+    -0.010678443,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.5
+to = [
+    -0.2520748,
+    -0.025550945,
+    -0.005809789,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.634375
+to = [
+    -0.24927436,
+    -0.018670471,
+    0.0029819547,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.75
+to = [
+    -0.23791155,
+    -0.0021499663,
+    0.009122409,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.8645833
+to = [
+    -0.23896375,
+    0.015274702,
+    0.010678444,
+]
+ease = "spline"
 
 [[blend.tracks]]
 combine = "replace"
@@ -1084,83 +2536,200 @@ bone = "upper_arm.l"
 [[blend.tracks.channel.keys]]
 at = 0.0
 to = [
-    -0.116595425,
-    0.08021665,
-    -0.6046843,
+    0.19232687,
+    -0.13362187,
+    -0.61290836,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
-at = 0.13556986
+at = 0.032935046
 to = [
-    0.009869638,
-    -0.006752454,
-    -0.6000334,
+    0.19739112,
+    -0.13725476,
+    -0.6136118,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
-at = 0.25045955
+at = 0.06050858
 to = [
-    0.11702314,
-    -0.08051428,
-    -0.604719,
+    0.19172461,
+    -0.13319044,
+    -0.61282605,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
-at = 0.38296565
+at = 0.1049326
 to = [
-    0.23976372,
-    -0.16803809,
-    -0.62028885,
+    0.16453195,
+    -0.11383489,
+    -0.60939604,
 ]
-ease = "linear"
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.13020833
+to = [
+    0.14032602,
+    -0.09678838,
+    -0.6068075,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.18382353
+to = [
+    0.07403217,
+    -0.050762676,
+    -0.6018803,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.22518383
+to = [
+    0.016188703,
+    -0.011076483,
+    -0.60008967,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.23897058
+to = [
+    -0.0029948526,
+    0.0020488962,
+    -0.600003,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.27956495
+to = [
+    -0.055602904,
+    0.038088456,
+    -0.6010593,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.3147978
+to = [
+    -0.09286181,
+    0.063756615,
+    -0.6029634,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.36764705
+to = [
+    -0.12670757,
+    0.08726293,
+    -0.6055393,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.4059436
+to = [
+    -0.13139933,
+    0.090539746,
+    -0.60596114,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.42356002
+to = [
+    -0.12767525,
+    0.087938376,
+    -0.60562503,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.4518995
+to = [
+    -0.114141256,
+    0.07850975,
+    -0.6044878,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.4886642
+to = [
+    -0.083965465,
+    0.05761112,
+    -0.6024208,
+]
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
 at = 0.5003255
 to = [
-    0.34635615,
-    -0.24948826,
-    -0.64386386,
+    -0.07200852,
+    0.049369056,
+    -0.6017787,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
-at = 0.57682294
+at = 0.53938806
 to = [
-    0.27669203,
-    -0.19552198,
-    -0.6273089,
+    -0.05081625,
+    0.034802243,
+    -0.60088456,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
-at = 0.6354166
+at = 0.609375
 to = [
-    0.22282347,
-    -0.15564343,
-    -0.6174474,
+    -0.008037074,
+    0.0054986044,
+    -0.6000221,
 ]
-ease = "linear"
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.7086588
+to = [
+    0.057325896,
+    -0.03927186,
+    -0.6011261,
+]
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
 at = 0.7460937
 to = [
-    0.12023086,
-    -0.0827474,
-    -0.60498327,
+    0.08150736,
+    -0.055915132,
+    -0.6022806,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
-at = 0.86328125
+at = 0.8567709
 to = [
-    0.010942376,
-    -0.0074864514,
-    -0.6000409,
+    0.14450496,
+    -0.099720284,
+    -0.6072236,
 ]
-ease = "linear"
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.9446615
+to = [
+    0.17943293,
+    -0.12441199,
+    -0.6112062,
+]
+ease = "spline"
 
 [[blend.tracks]]
 combine = "replace"
@@ -1176,11 +2745,92 @@ bone = "forearm.l"
 [[blend.tracks.channel.keys]]
 at = 0.0
 to = [
-    1.1000001,
+    1.1053011,
     0.0,
     0.0,
 ]
-ease = "linear"
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.09191176
+to = [
+    1.1017017,
+    0.0,
+    0.0,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.18382353
+to = [
+    1.1222106,
+    0.0,
+    0.0,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.234375
+to = [
+    1.1398304,
+    0.0,
+    0.0,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.36764705
+to = [
+    1.1804132,
+    0.0,
+    0.0,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.4442402
+to = [
+    1.1852212,
+    0.0,
+    0.0,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.50195307
+to = [
+    1.1773303,
+    0.0,
+    0.0,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.609375
+to = [
+    1.1635038,
+    0.0,
+    0.0,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.7363281
+to = [
+    1.1425204,
+    0.0,
+    0.0,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.90722656
+to = [
+    1.1154095,
+    0.0,
+    0.0,
+]
+ease = "spline"
 
 [[blend.tracks]]
 combine = "replace"
@@ -1196,74 +2846,200 @@ bone = "upper_arm.r"
 [[blend.tracks.channel.keys]]
 at = 0.0
 to = [
-    -0.34665066,
-    -0.2497233,
-    0.6439437,
+    0.19232687,
+    0.13362187,
+    0.61290836,
 ]
-ease = "linear"
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.03446691
+to = [
+    0.19731271,
+    0.13719842,
+    0.61360073,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.06127445
+to = [
+    0.19144003,
+    0.13298662,
+    0.6127871,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.10493258
+to = [
+    0.16453192,
+    0.11383487,
+    0.60939604,
+]
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
 at = 0.13020827
 to = [
-    -0.22762667,
-    -0.1591453,
-    0.61822945,
+    0.14032602,
+    0.09678838,
+    0.6068075,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
-at = 0.2550551
+at = 0.18382353
 to = [
-    -0.11188975,
-    -0.07694484,
-    0.6043113,
+    0.07403217,
+    0.050762676,
+    0.6018803,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
-at = 0.36994487
+at = 0.22365196
 to = [
-    -0.0047202776,
-    -0.003229345,
-    0.60000753,
+    0.018339392,
+    0.01254839,
+    0.6001151,
 ]
-ease = "linear"
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.23897062
+to = [
+    -0.0029948526,
+    -0.0020488962,
+    0.600003,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.2795649
+to = [
+    -0.055602904,
+    -0.038088456,
+    0.6010593,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.31479782
+to = [
+    -0.092861846,
+    -0.06375663,
+    0.6029634,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.36764705
+to = [
+    -0.12670754,
+    -0.0872629,
+    0.6055393,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.4059436
+to = [
+    -0.13139933,
+    -0.090539746,
+    0.60596114,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.42356005
+to = [
+    -0.12767525,
+    -0.08793836,
+    0.60562503,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.4518995
+to = [
+    -0.114141226,
+    -0.07850973,
+    0.6044878,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.4886642
+to = [
+    -0.083965465,
+    -0.05761112,
+    0.6024208,
+]
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
 at = 0.5003255
 to = [
-    0.11629245,
-    0.08000588,
-    0.6046598,
+    -0.072008535,
+    -0.04936907,
+    0.6017787,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
-at = 0.6354166
+at = 0.53938794
 to = [
-    -0.00972657,
-    -0.0066545634,
-    0.60003245,
+    -0.050816268,
+    -0.034802258,
+    0.60088456,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
-at = 0.7591145
+at = 0.609375
 to = [
-    -0.12507677,
-    -0.086125106,
-    0.6053964,
+    -0.008037064,
+    -0.005498598,
+    0.6000221,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
-at = 0.8714193
+at = 0.70703125
 to = [
-    -0.22912711,
-    -0.16024119,
-    0.6184776,
+    0.05625768,
+    0.038538147,
+    0.6010845,
 ]
-ease = "linear"
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.74934894
+to = [
+    0.08356509,
+    0.057334814,
+    0.6023977,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.8616537
+to = [
+    0.14685711,
+    0.101372465,
+    0.6074635,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.9283854
+to = [
+    0.17423134,
+    0.120712,
+    0.61055535,
+]
+ease = "spline"
 
 [[blend.tracks]]
 combine = "replace"
@@ -1279,11 +3055,92 @@ bone = "forearm.r"
 [[blend.tracks.channel.keys]]
 at = 0.0
 to = [
-    1.1000001,
+    1.1053011,
     0.0,
     0.0,
 ]
-ease = "linear"
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.09191176
+to = [
+    1.1017017,
+    0.0,
+    0.0,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.18382353
+to = [
+    1.1222106,
+    0.0,
+    0.0,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.23437501
+to = [
+    1.1398304,
+    0.0,
+    0.0,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.36764705
+to = [
+    1.1804132,
+    0.0,
+    0.0,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.4442402
+to = [
+    1.1852212,
+    0.0,
+    0.0,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.50195307
+to = [
+    1.1773303,
+    0.0,
+    0.0,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.609375
+to = [
+    1.1635038,
+    0.0,
+    0.0,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.7363281
+to = [
+    1.1425204,
+    0.0,
+    0.0,
+]
+ease = "spline"
+
+[[blend.tracks.channel.keys]]
+at = 0.90722656
+to = [
+    1.1154095,
+    0.0,
+    0.0,
+]
+ease = "spline"
 
 [[blend.tracks]]
 combine = "replace"
@@ -1297,242 +3154,161 @@ channel = "root"
 [[blend.tracks.channel.keys]]
 at = 0.0
 to = [
-    0.0,
+    0.008037403,
     -0.45,
     0.0,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
-at = 0.027083334
+at = 0.063541666
 to = [
-    0.0,
-    -0.45086035,
+    0.0024821695,
+    -0.45397213,
     0.0,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
-at = 0.055208333
+at = 0.119791664
 to = [
-    0.0,
-    -0.45346737,
+    -0.0027914282,
+    -0.4461845,
     0.0,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
-at = 0.0875
+at = 0.15104167
 to = [
-    0.0,
-    -0.45819014,
+    -0.005613029,
+    -0.4384693,
     0.0,
 ]
-ease = "linear"
-
-[[blend.tracks.channel.keys]]
-at = 0.15520833
-to = [
-    0.0,
-    -0.47055835,
-    0.0,
-]
-ease = "linear"
-
-[[blend.tracks.channel.keys]]
-at = 0.18541667
-to = [
-    0.0,
-    -0.47532532,
-    0.0,
-]
-ease = "linear"
-
-[[blend.tracks.channel.keys]]
-at = 0.21875
-to = [
-    0.0,
-    -0.47885817,
-    0.0,
-]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
 at = 0.25
 to = [
-    0.0,
-    -0.48,
+    -0.012664919,
+    -0.41359422,
     0.0,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
-at = 0.28125
+at = 0.31458333
 to = [
-    0.0,
-    -0.47885817,
+    -0.014809131,
+    -0.40967387,
     0.0,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
-at = 0.31354168
+at = 0.37083334
 to = [
-    0.0,
-    -0.47546685,
+    -0.014719389,
+    -0.4176374,
     0.0,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
-at = 0.34375
+at = 0.40208334
 to = [
-    0.0,
-    -0.47074023,
+    -0.013873173,
+    -0.42540675,
     0.0,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
-at = 0.41458333
+at = 0.44583333
 to = [
-    0.0,
-    -0.45784262,
+    -0.011804026,
+    -0.43762052,
     0.0,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
-at = 0.45
+at = 0.5
 to = [
-    0.0,
-    -0.45286474,
+    -0.008037401,
+    -0.45,
     0.0,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
-at = 0.48333332
+at = 0.56354165
 to = [
-    0.0,
-    -0.45032778,
+    -0.00248217,
+    -0.45397213,
     0.0,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
-at = 0.51666665
+at = 0.6197917
 to = [
-    0.0,
-    -0.45032778,
+    0.002791433,
+    -0.4461845,
     0.0,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
-at = 0.54375
+at = 0.6510417
 to = [
-    0.0,
-    -0.4522104,
+    0.005613032,
+    -0.4384693,
     0.0,
 ]
-ease = "linear"
-
-[[blend.tracks.channel.keys]]
-at = 0.571875
-to = [
-    0.0,
-    -0.45571357,
-    0.0,
-]
-ease = "linear"
-
-[[blend.tracks.channel.keys]]
-at = 0.659375
-to = [
-    0.0,
-    -0.4712799,
-    0.0,
-]
-ease = "linear"
-
-[[blend.tracks.channel.keys]]
-at = 0.690625
-to = [
-    0.0,
-    -0.47601482,
-    0.0,
-]
-ease = "linear"
-
-[[blend.tracks.channel.keys]]
-at = 0.72083336
-to = [
-    0.0,
-    -0.4790037,
-    0.0,
-]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
 at = 0.75
 to = [
-    0.0,
-    -0.48,
-    0.0,
-]
-ease = "linear"
-
-[[blend.tracks.channel.keys]]
-at = 0.78125
-to = [
-    0.0,
-    -0.47885817,
+    0.01266492,
+    -0.41359422,
     0.0,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
 at = 0.81458336
 to = [
-    0.0,
-    -0.4753253,
+    0.014809131,
+    -0.40967387,
     0.0,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
-at = 0.84479165
+at = 0.87083334
 to = [
-    0.0,
-    -0.47055835,
+    0.014719388,
+    -0.4176374,
     0.0,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
-at = 0.9125
+at = 0.90208334
 to = [
-    0.0,
-    -0.4581901,
+    0.013873171,
+    -0.42540675,
     0.0,
 ]
-ease = "linear"
+ease = "spline"
 
 [[blend.tracks.channel.keys]]
-at = 0.9447917
+at = 0.9458333
 to = [
-    0.0,
-    -0.45346737,
+    0.011804027,
+    -0.43762052,
     0.0,
 ]
-ease = "linear"
-
-[[blend.tracks.channel.keys]]
-at = 0.97291666
-to = [
-    0.0,
-    -0.45086038,
-    0.0,
-]
-ease = "linear"
+ease = "spline"

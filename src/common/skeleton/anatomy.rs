@@ -47,6 +47,10 @@ pub struct Anatomy {
     pub head: Option<usize>,
     /// Bones that bend with the aim's pitch, each with its share. The shares sum to one.
     pub look: Vec<(usize, f32)>,
+    /// Bones that turn back against the legs when they swing toward where the body is going, each
+    /// with its share, root first. The shares sum to one, so the last faces the aim; the bones
+    /// between face part of the way. Empty: the legs never turn.
+    pub twist: Vec<(usize, f32)>,
     /// Bones a first-person view draws, each with the hand (0 trigger, 1 support) it belongs to.
     pub viewmodel: Vec<(usize, usize)>,
     /// One per bone. `NONE` is never masked.
@@ -57,6 +61,9 @@ pub struct Anatomy {
     pub leg: f32,
     pub arm: f32,
     pub hip: f32,
+    /// Where a crouched body's crown sits, as a share of the crouched box's height. Under one, a
+    /// rig crouches lower than the box needs: a strider stalking with its head down.
+    pub crouched_crown: f32,
 }
 
 impl Anatomy {
@@ -113,6 +120,10 @@ impl Anatomy {
         let shares: f32 = self.look.iter().map(|(_, share)| share).sum();
         if !self.look.is_empty() && (shares - 1.0).abs() > 1e-4 {
             problems.push(format!("the look shares come to {shares}, not 1"));
+        }
+        let twist: f32 = self.twist.iter().map(|(_, share)| share).sum();
+        if !self.twist.is_empty() && (twist - 1.0).abs() > 1e-4 {
+            problems.push(format!("the twist shares come to {twist}, not 1"));
         }
         problems
     }

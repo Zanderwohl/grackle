@@ -259,7 +259,7 @@ pub fn pose_the_figure(
 
         if let Some((state, inputs)) = beneath.state {
             let library = library.as_deref();
-            standing = crate::common::skeleton::ik::finish_pose(skeleton, state, &inputs, &root, library);
+            standing = crate::common::skeleton::ik::ducked_pose(skeleton, state, &inputs, &root, library, None);
             if let Some(performance) = performance.as_deref() {
                 crate::game::skeleton::stand_where_claimed(skeleton, &mut standing, &performance.0, || {
                     crate::common::skeleton::ik::finish_pose(skeleton, still_of(state), &inputs, &root, library)

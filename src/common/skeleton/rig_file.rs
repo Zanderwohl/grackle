@@ -41,6 +41,9 @@ pub struct RigFile {
     pub mount: Option<MountEntry>,
     #[serde(default)]
     pub look: Vec<LookEntry>,
+    /// Bones that turn back against the legs; see `Anatomy::twist`. Shaped as `look` is.
+    #[serde(default)]
+    pub twist: Vec<LookEntry>,
     #[serde(default)]
     pub viewmodel: Vec<ViewmodelEntry>,
     pub measures: Measures,
@@ -142,6 +145,14 @@ pub struct Measures {
     pub arm: Option<String>,
     /// The bone whose head's height off the floor is a hip-height.
     pub hip: String,
+    /// Where a crouched body's crown sits, as a share of the crouched box's height; see
+    /// `Anatomy::crouched_crown`.
+    #[serde(default = "the_box_top")]
+    pub crouched_crown: f32,
+}
+
+fn the_box_top() -> f32 {
+    1.0
 }
 
 impl RigFile {
@@ -326,12 +337,14 @@ pub fn build_rig(file: &RigFile, build: &Build) -> Result<Skeleton, String> {
             .map(|mount| Ok::<_, String>((bone(&mount.bone)?, Vec3::from_array(mount.offset) * uniform)))
             .transpose()?,
         look: file.look.iter().map(|look| Ok((bone(&look.bone)?, look.share))).collect::<Result<_, String>>()?,
+        twist: file.twist.iter().map(|twist| Ok((bone(&twist.bone)?, twist.share))).collect::<Result<_, String>>()?,
         viewmodel: file.viewmodel.iter().map(|entry| Ok((bone(&entry.bone)?, entry.hand))).collect::<Result<_, String>>()?,
         regions,
         region_names,
         leg,
         arm,
         hip,
+        crouched_crown: file.measures.crouched_crown.clamp(0.1, 1.0),
         limbs,
     };
     Ok(Skeleton::from_parts(build.clone(), bones, anatomy))
@@ -496,7 +509,8 @@ to = [0.0, -0.6, 0.1]
         assert_eq!(tail.chain.middle, ["tail.2"]);
         let root = Transform::IDENTITY;
         let base = rig.posed_bone(&Pose::rest(), &root, rig.index_of("tail.1").unwrap()).head;
-        let pole = Vec3::Y;
+        // The rig's own: a high target bowed the other way needs the base to rise past its joint.
+        let pole = tail.pole;
 
         let target = base + Vec3::new(0.15, 0.25, 0.45);
         let mut pose = Pose::rest();
@@ -704,5 +718,41 @@ to = [0.0, -0.6, 0.1]
         let wanted = in_body.lerp(pelvis.tail + pelvis.rotation * on_pelvis, 0.5);
         let ankle = rig.posed_bone(&pose, &root, rig.index_of("metatarsus.l").unwrap()).tail;
         assert!(ankle.distance(wanted) < 1e-3, "the ankle is {} m off the halfway point", ankle.distance(wanted));
+    }
+
+    /// Every effector in another rig's shipped clips is within reach of its chain, through the
+    /// whole clip. One short of it reaches toward the target or drops to rest, and either way
+    /// the clip plays as something other than what was authored.
+    #[test]
+    fn every_rig_clip_reaches_its_targets() {
+        use crate::common::class::{Class, ClassBuilds};
+        use crate::common::skeleton::clip::Clip;
+        use crate::common::skeleton::play::{apply, Frames};
+        use crate::common::skeleton::Reach;
+        use strum::IntoEnumIterator;
+        let builds = ClassBuilds::shipped();
+        let mut read = 0;
+        for class in Class::iter() {
+            let rig = builds.rig_for(class);
+            let Ok(files) = std::fs::read_dir(format!("assets/default/animations/{}", rig.kind())) else { continue };
+            for file in files.flatten() {
+                let path = file.path();
+                let clip: Clip = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+                read += 1;
+                let ground = |_: Vec3| 0.0;
+                for step in 0..=96 {
+                    let time = clip.length * step as f32 / 96.0;
+                    let mut pose = Pose::rest();
+                    let frames = Frames::standing(Transform::IDENTITY, Transform::IDENTITY, &ground);
+                    let reaches = apply(&clip, time, &rig, &mut pose, &frames, None);
+                    assert!(
+                        reaches.iter().all(|reach| *reach == Reach::Reached),
+                        "{class:?}: {} at {time:.2} s: {reaches:?}",
+                        path.display()
+                    );
+                }
+            }
+        }
+        assert!(read > 0, "no rig clip was found, so this checked nothing");
     }
 }
