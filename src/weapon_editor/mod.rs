@@ -68,10 +68,15 @@ impl WeaponEditor {
         (self.weapons.clone(), self.renames.clone())
     }
 
+    /// Keeps the same weapon selected, by pack and key: entries shift when one is added or removed.
     fn restore(&mut self, (weapons, renames): Snapshot) -> Snapshot {
         let was = self.snapshot();
+        let selected = self.selected.and_then(|index| self.weapons.get(index)).map(|weapon| (weapon.pack.clone(), weapon.key.clone()));
         self.weapons = weapons;
         self.renames = renames;
+        self.selected = selected.and_then(|(pack, key)| {
+            self.weapons.iter().position(|weapon| weapon.pack == pack && weapon.key == key)
+        });
         was
     }
 
@@ -172,17 +177,18 @@ impl WeaponEditor {
         }
     }
 
-    /// Why `key` cannot name a new weapon, or a weapon renamed (`except` is the one being renamed).
+    /// Why `key` cannot name a new weapon, or a weapon renamed (`except` is the one being renamed,
+    /// whose overrides in other packs share its key and go with it).
     pub fn key_problem(&self, key: &str, except: Option<usize>) -> Option<KeyProblem> {
         if key.is_empty() || !key.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_') {
             return Some(KeyProblem::Malformed);
         }
         let id = WeaponId::of(key);
+        let renaming = except.and_then(|index| self.weapons.get(index)).map(|weapon| weapon.key.as_str());
         let taken = self
             .weapons
             .iter()
-            .enumerate()
-            .any(|(index, weapon)| Some(index) != except && (weapon.key == key || WeaponId::of(&weapon.key) == id));
+            .any(|weapon| Some(weapon.key.as_str()) != renaming && (weapon.key == key || WeaponId::of(&weapon.key) == id));
         taken.then_some(KeyProblem::Taken)
     }
 
@@ -238,9 +244,12 @@ impl WeaponEditor {
         (later && !already).then(|| self.insert(PackWeapon { pack, ..source }))
     }
 
+    /// Every pack's entry under the old key, so an override stays an override of the weapon.
     pub fn rename(&mut self, index: usize, key: &str, in_loadouts: bool) {
-        let Some(weapon) = self.weapons.get_mut(index) else { return };
-        let from = std::mem::replace(&mut weapon.key, key.to_owned());
+        let Some(from) = self.weapons.get(index).map(|weapon| weapon.key.clone()) else { return };
+        for weapon in self.weapons.iter_mut().filter(|weapon| weapon.key == from) {
+            weapon.key = key.to_owned();
+        }
         if in_loadouts {
             self.renames.push((from, key.to_owned()));
         }
@@ -500,6 +509,31 @@ mod tests {
         assert!(editor.override_in(shipped, the_user_pack()).is_none(), "overrode twice");
         editor.checkpoint_when_idle(true);
         assert!(editor.problems.is_empty() && crate::common::weapon_file::problems(&editor.weapons).is_empty());
+    }
+
+    #[test]
+    fn a_rename_takes_the_weapons_overrides_with_it() {
+        let mut editor = opened();
+        let pistol = editor.weapons.iter().position(|weapon| weapon.key == "pistol").expect("a pistol ships");
+        let twin = editor.override_in(pistol, the_user_pack()).expect("overrides");
+        let base = editor.weapons.iter().position(|weapon| weapon.key == "pistol" && weapon.pack != the_user_pack()).unwrap();
+        assert_eq!(editor.key_problem("sidearm", Some(base)), None);
+        editor.rename(base, "sidearm", false);
+        assert_eq!(editor.weapons[twin].key, "sidearm", "the override was left under the old key");
+        assert!(crate::common::weapon_file::problems(&editor.weapons).is_empty());
+    }
+
+    #[test]
+    fn undo_keeps_the_same_weapon_selected() {
+        let mut editor = opened();
+        let last = editor.weapons.len() - 1;
+        let key = editor.weapons[last].key.clone();
+        let first_pack = editor.weapons[0].pack.clone();
+        editor.new_weapon(first_pack, "scattergun");
+        editor.checkpoint_when_idle(true);
+        editor.selected = editor.weapons.iter().position(|weapon| weapon.key == key);
+        editor.undo();
+        assert_eq!(editor.selected.map(|index| editor.weapons[index].key.clone()), Some(key));
     }
 
     #[test]

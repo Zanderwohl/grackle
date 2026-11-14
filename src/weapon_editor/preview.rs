@@ -27,7 +27,9 @@ fn curve_of(action: &WeaponAction) -> Option<(f32, Option<DistanceScale>, Option
     }
     // Past the last line's end it is flat, so show half as far again and no further than it reaches.
     let ends = ramp.iter().chain(fall.iter()).map(|line| line.far.max(line.near)).fold(0.0, f32::max);
-    Some((damage, ramp, fall, (ends * 1.5).max(1.0).min(reach)))
+    let extent = (ends * 1.5).max(1.0).min(reach);
+    // A reach of zero has no distance to draw over.
+    (extent > 0.0).then_some((damage, ramp, fall, extent))
 }
 
 pub fn damage_over_distance(ui: &mut egui::Ui, action: &WeaponAction) {
@@ -113,6 +115,16 @@ pub fn pellet_pattern(ui: &mut egui::Ui, grid: &PelletGrid) {
 mod tests {
     use super::*;
     use crate::common::weapon::HitscanSpec;
+
+    #[test]
+    fn a_weapon_reaching_nowhere_draws_no_curve() {
+        let spec = HitscanSpec {
+            range_m: 0.0,
+            falloff: Some(DistanceScale { near: 5.0, far: 10.0, scale: 0.5 }),
+            ..HitscanSpec::default()
+        };
+        assert!(curve_of(&WeaponAction::Hitscan(spec)).is_none());
+    }
 
     #[test]
     fn a_flat_weapon_draws_no_curve() {

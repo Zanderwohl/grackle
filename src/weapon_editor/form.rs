@@ -140,17 +140,20 @@ fn number(ui: &mut egui::Ui, value: &mut dyn PartialReflect, unit: Option<Unit>)
             }
             return changed;
         }
-        let (speed, most) = match unit {
-            Some(Unit::Fraction) => (0.01, 1.0),
-            Some(Unit::Seconds | Unit::PerSecond | Unit::Times | Unit::MetersPerSecondPerDamage) => (0.01, f32::INFINITY),
-            Some(Unit::Meters) => (0.05, f32::INFINITY),
-            _ => (0.1, f32::INFINITY),
+        // A length, a time or a share cannot be negative; a multiplier, a rate or a speed can
+        // (gravity that lifts, spin the other way).
+        let (speed, range) = match unit {
+            Some(Unit::Fraction) => (0.01, 0.0..=1.0),
+            Some(Unit::Seconds) => (0.01, 0.0..=f32::INFINITY),
+            Some(Unit::Meters) => (0.05, 0.0..=f32::INFINITY),
+            Some(Unit::PerSecond | Unit::Times | Unit::MetersPerSecondPerDamage) => (0.01, f32::NEG_INFINITY..=f32::INFINITY),
+            _ => (0.1, f32::NEG_INFINITY..=f32::INFINITY),
         };
         return ui
             .add(
                 egui::DragValue::new(value)
                     .speed(speed)
-                    .range(0.0..=most)
+                    .range(range)
                     .clamp_existing_to_range(false)
                     .suffix(suffix),
             )

@@ -22,14 +22,16 @@ use crate::common::weapon::{Mounted, Unit, WeaponAction, BUCKETS};
 use crate::common::weapon_file::read_pack_weapons;
 use crate::editor::editable::FeatureTimeline;
 use crate::get;
-use crate::prop::document::{load, prop_path, PropDoc, PropEditor};
-use crate::prop::picker::{prop_button, PropPreviews};
+use crate::prop::document::{load, PropDoc, PropEditor};
+use crate::prop::picker::{prop_button, source_of, PropPreviews};
 
 pub struct WeaponUiPlugin;
 
 impl Plugin for WeaponUiPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<WeaponPanels>()
+            // A prop saved in another mode is read again.
+            .add_systems(OnEnter(AppMode::Weapon), |mut panels: ResMut<WeaponPanels>| panels.browser.model = None)
             .add_systems(bevy_egui::EguiPrimaryContextPass, panels.run_if(in_state(AppMode::Weapon)))
             .add_systems(Update, weapon_shortcuts.run_if(in_state(AppMode::Weapon)));
     }
@@ -73,8 +75,11 @@ struct Browser {
     naming: Option<(Naming, String)>,
     rename_loadouts: bool,
     deleting: bool,
-    /// The selected weapon's model as its file holds it, read when the name changes.
+    /// The selected weapon's model as its file held it, read when the name changes or the mode
+    /// opens. Only for the summary: opening it reads the file again.
     model: Option<(String, Option<(PathBuf, PropDoc)>)>,
+    /// What names the selected weapon, as of a generation of the draft.
+    dependants: Option<(u64, usize, Vec<(PathBuf, String, crate::common::weapon::Slot)>)>,
 }
 
 #[derive(Resource)]
@@ -144,11 +149,16 @@ fn panels(
 
     let registry = registry.read();
     let packs = editor.packs();
-    let pickups: Vec<(String, String)> = timeline
-        .features_map()
-        .values()
-        .filter_map(|feature| Some((feature.label(), feature.object().weapon_named()?.to_owned())))
-        .collect();
+    // Only asked while a rename or delete is open.
+    let asking = panels.browser.deleting || matches!(panels.browser.naming, Some((Naming::Rename, _)));
+    let pickups: Vec<(String, String)> = match asking {
+        true => timeline
+            .features_map()
+            .values()
+            .filter_map(|feature| Some((feature.label(), feature.object().weapon_named()?.to_owned())))
+            .collect(),
+        false => Vec::new(),
+    };
     let WeaponPanels { left, right, browser } = &mut *panels;
     let mut tabs = Tabs {
         editor: &mut editor,
@@ -374,9 +384,13 @@ impl Tabs<'_, '_, '_> {
 
     /// What names the weapon by key: every pack's loadouts, and the open map's pickups. Blueprints
     /// on disk are not read.
-    fn dependants_ui(&self, ui: &mut Ui, index: usize) {
+    fn dependants_ui(&mut self, ui: &mut Ui, index: usize) {
+        let generation = self.editor.generation;
+        if !matches!(&self.browser.dependants, Some((of, at, _)) if *of == generation && *at == index) {
+            self.browser.dependants = Some((generation, index, self.editor.loadouts_naming(index)));
+        }
         let key = &self.editor.weapons[index].key;
-        let loadouts = self.editor.loadouts_naming(index);
+        let loadouts = self.browser.dependants.as_ref().map(|(_, _, found)| found.clone()).unwrap_or_default();
         let pickups: Vec<&String> =
             self.pickups.iter().filter(|(_, named)| named == key).map(|(label, _)| label).collect();
         if loadouts.is_empty() && pickups.is_empty() {
@@ -521,20 +535,13 @@ impl Tabs<'_, '_, '_> {
         if self.browser.model.as_ref().map(|(read, _)| read.as_str()) == name {
             return;
         }
-        self.browser.model = name.map(|name| {
-            // Highest priority last, as the prop cache reads them, so an overriding pack wins.
-            let found = default_packs()
-                .into_iter()
-                .rev()
-                .find(|pack| prop_path(pack, name).exists())
-                .and_then(|pack| load(self.assets, &pack, name).ok().map(|doc| (prop_path(&pack, name), doc)));
-            (name.to_owned(), found)
-        });
+        self.browser.model = name.map(|name| (name.to_owned(), read_prop(self.assets, name)));
     }
 
     /// What the model brings that this weapon leans on, and the way to it.
     fn model_ui(&mut self, ui: &mut Ui) {
-        let Some((_, read)) = &self.browser.model else { return };
+        let Some((name, read)) = &self.browser.model else { return };
+        let name = name.clone();
         let Some((path, doc)) = read else {
             ui.colored_label(ui.visuals().warn_fg_color, get!("weapon_editor.model_missing"));
             return;
@@ -563,15 +570,31 @@ impl Tabs<'_, '_, '_> {
                 {
                     let button = ui.add_enabled(!blocked, egui::Button::new(get!(key)));
                     if button.clicked() {
-                        if self.prop_editor.path.as_deref() != Some(path.as_path()) {
-                            self.prop_editor.open(doc.clone(), Some(path.clone()));
+                        if self.prop_editor.path.as_deref() == Some(path.as_path()) {
+                            self.open_mode = Some(mode);
+                        } else if let Some((path, fresh)) = read_prop(self.assets, &name) {
+                            // Read again: the summary's copy may predate a save in the prop editor.
+                            self.prop_editor.open(fresh, Some(path));
+                            self.open_mode = Some(mode);
                         }
-                        self.open_mode = Some(mode);
                     }
                     button.on_disabled_hover_text(get!("weapon_editor.prop_unsaved"));
                 }
             });
         });
+    }
+}
+
+/// The file a prop is read from and what it holds.
+fn read_prop(assets: &Assets, name: &str) -> Option<(PathBuf, PropDoc)> {
+    let path = source_of(name)?;
+    let pack = path.parent()?.parent()?;
+    match load(assets, pack, name) {
+        Ok(doc) => Some((path, doc)),
+        Err(e) => {
+            error!("{e}");
+            None
+        }
     }
 }
 
