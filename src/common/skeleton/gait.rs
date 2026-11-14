@@ -497,11 +497,11 @@ mod tests {
 
     /// Every class's build plus the two extreme sample builds.
     fn every_build() -> Vec<Proportions> {
-        use crate::common::class::Class;
-        use strum::IntoEnumIterator;
 
-        Class::iter()
-            .map(|class| crate::common::class::ClassBuilds::shipped().of(class))
+        let builds = crate::common::class::ClassBuilds::shipped();
+        builds
+            .humanoids()
+            .map(|class| builds.of(class))
             .chain([Proportions::STOCKY, Proportions::LANKY])
             .collect()
     }

@@ -215,6 +215,13 @@ A clip names a rig's parts by name: an effector's `chain` is any limb
 after the six every rig has (`Anatomy::region_names`); a taunt's claims are
 names, resolved against each body's rig as it taunts.
 
+**`Class::Strider`** is the first class on a rig file: two legs, a neck, a tail
+and no hands, so its weapon rides on the rig's `mount` and nothing grips. A
+taunt names another rig's clip in its `rigs`, and a body is offered only the
+taunts it has a clip for. `--class KEY` plays every body as that class until
+a class can be picked (`PlayAs`, read by `publish_game_rules`). The humanoid's
+own tests loop over `ClassBuilds::humanoids()`.
+
 A chain of three or more bones (a limb's `between`) is solved by FABRIK within
 each joint's limit, at a fixed round count so every machine agrees; two bones
 stay on the exact solver. A clip's `LookAt` turns a bone toward a target, and

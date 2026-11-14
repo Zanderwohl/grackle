@@ -520,7 +520,6 @@ mod tests {
     use crate::common::skeleton::rig::bone;
     use bevy::ecs::system::RunSystemOnce;
 
-    use strum::IntoEnumIterator;
     use crate::common::class::Class;
     use crate::common::skeleton::humanoid;
     use crate::common::skeleton::ik::Reach;
@@ -552,7 +551,7 @@ mod tests {
         let hold = HoldSpec::default();
         let weapon = ViewmodelSpec::default().transform(VIEWMODEL_FOV, 16.0 / 9.0);
 
-        for class in Class::iter() {
+        for class in crate::common::class::ClassBuilds::shipped().humanoids() {
             let skeleton = humanoid(crate::common::class::ClassBuilds::shipped().of(class));
             let mut pose = Pose::rest();
             let reached = grip_with(&skeleton, &mut pose, &eye_space(&skeleton), &hold, &weapon);
@@ -567,7 +566,7 @@ mod tests {
     /// The eye is the rig's own, with the shoulders below it.
     #[test]
     fn the_eye_is_the_rigs_own_and_the_shoulders_hang_below_it() {
-        for class in Class::iter() {
+        for class in crate::common::class::ClassBuilds::shipped().humanoids() {
             let skeleton = humanoid(crate::common::class::ClassBuilds::shipped().of(class));
             let root = eye_space(&skeleton);
             let bones = skeleton.posed_bones(&Pose::rest(), &root);
@@ -618,7 +617,7 @@ mod tests {
         .expect("the shipped launcher parses");
 
         let weapon = doc.viewmodel.transform(VIEWMODEL_FOV, 16.0 / 9.0);
-        for class in Class::iter() {
+        for class in crate::common::class::ClassBuilds::shipped().humanoids() {
             let skeleton = humanoid(crate::common::class::ClassBuilds::shipped().of(class));
             let hold = doc.hold.for_class(Some(class));
             let mut pose = Pose::rest();

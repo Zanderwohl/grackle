@@ -381,10 +381,25 @@ None of these is animation, but a creature is not playable without them:
       larger (`FigureTargets`).
 
 ### Stage 4: the first creature
-- [ ] Rig file, mesh profiles, joint limits; state clips; a taunt.
-- [ ] Mount socket instead of grip; hitboxes, ragdoll, death cam, hats and
-      viewmodel from sockets.
-- [ ] A class plays as it in a round: spawns, moves, shoots, dies, ragdolls.
+- [x] `Class::Strider`, built on `rigs/strider.toml` (two two-bone legs, a
+      long neck, a three-bone tail, no hands), with a loadout of its own.
+      The digitigrade three-bone legs the decisions above suggested wait:
+      a zigzag knee and hock needs per-joint poles, not one. The humanoid's
+      own tests loop over `ClassBuilds::humanoids()`.
+- [x] State clips under `animations/strider/` (an idle that sways the tail)
+      and the wave's strider clip, `strider/taunt_wag`, named in the
+      taunt's `rigs`. A body is offered only taunts it has a clip for
+      (`Taunts::first_for`); the Taunt inspector picks each rig's clip.
+- [x] A rig file's `mount` holds a weapon on a body with no hands
+      (`weapon_transform`); nothing grips. Hitboxes, the ragdoll, the death
+      cam and hats come from the anatomy already; the viewmodel draws no
+      arms where the rig names none.
+- [x] `a_strider_plays_a_round`: spawns as its rig, walks, shoots, is
+      offered its taunt, and dies into a strider corpse. `--class strider`
+      plays every body as one until a class can be picked.
+- Not done: the play camera's eye is still the shared hull's 1.8 m, above
+  a strider's head; a per-class eye is the hull question from the
+  decisions above.
 
 ### Stage 5: prop rigs
 - [ ] Bones on a prop (pivot feature, parent, bound parts), edited in Model.

@@ -372,23 +372,20 @@ fn read_the_packs(assets: &Assets, packs: &[PathBuf]) -> PackDoc {
                 Err(why) => warn!("{}: {why}", state.clip_name()),
             }
         }
+        // Another rig's clips, states and others alike, filed as `<rig>/<name>`.
         for rig in rigs_on_disk(&[pack.clone()]) {
             let dir = crate::common::clip_file::rig_clips_dir(&rig);
-            for state in AnimationState::iter() {
-                let relative = format!("{dir}/{}.{CLIP_EXTENSION}", state.clip_name());
-                match assets.read(pack, &relative) {
-                    Ok(bytes) => {
-                        let read = String::from_utf8(bytes)
-                            .map_err(|e| e.to_string())
-                            .and_then(|text| StateAnimation::from_toml(&text).map_err(|e| e.to_string()));
-                        match read {
-                            Ok(clip) => {
-                                clips.insert(format!("{rig}/{}", state.clip_name()), clip);
-                            }
-                            Err(why) => warn!("{}/{relative}: {why}", pack.display()),
-                        }
+            for stem in clips_in(&pack.join(&dir)) {
+                let relative = format!("{dir}/{stem}.{CLIP_EXTENSION}");
+                let read = assets
+                    .read(pack, &relative)
+                    .map_err(|e| e.to_string())
+                    .and_then(|bytes| String::from_utf8(bytes).map_err(|e| e.to_string()))
+                    .and_then(|text| StateAnimation::from_toml(&text).map_err(|e| e.to_string()));
+                match read {
+                    Ok(clip) => {
+                        clips.insert(format!("{rig}/{stem}"), clip);
                     }
-                    Err(crate::common::assets::AssetError::NotFound(_)) => {}
                     Err(why) => warn!("{}/{relative}: {why}", pack.display()),
                 }
             }
@@ -441,13 +438,19 @@ fn read_the_rigs(assets: &Assets, packs: &[PathBuf]) -> BTreeMap<String, RigFile
 /// Every clip in a pack that no state names. Listing a directory is authoring-only; the game is
 /// told each name by whatever plays it.
 fn clips_played_by_name(pack: &Path) -> Vec<String> {
-    let Ok(entries) = std::fs::read_dir(pack.join(CLIPS_DIR)) else { return Vec::new() };
+    let mut names = clips_in(&pack.join(CLIPS_DIR));
+    names.retain(|name| BodyClips::state_of(name).is_none());
+    names
+}
+
+/// The clip files directly in `directory`, by stem, sorted.
+fn clips_in(directory: &Path) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(directory) else { return Vec::new() };
     let mut names: Vec<String> = entries
         .filter_map(Result::ok)
         .map(|entry| entry.path())
         .filter(|path| path.extension().is_some_and(|extension| extension == CLIP_EXTENSION))
         .filter_map(|path| path.file_stem()?.to_str().map(str::to_string))
-        .filter(|name| BodyClips::state_of(name).is_none())
         .collect();
     names.sort();
     names

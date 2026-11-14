@@ -25,6 +25,8 @@ pub struct EditorParams {
     pub start_spectating: bool,
     /// `--rounds N`: quit once N rounds have ended.
     pub rounds: Option<u32>,
+    /// `--class KEY`: everybody plays as this class.
+    pub class: Option<crate::common::class::Class>,
 }
 
 impl EditorParams {
@@ -133,6 +135,12 @@ impl EditorParams {
                     .help("Spectate each round rather than choosing a team.")
             )
             .arg(
+                Arg::new("class")
+                    .long("class")
+                    .value_name("KEY")
+                    .help("Play every body as this class, by the name classes.toml uses.")
+            )
+            .arg(
                 Arg::new("rounds")
                     .long("rounds")
                     .value_name("N")
@@ -172,6 +180,11 @@ impl EditorParams {
             crate::editor::save::load(path).map_err(|error| format!("--map {}: {error}", path.display()))?;
         }
 
+        let class = match matches.get_one::<String>("class") {
+            Some(key) => Some(crate::common::class::Class::named(key).ok_or_else(|| format!("--class: there is no class called {key:?}"))?),
+            None => None,
+        };
+
         let server = match matches.get_one::<PathBuf>("server_config") {
             Some(path) => {
                 let text = std::fs::read_to_string(path).map_err(|error| format!("--server-config {}: {error}", path.display()))?;
@@ -193,6 +206,7 @@ impl EditorParams {
             server,
             start_spectating: matches.get_flag("spectate"),
             rounds: matches.get_one::<u32>("rounds").copied(),
+            class,
         })
     }
 }
@@ -292,6 +306,8 @@ mod tests {
         assert!(params.start_spectating);
         assert_eq!(params.rounds, Some(2));
         assert!(parse(&["--rounds", "0"]).is_err());
+        assert_eq!(parse(&["--class", "strider"]).unwrap().class, Some(crate::common::class::Class::Strider));
+        assert!(parse(&["--class", "wizard"]).is_err(), "a class nobody defines was taken");
         let params = parse(&[]).unwrap();
         assert!(params.map.is_none() && params.server.is_none() && !params.start_spectating && params.rounds.is_none());
     }

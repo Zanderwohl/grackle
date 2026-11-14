@@ -626,6 +626,38 @@ impl AnimTabs<'_> {
             });
             ui.end_row();
 
+            // Another rig's clip for this taunt: without one, a body on that rig is not offered it.
+            let rigs: Vec<String> = self.body.rigs().keys().cloned().collect();
+            for rig in rigs {
+                ui.label(get!("anim.label.taunt_rig_clip", "rig", &rig));
+                let prefix = format!("{rig}/");
+                let candidates: Vec<String> = self
+                    .body
+                    .animations()
+                    .keys()
+                    .filter(|name| name.starts_with(&prefix) && BodyClips::state_of(name).is_none())
+                    .cloned()
+                    .collect();
+                let mut chosen = edited.rigs.get(&rig).cloned();
+                egui::ComboBox::from_id_salt(("anim_taunt_rig", &rig))
+                    .selected_text(chosen.clone().unwrap_or_else(|| get!("anim.taunt.not_offered")))
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut chosen, None, get!("anim.taunt.not_offered"));
+                        for name in &candidates {
+                            ui.selectable_value(&mut chosen, Some(name.clone()), name);
+                        }
+                    });
+                match chosen {
+                    Some(clip) => {
+                        edited.rigs.insert(rig, clip);
+                    }
+                    None => {
+                        edited.rigs.remove(&rig);
+                    }
+                }
+                ui.end_row();
+            }
+
             ui.label(get!("anim.label.claims"));
             ui.horizontal_wrapped(|ui| {
                 let rig = self.rig();

@@ -67,6 +67,7 @@ fn main() {
         .insert_resource(StartupMap(editor_params.map.clone()))
         .insert_resource(StartSpectating(editor_params.start_spectating))
         .insert_resource(QuitAfterRounds(editor_params.rounds))
+        .insert_resource(grackle::common::game_rules::PlayAs(editor_params.class))
         .init_resource::<grackle::game::telemetry::RecordRounds>()
         .insert_resource(StartInPropEditor(editor_params.start_modeling))
         .insert_resource(StartInAnimEditor(editor_params.start_animating))

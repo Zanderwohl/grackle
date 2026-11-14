@@ -303,7 +303,7 @@ fn describe_player_bodies(
 /// error.
 ///
 /// Must not decide a corpse's build: `CorpseBuild` is read off the rig.
-fn dress_new_players(
+pub(crate) fn dress_new_players(
     mut commands: Commands,
     builds: Res<ClassBuilds>,
     players: Query<(Entity, &Class), (With<Player>, Without<Skeleton>)>,

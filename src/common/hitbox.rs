@@ -173,12 +173,10 @@ mod tests {
 
     #[test]
     fn every_class_is_boxed_around_its_own_head() {
-        use crate::common::class::Class;
         use crate::common::skeleton::humanoid;
-        use strum::IntoEnumIterator;
 
         let mut heights = Vec::new();
-        for class in Class::iter() {
+        for class in crate::common::class::ClassBuilds::shipped().humanoids() {
             let skeleton = humanoid(crate::common::class::ClassBuilds::shipped().of(class));
             let root = Transform::IDENTITY;
             let boxes = hitboxes(&skeleton, &Pose::rest(), &root, Stance::Standing);

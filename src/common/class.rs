@@ -102,6 +102,9 @@ pub enum Class {
     /// A corpse's build is read off its rig, never keyed on a class; a body
     /// need not have one.
     Mercenary,
+    /// Two legs, a long neck and a tail, and no hands: the first class built on a rig file
+    /// (`rigs/strider.toml`). Its weapon rides on a mount.
+    Strider,
 }
 
 impl Class {
@@ -136,6 +139,7 @@ impl Class {
             Class::Spy => get!("class.names.spy"),
             Class::Mercenary => get!("class.names.mercenary"),
             Class::Civilian => get!("class.names.civilian"),
+            Class::Strider => get!("class.names.strider"),
         }
     }
 }
@@ -162,6 +166,11 @@ impl ClassBuilds {
 
     pub fn build(&self, class: Class) -> Build {
         self.builds.get(&Class::key(class)).cloned().unwrap_or_else(|| Build::humanoid(Proportions::DEFAULT))
+    }
+
+    /// The classes built as the humanoid, which the humanoid's own tests are about.
+    pub fn humanoids(&self) -> impl Iterator<Item = Class> + '_ {
+        Class::iter().filter(|class| self.build(*class).rig.is_none())
     }
 
     pub fn rig_for(&self, class: Class) -> Skeleton {
@@ -210,11 +219,12 @@ mod tests {
         }
     }
 
-    /// Ten plus the `Mercenary` placeholder, which is in the iterator on
-    /// purpose so the animation grid shows it.
+    /// Ten, the `Mercenary` placeholder, which is in the iterator on purpose so the animation
+    /// grid shows it, and the strider.
     #[test]
-    fn there_are_ten_classes_and_the_placeholder() {
-        assert_eq!(Class::iter().count(), 11);
+    fn there_are_ten_classes_the_placeholder_and_the_strider() {
+        assert_eq!(Class::iter().count(), 12);
+        assert_eq!(ClassBuilds::shipped().humanoids().count(), 11);
     }
 
     /// Fails if two classes share a build or the extremes are too close to

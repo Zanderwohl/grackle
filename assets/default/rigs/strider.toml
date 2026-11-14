@@ -12,6 +12,8 @@
 height = 1.6
 carry = "spine"
 head = "head"
+# No hands, so a weapon rides here: meters from the spine's tail along the aim.
+mount = { bone = "spine", offset = [0.0, 0.14, -0.1] }
 
 [measures]
 leg = "left_leg"

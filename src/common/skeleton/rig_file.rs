@@ -36,6 +36,9 @@ pub struct RigFile {
     /// The bone the head hitbox is built from.
     #[serde(default)]
     pub head: Option<String>,
+    /// Where a weapon is fixed on a body with no hands.
+    #[serde(default)]
+    pub mount: Option<MountEntry>,
     #[serde(default)]
     pub look: Vec<LookEntry>,
     #[serde(default)]
@@ -95,6 +98,15 @@ pub struct FootEntry {
     pub limb: String,
     /// Fraction of a stride.
     pub phase: f32,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MountEntry {
+    pub bone: String,
+    /// Meters at the reference build, from the bone's tail, in the aim's frame (`-Z` along it).
+    #[serde(default)]
+    pub offset: [f32; 3],
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -279,6 +291,11 @@ pub fn build_rig(file: &RigFile, build: &Build) -> Result<Skeleton, String> {
         hands,
         carry: file.carry.as_deref().map(bone).transpose()?,
         head: file.head.as_deref().map(bone).transpose()?,
+        mount: file
+            .mount
+            .as_ref()
+            .map(|mount| Ok::<_, String>((bone(&mount.bone)?, Vec3::from_array(mount.offset) * uniform)))
+            .transpose()?,
         look: file.look.iter().map(|look| Ok((bone(&look.bone)?, look.share))).collect::<Result<_, String>>()?,
         viewmodel: file.viewmodel.iter().map(|entry| Ok((bone(&entry.bone)?, entry.hand))).collect::<Result<_, String>>()?,
         regions,

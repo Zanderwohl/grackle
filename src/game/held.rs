@@ -713,7 +713,6 @@ fn place_held_weapons(
 mod tests {
     use bevy::ecs::system::RunSystemOnce;
 
-    use strum::IntoEnumIterator;
     use super::*;
     use crate::common::skeleton::play::Playing;
     use crate::common::weapon::{Magazine, Mounted, Weapon};
@@ -1115,7 +1114,7 @@ mod tests {
         let hold = HoldSpec::default();
         assert!(hold.two_handed);
 
-        for class in Class::iter() {
+        for class in crate::common::class::ClassBuilds::shipped().humanoids() {
             for step in 0..=20 {
                 let time = reload.length * step as f32 / 20.0;
                 let mut world = World::new();
@@ -1153,7 +1152,7 @@ mod tests {
     /// hand cannot reach the grip holds nothing.
     #[test]
     fn every_class_can_get_its_trigger_hand_onto_the_grip() {
-        for class in Class::iter() {
+        for class in crate::common::class::ClassBuilds::shipped().humanoids() {
             let mut world = World::new();
             let body = body_holding(&mut world, class, 0.0);
             world.run_system_once(place_the_weapon).unwrap();

@@ -1069,11 +1069,9 @@ mod tests {
     /// at the keys.
     #[test]
     fn every_clip_the_default_pack_ships_samples_on_every_class() {
-        use crate::common::class::Class;
         use crate::common::skeleton::play::{apply, Frames};
         use crate::common::skeleton::rig::humanoid;
         use crate::common::skeleton::Pose;
-        use strum::IntoEnumIterator;
 
         // Past the end, because a one-shot holds there.
         const OVERSHOOT: f32 = 1.2;
@@ -1094,7 +1092,7 @@ mod tests {
             let named = path.display();
 
             for (name, clip) in &doc.animations.clips {
-                for class in Class::iter() {
+                for class in crate::common::class::ClassBuilds::shipped().humanoids() {
                     let rig = humanoid(crate::common::class::ClassBuilds::shipped().of(class));
                     let problems = clip.problems(|bone| rig.index_of(bone).is_some());
                     assert!(

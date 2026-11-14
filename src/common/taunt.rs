@@ -90,6 +90,9 @@ pub struct Taunt {
     pub key: String,
     /// A file under the pack's `animations/`, without its extension.
     pub clip: String,
+    /// Another rig's clip for this taunt, by rig name. A body whose rig is neither the humanoid
+    /// nor named here is not offered the taunt: the humanoid's clip names bones it lacks.
+    pub rigs: std::collections::BTreeMap<String, String>,
     /// Region names, resolved against each body's rig as it taunts (`Anatomy::claims`), so one
     /// taunt can claim a strider's tail and a humanoid's arms.
     pub claims: Vec<String>,
@@ -115,8 +118,22 @@ impl Taunts {
         self.0.first()
     }
 
+    /// The first taunt a body of rig `kind` has a clip for.
+    pub fn first_for(&self, kind: &str) -> Option<&Taunt> {
+        self.0.iter().find(|taunt| taunt.clip_for(kind).is_some())
+    }
+
     pub fn shipped() -> Taunts {
         load_taunts(&Assets::default(), &crate::common::assets::default_packs())
+    }
+}
+
+impl Taunt {
+    pub fn clip_for(&self, kind: &str) -> Option<&str> {
+        match kind {
+            crate::common::skeleton::rig::HUMANOID => Some(&self.clip),
+            _ => self.rigs.get(kind).map(String::as_str),
+        }
     }
 }
 
@@ -133,6 +150,7 @@ pub enum TauntLength {
 #[derive(Clone, Debug, PartialEq)]
 pub struct TauntSpec {
     pub clip: String,
+    pub rigs: std::collections::BTreeMap<String, String>,
     pub claims: Vec<String>,
     pub movement: TauntMovement,
     pub turning: TauntTurning,
@@ -144,6 +162,7 @@ impl TauntSpec {
     pub fn new(clip: String) -> TauntSpec {
         TauntSpec {
             clip,
+            rigs: Default::default(),
             claims: Regions::NAMED.iter().map(|(_, name)| name.to_string()).collect(),
             movement: TauntMovement::Stopped,
             turning: TauntTurning::Locked,
@@ -184,6 +203,7 @@ impl TauntSpec {
             id: TauntId::of(key),
             key: key.to_string(),
             clip: self.clip.clone(),
+            rigs: self.rigs.clone(),
             claims: self.claims.clone(),
             movement: self.movement,
             turning: self.turning,
@@ -198,6 +218,8 @@ impl TauntSpec {
 #[serde(deny_unknown_fields)]
 struct TauntEntry {
     clip: String,
+    #[serde(default)]
+    rigs: std::collections::BTreeMap<String, String>,
     claims: Vec<String>,
     movement: TauntMovement,
     turning: TauntTurning,
@@ -225,6 +247,7 @@ impl TauntEntry {
         };
         let spec = TauntSpec {
             clip: self.clip,
+            rigs: self.rigs,
             claims: self.claims,
             movement: self.movement,
             turning: self.turning,
@@ -347,6 +370,16 @@ pub fn write_taunts(existing: Option<&str>, specs: &[(String, TauntSpec)]) -> St
         };
         let fields = [
             ("clip", Some(Value::from(spec.clip.as_str()))),
+            (
+                "rigs",
+                (!spec.rigs.is_empty()).then(|| {
+                    let mut table = InlineTable::new();
+                    for (rig, clip) in &spec.rigs {
+                        table.insert(rig, Value::from(clip.as_str()));
+                    }
+                    Value::InlineTable(table)
+                }),
+            ),
             ("claims", Some(Value::Array(spec.claims.iter().map(String::as_str).collect::<Array>()))),
             ("movement", Some(movement)),
             ("turning", Some(turning)),

@@ -612,6 +612,7 @@ fn humanoid_anatomy(bones: &[Bone], proportions: Proportions) -> super::anatomy:
             .collect(),
         hands: [limb(ChainRef::RIGHT_ARM), limb(ChainRef::LEFT_ARM)],
         carry: index(bone::CHEST),
+        mount: None,
         head: index(bone::HEAD),
         look: [(bone::NECK, NECK_SHARE), (bone::HEAD, 1.0 - NECK_SHARE)]
             .into_iter()
@@ -775,9 +776,7 @@ mod tests {
     /// the wrong limb.
     #[test]
     fn every_build_publishes_an_anatomy_that_names_its_own_bones() {
-        use crate::common::class::Class;
-        use strum::IntoEnumIterator;
-        for class in Class::iter() {
+        for class in crate::common::class::ClassBuilds::shipped().humanoids() {
             let skeleton = humanoid(crate::common::class::ClassBuilds::shipped().of(class));
             let anatomy = skeleton.anatomy();
             assert_eq!(anatomy.problems(skeleton.bones()), Vec::<String>::new(), "{class:?}");
@@ -814,10 +813,8 @@ mod tests {
     /// must keep their stated shoulders.
     #[test]
     fn no_build_starts_its_arms_inside_its_own_chest() {
-        use crate::common::class::Class;
-        use strum::IntoEnumIterator;
 
-        for class in Class::iter() {
+        for class in crate::common::class::ClassBuilds::shipped().humanoids() {
             let proportions = crate::common::class::ClassBuilds::shipped().of(class);
             let skeleton = humanoid(proportions);
             let bones = posed(&skeleton, &Pose::rest());

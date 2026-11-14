@@ -40,6 +40,9 @@ pub struct Anatomy {
     pub hands: [Option<usize>; 2],
     /// The bone whose tail a weapon hangs from: the point between the shoulders.
     pub carry: Option<usize>,
+    /// For a body with no hands: the bone a weapon is fixed to, and where on it, in meters along
+    /// the aim from its tail. It replaces the hold's carry; nothing grips.
+    pub mount: Option<(usize, Vec3)>,
     /// The bone the head hitbox is built from; its tail is the crown.
     pub head: Option<usize>,
     /// Bones that bend with the aim's pitch, each with its share. The shares sum to one.

@@ -367,8 +367,16 @@ mod tests {
     fn every_clip_the_default_pack_ships_parses() {
         let directory = Path::new("assets/default").join(CLIPS_DIR);
         let mut read = 0;
-        for entry in std::fs::read_dir(&directory).unwrap() {
-            let path = entry.unwrap().path();
+        // Another rig's clips are a directory down.
+        let paths: Vec<std::path::PathBuf> = std::fs::read_dir(&directory)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .flat_map(|path| match path.is_dir() {
+                true => std::fs::read_dir(&path).unwrap().map(|entry| entry.unwrap().path()).collect(),
+                false => vec![path],
+            })
+            .collect();
+        for path in paths {
             if path.extension().is_none_or(|extension| extension != CLIP_EXTENSION) {
                 continue;
             }

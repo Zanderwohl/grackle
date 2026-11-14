@@ -812,7 +812,8 @@ fn other_rig(anim: &AnimEditor, body: &body::BodyClips) -> Option<crate::common:
     if anim.source != ClipSource::Body {
         return None;
     }
-    let (rig, _) = body::BodyClips::rig_and_state(body::address(anim.selected.as_deref()?).0)?;
+    // Any clip filed under a rig's name: its states and its taunts alike.
+    let (rig, _) = body::address(anim.selected.as_deref()?).0.split_once('/')?;
     let file = body.rigs().get(rig).filter(|_| rig != HUMANOID)?;
     let build = Build {
         rig: Some(rig.to_string()),
@@ -869,7 +870,7 @@ pub fn taunt_of_clip<'a>(
     body: &'a body::BodyClips,
     clip: &str,
 ) -> Option<(&'a str, &'a TauntSpec)> {
-    let plays = |(_, spec): &&(String, TauntSpec)| spec.clip == clip;
+    let plays = |(_, spec): &&(String, TauntSpec)| spec.clip == clip || spec.rigs.values().any(|rig_clip| rig_clip == clip);
     let inspected = anim.taunt.as_deref();
     body.taunts()
         .iter()
@@ -1305,7 +1306,7 @@ mod tests {
         assert!(beneath.yaw > 0.0 && beneath.yaw <= 45f32.to_radians() * 0.5 + 1e-4, "{}", beneath.yaw);
     }
 
-    /// Picking another rig's state clip previews it on that rig, not on the figure's class.
+    /// Picking another rig's clip previews it on that rig, not on the figure's class.
     #[test]
     fn another_rigs_clip_is_previewed_on_that_rig() {
         let mut body = body::BodyClips::default();

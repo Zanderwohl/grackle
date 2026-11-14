@@ -110,16 +110,17 @@ impl Plugin for ConditionPlugin {
 pub fn toggle_conditions(
     taunts: Option<Res<Taunts>>,
     timeline: Option<Res<LocalTimeline>>,
-    mut bodies: Query<(&Inputs, &mut Condition, &mut TauntClock)>,
+    mut bodies: Query<(&Inputs, &mut Condition, &mut TauntClock, Option<&crate::common::skeleton::Skeleton>)>,
 ) {
-    for (input, mut condition, mut clock) in &mut bodies {
+    for (input, mut condition, mut clock, skeleton) in &mut bodies {
+        let kind = skeleton.map_or(crate::common::skeleton::rig::HUMANOID, |rig| rig.kind());
         if input.humiliate {
             condition.humiliated = !condition.humiliated;
         }
         if input.taunt {
             condition.taunt = match condition.taunt {
                 Some(_) => None,
-                None => taunts.as_deref().and_then(Taunts::first).map(|taunt| taunt.id),
+                None => taunts.as_deref().and_then(|taunts| taunts.first_for(kind)).map(|taunt| taunt.id),
             };
             condition.taunt_started = timeline.as_deref().map_or_else(Tick::default, LocalTimeline::tick);
             clock.0 = 0.0;
@@ -236,11 +237,13 @@ pub fn load_taunt_clips(
     // Marked changed, this system would wake itself every frame.
     let named = named.bypass_change_detection();
     for taunt in &taunts.0 {
-        let clip = named.load(&packs, &mut clips, &taunt.clip);
-        if clip.is_none() && !loaded.taunts.contains_key(&taunt.clip) {
-            warn!("The `{}` taunt's clip `{}` is not in any pack", taunt.key, taunt.clip);
+        for name in std::iter::once(&taunt.clip).chain(taunt.rigs.values()) {
+            let clip = named.load(&packs, &mut clips, name);
+            if clip.is_none() && !loaded.taunts.contains_key(name) {
+                warn!("The `{}` taunt's clip `{name}` is not in any pack", taunt.key);
+            }
+            loaded.taunts.insert(name.clone(), clip);
         }
-        loaded.taunts.insert(taunt.clip.clone(), clip);
     }
 }
 
@@ -274,7 +277,8 @@ pub(crate) fn perform_conditions(
             .and_then(|id| taunts.as_deref()?.get(id))
             .and_then(|taunt| {
                 let claims = anatomy.claims(taunt.claims.iter().map(String::as_str));
-                Some((clips?.taunts.get(&taunt.clip)?.as_ref()?, claims))
+                let clip = taunt.clip_for(skeleton.map_or(crate::common::skeleton::rig::HUMANOID, |rig| rig.kind()))?;
+                Some((clips?.taunts.get(clip)?.as_ref()?, claims))
             });
 
         for (layer, wanted) in [(Layer::Humiliation, humiliation), (Layer::Taunt, taunt)] {
@@ -551,8 +555,7 @@ mod tests {
     /// cannot reach is left hanging, with no error.
     #[test]
     fn every_class_can_put_its_hands_up() {
-        use strum::IntoEnumIterator;
-        use crate::common::class::{Class, ClassBuilds};
+        use crate::common::class::ClassBuilds;
         use crate::common::skeleton::ik::Reach;
         use crate::common::skeleton::play::{apply, Frames};
         use crate::common::skeleton::rig::bone;
@@ -566,7 +569,7 @@ mod tests {
         .expect("the default pack should ship a humiliation clip");
         let ground = |_: Vec3| 0.0;
 
-        for class in Class::iter() {
+        for class in crate::common::class::ClassBuilds::shipped().humanoids() {
             let rig = humanoid(ClassBuilds::shipped().of(class));
             for time in [0.0, 0.6] {
                 let mut pose = Pose::rest();
@@ -591,8 +594,7 @@ mod tests {
     /// one side of the wave to the other.
     #[test]
     fn every_class_can_wave() {
-        use strum::IntoEnumIterator;
-        use crate::common::class::{Class, ClassBuilds};
+        use crate::common::class::ClassBuilds;
         use crate::common::skeleton::ik::Reach;
         use crate::common::skeleton::play::{apply, Frames};
         use crate::common::skeleton::rig::bone;
@@ -608,7 +610,7 @@ mod tests {
         .expect("the first taunt's clip is not in the default pack");
         let ground = |_: Vec3| 0.0;
 
-        for class in Class::iter() {
+        for class in crate::common::class::ClassBuilds::shipped().humanoids() {
             let rig = humanoid(ClassBuilds::shipped().of(class));
             for time in [0.0, 0.3, 0.6, 0.9, 1.2] {
                 let mut pose = Pose::rest();
