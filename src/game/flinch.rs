@@ -6,7 +6,6 @@
 
 use bevy::prelude::*;
 
-use crate::common::app_mode::AppMode;
 use crate::common::assets::{default_packs, Assets as PackAssets};
 use crate::common::damage::{DamageDealt, DamageSource, PlayerId};
 use crate::common::skeleton::clip::Clip;
@@ -72,7 +71,7 @@ impl Plugin for FlinchPlugin {
                 (start_flinches, end_flinches)
                     .chain()
                     .before(crate::game::held::fade_the_layers)
-                    .run_if(in_state(AppMode::Play)),
+                    .run_if(crate::common::app_mode::simulating),
             );
     }
 }

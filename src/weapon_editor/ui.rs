@@ -10,6 +10,7 @@ use egui_dock::{DockArea, DockState, TabViewer};
 
 use super::form::{edit_struct, unit_key, Form, FormMemory};
 use super::preview::{damage_over_distance, pellet_pattern};
+use super::range::RangeShow;
 use super::{save_the_draft, KeyProblem, PublishedCatalog, WeaponEditor};
 use crate::common::app_mode::{mode_menu, AppMode};
 use crate::common::assets::{default_packs, Assets};
@@ -118,6 +119,7 @@ fn panels(
     mut published: ResMut<PublishedCatalog>,
     mut memory: ResMut<FormMemory>,
     mut prop_editor: ResMut<PropEditor>,
+    mut show: ResMut<RangeShow>,
     (assets, registry, timeline): (Res<Assets>, Res<AppTypeRegistry>, Res<FeatureTimeline>),
     mut next_mode: ResMut<NextState<AppMode>>,
     // Optional: a build with no `NetPlugin` is a closed game, its own authority.
@@ -192,6 +194,9 @@ fn panels(
             .show_inside(ui, &mut tabs);
     });
     let (changed, open_mode) = (tabs.changed, tabs.open_mode);
+    egui::Panel::bottom("weapon_strip").resizable(true).default_size(150.0).show(&mut window_ui, |ui| strip(ui, &mut show));
+    // What is left is the range's: the views are drawn there by their cameras, under egui.
+    show.view = Some(window_ui.available_rect_before_wrap());
     if changed {
         editor.edited();
     }
@@ -596,6 +601,63 @@ fn read_prop(assets: &Assets, name: &str) -> Option<(PathBuf, PropDoc)> {
             None
         }
     }
+}
+
+const SPEEDS: [f32; 4] = [0.1, 0.25, 0.5, 1.0];
+
+/// The beats of the loop, the transport, and what each beat came to.
+fn strip(ui: &mut Ui, show: &mut RangeShow) {
+    ui.horizontal(|ui| {
+        let play = match show.playing {
+            true => get!("weapon_editor.range.pause"),
+            false => get!("weapon_editor.range.play"),
+        };
+        if ui.button(play).clicked() {
+            show.playing = !show.playing;
+        }
+        if ui.button(get!("weapon_editor.range.restart")).clicked() {
+            show.restart = true;
+            show.playing = true;
+        }
+        if ui.button(get!("weapon_editor.range.previous")).clicked() {
+            show.step = -1;
+            show.playing = true;
+        }
+        if ui.button(get!("weapon_editor.range.next")).clicked() {
+            show.step = 1;
+            show.playing = true;
+        }
+        ui.separator();
+        ui.label(get!("weapon_editor.range.speed"));
+        for speed in SPEEDS {
+            let times = get!(unit_key(Unit::Times));
+            if ui.selectable_label(show.speed == speed, format!("{speed}{times}")).clicked() {
+                show.speed = speed;
+            }
+        }
+    });
+    ui.horizontal_wrapped(|ui| {
+        let current = show.current;
+        let labels: Vec<String> = show.beats.iter().map(|beat| beat.label()).collect();
+        for (index, label) in labels.into_iter().enumerate() {
+            let mut on = !show.off.get(index).copied().unwrap_or(false);
+            let text = match index == current {
+                true => egui::RichText::new(label).strong(),
+                false => egui::RichText::new(label),
+            };
+            if ui.checkbox(&mut on, text).changed()
+                && let Some(off) = show.off.get_mut(index)
+            {
+                *off = !on;
+            }
+        }
+    });
+    ui.separator();
+    egui::ScrollArea::vertical().stick_to_bottom(true).show(ui, |ui| {
+        for line in &show.log {
+            ui.label(egui::RichText::new(line).monospace());
+        }
+    });
 }
 
 fn drawings(ui: &mut Ui, mounted: &Mounted) {

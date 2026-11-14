@@ -8,6 +8,7 @@
 
 pub mod form;
 pub mod preview;
+pub mod range;
 pub mod save;
 pub mod ui;
 
@@ -331,6 +332,10 @@ fn open_the_draft(
     if !editor.loaded || !editor.dirty() {
         editor.open(read_pack_weapons(&assets, &default_packs()));
     }
+    // So the range has something to play the moment the mode opens.
+    if editor.selected.is_none() && !editor.weapons.is_empty() {
+        editor.selected = Some(0);
+    }
     editor.loadouts = read_loadouts(&assets, &editor.packs());
     published.0 = Some(catalog.clone());
     editor.played = None;
@@ -398,6 +403,20 @@ pub fn save_the_draft(
     published.0 = Some(catalog_with(&editor.clean.0, &editor.loadouts.renamed(&editor.clean.1)));
 }
 
+/// `--weapon`. A resource rather than an initial state, so entering goes through
+/// `OnEnter(AppMode::Weapon)`.
+#[derive(Resource, Debug, Clone, Copy, Default)]
+pub struct StartInWeaponEditor(pub bool);
+
+fn start_in_the_weapon_editor(start: Res<StartInWeaponEditor>, mut next: ResMut<NextState<AppMode>>, mut done: Local<bool>) {
+    if !start.0 || *done {
+        return;
+    }
+    info!("Opening the weapon editor, as asked");
+    next.set(AppMode::Weapon);
+    *done = true;
+}
+
 pub struct WeaponEditorPlugin;
 
 impl Plugin for WeaponEditorPlugin {
@@ -405,13 +424,16 @@ impl Plugin for WeaponEditorPlugin {
         app.init_resource::<WeaponEditor>()
             .init_resource::<PublishedCatalog>()
             .init_resource::<form::FormMemory>()
+            .init_resource::<StartInWeaponEditor>()
+            // Ungated: it has to run in whatever mode the process started in.
+            .add_systems(Update, start_in_the_weapon_editor)
             // Registered with their field types, so the form can build any variant from defaults.
             .register_type::<Mounted>()
             .register_type::<crate::common::weapon::Magazine>()
             .add_systems(OnEnter(AppMode::Weapon), open_the_draft)
             .add_systems(Update, play_the_draft.run_if(in_state(AppMode::Weapon)))
             .add_systems(OnExit(AppMode::Weapon), put_back_the_published)
-            .add_plugins(ui::WeaponUiPlugin);
+            .add_plugins((ui::WeaponUiPlugin, range::RangePlugin));
     }
 }
 

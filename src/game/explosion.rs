@@ -54,9 +54,10 @@ impl Plugin for ExplosionPlugin {
             .add_systems(Update, (mark_blasts, fade_blast_marks))
             .add_systems(
                 PostUpdate,
-                draw_blast_marks.run_if(in_state(AppMode::Play)),
+                draw_blast_marks.run_if(crate::common::app_mode::simulating).run_if(resource_exists::<GizmoConfigStore>),
             )
             .add_systems(OnExit(AppMode::Play), clear_blast_marks)
+            .add_systems(OnExit(AppMode::Weapon), clear_blast_marks)
         ;
     }
 }

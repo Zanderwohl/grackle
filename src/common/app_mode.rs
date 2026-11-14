@@ -53,6 +53,13 @@ impl AppMode {
         matches!(self, AppMode::Editor | AppMode::Play)
     }
 
+    /// Whether bodies are stepped, weapons fire and damage lands: a round, and the weapon editor's
+    /// range, which plays the same systems on puppets. Seating, scoring and respawning are still
+    /// a round's alone.
+    pub fn simulates(self) -> bool {
+        matches!(self, AppMode::Play | AppMode::Weapon)
+    }
+
     /// The two prop modes share one scene: stage, lights, framed cameras and
     /// the hidden world.
     pub fn shows_a_prop(self) -> bool {
@@ -93,6 +100,10 @@ impl AppMode {
 /// `in_state` can only name one variant; this covers every authoring mode.
 pub fn authoring(mode: Res<State<AppMode>>) -> bool {
     mode.get().is_authoring()
+}
+
+pub fn simulating(mode: Res<State<AppMode>>) -> bool {
+    mode.get().simulates()
 }
 
 pub fn showing_a_prop(mode: Res<State<AppMode>>) -> bool {

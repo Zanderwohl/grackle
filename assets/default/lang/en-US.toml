@@ -1092,6 +1092,33 @@ open_in_prop = "Open in Prop Editor"
 open_in_animation = "Open in Animation Editor"
 prop_unsaved = "The prop editor has unsaved changes to another prop"
 
+[weapon_editor.range]
+play = "Play"
+pause = "Pause"
+restart = "Restart"
+previous = "Previous beat"
+next = "Next beat"
+speed = "Speed"
+
+[weapon_editor.beats]
+shoot = "{ button } at { distance } m"
+shoot_strafing = "{ button } at a strafer, { distance } m"
+burn = "{ button }, then afterburn"
+push = "{ button } pushes"
+reflect = "{ button } reflects a rocket"
+extinguish = "{ button } puts out a teammate"
+rocket_jump = "{ button } rocket jump"
+stub = "{ button }: no behavior yet"
+deploy = "Draw"
+reload = "Empty and reload"
+
+[weapon_editor.outcome]
+hits = "{ beat }: { hits } hits, { damage } damage"
+killed = ", killed at { seconds } s"
+reflected = ", reflected"
+not_reflected = ", not reflected"
+speed = ", fastest { speed } m/s"
+
 [weapon_editor.tabs]
 weapons = "Weapons"
 weapon = "Weapon"

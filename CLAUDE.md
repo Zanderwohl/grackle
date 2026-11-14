@@ -1094,9 +1094,29 @@ at the origin and the figure stands under it, inverted through the same
 
 `AppMode::Weapon` ([`src/weapon_editor/`](src/weapon_editor/)) edits every
 pack's `weapons.toml` as one document: a Weapons browser on the left, the
-selected weapon on the right, and the range, still to come, between them. The
-plan and what is left is
+selected weapon on the right, and the range between them; `--weapon` opens it.
+The plan and what is left is
 [documentation/weapon-editor.md](documentation/weapon-editor.md).
+
+- **The range plays the game, not an animation**
+  ([`range.rs`](src/weapon_editor/range.rs)): puppets are `spawn_player`
+  bodies whose `Inputs` a director writes each tick, as `steer_bots` does, so
+  recoil, reloads, the viewmodel, damage and ragdolls are the match's own.
+  **`AppMode::simulates()`** (the `simulating` run condition, true in Play and
+  Weapon) is what those systems ask instead of `in_state(Play)`; seating,
+  scoring, respawning, telemetry, bots and the map's collision rebuild still
+  ask for Play. A new system the range should show joins by asking it, and
+  one that seats or scores must not.
+- **The stage is 2 km under the map** (`RANGE_ORIGIN`), on its own
+  `CollisionWorld`, swapped in on entry and back on exit, so the map's
+  triggers and pickups never touch a puppet. The map's roots are hidden as
+  they stand on entry and put back on exit: the prop mode's every-frame rule
+  would hide every shot, blast and corpse the range makes.
+- **A beat comes from the weapon** (`beats_for`, `loop_for`): each button's
+  action contributes its own, every puppet is stood up again per beat so a
+  pass is comparable with the last, and the strip under the views logs what
+  each came to. `every_action_kind_contributes_a_beat` fails for a new
+  `WeaponAction` with nothing to show.
 
 - **The draft is the catalog while the mode is open.** Entering stashes the
   published `WeaponCatalog` (`PublishedCatalog`) and puts `catalog_of` the

@@ -10,7 +10,6 @@ use serde::{Deserialize, Serialize};
 
 use lightyear::prelude::{LocalTimeline, Tick};
 
-use crate::common::app_mode::AppMode;
 use crate::common::assets::Assets as PackAssets;
 use crate::common::assets::default_packs;
 use crate::common::skeleton::clip::Clip;
@@ -94,14 +93,14 @@ impl Plugin for ConditionPlugin {
             (toggle_conditions, end_taunts)
                 .chain()
                 .before(crate::game::weapon::pull_trigger)
-                .run_if(in_state(AppMode::Play))
+                .run_if(crate::common::app_mode::simulating)
                 .run_if(crate::common::net::has_authority),
         )
         .add_systems(
             Update,
             decide_the_view
                 .after(crate::game::player::toggle_view)
-                .run_if(in_state(AppMode::Play)),
+                .run_if(crate::common::app_mode::simulating),
         );
     }
 }
