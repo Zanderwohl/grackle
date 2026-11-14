@@ -381,11 +381,22 @@ None of these is animation, but a creature is not playable without them:
       larger (`FigureTargets`).
 
 ### Stage 4: the first creature
-- [x] `Class::Strider`, built on `rigs/strider.toml` (two two-bone legs, a
-      long neck, a three-bone tail, no hands), with a loadout of its own.
-      The digitigrade three-bone legs the decisions above suggested wait:
-      a zigzag knee and hock needs per-joint poles, not one. The humanoid's
-      own tests loop over `ClassBuilds::humanoids()`.
+- [x] `Class::Strider`, built on `rigs/strider.toml` (two digitigrade legs,
+      a long neck, a three-bone tail, no hands), with a loadout of its own.
+      The humanoid's own tests loop over `ClassBuilds::humanoids()`.
+- [x] Digitigrade legs: thigh, shin and metatarsus, the knee forward and the
+      hock back. A limb's `bends_away` names the joints that bend away from
+      its pole (`Chain::away`). A three-bone chain bent toward then away is
+      solved exactly (`ik::digitigrade`): the metatarsus keeps its rest angle
+      to the thigh, so the two are one rigid bone from the hip and the leg is
+      the two-bone problem. FABRIK with the stops clamped inside its passes
+      was tried first and settled in bad shapes (the whole leg swung back
+      with the foot short). Other chains stay on FABRIK, which now seeds each
+      joint its own way and rolls every bone from one hinge axis, square to
+      the bend plane, rather than from `bone × pole`. A joint that rests bent
+      states its own hinge `stops` in degrees, since a named kind is measured
+      from a straight rest and would not let it straighten; the ragdoll reads
+      them too.
 - [x] State clips under `animations/strider/` (an idle that sways the tail)
       and the wave's strider clip, `strider/taunt_wag`, named in the
       taunt's `rigs`. A body is offered only taunts it has a clip for

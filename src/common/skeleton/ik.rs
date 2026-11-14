@@ -33,9 +33,18 @@ pub struct Chain {
     pub middle: &'static [&'static str],
     pub lower: &'static str,
     pub tip: Option<&'static str>,
+    /// Bit `i` set: the joint at the head of the chain's bone `i` (root first, so from 1) bends
+    /// away from the pole rather than toward it, as a digitigrade hock does under a forward knee.
+    pub away: u32,
 }
 
 impl Chain {
+    /// Three bones, the knee bending toward the pole and the hock away: solved exactly by
+    /// [`digitigrade`] rather than by [`fabrik`].
+    pub fn is_digitigrade(&self) -> bool {
+        self.middle.len() == 1 && self.away == 1 << 2
+    }
+
     /// Root first, without the tip.
     pub fn bones(&self) -> impl Iterator<Item = &'static str> + '_ {
         std::iter::once(self.upper).chain(self.middle.iter().copied()).chain(std::iter::once(self.lower))
@@ -47,6 +56,7 @@ pub const LEFT_LEG: Chain = Chain {
     middle: &[],
     lower: bone::SHIN_L,
     tip: Some(bone::FOOT_L),
+    away: 0,
 };
 
 pub const RIGHT_LEG: Chain = Chain {
@@ -54,6 +64,7 @@ pub const RIGHT_LEG: Chain = Chain {
     middle: &[],
     lower: bone::SHIN_R,
     tip: Some(bone::FOOT_R),
+    away: 0,
 };
 
 pub const LEFT_ARM: Chain = Chain {
@@ -61,6 +72,7 @@ pub const LEFT_ARM: Chain = Chain {
     middle: &[],
     lower: bone::FOREARM_L,
     tip: Some(bone::HAND_L),
+    away: 0,
 };
 
 pub const RIGHT_ARM: Chain = Chain {
@@ -68,6 +80,7 @@ pub const RIGHT_ARM: Chain = Chain {
     middle: &[],
     lower: bone::FOREARM_R,
     tip: Some(bone::HAND_R),
+    away: 0,
 };
 
 /// What happened when a chain was asked to reach somewhere.
@@ -93,6 +106,9 @@ pub fn solve(
     target: Vec3,
     pole: Vec3,
 ) -> Reach {
+    if chain.is_digitigrade() {
+        return digitigrade(skeleton, pose, root, chain, target, pole);
+    }
     if !chain.middle.is_empty() {
         return fabrik(skeleton, pose, root, chain, target, pole);
     }
@@ -457,6 +473,79 @@ fn clip_pose(
     pose
 }
 
+/// A thigh, shin and metatarsus onto `target`, the knee toward `pole` and the hock away from it.
+///
+/// The metatarsus keeps its rest angle to the thigh, as a bird's or a dog's roughly does, so the
+/// two add up to one rigid bone from the hip and the leg is [`solve`]'s two-bone problem: exact,
+/// and the same every tick. Out of reach is that virtual leg straightened, not the real one.
+fn digitigrade(skeleton: &Skeleton, pose: &mut Pose, root: &Transform, chain: &Chain, target: Vec3, pole: Vec3) -> Reach {
+    let bones = skeleton.bones();
+    let (Some(thigh), Some(shin), Some(meta)) = (
+        skeleton.index_of(chain.upper),
+        chain.middle.first().and_then(|name| skeleton.index_of(name)),
+        skeleton.index_of(chain.lower),
+    ) else {
+        return Reach::Impossible;
+    };
+    let hip = skeleton.posed_bone(pose, root, thigh).head;
+    let parent = match bones[thigh].parent {
+        Some(parent) => skeleton.posed_bone(pose, root, parent).rotation,
+        None => root.rotation,
+    };
+    let tip = chain.tip.and_then(|tip| {
+        let index = skeleton.index_of(tip)?;
+        Some((tip, index, skeleton.posed_bone(pose, root, index).rotation))
+    });
+
+    let to_target = target - hip;
+    let distance = to_target.length();
+    if distance < 1e-5 {
+        return Reach::Impossible;
+    }
+    let direction = to_target / distance;
+    let axis = direction.cross(pole).try_normalize().unwrap_or_else(|| direction.any_orthonormal_vector());
+
+    // The metatarsus's rest direction in the thigh's frame, as a turn about the thigh's `+X`
+    // (the hinge axis; positive toward `+Z`).
+    let (upper, middle, lower) = (bones[thigh].length, bones[shin].length, bones[meta].length);
+    let rest = bones[shin].rest * bones[meta].rest * Vec3::Y;
+    let hock = rest.z.atan2(rest.y);
+    // Thigh plus metatarsus as one bone, `upper + lower·e^(i·hock)` in the bend plane.
+    let (along, across) = (upper + lower * hock.cos(), lower * hock.sin());
+    let first = along.hypot(across);
+    let offset = across.atan2(along);
+
+    let reach = first + middle;
+    let usable = distance.clamp((first - middle).abs() + STRAIGHT_MARGIN, reach - STRAIGHT_MARGIN);
+    let cosine = ((first * first + usable * usable - middle * middle) / (2.0 * first * usable)).clamp(-1.0, 1.0);
+    let virtual_bone = Quat::from_axis_angle(axis, cosine.acos()) * direction;
+    let elbow = hip + virtual_bone * first;
+    let end = hip + direction * usable;
+
+    let thigh_direction = Quat::from_axis_angle(axis, -offset) * virtual_bone;
+    let shin_direction = (end - elbow).normalize_or_zero();
+    let meta_direction = Quat::from_axis_angle(axis, hock) * thigh_direction;
+    if shin_direction == Vec3::ZERO {
+        return Reach::Impossible;
+    }
+
+    let thigh_rotation = aim(thigh_direction, axis);
+    let shin_rotation = aim(shin_direction, axis);
+    let meta_rotation = aim(meta_direction, axis);
+    pose.set(chain.upper, (parent * bones[thigh].rest).inverse() * thigh_rotation);
+    pose.set(bones[shin].name, (thigh_rotation * bones[shin].rest).inverse() * shin_rotation);
+    pose.set(chain.lower, (shin_rotation * bones[meta].rest).inverse() * meta_rotation);
+    if let Some((tip, index, was)) = tip {
+        pose.set(tip, (meta_rotation * bones[index].rest).inverse() * was);
+    }
+
+    if distance <= reach + STRAIGHT_MARGIN {
+        Reach::Reached
+    } else {
+        Reach::Short
+    }
+}
+
 /// Rounds of [`fabrik`]: positions, then rotations through each joint's limit, then positions
 /// again from where the limits left the joints. Fixed, so a hitbox rebuilt on the tick is the
 /// same on every machine.
@@ -466,7 +555,8 @@ const FABRIK_PASSES: usize = 8;
 /// How close the tip must come to count as reached, meters.
 const FABRIK_REACHED: f32 = 1e-3;
 
-/// A chain of three or more bones onto `target`, bending toward `pole` (world space). FABRIK:
+/// A chain of three or more bones onto `target`, each inner joint bending toward `pole` (world
+/// space), or away from it where [`Chain::away`] says. FABRIK:
 /// joint positions are pulled to the target and back to the root, then each bone is turned to
 /// its new direction as far as its [`JointLimit`](super::joints::JointLimit) allows.
 fn fabrik(skeleton: &Skeleton, pose: &mut Pose, root: &Transform, chain: &Chain, target: Vec3, pole: Vec3) -> Reach {
@@ -492,16 +582,24 @@ fn fabrik(skeleton: &Skeleton, pose: &mut Pose, root: &Transform, chain: &Chain,
     if (target - base).length() < 1e-5 {
         return Reach::Impossible;
     }
+    // One roll reference for the whole chain, square to the plane it bends in. Per bone, `bone ×
+    // pole` vanishes for a bone running along the pole and flips its frame, and a zigzag has bones
+    // on both sides of it.
+    let hinge = (target - base)
+        .cross(pole)
+        .try_normalize()
+        .unwrap_or_else(|| (target - base).normalize().any_orthonormal_vector());
 
     for round in 0..FABRIK_ROUNDS {
         let mut points = joints(pose);
         if round == 0 {
-            // Bowed toward the pole, so the chain settles bending that way rather than whichever
-            // way it started.
+            // Each inner joint bowed its own way, so the chain settles bending as the rig says
+            // rather than whichever way it started.
             let span = lengths.iter().sum::<f32>() * 0.05;
             let count = points.len();
-            for point in points.iter_mut().take(count - 1).skip(1) {
-                *point += pole * span;
+            for (at, point) in points.iter_mut().enumerate().take(count - 1).skip(1) {
+                let side = if chain.away & (1 << at) != 0 { -1.0 } else { 1.0 };
+                *point += pole * side * span;
             }
         }
         for _ in 0..FABRIK_PASSES {
@@ -529,7 +627,7 @@ fn fabrik(skeleton: &Skeleton, pose: &mut Pose, root: &Transform, chain: &Chain,
             let frame = parent * bone.rest;
             let wanted = (points[at + 1] - head).normalize_or(frame * Vec3::Y);
             let allowed = frame * bone.limit.nearest(frame.inverse() * wanted);
-            let rotation = aim(allowed, allowed.cross(pole));
+            let rotation = aim(allowed, hinge);
             pose.set(bone.name, frame.inverse() * rotation);
         }
     }
