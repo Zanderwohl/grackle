@@ -950,9 +950,7 @@ impl AnimTabs<'_> {
     fn track_headers(&mut self, ui: &mut Ui, strip: Rect, zoom: f32) {
         use crate::anim::timeline::{row_top, track_name, NAMES_WIDTH, ROW_HEIGHT};
         let Some(clip) = self.clip() else { return };
-        let rig = crate::common::skeleton::humanoid(
-            self.builds.of(self.figure.0.unwrap_or(Class::Mercenary)),
-        );
+        let rig = self.builds.rig_for(self.figure.0.unwrap_or(Class::Mercenary));
         let problems = self.problems_of(&clip, &rig);
 
         let points = |x: f32, y: f32| egui::pos2(x / zoom, y / zoom);
@@ -1041,7 +1039,7 @@ impl AnimTabs<'_> {
 
     /// Tracks are picked, added, reordered and removed on the strip.
     fn track_section(&mut self, ui: &mut Ui, clip: &Clip) {
-        let rig = crate::common::skeleton::humanoid(self.builds.of(self.figure.0.unwrap_or(Class::Mercenary)));
+        let rig = self.builds.rig_for(self.figure.0.unwrap_or(Class::Mercenary));
         if clip.tracks.is_empty() {
             ui.label(get!("anim.no_tracks"));
             return;
@@ -1435,9 +1433,7 @@ impl AnimTabs<'_> {
     fn problems(&mut self, ui: &mut Ui) {
         let Some(clip) = self.clip() else { return };
         // The rig on screen, so a bone missing on one build is reported against it.
-        let rig = crate::common::skeleton::humanoid(
-            self.builds.of(self.figure.0.unwrap_or(Class::Mercenary)),
-        );
+        let rig = self.builds.rig_for(self.figure.0.unwrap_or(Class::Mercenary));
         for problem in self.problems_of(&clip, &rig) {
             // Named as the strip names the row.
             let text = match problem.track.and_then(|index| clip.tracks.get(index)) {

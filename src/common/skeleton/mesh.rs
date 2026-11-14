@@ -113,20 +113,40 @@ const FOOT: Profile = Profile {
 
 /// The shape of each bone in the humanoid rig, which its builder copies onto each [`Bone`].
 pub fn profile(name: &str) -> Profile {
-    match name {
-        bone::PELVIS => PELVIS,
-        bone::CHEST => CHEST,
-        bone::NECK => NECK,
-        bone::HEAD => HEAD,
-        bone::CLAVICLE_L | bone::CLAVICLE_R => CLAVICLE,
-        bone::UPPER_ARM_L | bone::UPPER_ARM_R => UPPER_ARM,
-        bone::FOREARM_L | bone::FOREARM_R => FOREARM,
-        bone::HAND_L | bone::HAND_R => HAND,
-        bone::THIGH_L | bone::THIGH_R => THIGH,
-        bone::SHIN_L | bone::SHIN_R => SHIN,
-        bone::FOOT_L | bone::FOOT_R => FOOT,
-        _ => DEFAULT,
-    }
+    let kind = match name {
+        bone::PELVIS => "pelvis",
+        bone::CHEST => "chest",
+        bone::NECK => "neck",
+        bone::HEAD => "head",
+        bone::CLAVICLE_L | bone::CLAVICLE_R => "clavicle",
+        bone::UPPER_ARM_L | bone::UPPER_ARM_R => "upper_arm",
+        bone::FOREARM_L | bone::FOREARM_R => "forearm",
+        bone::HAND_L | bone::HAND_R => "hand",
+        bone::THIGH_L | bone::THIGH_R => "thigh",
+        bone::SHIN_L | bone::SHIN_R => "shin",
+        bone::FOOT_L | bone::FOOT_R => "foot",
+        _ => "default",
+    };
+    profile_named(kind).unwrap_or(DEFAULT)
+}
+
+/// A shape by the name a rig file gives it.
+pub fn profile_named(kind: &str) -> Option<Profile> {
+    Some(match kind {
+        "pelvis" => PELVIS,
+        "chest" => CHEST,
+        "neck" => NECK,
+        "head" => HEAD,
+        "clavicle" => CLAVICLE,
+        "upper_arm" => UPPER_ARM,
+        "forearm" => FOREARM,
+        "hand" => HAND,
+        "thigh" => THIGH,
+        "shin" => SHIN,
+        "foot" => FOOT,
+        "default" => DEFAULT,
+        _ => return None,
+    })
 }
 
 pub fn bone_mesh(bone: &Bone) -> Mesh {

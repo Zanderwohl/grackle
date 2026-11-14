@@ -64,7 +64,10 @@ impl Side {
 
 /// The numbers a body's shape is built from, as fractions of `height` so that
 /// changing `height` alone scales the body.
+/// Absent fields are [`Proportions::DEFAULT`]'s, so a file rig's build need state only `height`
+/// and `girth`.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Proportions {
     /// Ground to crown, in meters.
     pub height: f32,
@@ -172,11 +175,47 @@ pub struct Bone {
 /// A rig: bones in dependency order, plus the numbers they were built from.
 #[derive(Component, Clone, Debug)]
 pub struct Skeleton {
-    /// Which builder made it.
-    kind: &'static str,
+    build: Build,
     bones: Vec<Bone>,
-    proportions: Proportions,
     anatomy: super::anatomy::Anatomy,
+}
+
+/// What a rig is built from: a rig file's name, or `None` for the humanoid built in code, and
+/// the numbers that size it. A humanoid reads all of `proportions`; a file rig reads `height` and
+/// `girth`, and scales each of its bone groups by `scales`.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Build {
+    pub rig: Option<String>,
+    pub proportions: Proportions,
+    pub scales: std::collections::BTreeMap<String, f32>,
+}
+
+/// What [`Build::kind`] answers for the humanoid.
+pub const HUMANOID: &str = "humanoid";
+
+impl Build {
+    pub fn humanoid(proportions: Proportions) -> Build {
+        Build { rig: None, proportions, scales: Default::default() }
+    }
+
+    pub fn kind(&self) -> &str {
+        self.rig.as_deref().unwrap_or(HUMANOID)
+    }
+}
+
+/// A bone or limb name read from a file, made `&'static` as a [`Pose`] keys it. Leaked once per
+/// distinct name, which is bounded by the rigs a pack ships.
+pub fn intern(name: &str) -> &'static str {
+    use std::collections::BTreeSet;
+    use std::sync::Mutex;
+    static NAMES: OnceLock<Mutex<BTreeSet<&'static str>>> = OnceLock::new();
+    let mut names = NAMES.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(known) = names.get(name) {
+        return known;
+    }
+    let leaked: &'static str = Box::leak(name.to_owned().into_boxed_str());
+    names.insert(leaked);
+    leaked
 }
 
 impl Skeleton {
@@ -191,15 +230,24 @@ impl Skeleton {
     }
 
     pub fn proportions(&self) -> Proportions {
-        self.proportions
+        self.build.proportions
+    }
+
+    pub fn build(&self) -> &Build {
+        &self.build
+    }
+
+    pub(super) fn from_parts(build: Build, bones: Vec<Bone>, anatomy: super::anatomy::Anatomy) -> Skeleton {
+        Skeleton { build, bones, anatomy }
     }
 
     pub fn anatomy(&self) -> &super::anatomy::Anatomy {
         &self.anatomy
     }
 
-    pub fn kind(&self) -> &'static str {
-        self.kind
+    /// The rig file's name, or [`HUMANOID`].
+    pub fn kind(&self) -> &str {
+        self.build.kind()
     }
 
     /// Forward kinematics into world space. `root` places the feet, the same
@@ -504,7 +552,7 @@ pub fn humanoid(proportions: Proportions) -> Skeleton {
     for problem in anatomy.problems(&builder.bones) {
         warn!("The humanoid rig: {problem}");
     }
-    Skeleton { kind: "humanoid", bones: builder.bones, proportions, anatomy }
+    Skeleton { build: Build::humanoid(proportions), bones: builder.bones, anatomy }
 }
 
 /// How much of the aim's pitch the neck takes; the head takes the rest. A head alone at eighty
@@ -616,14 +664,28 @@ impl LimbNames {
 
 /// Turns world-space landmarks into parent-relative bones.
 #[derive(Default)]
-struct Builder {
-    bones: Vec<Bone>,
+pub(super) struct Builder {
+    pub(super) bones: Vec<Bone>,
     /// Each bone's rest orientation and head position in world rest space.
     rest: Vec<(Quat, Vec3)>,
 }
 
 impl Builder {
     fn bone(&mut self, name: &'static str, parent: Option<&'static str>, head: Vec3, tail: Vec3, thickness: Vec2) {
+        let shape = (super::joints::limit_of(name), super::mesh::profile(name));
+        self.bone_shaped(name, parent, head, tail, thickness, shape);
+    }
+
+    /// Parents first: panics on a parent not yet added, which a rig file is checked for.
+    pub(super) fn bone_shaped(
+        &mut self,
+        name: &'static str,
+        parent: Option<&'static str>,
+        head: Vec3,
+        tail: Vec3,
+        thickness: Vec2,
+        (limit, profile): (super::joints::JointLimit, super::mesh::Profile),
+    ) {
         let parent = parent.map(|parent| {
             self.bones
                 .iter()
@@ -651,8 +713,8 @@ impl Builder {
             rest: local_rest,
             length,
             thickness,
-            limit: super::joints::limit_of(name),
-            profile: super::mesh::profile(name),
+            limit,
+            profile,
         });
         self.rest.push((rest_global, head));
     }

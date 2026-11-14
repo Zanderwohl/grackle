@@ -114,6 +114,7 @@ impl Plugin for GamePlugin {
                 Startup,
                 crate::common::clip_file::load_body_clips_at_startup,
             )
+            .add_systems(Update, crate::common::clip_file::load_clips_for_new_rigs)
 
             .init_resource::<CollisionWorld>()
             .init_resource::<MovementRules>()

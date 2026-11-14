@@ -1,6 +1,7 @@
 //! Code-defined skeletons: the rig, what it is asked to do, and how it is drawn.
 //!
 //! - [`anatomy`] — what a rig says about itself: limbs, feet, where the head is.
+//! - [`rig_file`] — a rig read from a pack, for anatomy the builder in code does not know.
 //! - [`rig`] — bones and [`Pose`]s. Proportions live in the skeleton, motion in
 //!   the pose as rotations, so one animation fits every build.
 //! - [`state`] — [`BodyRequests`], which anything can write, and the state
@@ -30,6 +31,7 @@ pub mod joints;
 pub mod mesh;
 pub mod play;
 pub mod rig;
+pub mod rig_file;
 pub mod seed;
 pub mod state;
 

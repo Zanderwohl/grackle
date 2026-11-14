@@ -314,17 +314,37 @@ None of these is animation, but a creature is not playable without them:
   spellings. `Regions` stays six bits until a rig names other regions.
 
 ### Stage 2: rig files
-- [ ] Interned bone names; `ChainRef` → a chain name; `Space::Socket`,
-      `Unit::Measure`, `Timing::Foot` and per-rig regions, the old spellings
-      kept. Every shipped `.gpa` and `.gpp` loads unchanged.
-- [ ] `rigs/<name>.toml` format and loader; Problems for bad files, as
-      `classes.toml` drops bad builds.
-- [ ] `classes.toml` `rig =`; build as height + measure scales + girth for
-      file rigs.
-- [ ] `CorpseBuild`, `BuildKey` keyed by (rig, build).
-- [ ] Rigs synced by `pack_sync`.
-- [ ] Clips name a `rig`; state clips per rig; the editor's bone, chain and
-      region menus come from the figure's rig.
+- [x] `rigs/<name>.toml` ([`rig_file.rs`](../src/common/skeleton/rig_file.rs)):
+      bones at a reference height (parent, head, tail, thickness, group,
+      region, and a joint kind and shape by the humanoid's names), limbs,
+      feet, hands, carry, head, look, viewmodel, and which limb and bone the
+      measures are read off. Names are interned (`rig::intern`). A file is
+      checked by building it: a bad one is dropped with a line, and the
+      classes on it are built as humanoids. The default pack ships
+      `strider.toml`, two legs, a neck and a tail, which no class uses yet.
+- [x] `classes.toml` `rig =`, with `height`, `girth` and `[scales]` per bone
+      group; a build resizes the rig to its height, lengthens each group, and
+      puts the feet back on the floor.
+- [x] A `Build` (rig, proportions, scales) is what a `Skeleton`, a
+      `CorpseBuild` and the body mesh cache are keyed by.
+- [x] Rigs ride in `ClassBuilds`, which `pack_sync` already sends; a body is
+      re-rigged when its rig file changes under an unchanged build.
+- [x] Another rig's state clips are `animations/<rig>/<state>.gpa`, read as
+      its builds arrive (`load_clips_for_new_rigs`); a state with no clip
+      stands in rest rather than in the humanoid's pose functions.
+- [x] The editor's figure, bone menu, pole and Problems come from the
+      class's own rig.
+- [x] `every_corpse_settles_however_it_lands` drops striders too, with 16 s
+      rather than 12: their neck and tail can roll after resting.
+
+### Stage 2b: what only a rig with other names needs
+- [ ] `ChainRef` → a free chain name, so a clip can name a rig's own limbs;
+      the editor's Reach menu from the rig's limbs.
+- [ ] `Space::Socket`, `Unit::Measure`, `Timing::Foot` beside the old
+      spellings. Every shipped `.gpa` and `.gpp` loads unchanged.
+- [ ] Per-rig regions and their names, for claims and the editor.
+- [ ] The animation editor edits another rig's state clips, under
+      `animations/<rig>/`.
 
 ### Stage 3: IK
 - [ ] FABRIK with joint limits, fixed iterations; tested for reach, limits,

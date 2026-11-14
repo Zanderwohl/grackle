@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 
+use crate::common::skeleton::rig::{humanoid, Build, Skeleton};
+use crate::common::skeleton::rig_file::{build_rig, RigFile};
 use crate::common::skeleton::Proportions;
 use crate::get;
 
@@ -145,13 +147,37 @@ impl Class {
 /// Keyed by [`Class::key`] in a `BTreeMap` so two equal tables compare equal;
 /// see [`crate::common::pack_sync`].
 #[derive(Resource, Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct ClassBuilds(pub BTreeMap<String, Proportions>);
+pub struct ClassBuilds {
+    pub builds: BTreeMap<String, Build>,
+    /// The rig files the builds name, by name, each already checked.
+    pub rigs: BTreeMap<String, RigFile>,
+}
 
 impl ClassBuilds {
     /// A class the pack does not describe is built as [`Proportions::DEFAULT`]
     /// rather than not at all.
     pub fn of(&self, class: Class) -> Proportions {
-        self.0.get(&Class::key(class)).copied().unwrap_or(Proportions::DEFAULT)
+        self.build(class).proportions
+    }
+
+    pub fn build(&self, class: Class) -> Build {
+        self.builds.get(&Class::key(class)).cloned().unwrap_or_else(|| Build::humanoid(Proportions::DEFAULT))
+    }
+
+    pub fn rig_for(&self, class: Class) -> Skeleton {
+        self.skeleton(&self.build(class))
+    }
+
+    /// A rig this table does not hold is drawn as the humanoid of the same numbers rather than
+    /// not at all, as a missing build is.
+    pub fn skeleton(&self, build: &Build) -> Skeleton {
+        let Some(file) = build.rig.as_ref().and_then(|name| self.rigs.get(name)) else {
+            return humanoid(build.proportions);
+        };
+        build_rig(file, build).unwrap_or_else(|why| {
+            warn!("The {} rig will not build: {why}", build.kind());
+            humanoid(build.proportions)
+        })
     }
 
     /// The default pack's builds. What tests and tools use; there is

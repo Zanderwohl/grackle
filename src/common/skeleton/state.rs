@@ -387,12 +387,43 @@ impl AnimationState {
 /// Owned here rather than behind handles: this resource is the single copy.
 #[derive(Resource, Debug, Default, Clone)]
 pub struct ClipLibrary {
+    /// The humanoid's.
     by_state: HashMap<AnimationState, StateAnimation>,
+    /// Every other rig's, by its name: their clips name bones the humanoid's do not.
+    by_rig: HashMap<String, HashMap<AnimationState, StateAnimation>>,
 }
 
 impl ClipLibrary {
     pub fn get(&self, state: AnimationState) -> Option<&StateAnimation> {
         self.by_state.get(&state)
+    }
+
+    /// `rig` as [`Skeleton::kind`](super::rig::Skeleton::kind) names it.
+    pub fn get_for(&self, rig: &str, state: AnimationState) -> Option<&StateAnimation> {
+        match rig {
+            super::rig::HUMANOID => self.get(state),
+            _ => self.by_rig.get(rig)?.get(&state),
+        }
+    }
+
+    pub fn insert_for(&mut self, rig: &str, state: AnimationState, animation: StateAnimation) {
+        match rig {
+            super::rig::HUMANOID => self.insert(state, animation),
+            _ => {
+                self.by_rig.entry(rig.to_string()).or_default().insert(state, animation);
+            }
+        }
+    }
+
+    /// Marks a rig's clips as read, whether or not it had any.
+    pub fn add_rig(&mut self, rig: &str) {
+        if rig != super::rig::HUMANOID {
+            self.by_rig.entry(rig.to_string()).or_default();
+        }
+    }
+
+    pub fn has_rig(&self, rig: &str) -> bool {
+        rig == super::rig::HUMANOID || self.by_rig.contains_key(rig)
     }
 
     pub fn insert(&mut self, state: AnimationState, animation: impl Into<StateAnimation>) {

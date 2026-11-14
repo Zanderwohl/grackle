@@ -23,7 +23,21 @@ pub fn read_clip(
     pack: &Path,
     state: AnimationState,
 ) -> Result<Option<StateAnimation>, String> {
-    let relative = format!("{CLIPS_DIR}/{}.{CLIP_EXTENSION}", state.clip_name());
+    read_state_clip(assets, pack, CLIPS_DIR, state)
+}
+
+/// Another rig's state clips are under `animations/<rig>/`, since they name other bones.
+pub fn rig_clips_dir(rig: &str) -> String {
+    format!("{CLIPS_DIR}/{rig}")
+}
+
+fn read_state_clip(
+    assets: &Assets,
+    pack: &Path,
+    dir: &str,
+    state: AnimationState,
+) -> Result<Option<StateAnimation>, String> {
+    let relative = format!("{dir}/{}.{CLIP_EXTENSION}", state.clip_name());
     let bytes = match assets.read(pack, &relative) {
         Ok(bytes) => bytes,
         Err(AssetError::NotFound(_)) => return Ok(None),
@@ -111,6 +125,35 @@ impl NamedClips {
             Some(Some(handle)) => crate::common::skeleton::play::refill(clips, handle, clip),
             _ => {
                 self.0.insert(name.to_string(), Some(clips.add(clip.clone())));
+            }
+        }
+    }
+}
+
+/// Each rig the class builds name that the library has not read yet, as the builds arrive: at
+/// startup, and on a client when the server's builds replace its own.
+pub fn load_clips_for_new_rigs(
+    assets: Res<Assets>,
+    builds: Res<crate::common::class::ClassBuilds>,
+    library: Option<ResMut<ClipLibrary>>,
+) {
+    let Some(mut library) = library else { return };
+    if !builds.is_changed() && !library.is_added() {
+        return;
+    }
+    for rig in builds.rigs.keys() {
+        if library.has_rig(rig) {
+            continue;
+        }
+        library.add_rig(rig);
+        let dir = rig_clips_dir(rig);
+        for pack in default_packs() {
+            for state in AnimationState::iter() {
+                match read_state_clip(&assets, &pack, &dir, state) {
+                    Ok(Some(clip)) => library.insert_for(rig, state, clip),
+                    Ok(None) => {}
+                    Err(why) => warn!("{}/{dir}/{}.{CLIP_EXTENSION}: {why}", pack.display(), state.clip_name()),
+                }
             }
         }
     }

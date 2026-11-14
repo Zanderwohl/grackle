@@ -129,20 +129,40 @@ const UNLISTED: JointLimit = JointLimit::Cone { radians: 0.3 };
 
 /// What each humanoid joint will do, which its builder copies onto each bone.
 pub fn limit_of(bone_name: &str) -> JointLimit {
-    match bone_name {
-        bone::PELVIS => JointLimit::Fixed,
-        bone::CHEST => SPINE,
-        bone::NECK => NECK,
-        bone::HEAD => HEAD,
-        bone::CLAVICLE_L | bone::CLAVICLE_R => CLAVICLE,
-        bone::UPPER_ARM_L | bone::UPPER_ARM_R => SHOULDER,
-        bone::FOREARM_L | bone::FOREARM_R => ELBOW,
-        bone::HAND_L | bone::HAND_R => WRIST,
-        bone::THIGH_L | bone::THIGH_R => HIP,
-        bone::SHIN_L | bone::SHIN_R => KNEE,
-        bone::FOOT_L | bone::FOOT_R => ANKLE,
-        _ => UNLISTED,
-    }
+    let kind = match bone_name {
+        bone::PELVIS => "fixed",
+        bone::CHEST => "spine",
+        bone::NECK => "neck",
+        bone::HEAD => "head",
+        bone::CLAVICLE_L | bone::CLAVICLE_R => "clavicle",
+        bone::UPPER_ARM_L | bone::UPPER_ARM_R => "shoulder",
+        bone::FOREARM_L | bone::FOREARM_R => "elbow",
+        bone::HAND_L | bone::HAND_R => "wrist",
+        bone::THIGH_L | bone::THIGH_R => "hip",
+        bone::SHIN_L | bone::SHIN_R => "knee",
+        bone::FOOT_L | bone::FOOT_R => "ankle",
+        _ => "unlisted",
+    };
+    limit_named(kind).unwrap_or(UNLISTED)
+}
+
+/// A joint by the name a rig file gives it.
+pub fn limit_named(kind: &str) -> Option<JointLimit> {
+    Some(match kind {
+        "fixed" => JointLimit::Fixed,
+        "spine" => SPINE,
+        "neck" => NECK,
+        "head" => HEAD,
+        "clavicle" => CLAVICLE,
+        "shoulder" => SHOULDER,
+        "elbow" => ELBOW,
+        "wrist" => WRIST,
+        "hip" => HIP,
+        "knee" => KNEE,
+        "ankle" => ANKLE,
+        "unlisted" => UNLISTED,
+        _ => return None,
+    })
 }
 
 #[cfg(test)]

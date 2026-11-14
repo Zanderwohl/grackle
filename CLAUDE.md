@@ -197,6 +197,16 @@ with no build is drawn as `Proportions::DEFAULT` rather than not at all. Tests
 and tools read `ClassBuilds::shipped()`; there is no table in Rust to drift
 from the file.
 
+A build may name a **rig file** instead (`rig = "strider"`, with `height`,
+`girth` and `[scales]` per bone group): `rigs/<name>.toml`
+([`src/common/skeleton/rig_file.rs`](src/common/skeleton/rig_file.rs)), loaded
+because a build names it and checked by building it. The rigs ride in
+`ClassBuilds`, so a client is sent them with the builds. Everything that rigs a
+body asks `ClassBuilds::rig_for` or `skeleton(build)`, never `humanoid`
+directly, and a `Build` — rig, proportions, scales — is what a skeleton, a
+corpse and the mesh cache remember. Another rig's state clips are
+`animations/<rig>/<state>.gpa`; without one a state stands in rest.
+
 Usability is decided by `CollisionWorld::fits` — the body box must be in the
 map and touching no wall. There is no separate notion of "headroom": a low
 ceiling *is* a slab the body overlaps. Unusable spawns are skipped with a
@@ -2463,7 +2473,7 @@ What crosses is the **seed**, not the simulation. `Ragdoll` is
 `replicate_once`: two points per bone at the moment of death, sent once and
 never again, and each machine runs the same solver over them from there —
 twenty bones of physics per corpse once, not per tick. A `Skeleton` still never
-crosses; the corpse carries a `CorpseBuild` — the `Proportions` read straight
+crosses; the corpse carries a `CorpseBuild` — the `Build` read straight
 off the rig the body had — and `dress_corpses_from_elsewhere` puts the rig
 back from it.
 

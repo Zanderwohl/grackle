@@ -345,11 +345,20 @@ pub fn finish_pose(
     // A state without a clip falls back to its function; `None` is the
     // all-function baseline the comparison tests measure against.
     let mut pose = clips
-        .and_then(|library| library.get(state))
+        .and_then(|library| library.get_for(skeleton.kind(), state))
         .map(|animation| animation_pose(animation, state, inputs, skeleton, root))
-        .unwrap_or_else(|| state.pose(inputs));
+        .unwrap_or_else(|| fallback_pose(skeleton, state, inputs));
     correct_for_state(skeleton, &mut pose, state, inputs, root);
     pose
+}
+
+/// A state with no clip: the humanoid's pose function, which names the humanoid's bones, or rest
+/// for any other rig.
+fn fallback_pose(skeleton: &Skeleton, state: AnimationState, inputs: &PoseInputs) -> Pose {
+    match skeleton.kind() {
+        super::rig::HUMANOID => state.pose(inputs),
+        _ => Pose::rest(),
+    }
 }
 
 /// The corrections a state calls for. Public so the animation editor previews
@@ -382,7 +391,7 @@ pub fn animation_pose(
     root: &Transform,
 ) -> Pose {
     let Some((first, second)) = animation.at_heading(state.heading(inputs)) else {
-        return state.pose(inputs);
+        return fallback_pose(skeleton, state, inputs);
     };
     let footfalls = state
         .stance(inputs)

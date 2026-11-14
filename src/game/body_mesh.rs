@@ -6,7 +6,7 @@
 //! Parts are placed in body-local space, so a moving body carries its mesh
 //! even on a frame this does not run.
 //!
-//! Meshes are cached per build ([`Proportions`]), not per body: sixty bodies in
+//! Meshes are cached per build ([`Build`]), not per body: sixty bodies in
 //! an animation grid are ten meshes.
 
 use bevy::platform::collections::HashMap;
@@ -15,7 +15,7 @@ use bevy::transform::TransformSystems;
 
 use crate::common::flame::Burning;
 use crate::common::skeleton::mesh::body_meshes;
-use crate::common::skeleton::rig::Proportions;
+use crate::common::skeleton::rig::Build;
 use crate::common::skeleton::{Pose, Skeleton};
 use crate::common::player_color::PlayerColor;
 use crate::common::team::Team;
@@ -111,8 +111,7 @@ impl BodyMaterials {
 }
 
 #[derive(Resource, Default)]
-/// By rig and build: two rigs of one build are shaped differently.
-pub struct BodyMeshCache(HashMap<(&'static str, BuildKey), Vec<Handle<Mesh>>>);
+pub struct BodyMeshCache(HashMap<BuildKey, Vec<Handle<Mesh>>>);
 
 impl BodyMeshCache {
     /// One handle per bone, in [`Skeleton::bones`] order, built on first ask.
@@ -122,30 +121,35 @@ impl BodyMeshCache {
         skeleton: &Skeleton,
         meshes: &mut Assets<Mesh>,
     ) -> &Vec<Handle<Mesh>> {
-        self.0.entry((skeleton.kind(), BuildKey::of(&skeleton.proportions()))).or_insert_with(|| {
+        self.0.entry(BuildKey::of(skeleton.build())).or_insert_with(|| {
             body_meshes(skeleton).into_iter().map(|mesh| meshes.add(mesh)).collect()
         })
     }
 }
 
-/// A [`Proportions`] as bit patterns. Exact equality is right: the numbers are
-/// copied from a class's table, not computed.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-struct BuildKey([u32; 9]);
+/// A [`Build`] as bit patterns: the rig, its proportions and its group scales. Exact equality is
+/// right: the numbers are copied from a class's table, not computed.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+struct BuildKey(String, [u32; 9], Vec<(String, u32)>);
 
 impl BuildKey {
-    fn of(p: &Proportions) -> BuildKey {
-        BuildKey([
-            p.height.to_bits(),
-            p.hip_height.to_bits(),
-            p.torso_length.to_bits(),
-            p.arm_length.to_bits(),
-            p.head_length.to_bits(),
-            p.shoulder_half_width.to_bits(),
-            p.hip_half_width.to_bits(),
-            p.girth.to_bits(),
-            p.belly.to_bits(),
-        ])
+    fn of(build: &Build) -> BuildKey {
+        let p = &build.proportions;
+        BuildKey(
+            build.kind().to_string(),
+            [
+                p.height.to_bits(),
+                p.hip_height.to_bits(),
+                p.torso_length.to_bits(),
+                p.arm_length.to_bits(),
+                p.head_length.to_bits(),
+                p.shoulder_half_width.to_bits(),
+                p.hip_half_width.to_bits(),
+                p.girth.to_bits(),
+                p.belly.to_bits(),
+            ],
+            build.scales.iter().map(|(group, scale)| (group.clone(), scale.to_bits())).collect(),
+        )
     }
 }
 
@@ -321,6 +325,7 @@ pub(crate) fn hide_own_body(
 
 #[cfg(test)]
 mod tests {
+    use crate::common::skeleton::rig::Proportions;
     use super::*;
     use crate::game::player::Player;
     use crate::common::class::Class;

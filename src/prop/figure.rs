@@ -14,7 +14,7 @@ use bevy::prelude::*;
 
 use crate::common::class::Class;
 use crate::common::skeleton::ik::Reach;
-use crate::common::skeleton::{humanoid, Pose, Skeleton};
+use crate::common::skeleton::{Pose, Skeleton};
 use crate::game::body_mesh::BodyTint;
 use crate::prop::camera::ViewmodelPreview;
 use crate::prop::document::PropEditor;
@@ -168,7 +168,7 @@ pub fn refresh_the_figure(
         BodyTint(FIGURE_TINT),
         Name::new("Scale figure"),
         FigureReach([Reach::Impossible; 2]),
-        humanoid(builds.of(class)),
+        builds.rig_for(class),
     ));
 }
 
@@ -334,6 +334,7 @@ pub fn clear_the_figure(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::common::skeleton::humanoid;
     use crate::common::skeleton::rig::bone;
     use crate::prop::hold::{grip_with, HoldSpec};
 

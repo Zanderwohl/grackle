@@ -25,7 +25,7 @@ use crate::common::skeleton::ik::ducked_pose;
 use crate::common::skeleton::play::{ClipStack, Layer, Regions};
 use crate::common::skeleton::state::{AnimationState, ClipLibrary};
 use crate::common::skeleton::{
-    draw_skeleton, animator_pose, humanoid, leg_length, AnimationClock, AnimationPhase, BodyRequests,
+    draw_skeleton, animator_pose, leg_length, AnimationClock, AnimationPhase, BodyRequests,
     direction_of, DisplaySpeed, ForcedAnimation, Gait, Pose, PoseInputs, Skeleton,
     SkeletonAnimator,
     SkeletonPalette,
@@ -312,7 +312,7 @@ fn dress_new_players(
         // `insert_if_new`: a replicated body may already carry the server's
         // `Stance`.
         commands.entity(player).insert_if_new((
-            humanoid(builds.of(*class)),
+            builds.rig_for(*class),
             Pose::rest(),
             SkeletonAnimator::default(),
             BodyRequests::default(),
@@ -383,7 +383,7 @@ fn dress_bodies_from_elsewhere(
 ) {
     for (body, class) in &bodies {
         commands.entity(body).insert_if_new((
-            humanoid(builds.of(*class)),
+            builds.rig_for(*class),
             Pose::rest(),
             SkeletonAnimator::default(),
             BodyRequests::default(),
@@ -405,16 +405,20 @@ fn rebuild_rigs_for_new_builds(
     mut commands: Commands,
     builds: Res<ClassBuilds>,
     bodies: Query<(Entity, &Class, &Skeleton), Without<crate::game::ragdoll::Ragdoll>>,
+    mut rigs_seen: Local<std::collections::BTreeMap<String, crate::common::skeleton::rig_file::RigFile>>,
 ) {
     if !builds.is_changed() {
         return;
     }
+    // A rig file can change under an unchanged build, as when the server's replaces this pack's.
+    let changed = |kind: &str| rigs_seen.get(kind) != builds.rigs.get(kind);
     for (body, class, skeleton) in &bodies {
-        let wanted = builds.of(*class);
-        if skeleton.proportions() != wanted {
-            commands.entity(body).insert(humanoid(wanted));
+        let wanted = builds.build(*class);
+        if *skeleton.build() != wanted || changed(skeleton.kind()) {
+            commands.entity(body).insert(builds.skeleton(&wanted));
         }
     }
+    *rigs_seen = builds.rigs.clone();
 }
 
 /// Put each body at its own point in the animation cycle, from its network id.

@@ -1,0 +1,167 @@
+# A rig a class can name in classes.toml with `rig = "strider"`: two legs, a
+# long neck and a tail, and no arms. Bones are where they rest in a body
+# `height` meters tall, feet on the floor, facing -Z, parents first. A build
+# resizes the rig to its own height and lengthens each `group` by its scale.
+#
+# `region` is one of legs, torso, head, arm.l, arm.r; `limit` a joint kind
+# (fixed, spine, neck, head, clavicle, shoulder, elbow, wrist, hip, knee,
+# ankle, unlisted); `profile` a shape (pelvis, chest, neck, head, clavicle,
+# upper_arm, forearm, hand, thigh, shin, foot, default).
+
+height = 1.6
+carry = "spine"
+head = "head"
+
+[measures]
+leg = "left_leg"
+hip = "pelvis"
+
+[[bones]]
+name = "pelvis"
+head = [0.0, 0.85, 0.0]
+tail = [0.0, 0.95, -0.15]
+thickness = [0.26, 0.2]
+group = "torso"
+region = "legs"
+limit = "fixed"
+profile = "pelvis"
+
+[[bones]]
+name = "spine"
+parent = "pelvis"
+head = [0.0, 0.95, -0.15]
+tail = [0.0, 1.05, -0.45]
+thickness = [0.24, 0.22]
+group = "torso"
+region = "torso"
+limit = "spine"
+profile = "chest"
+
+[[bones]]
+name = "neck"
+parent = "spine"
+head = [0.0, 1.05, -0.45]
+tail = [0.0, 1.4, -0.6]
+thickness = [0.09, 0.09]
+group = "neck"
+region = "head"
+limit = "neck"
+profile = "neck"
+
+[[bones]]
+name = "head"
+parent = "neck"
+head = [0.0, 1.4, -0.6]
+tail = [0.0, 1.6, -0.7]
+thickness = [0.14, 0.18]
+region = "head"
+limit = "head"
+profile = "head"
+
+[[bones]]
+name = "tail"
+parent = "pelvis"
+head = [0.0, 0.9, 0.05]
+tail = [0.0, 0.8, 0.65]
+thickness = [0.1, 0.1]
+group = "tail"
+region = "torso"
+limit = "spine"
+
+[[bones]]
+name = "thigh.l"
+parent = "pelvis"
+head = [-0.12, 0.85, 0.0]
+tail = [-0.12, 0.46, 0.04]
+thickness = [0.12, 0.12]
+group = "leg"
+region = "legs"
+limit = "hip"
+profile = "thigh"
+
+[[bones]]
+name = "shin.l"
+parent = "thigh.l"
+head = [-0.12, 0.46, 0.04]
+tail = [-0.12, 0.06, 0.0]
+thickness = [0.09, 0.09]
+group = "leg"
+region = "legs"
+limit = "knee"
+profile = "shin"
+
+[[bones]]
+name = "foot.l"
+parent = "shin.l"
+head = [-0.12, 0.06, 0.0]
+tail = [-0.12, 0.0, -0.22]
+thickness = [0.09, 0.06]
+group = "leg"
+region = "legs"
+limit = "ankle"
+profile = "foot"
+
+[[bones]]
+name = "thigh.r"
+parent = "pelvis"
+head = [0.12, 0.85, 0.0]
+tail = [0.12, 0.46, 0.04]
+thickness = [0.12, 0.12]
+group = "leg"
+region = "legs"
+limit = "hip"
+profile = "thigh"
+
+[[bones]]
+name = "shin.r"
+parent = "thigh.r"
+head = [0.12, 0.46, 0.04]
+tail = [0.12, 0.06, 0.0]
+thickness = [0.09, 0.09]
+group = "leg"
+region = "legs"
+limit = "knee"
+profile = "shin"
+
+[[bones]]
+name = "foot.r"
+parent = "shin.r"
+head = [0.12, 0.06, 0.0]
+tail = [0.12, 0.0, -0.22]
+thickness = [0.09, 0.06]
+group = "leg"
+region = "legs"
+limit = "ankle"
+profile = "foot"
+
+[[limbs]]
+name = "left_leg"
+upper = "thigh.l"
+lower = "shin.l"
+tip = "foot.l"
+side = -1.0
+straightens = true
+
+[[limbs]]
+name = "right_leg"
+upper = "thigh.r"
+lower = "shin.r"
+tip = "foot.r"
+side = 1.0
+straightens = true
+
+[[feet]]
+limb = "left_leg"
+phase = 0.0
+
+[[feet]]
+limb = "right_leg"
+phase = 0.5
+
+[[look]]
+bone = "neck"
+share = 0.4
+
+[[look]]
+bone = "head"
+share = 0.6
