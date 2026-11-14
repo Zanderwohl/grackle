@@ -218,8 +218,7 @@ fn build_body_meshes(
                         FirstPersonHidden,
                         Mesh3d(handle.clone()),
                         MeshMaterial3d(material.clone()),
-                        // A piece of a body blown apart keeps a part per bone,
-                        // so parts stay in bone order, and hides what it lacks.
+                        // A part per bone keeps parts in bone order; a piece hides the ones it lacks.
                         match corpse.is_none_or(|corpse| corpse.keeps(index)) {
                             true => Visibility::Inherited,
                             false => Visibility::Hidden,
@@ -461,8 +460,7 @@ mod tests {
         assert_eq!(mesh.parts.len(), bones);
     }
 
-    /// Fails if a piece of a body blown apart draws the bones it lost or left
-    /// to another piece.
+    /// Fails if a piece of a body draws bones it does not have.
     #[test]
     fn a_piece_of_a_body_draws_only_its_own_bones() {
         use crate::common::skeleton::rig::bone;

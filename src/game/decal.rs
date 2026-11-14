@@ -455,7 +455,11 @@ fn turned(normal: Vec3, up: Vec3, seed: u32) -> Vec3 {
     Quat::from_axis_angle(normal, (seed % 360) as f32 * std::f32::consts::TAU / 360.0) * up
 }
 
-/// Blood at `at` on a surface facing `normal`, thrown along `direction`.
+/// Meters across, from the smallest splat at a `share` of 0 to the largest at 1 or more.
+fn blood_size(share: f32) -> f32 {
+    BLOOD_SIZE.0 + (BLOOD_SIZE.1 - BLOOD_SIZE.0) * share.clamp(0.0, 1.0)
+}
+
 fn thrown(at: Vec3, normal: Vec3, size: f32, direction: Vec3, seed: u32) -> Projection {
     let mut projection = Projection::on(at, normal, size, 0.3, direction);
     // The splash is drawn thrown toward +u, so +u goes the way the blood went; the drip runs down
@@ -469,14 +473,13 @@ fn thrown(at: Vec3, normal: Vec3, size: f32, direction: Vec3, seed: u32) -> Proj
     projection
 }
 
-/// The blood a gib leaves where it struck: larger the harder it struck, thrown the way it was
-/// going. `None` when no face among `faces` is there to take it.
+/// Larger the harder the gib struck. `None` when no face is there.
 fn gib_splat<'a>(faces: impl IntoIterator<Item = &'a world_surface::Face>, impact: &GibImpact) -> Option<(Projection, u32)> {
     let from = impact.at + impact.normal * GIB_SPLAT_REACH;
     let (at, normal) = decal::hit(faces, from, -impact.normal, GIB_SPLAT_REACH * 2.0)?;
     let speed = impact.velocity.length();
-    let share = ((speed - GIB_SPLAT_SPEED) / (GIB_FULL_SPLAT_SPEED - GIB_SPLAT_SPEED)).clamp(0.0, 1.0);
-    let size = BLOOD_SIZE.0 + (BLOOD_SIZE.1 - BLOOD_SIZE.0) * share;
+    let share = (speed - GIB_SPLAT_SPEED) / (GIB_FULL_SPLAT_SPEED - GIB_SPLAT_SPEED);
+    let size = blood_size(share);
     let seed = seed_of(at);
     Some((thrown(at, normal, size, impact.velocity.normalize_or(-normal), seed), seed))
 }
@@ -561,7 +564,7 @@ fn mark_the_world(
         // A blast's line runs out from its center. A projectile's direct hit has none.
         let Some(direction) = hit.from.and_then(|from| (hit.point - from).try_normalize()) else { continue };
         let Some((at, normal)) = surface_hit(&bakes, hit.point, direction, BLOOD_REACH) else { continue };
-        let size = BLOOD_SIZE.0 + (BLOOD_SIZE.1 - BLOOD_SIZE.0) * (hit.amount as f32 / BLOOD_FULL_DAMAGE).min(1.0);
+        let size = blood_size(hit.amount as f32 / BLOOD_FULL_DAMAGE);
         let seed = seed_of(at);
         marks.push((TransientKind::Blood, thrown(at, normal, size, direction, seed), seed));
     }
@@ -714,7 +717,7 @@ impl Plugin for DecalPlugin {
         app.init_resource::<DecalArt>()
             .init_resource::<TransientDecals>()
             .init_resource::<MapDecalArt>()
-            // `RagdollPlugin`'s too; registered here so the decals stand without it.
+            // Also registered by `RagdollPlugin`; here so decals work without it.
             .add_message::<GibImpact>()
             .add_systems(Startup, (load_decal_art, warm_up_decals).chain())
             .add_systems(Update, end_the_warm_up)

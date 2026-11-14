@@ -42,11 +42,10 @@
 //!
 //! A body killed by a projectile's direct hit is [`BlownApart`]: whichever of
 //! its hips, torso and head is nearest the blast goes, with its parent and
-//! children, and each piece left
-//! is a corpse of its own ([`Ragdoll::blown_apart`]). A piece is a `Ragdoll`
-//! over the whole rig that keeps only its own bones, so the solver, the wire
-//! and the mesh cache need nothing new; the blast's own shove throws each
-//! piece. A splash kill leaves a whole corpse.
+//! children, and each piece left is a corpse of its own
+//! ([`Ragdoll::blown_apart`]). A piece is a `Ragdoll` over the whole rig that
+//! keeps only its own bones, so the wire and the mesh cache need nothing new.
+//! A splash kill leaves a whole corpse.
 //!
 //! A piece striking a surface faster than [`GIB_SPLAT_SPEED`] writes a
 //! [`GibImpact`], which [`crate::game::decal`] turns into blood. Every machine
@@ -155,14 +154,13 @@ pub struct RagdollShove {
 }
 
 /// A piece of a body striking a surface faster than [`GIB_SPLAT_SPEED`].
-/// Written on every machine by [`report_gib_impacts`], never sent.
 #[derive(Message, Clone, Copy, Debug, PartialEq)]
 pub struct GibImpact {
     /// On the surface, world space.
     pub at: Vec3,
-    /// The surface's, out of it.
+    /// Out of the surface.
     pub normal: Vec3,
-    /// The piece's point's, in meters per second, as it struck.
+    /// Meters per second.
     pub velocity: Vec3,
 }
 
@@ -203,23 +201,23 @@ pub struct Ragdoll {
     anchor: Vec<Vec3>,
     /// Settled, and no longer being solved.
     asleep: bool,
-    /// Per bone, in [`Skeleton::bones`] order: whether this corpse has it. All
-    /// of them unless it is a piece of a body [`BlownApart`]; the points of a
-    /// bone it lacks are never moved.
+    /// Per bone, in [`Skeleton::bones`] order: whether this corpse has it.
     kept: Vec<bool>,
     /// The bone every kept bone hangs from: 0 for a whole body, and for a
     /// piece the one bone whose parent it lacks. `root_seed` is this bone's.
     root: usize,
-    /// The fastest strike on a surface in the last [`Ragdoll::step`], for a
-    /// piece only. Each machine finds its own.
+    /// The fastest strike in the last [`Ragdoll::step`], for a piece only,
+    /// until [`report_gib_impacts`] takes it.
     #[serde(skip)]
     struck: Option<GibImpact>,
+    /// Touching a surface at the end of the last step. A piece strikes only
+    /// on arriving, so a leg landing foot, knee, then hip is one strike.
+    #[serde(skip)]
+    grounded: bool,
 }
 
-/// The fatal hit was a projectile's direct hit at `at`, so the body is torn
-/// into pieces rather than left whole. Written by
-/// [`apply_damage`](crate::game::damage::apply_damage), read by
-/// [`raise_ragdolls`]; never sent, since the pieces are.
+/// The fatal hit was a projectile's direct hit at `at`. Never sent, since the
+/// pieces are.
 #[derive(Component, Clone, Copy, Debug, PartialEq)]
 pub struct BlownApart {
     /// World space.
@@ -343,6 +341,7 @@ impl Ragdoll {
             kept: vec![true; posed.len()],
             root: 0,
             struck: None,
+            grounded: false,
         }
     }
 
@@ -367,12 +366,9 @@ impl Ragdoll {
 
         let fall = Vec3::Y * fall * dt * dt;
         let kept = &self.kept;
-        let piece = self.root != 0 || kept.contains(&false);
+        let striking = kept.contains(&false) && !self.grounded && dt > 0.0;
         let mut struck: Option<(f32, GibImpact)> = None;
-        for (index, (point, contact)) in self.points.iter_mut().zip(touching.iter_mut()).enumerate() {
-            if !kept[index / 2] {
-                continue;
-            }
+        for (point, contact) in kept_points(kept, self.points.iter_mut().zip(touching.iter_mut())) {
             let carried = (point.at - point.previous) * (1.0 - DRAG);
             let moving = carried + fall;
             // Swept: a point thrown by an explosion can cover more than a wall's
@@ -381,7 +377,7 @@ impl Ragdoll {
             // Measured on the swept move, before the rig and the walls are
             // solved: the solve stops a point, and a stopped point struck
             // nothing.
-            if piece && dt > 0.0 {
+            if striking {
                 for normal in touched.iter() {
                     let speed = -moving.dot(normal) / dt;
                     if speed > GIB_SPLAT_SPEED && struck.is_none_or(|(fastest, _)| speed > fastest) {
@@ -412,11 +408,9 @@ impl Ragdoll {
 
         self.settle(dt);
 
+        self.grounded = touching.iter().any(|contact| !contact.is_empty());
         let kept = &self.kept;
-        for (index, ((point, was), contact)) in self.points.iter_mut().zip(started.iter()).zip(touching.iter()).enumerate() {
-            if !kept[index / 2] {
-                continue;
-            }
+        for ((point, was), contact) in kept_points(kept, self.points.iter_mut().zip(started.iter()).zip(touching.iter())) {
             let mut velocity = point.at - *was;
             // Into the surface and off it alike: a bounce is not wanted.
             for normal in contact.iter() {
@@ -444,11 +438,7 @@ impl Ragdoll {
         }
 
         let mut touched = false;
-        let kept = &self.kept;
-        for (index, point) in self.points.iter_mut().enumerate() {
-            if !kept[index / 2] {
-                continue;
-            }
+        for point in kept_points(&self.kept, self.points.iter_mut()) {
             let reach = falloff(point.at.distance(at), radius);
             if reach <= 0.0 {
                 continue;
@@ -484,13 +474,11 @@ impl Ragdoll {
         self.points[self.root * 2].at
     }
 
-    /// Whether this corpse has bone `index`: false only for what a piece of a
-    /// body [`BlownApart`] lost or left to another piece.
+    /// Whether this corpse has bone `index`.
     pub fn keeps(&self, index: usize) -> bool {
         self.kept.get(index).copied().unwrap_or(false)
     }
 
-    /// How many bones this corpse has.
     pub fn bones_kept(&self) -> usize {
         self.kept.iter().filter(|&&kept| kept).count()
     }
@@ -507,8 +495,6 @@ impl Ragdoll {
         self.asleep
     }
 
-    /// The fastest strike on a surface in the last step, if this is a piece of
-    /// a body and it struck faster than [`GIB_SPLAT_SPEED`].
     pub fn struck(&self) -> Option<GibImpact> {
         self.struck
     }
@@ -656,11 +642,7 @@ impl Ragdoll {
     /// [`CollisionWorld::depenetrate`], because the shortest way out of a floor
     /// is downwards, out of the level.
     fn clear_walls(&mut self, world: &CollisionWorld, touching: &mut [Touched]) {
-        let kept = &self.kept;
-        for (index, (point, contact)) in self.points.iter_mut().zip(touching).enumerate() {
-            if !kept[index / 2] {
-                continue;
-            }
+        for (point, contact) in kept_points(&self.kept, self.points.iter_mut().zip(touching)) {
             let out = world.depenetrate(point.at, point.half);
 
             // Being pushed out counts as contact. Otherwise a foot the rig
@@ -719,6 +701,11 @@ impl Ragdoll {
 
 /// Solver points kept on the stack: two per bone.
 const POINTS_ON_THE_STACK: usize = BONES_ON_THE_STACK * 2;
+
+/// The items of `points`, one per solver point, whose bone is `kept`.
+fn kept_points<'a, T>(kept: &'a [bool], points: impl Iterator<Item = T> + 'a) -> impl Iterator<Item = T> + 'a {
+    points.enumerate().filter(|(index, _)| kept[index / 2]).map(|(_, item)| item)
+}
 
 /// The frame of a bone a corpse lacks: its parent's with the joint at rest.
 fn loose_frame(bone: &Bone, frames: &[Quat]) -> Quat {
@@ -824,10 +811,7 @@ pub fn raise_ragdolls(
         let largest = pieces
             .iter()
             .enumerate()
-            .fold(None::<(usize, usize)>, |best, (index, piece)| match best {
-                Some((_, most)) if most >= piece.bones_kept() => best,
-                _ => Some((index, piece.bones_kept())),
-            })
+            .max_by_key(|(index, piece)| (piece.bones_kept(), std::cmp::Reverse(*index)))
             .map(|(index, _)| index);
 
         for (index, ragdoll) in pieces.into_iter().enumerate() {
@@ -964,16 +948,15 @@ pub fn step_ragdolls(
     });
 }
 
-/// Say where each piece of a body struck a surface in the step just taken.
 /// Apart from [`step_ragdolls`], which steps in parallel and so cannot write
-/// messages.
-pub fn report_gib_impacts(corpses: Query<&Ragdoll>, mut impacts: MessageWriter<GibImpact>) {
-    for corpse in &corpses {
-        // A corpse past its lifetime is not stepped, so what it last struck is stale.
-        if corpse.age() >= RAGDOLL_LIFETIME {
-            continue;
-        }
-        if let Some(impact) = corpse.struck() {
+/// messages. A strike is taken as it is reported, so a corpse left unstepped
+/// never reports it again.
+pub fn report_gib_impacts(mut corpses: Query<&mut Ragdoll>, mut impacts: MessageWriter<GibImpact>) {
+    for mut corpse in &mut corpses {
+        // Read first, so a corpse with nothing to report is not marked changed.
+        if corpse.struck.is_some()
+            && let Some(impact) = corpse.struck.take()
+        {
             impacts.write(impact);
         }
     }
@@ -1767,9 +1750,8 @@ mod tests {
         skeleton.bones().iter().enumerate().filter(|(index, _)| piece.keeps(*index)).map(|(_, bone)| bone.name).collect()
     }
 
-    /// Fails if a blast at the chest keeps the chest or a bone touching it, or
-    /// leaves the head, the arms and the legs joined in fewer or more pieces
-    /// than five.
+    /// Fails if a blast at the chest keeps the chest or its neighbors, or does
+    /// not leave five pieces.
     #[test]
     fn a_body_blown_apart_at_the_chest_loses_it_and_its_neighbors() {
         let skeleton = rig();
@@ -1795,9 +1777,8 @@ mod tests {
         assert!(shapes.contains(&vec![bone::THIGH_L, bone::SHIN_L, bone::FOOT_L]), "pieces: {shapes:?}");
     }
 
-    /// Fails if a blast at a limb takes the limb rather than the nearest of
-    /// the hips, torso and head, or if a blast at the face takes anything but
-    /// the head.
+    /// Fails if a blast takes anything but the nearest of the hips, torso and
+    /// head.
     #[test]
     fn only_the_hips_torso_or_head_are_blown_away() {
         let skeleton = rig();
@@ -1823,8 +1804,7 @@ mod tests {
         assert_eq!(by_the_face, vec![bone::NECK, bone::HEAD]);
     }
 
-    /// Fails if a piece twitches at the moment it is torn off: each kept bone
-    /// is drawn where the body had it.
+    /// Fails if a piece's bones move at the moment it is torn off.
     #[test]
     fn a_piece_starts_where_its_bones_were() {
         let skeleton = rig();
@@ -1979,8 +1959,7 @@ mod tests {
             .expect("no left leg")
     }
 
-    /// Fails if a piece thrown down onto the floor reports no strike there, or one slower than
-    /// it was thrown.
+    /// Fails if a piece thrown at the floor reports no strike, or too slow a one.
     #[test]
     fn a_piece_thrown_at_the_floor_strikes_it() {
         let skeleton = rig();
@@ -1996,8 +1975,8 @@ mod tests {
         assert!(-first.velocity.y > GIB_SPLAT_SPEED, "struck at {} m/s", -first.velocity.y);
     }
 
-    /// Fails if a piece set down on the floor, or one lying there, reports a strike, or if a whole
-    /// corpse thrown at the floor reports one.
+    /// Fails if a piece set down on the floor, or a whole corpse thrown at it,
+    /// reports a strike.
     #[test]
     fn only_a_piece_striking_hard_reports_it() {
         let skeleton = rig();
@@ -2014,8 +1993,7 @@ mod tests {
         assert_eq!(strikes(&mut whole, &skeleton, &world, 64), vec![]);
     }
 
-    /// Fails if a piece crosses the wire as a whole body, or posed elsewhere
-    /// somewhere other than where the authority has it.
+    /// Fails if a piece does not come off the wire as it went on.
     #[test]
     fn a_piece_crosses_the_wire_as_the_piece_it_is() {
         let skeleton = rig();

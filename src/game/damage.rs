@@ -108,8 +108,8 @@ impl Plugin for DamagePlugin {
 /// no zero is drawn over a friend. The record is the whole hit, armor's share
 /// included: a number is what you did, not where it landed.
 ///
-/// A body a projectile's direct hit kills is marked [`BlownApart`], so its
-/// corpse is raised in pieces. A splash kill is not.
+/// A body a projectile's direct hit kills is marked [`BlownApart`]; a splash
+/// kill is not.
 #[allow(clippy::too_many_arguments)]
 pub fn apply_damage(
     mut commands: Commands,
@@ -154,7 +154,7 @@ pub fn apply_damage(
         });
         let killed = was_alive && !target.is_alive();
         if killed && request.cause.how == How::Direct {
-            commands.entity(request.target).insert(BlownApart { at: request.point });
+            commands.entity(request.target).try_insert(BlownApart { at: request.point });
         }
         // Lands on the corpse `raise_ragdolls` stands up later this tick.
         if let Some(shove) = request.kill_shove
