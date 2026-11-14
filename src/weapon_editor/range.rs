@@ -42,7 +42,6 @@ use crate::tool::room::Room;
 
 use super::WeaponEditor;
 
-/// Far below any map, so its triggers, pickups and props are nowhere near.
 pub const RANGE_ORIGIN: Vec3 = Vec3::new(0.0, -2000.0, 0.0);
 /// The stage, around the origin: the shooter at its feet, looking down `-Z`.
 const STAGE_MIN: Vec3 = Vec3::new(-10.0, 0.0, -40.0);
@@ -74,7 +73,6 @@ pub enum BeatKind {
     Shoot { button: Button, distance: f32, strafing: bool },
     /// Flame an enemy, then stop and let the afterburn run out.
     Burn { button: Button, distance: f32 },
-    /// Airblast an enemy away.
     Push { button: Button, distance: f32 },
     /// An enemy fires a rocket; turn it back.
     Reflect { button: Button },
@@ -119,7 +117,6 @@ impl Beat {
     }
 }
 
-/// What one button's action contributes to the loop.
 pub fn beats_for(button: Button, mounted: &Mounted) -> Vec<Beat> {
     let shot = mounted.cadence.interval().max(0.1);
     let shoot = |distance: f32, strafing: bool| Beat {
@@ -374,7 +371,6 @@ fn eye_of(center: Vec3) -> Vec3 {
     center + Vec3::Y * (TALLEST_CLASS_EYE_HEIGHT - CLASS_HALF_EXTENTS.y)
 }
 
-/// Another weapon to draw from, and one an enemy can fire a rocket with.
 fn helpers(catalog: &WeaponCatalog, weapon: WeaponId) -> (Option<WeaponId>, Option<WeaponId>) {
     let other = catalog.weapons.iter().find(|w| w.id != weapon && w.key == "pistol").or_else(|| catalog.weapons.iter().find(|w| w.id != weapon)).map(|w| w.id);
     let rocket = catalog
@@ -648,7 +644,6 @@ fn stand_up(
     }
 }
 
-/// What the strip says a beat came to.
 fn summary(show: &RangeShow) -> String {
     let beat = &show.beats[show.current];
     let tally = &show.tally;
@@ -670,7 +665,7 @@ fn summary(show: &RangeShow) -> String {
     line
 }
 
-/// Hits and deaths in the beat being played, by whoever they came from.
+/// The shooter's hits, and the first death, in the beat being played.
 fn tally(
     mut show: ResMut<RangeShow>,
     mut dealt: MessageReader<DamageDealt>,

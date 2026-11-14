@@ -12,8 +12,8 @@ use toml_edit::{Array, DocumentMut, InlineTable, Item, Table, TableLike, Value};
 
 use crate::common::weapon_file::{parse_weapons, WeaponEntry, WEAPONS_FILE};
 
-/// The text `original` becomes when the weapons it holds are `weapons`, in any order. Refuses a
-/// file that does not parse, rather than writing over whatever somebody was halfway through.
+/// `weapons` in any order. Refuses a file that does not parse, rather than writing over whatever
+/// somebody was halfway through.
 pub fn rewrite(original: &str, weapons: &[(String, WeaponEntry)]) -> Result<String, String> {
     let before = match original.trim().is_empty() {
         true => Vec::new(),
@@ -84,7 +84,6 @@ pub fn save_pack(
     std::fs::rename(&partial, &path).map_err(|e| format!("{}: {e}", path.display()))
 }
 
-/// Whether `text` parses to exactly `expected`, in any order.
 fn holds(text: &str, expected: &[(String, WeaponEntry)]) -> bool {
     let on_disk = match text.trim().is_empty() {
         true => Vec::new(),
@@ -96,8 +95,7 @@ fn holds(text: &str, expected: &[(String, WeaponEntry)]) -> bool {
     on_disk.len() == expected.len() && expected.iter().all(|weapon| on_disk.contains(weapon))
 }
 
-/// `loadouts.toml` with every weapon named in a `permitted` list or a `default` renamed, in
-/// order, keeping the file's comments and layout. `None` when nothing in it names one.
+/// Renames in `permitted` lists and `default`s only, in order. `None` when nothing in it names one.
 pub fn rename_in_loadouts(original: &str, renames: &[(String, String)]) -> Result<Option<String>, String> {
     let mut doc: DocumentMut = original.parse().map_err(|e: toml_edit::TomlError| e.to_string())?;
     let mut touched = false;
@@ -137,7 +135,6 @@ fn rename_value(value: &mut Value, renames: &[(String, String)]) -> bool {
     true
 }
 
-/// Rewrites a pack's `loadouts.toml` for `renames`, if anything in it names one.
 pub fn rename_in_pack(pack: &Path, renames: &[(String, String)]) -> Result<bool, String> {
     let path = pack.join(crate::common::weapon_file::LOADOUTS_FILE);
     let original = match std::fs::read_to_string(&path) {

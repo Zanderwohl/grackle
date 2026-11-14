@@ -1,6 +1,6 @@
 //! The weapon editor's window: the menu bar, the Weapons browser on the left and the selected
-//! weapon on the right, each its own `DockState` as the prop editor's are. The middle is the
-//! range's, a later stage of [documentation/weapon-editor.md](../../documentation/weapon-editor.md).
+//! weapon on the right, each its own `DockState` as the prop editor's are, and the range's strip
+//! under the middle, which [`super::range`]'s cameras draw into.
 
 use std::path::{Path, PathBuf};
 
@@ -543,7 +543,6 @@ impl Tabs<'_, '_, '_> {
         self.browser.model = name.map(|name| (name.to_owned(), read_prop(self.assets, name)));
     }
 
-    /// What the model brings that this weapon leans on, and the way to it.
     fn model_ui(&mut self, ui: &mut Ui) {
         let Some((name, read)) = &self.browser.model else { return };
         let name = name.clone();
@@ -590,7 +589,6 @@ impl Tabs<'_, '_, '_> {
     }
 }
 
-/// The file a prop is read from and what it holds.
 fn read_prop(assets: &Assets, name: &str) -> Option<(PathBuf, PropDoc)> {
     let path = source_of(name)?;
     let pack = path.parent()?.parent()?;
@@ -605,7 +603,6 @@ fn read_prop(assets: &Assets, name: &str) -> Option<(PathBuf, PropDoc)> {
 
 const SPEEDS: [f32; 4] = [0.1, 0.25, 0.5, 1.0];
 
-/// The beats of the loop, the transport, and what each beat came to.
 fn strip(ui: &mut Ui, show: &mut RangeShow) {
     ui.horizontal(|ui| {
         let play = match show.playing {

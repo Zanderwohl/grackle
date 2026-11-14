@@ -51,7 +51,7 @@ pub struct WeaponEditor {
     pub generation: u64,
     /// The generation the catalog and `problems` were last built from.
     played: Option<u64>,
-    /// Read when the mode opens; nothing here edits them.
+    /// Read when the mode opens; nothing in this mode edits them.
     loadouts: LoadoutFiles,
     pub problems: Vec<(usize, WeaponProblem)>,
 }
@@ -265,7 +265,7 @@ impl WeaponEditor {
         }
     }
 
-    /// Each class slot that names the weapon at `index`, with the draft's renames applied.
+    /// With the draft's renames applied.
     pub fn loadouts_naming(&self, index: usize) -> Vec<(PathBuf, String, crate::common::weapon::Slot)> {
         self.weapons
             .get(index)
@@ -273,7 +273,7 @@ impl WeaponEditor {
             .unwrap_or_default()
     }
 
-    /// Every pack a weapon is in or could go to, lowest priority first.
+    /// Lowest priority first.
     pub fn packs(&self) -> Vec<PathBuf> {
         let mut packs = default_packs();
         for weapon in &self.weapons {
@@ -284,8 +284,7 @@ impl WeaponEditor {
         packs
     }
 
-    /// The packs whose weapons differ from what was last read or saved, each with what it should
-    /// now hold and what it held.
+    /// Each pack that changed since it was read or saved, with what it holds now and held then.
     #[allow(clippy::type_complexity)]
     pub fn changed_packs(&self) -> Vec<(PathBuf, Vec<(String, WeaponEntry)>, Vec<(String, WeaponEntry)>)> {
         let of = |weapons: &[PackWeapon], pack: &PathBuf| -> Vec<(String, _)> {
@@ -360,8 +359,7 @@ fn put_back_the_published(mut catalog: ResMut<WeaponCatalog>, mut published: Res
     }
 }
 
-/// Writes every pack that changed, then publishes what is on disk. A pack that fails is logged
-/// and stays dirty, so nothing reads as saved that is not.
+/// A pack that fails to write stays dirty, so nothing reads as saved that is not.
 pub fn save_the_draft(
     editor: &mut WeaponEditor,
     assets: &crate::common::assets::Assets,

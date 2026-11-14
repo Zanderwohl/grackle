@@ -119,8 +119,8 @@ fn row(ui: &mut egui::Ui, label: &str, add: impl FnOnce(&mut egui::Ui) -> bool) 
     .inner
 }
 
-/// `clamp_existing_to_range(false)`: a value the file holds outside the range is shown as it is,
-/// not quietly rewritten by being looked at.
+/// `clamp_existing_to_range(false)`: a value outside the range is shown as the file holds it, not
+/// rewritten by being looked at.
 fn number(ui: &mut egui::Ui, value: &mut dyn PartialReflect, unit: Option<Unit>) -> bool {
     let suffix = unit.map(|unit| get!(unit_key(unit))).unwrap_or_default();
     if let Some(value) = value.try_downcast_mut::<f32>() {
