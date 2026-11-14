@@ -281,7 +281,6 @@ pub fn foot_offsets(phase: f32, travel: Vec2, shape: GaitShape) -> [FootOffset; 
     ]
 }
 
-/// Every foot the rig plants, each at its own phase of the stride and on its own side.
 pub fn feet_offsets(phase: f32, travel: Vec2, shape: GaitShape, anatomy: &Anatomy) -> PerFoot<FootOffset> {
     anatomy
         .feet
@@ -466,8 +465,7 @@ pub fn footfall(phase: f32, stance: f32) -> f32 {
     }
 }
 
-/// The [`footfall`]s of the rig's first two feet, the ones `Timing::LeftFoot` and `RightFoot` name,
-/// for a body at `stride` in a gait of this stance. `None` for a rig with fewer.
+/// The [`footfall`]s of the rig's first two feet. `None` for a rig with fewer.
 pub fn footfalls(stride: f32, stance: f32, anatomy: &Anatomy) -> Option<[f32; 2]> {
     let [left, right, ..] = anatomy.feet[..] else { return None };
     Some([footfall(stride + left.phase, stance), footfall(stride + right.phase, stance)])

@@ -150,10 +150,8 @@ pub fn solve(
     }
 }
 
-/// Hold each of the rig's feet at its rest position plus its offset, so whatever the animation does
-/// above the hips, the knees take the difference. `offsets` is in [`Anatomy::feet`] order.
-///
-/// [`Anatomy::feet`]: super::anatomy::Anatomy::feet
+/// Hold each of the rig's feet at its rest position plus its offset, so the knees take whatever
+/// the animation does above the hips. `offsets` is in `Anatomy::feet` order.
 pub fn plant_feet(
     skeleton: &Skeleton,
     pose: &mut Pose,

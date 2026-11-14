@@ -172,7 +172,7 @@ pub struct Bone {
 /// A rig: bones in dependency order, plus the numbers they were built from.
 #[derive(Component, Clone, Debug)]
 pub struct Skeleton {
-    /// Which builder made it: two rigs of one build are still different bodies.
+    /// Which builder made it.
     kind: &'static str,
     bones: Vec<Bone>,
     proportions: Proportions,
@@ -692,8 +692,8 @@ mod tests {
     }
 
     /// A floating or sunken rig disagrees with the spawn clearance check.
-    /// Fails if the humanoid publishes a limb, foot, hand or region that names no bone: whatever
-    /// asks for it would then do nothing, with no error.
+    /// Fails if the humanoid's anatomy names a bone or limb it lacks, or points a foot or hand at
+    /// the wrong limb.
     #[test]
     fn every_build_publishes_an_anatomy_that_names_its_own_bones() {
         use crate::common::class::Class;

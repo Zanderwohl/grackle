@@ -1041,7 +1041,6 @@ impl AnimTabs<'_> {
 
     /// Tracks are picked, added, reordered and removed on the strip.
     fn track_section(&mut self, ui: &mut Ui, clip: &Clip) {
-        // The rig on screen, as the Problems panel uses.
         let rig = crate::common::skeleton::humanoid(self.builds.of(self.figure.0.unwrap_or(Class::Mercenary)));
         if clip.tracks.is_empty() {
             ui.label(get!("anim.no_tracks"));
@@ -1420,7 +1419,6 @@ impl AnimTabs<'_> {
         for track in self.played_as().1.uncovered_tracks(clip, rig) {
             problems.push(ClipProblem { track: Some(track), message: get!("anim.problem.unclaimed") });
         }
-        // `Timing::LeftFoot` and `RightFoot` name the rig's first two feet.
         for (index, track) in clip.tracks.iter().enumerate() {
             let needs = match track.timing {
                 Timing::Clip => 0,

@@ -1,7 +1,5 @@
-//! What a rig says about itself, so nothing outside the builder names one of its bones: which bones
-//! make each limb, which feet plant and when, where a weapon hangs and where the head is, how long
-//! a leg is, and which region each bone is in. A rig of another shape answers the same questions.
-//! See `documentation/rigs.md`.
+//! What a rig says about itself, so nothing outside its builder names one of its bones. See
+//! `documentation/rigs.md`.
 
 use std::ops::Deref;
 
@@ -10,7 +8,7 @@ use bevy::prelude::*;
 use super::ik::Chain;
 use super::play::Regions;
 
-/// A two-bone chain a clip or a pass can solve, under the name a clip's `chain` uses.
+/// A two-bone chain, under the name a clip's `chain` uses.
 #[derive(Clone, Copy, Debug)]
 pub struct Limb {
     pub name: &'static str,
@@ -20,12 +18,11 @@ pub struct Limb {
     /// Which way the middle joint bends when nothing says, in the body's frame.
     pub pole: Vec3,
     pub region: Regions,
-    /// A leg out of reach straightens toward its target; an arm is left as it was, since a
+    /// Out of reach, straighten toward the target rather than stay put. False for an arm, since a
     /// straightened arm reads as broken.
     pub straightens: bool,
 }
 
-/// A planted foot: a limb, and where in the stride its own cycle starts.
 #[derive(Clone, Copy, Debug)]
 pub struct Foot {
     /// Index into [`Anatomy::limbs`].
@@ -70,8 +67,7 @@ impl Anatomy {
         self.regions.get(bone).copied().unwrap_or(Regions::NONE)
     }
 
-    /// What is wrong with it against its own bones: each would make something do nothing, with
-    /// no error where it happens.
+    /// Each problem makes something do nothing, with no error where it happens.
     pub fn problems(&self, bones: &[super::rig::Bone]) -> Vec<String> {
         let mut problems = Vec::new();
         let has = |name: &str| bones.iter().any(|bone| bone.name == name);
