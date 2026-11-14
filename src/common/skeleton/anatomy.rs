@@ -48,6 +48,8 @@ pub struct Anatomy {
     pub viewmodel: Vec<(usize, usize)>,
     /// One per bone. `NONE` is never masked.
     pub regions: Vec<Regions>,
+    /// What a claim may name on this rig: `Regions::NAMED`, then the rig's own.
+    pub region_names: Vec<(&'static str, Regions)>,
     /// In meters: the units clips and carries are measured in.
     pub leg: f32,
     pub arm: f32,
@@ -65,6 +67,21 @@ impl Anatomy {
 
     pub fn region_of(&self, bone: usize) -> Regions {
         self.regions.get(bone).copied().unwrap_or(Regions::NONE)
+    }
+
+    pub fn region_named(&self, name: &str) -> Option<Regions> {
+        self.region_names.iter().find(|(named, _)| *named == name).map(|(_, region)| *region)
+    }
+
+    /// What names claim on this rig. A name it does not have claims nothing here: it may be
+    /// another rig's.
+    pub fn claims<'a>(&self, names: impl IntoIterator<Item = &'a str>) -> Regions {
+        names.into_iter().filter_map(|name| self.region_named(name)).fold(Regions::NONE, Regions::union)
+    }
+
+    /// The names of the regions in `claimed`, in `region_names` order.
+    pub fn names_of(&self, claimed: Regions) -> impl Iterator<Item = &'static str> + '_ {
+        self.region_names.iter().filter(move |(_, region)| claimed.overlaps(*region)).map(|(name, _)| *name)
     }
 
     /// Each problem makes something do nothing, with no error where it happens.

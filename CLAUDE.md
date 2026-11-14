@@ -205,7 +205,15 @@ because a build names it and checked by building it. The rigs ride in
 body asks `ClassBuilds::rig_for` or `skeleton(build)`, never `humanoid`
 directly, and a `Build` — rig, proportions, scales — is what a skeleton, a
 corpse and the mesh cache remember. Another rig's state clips are
-`animations/<rig>/<state>.gpa`; without one a state stands in rest.
+`animations/<rig>/<state>.gpa`; without one a state stands in rest. The
+animation editor lists every rig on disk, each with its states, and previews
+a rig's clip on that rig (`FigureRig`).
+
+A clip names a rig's parts by name: an effector's `chain` is any limb
+(`ChainRef`, interned), `Space::Bone` measures from any bone's tail, and
+`Timing::Foot(n)` times against any foot. A rig may name regions of its own
+after the six every rig has (`Anatomy::region_names`); a taunt's claims are
+names, resolved against each body's rig as it taunts.
 
 Usability is decided by `CollisionWorld::fits` — the body box must be in the
 map and touching no wall. There is no separate notion of "headroom": a low

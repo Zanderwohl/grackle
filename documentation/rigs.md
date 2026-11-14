@@ -338,13 +338,25 @@ None of these is animation, but a creature is not playable without them:
       rather than 12: their neck and tail can roll after resting.
 
 ### Stage 2b: what only a rig with other names needs
-- [ ] `ChainRef` → a free chain name, so a clip can name a rig's own limbs;
-      the editor's Reach menu from the rig's limbs.
-- [ ] `Space::Socket`, `Unit::Measure`, `Timing::Foot` beside the old
-      spellings. Every shipped `.gpa` and `.gpp` loads unchanged.
-- [ ] Per-rig regions and their names, for claims and the editor.
-- [ ] The animation editor edits another rig's state clips, under
-      `animations/<rig>/`.
+- [x] `ChainRef` is a limb's name, interned so it stays `Copy`; the
+      humanoid's four are constants. The editor's Reach menu lists the
+      previewed rig's limbs, and a track naming a limb the rig lacks is a
+      Problem.
+- [x] `Space::Bone(name)`: a bone's tail, turned with the bone as the pose
+      stands — the generic socket. `Timing::Foot(n)` for any foot, with
+      `LeftFoot` and `RightFoot` kept as feet 0 and 1. Every shipped `.gpa`
+      and `.gpp` loads unchanged.
+- [x] `Unit::Measure` was not needed: every rig answers leg, arm and hip
+      (arm falls back to leg), which are what the units already name.
+- [x] Per-rig regions: `Regions` is 32 bits, every rig's six first and a
+      rig's own names after (`Anatomy::region_names`). The strider's tail is
+      `tail`. A taunt's claims are names, resolved against each body's rig
+      as it taunts; the Taunt inspector offers the previewed rig's regions
+      and shows a claim it lacks in orange. Humiliation's claims stay the
+      humanoid's names.
+- [x] The animation editor lists every rig on disk with a group of its
+      states, saves them under `animations/<rig>/`, publishes them to the
+      game, and stands the preview figure up as that rig (`FigureRig`).
 
 ### Stage 3: IK
 - [ ] FABRIK with joint limits, fixed iterations; tested for reach, limits,

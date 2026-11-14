@@ -101,6 +101,7 @@ impl Plugin for AnimPlugin {
             .init_resource::<crate::prop::figure::FigureCorrections>()
             .init_resource::<crate::prop::figure::FigureWeapon>()
             .init_resource::<crate::prop::figure::FigureBeneath>()
+            .init_resource::<crate::prop::figure::FigureRig>()
             .init_resource::<crate::common::clip_file::NamedClips>()
             .init_resource::<crate::common::skeleton::play::LayerClaims>()
             .init_resource::<crate::common::taunt::Taunts>()
@@ -121,6 +122,7 @@ impl Plugin for AnimPlugin {
                     // After loading, so it sees the real list.
                     keep_a_clip_selected,
                     body::publish_the_body_clips,
+                    stand_the_rig_up,
                     frame_when_there_is_something_to_frame,
                     follow_the_document,
                     timeline_input,
@@ -792,9 +794,50 @@ impl PreviewClips {
     }
 }
 
+/// The rig a clip is previewed on: another rig's when its state clip is picked, at the height its
+/// file is drawn at, else the figure's class's.
+pub fn preview_rig(
+    anim: &AnimEditor,
+    body: &body::BodyClips,
+    builds: &crate::common::class::ClassBuilds,
+    class: crate::common::class::Class,
+) -> crate::common::skeleton::Skeleton {
+    other_rig(anim, body).unwrap_or_else(|| builds.rig_for(class))
+}
+
+fn other_rig(anim: &AnimEditor, body: &body::BodyClips) -> Option<crate::common::skeleton::Skeleton> {
+    use crate::common::skeleton::rig::{Build, Proportions, HUMANOID};
+    if anim.source != ClipSource::Body {
+        return None;
+    }
+    let (rig, _) = body::BodyClips::rig_and_state(body::address(anim.selected.as_deref()?).0)?;
+    let file = body.rigs().get(rig).filter(|_| rig != HUMANOID)?;
+    let build = Build {
+        rig: Some(rig.to_string()),
+        proportions: Proportions { height: file.height, ..default() },
+        scales: Default::default(),
+    };
+    crate::common::skeleton::rig_file::build_rig(file, &build).ok()
+}
+
+/// Written only when the rig changes: re-inserting a rig rebuilds the figure's meshes.
+fn stand_the_rig_up(anim: Res<AnimEditor>, body: Res<body::BodyClips>, mut figure: ResMut<crate::prop::figure::FigureRig>) {
+    let wanted = other_rig(&anim, &body);
+    let build = |rig: &Option<crate::common::skeleton::Skeleton>| rig.as_ref().map(|rig| rig.build().clone());
+    if build(&figure.0) != build(&wanted) {
+        figure.0 = wanted;
+    }
+}
+
 /// The layer the selected clip is played on in a match, and what it claims there. A clip nothing
 /// plays is previewed as a body clip.
-pub fn played_as(anim: &AnimEditor, body: &body::BodyClips, claims: &LayerClaims) -> (Layer, Regions) {
+/// `rig` is the figure's: a taunt's claims are names, resolved against it.
+pub fn played_as(
+    anim: &AnimEditor,
+    body: &body::BodyClips,
+    claims: &LayerClaims,
+    rig: &crate::common::skeleton::anatomy::Anatomy,
+) -> (Layer, Regions) {
     use crate::game::{condition::HUMILIATED_CLIP, flinch::is_a_flinch_clip, held};
     let name = anim.selected.as_deref().unwrap_or_default();
     match anim.source {
@@ -804,7 +847,7 @@ pub fn played_as(anim: &AnimEditor, body: &body::BodyClips, claims: &LayerClaims
         }
         ClipSource::Body => {
             if let Some((_, spec)) = taunt_of_clip(anim, body, name) {
-                (Layer::Taunt, spec.claims)
+                (Layer::Taunt, rig.claims(spec.claims.iter().map(String::as_str)))
             } else if name == HUMILIATED_CLIP {
                 (Layer::Humiliation, claims.of(Layer::Humiliation))
             } else if is_a_flinch_clip(name) {
@@ -887,6 +930,8 @@ fn drive_the_preview(
     anim: Res<AnimEditor>,
     clips: Res<body::BodyClips>,
     layer_claims: Res<LayerClaims>,
+    builds: Option<Res<crate::common::class::ClassBuilds>>,
+    figure: Option<Res<crate::prop::figure::ScaleFigure>>,
     mut previews: ResMut<PreviewClips>,
     mut assets: ResMut<Assets<Clip>>,
     mut performance: ResMut<FigurePerformance>,
@@ -906,7 +951,11 @@ fn drive_the_preview(
         heading: anim.blend_preview.map(f32::to_bits),
     };
 
-    let (layer, claims) = played_as(&anim, &clips, &layer_claims);
+    let class = figure.and_then(|figure| figure.0).unwrap_or(crate::common::class::Class::Mercenary);
+    let rig = builds.map_or_else(|| crate::common::skeleton::default_humanoid().clone(), |builds| {
+        preview_rig(&anim, &clips, &builds, class)
+    });
+    let (layer, claims) = played_as(&anim, &clips, &layer_claims, rig.anatomy());
     if layer != Layer::Locomotion {
         let clip = previews.show(0, clip, from, &mut assets);
         performance.0 .0.push(Playing { claims, ..Playing::new(layer, clip, cursor.time) });
@@ -961,7 +1010,7 @@ fn preview_beneath(
     time: f32,
 ) -> crate::prop::figure::FigureBeneath {
     use crate::common::taunt::TauntWeapon;
-    let (layer, _) = played_as(anim, clips, claims);
+    let (layer, _) = played_as(anim, clips, claims, crate::common::skeleton::default_humanoid().anatomy());
     if layer == Layer::Locomotion {
         return default();
     }
@@ -1003,7 +1052,7 @@ fn draw_the_swept_aim(
     beneath: Res<crate::prop::figure::FigureBeneath>,
     mut gizmos: Gizmos,
 ) {
-    if !anim.moving || played_as(&anim, &clips, &layer_claims).0 != Layer::Taunt {
+    if !anim.moving || played_as(&anim, &clips, &layer_claims, crate::common::skeleton::default_humanoid().anatomy()).0 != Layer::Taunt {
         return;
     }
     let aim = Quat::from_rotation_y(swept_aim(cursor.time)) * Vec3::NEG_Z;
@@ -1216,7 +1265,8 @@ mod tests {
         let performance = &world.resource::<FigurePerformance>().0 .0;
         assert_eq!(performance.len(), 1);
         assert_eq!(performance[0].layer, Layer::Taunt);
-        assert_eq!(performance[0].claims, spec.claims);
+        let claims = crate::common::skeleton::default_humanoid().anatomy().claims(spec.claims.iter().map(String::as_str));
+        assert_eq!(performance[0].claims, claims);
         let beneath = *world.resource::<crate::prop::figure::FigureBeneath>();
         assert_eq!(beneath.hides_weapon, spec.weapon == TauntWeapon::Hidden);
         // The shipped wave stops you and locks your turning.
@@ -1231,6 +1281,23 @@ mod tests {
         let beneath = *world.resource::<crate::prop::figure::FigureBeneath>();
         assert_eq!(beneath.state.map(|(state, _)| state), Some(AnimationState::RunForward));
         assert!(beneath.yaw > 0.0 && beneath.yaw <= 45f32.to_radians() * 0.5 + 1e-4, "{}", beneath.yaw);
+    }
+
+    /// Picking another rig's state clip previews it on that rig, not on the figure's class.
+    #[test]
+    fn another_rigs_clip_is_previewed_on_that_rig() {
+        let mut body = body::BodyClips::default();
+        body.ensure_loaded(&crate::common::assets::Assets::default());
+        body.edit(|clips| {
+            clips.insert("strider/idle".into(), Clip { length: 1.0, ..Clip::default() }.into());
+        });
+        let builds = crate::common::class::ClassBuilds::shipped();
+        let class = crate::common::class::Class::Mercenary;
+        let mut anim = AnimEditor { source: ClipSource::Body, selected: Some("strider/idle".into()), ..default() };
+        assert_eq!(preview_rig(&anim, &body, &builds, class).kind(), "strider");
+
+        anim.selected = Some("idle".into());
+        assert_eq!(preview_rig(&anim, &body, &builds, class).kind(), crate::common::skeleton::rig::HUMANOID);
     }
 
     #[test]

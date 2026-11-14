@@ -577,10 +577,10 @@ fn humanoid_anatomy(bones: &[Bone], proportions: Proportions) -> super::anatomy:
     let leg = |name, chain, side| Limb { name, chain, side, pole: Vec3::NEG_Z, region: Regions::LEGS, straightens: true };
     use super::clip::ChainRef;
     let limbs = vec![
-        arm(ChainRef::RightArm.key(), ik::RIGHT_ARM, 1.0, Regions::ARM_R),
-        arm(ChainRef::LeftArm.key(), ik::LEFT_ARM, -1.0, Regions::ARM_L),
-        leg(ChainRef::RightLeg.key(), ik::RIGHT_LEG, 1.0),
-        leg(ChainRef::LeftLeg.key(), ik::LEFT_LEG, -1.0),
+        arm(ChainRef::RIGHT_ARM.key(), ik::RIGHT_ARM, 1.0, Regions::ARM_R),
+        arm(ChainRef::LEFT_ARM.key(), ik::LEFT_ARM, -1.0, Regions::ARM_L),
+        leg(ChainRef::RIGHT_LEG.key(), ik::RIGHT_LEG, 1.0),
+        leg(ChainRef::LEFT_LEG.key(), ik::LEFT_LEG, -1.0),
     ];
     let limb = |chain: ChainRef| limbs.iter().position(|limb| limb.name == chain.key());
     let leg_meters = [ik::LEFT_LEG.upper, ik::LEFT_LEG.lower]
@@ -590,11 +590,11 @@ fn humanoid_anatomy(bones: &[Bone], proportions: Proportions) -> super::anatomy:
         .sum();
 
     Anatomy {
-        feet: [(ChainRef::LeftLeg, 0.0), (ChainRef::RightLeg, 0.5)]
+        feet: [(ChainRef::LEFT_LEG, 0.0), (ChainRef::RIGHT_LEG, 0.5)]
             .into_iter()
             .filter_map(|(chain, phase)| Some(Foot { limb: limb(chain)?, phase }))
             .collect(),
-        hands: [limb(ChainRef::RightArm), limb(ChainRef::LeftArm)],
+        hands: [limb(ChainRef::RIGHT_ARM), limb(ChainRef::LEFT_ARM)],
         carry: index(bone::CHEST),
         head: index(bone::HEAD),
         look: [(bone::NECK, NECK_SHARE), (bone::HEAD, 1.0 - NECK_SHARE)]
@@ -608,6 +608,7 @@ fn humanoid_anatomy(bones: &[Bone], proportions: Proportions) -> super::anatomy:
             .filter_map(|(name, hand)| Some((index(name)?, hand)))
             .collect(),
         regions: bones.iter().map(|bone| humanoid_region(bone.name)).collect(),
+        region_names: Regions::NAMED.into_iter().map(|(region, name)| (name, region)).collect(),
         leg: leg_meters,
         arm: proportions.arm_meters(),
         hip: proportions.hip_meters(),

@@ -63,6 +63,31 @@ pub enum Space {
     /// a key at zero is holding and a reload can take the support hand to a
     /// magazine and back. Read by the grip, never solved by the clip.
     Grip,
+    /// A bone's tail, turned with the bone as the pose has it then: a jaw, a tail tip, any part of
+    /// a rig the frames above do not name.
+    Bone(BoneRef),
+}
+
+/// A bone by name, interned so a [`Space`] naming one stays `Copy`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct BoneRef(pub &'static str);
+
+impl BoneRef {
+    pub fn named(name: &str) -> BoneRef {
+        BoneRef(super::rig::intern(name))
+    }
+}
+
+impl Serialize for BoneRef {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for BoneRef {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<BoneRef, D::Error> {
+        String::deserialize(deserializer).map(|name| BoneRef::named(&name))
+    }
 }
 
 /// What a number on a key is measured in.
@@ -112,18 +137,37 @@ pub enum Timing {
     /// The clip's own clock.
     #[default]
     Clip,
+    /// The rig's first foot.
     LeftFoot,
+    /// Its second.
     RightFoot,
+    /// Any foot, by its place in the rig's `feet`.
+    Foot(u8),
 }
 
 impl Timing {
-    pub const ALL: [Timing; 3] = [Timing::Clip, Timing::LeftFoot, Timing::RightFoot];
+    /// Every timing a rig with `feet` feet offers, in menu order.
+    pub fn offered(feet: usize) -> impl Iterator<Item = Timing> {
+        let named = [Timing::Clip, Timing::LeftFoot, Timing::RightFoot].into_iter().take(1 + feet.min(2));
+        named.chain((2..feet.min(u8::MAX as usize + 1)).map(|foot| Timing::Foot(foot as u8)))
+    }
 
-    pub fn name_key(self) -> &'static str {
+    /// Which foot it times against, by its place in the rig's `feet`.
+    pub fn foot(self) -> Option<usize> {
         match self {
-            Timing::Clip => "anim.timing.clip",
-            Timing::LeftFoot => "anim.timing.left_foot",
-            Timing::RightFoot => "anim.timing.right_foot",
+            Timing::Clip => None,
+            Timing::LeftFoot => Some(0),
+            Timing::RightFoot => Some(1),
+            Timing::Foot(foot) => Some(foot as usize),
+        }
+    }
+
+    pub fn label(self) -> String {
+        match self {
+            Timing::Clip => crate::get!("anim.timing.clip"),
+            Timing::LeftFoot => crate::get!("anim.timing.left_foot"),
+            Timing::RightFoot => crate::get!("anim.timing.right_foot"),
+            Timing::Foot(foot) => crate::get!("anim.timing.foot", "foot", foot + 1),
         }
     }
 
@@ -132,40 +176,44 @@ impl Timing {
     }
 }
 
-/// Which two-bone chain an effector track drives.
-///
-/// An enum rather than bone names because `Pose::set` takes a `&'static str`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, strum_macros::IntoStaticStr)]
-#[serde(rename_all = "snake_case")]
-#[strum(serialize_all = "snake_case")]
-pub enum ChainRef {
-    LeftArm,
-    RightArm,
-    LeftLeg,
-    RightLeg,
-}
+/// Which [`Limb`](super::anatomy::Limb) an effector track drives, by the name its rig gives it.
+/// Interned, so a name read from a file is as cheap to copy and compare as the humanoid's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ChainRef(&'static str);
 
 impl ChainRef {
-    /// In menu order.
-    pub const ALL: [ChainRef; 4] = [
-        ChainRef::RightArm,
-        ChainRef::LeftArm,
-        ChainRef::RightLeg,
-        ChainRef::LeftLeg,
-    ];
+    pub const RIGHT_ARM: ChainRef = ChainRef("right_arm");
+    pub const LEFT_ARM: ChainRef = ChainRef("left_arm");
+    pub const RIGHT_LEG: ChainRef = ChainRef("right_leg");
+    pub const LEFT_LEG: ChainRef = ChainRef("left_leg");
+    const HUMANOID: [ChainRef; 4] = [ChainRef::RIGHT_ARM, ChainRef::LEFT_ARM, ChainRef::RIGHT_LEG, ChainRef::LEFT_LEG];
 
-    /// The [`Limb`](super::anatomy::Limb) it names, as the file writes it.
-    pub fn key(self) -> &'static str {
-        self.into()
+    pub fn named(name: &str) -> ChainRef {
+        ChainRef(super::rig::intern(name))
     }
 
-    pub fn name_key(self) -> &'static str {
-        match self {
-            ChainRef::RightArm => "anim.chain.right_arm",
-            ChainRef::LeftArm => "anim.chain.left_arm",
-            ChainRef::RightLeg => "anim.chain.right_leg",
-            ChainRef::LeftLeg => "anim.chain.left_leg",
+    pub fn key(self) -> &'static str {
+        self.0
+    }
+
+    /// The humanoid's limbs by their translated names; any other rig's as the file names them.
+    pub fn label(self) -> String {
+        match ChainRef::HUMANOID.contains(&self) {
+            true => crate::get!(&format!("anim.chain.{}", self.0)),
+            false => self.0.to_string(),
         }
+    }
+}
+
+impl Serialize for ChainRef {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for ChainRef {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<ChainRef, D::Error> {
+        String::deserialize(deserializer).map(|name| ChainRef::named(&name))
     }
 }
 
@@ -897,7 +945,7 @@ mod tests {
                     enabled: true,
                     timing: Default::default(),
                     channel: Channel::Effector {
-                        chain: ChainRef::RightLeg,
+                        chain: ChainRef::RIGHT_LEG,
                         pole: None,
                         keys: vec![
                             Key {
@@ -1145,7 +1193,7 @@ mod tests {
         let mut channels = vec![
             Channel::Rotation { bone: "chest".into(), keys: vec![] },
             Channel::WeaponRotation { keys: vec![] },
-            Channel::Effector { chain: ChainRef::RightArm, pole: None, keys: vec![] },
+            Channel::Effector { chain: ChainRef::RIGHT_ARM, pole: None, keys: vec![] },
             Channel::Weapon { keys: vec![] },
             Channel::Root { keys: vec![] },
         ];

@@ -3,7 +3,8 @@
 # `height` meters tall, feet on the floor, facing -Z, parents first. A build
 # resizes the rig to its own height and lengthens each `group` by its scale.
 #
-# `region` is one of legs, torso, head, arm.l, arm.r; `limit` a joint kind
+# `region` is one of legs, torso, head, arm.l, arm.r, or a name of the rig's
+# own that a taunt can claim; `limit` a joint kind
 # (fixed, spine, neck, head, clavicle, shoulder, elbow, wrist, hip, knee,
 # ankle, unlisted); `profile` a shape (pelvis, chest, neck, head, clavicle,
 # upper_arm, forearm, hand, thigh, shin, foot, default).
@@ -65,7 +66,7 @@ head = [0.0, 0.9, 0.05]
 tail = [0.0, 0.8, 0.65]
 thickness = [0.1, 0.1]
 group = "tail"
-region = "torso"
+region = "tail"
 limit = "spine"
 
 [[bones]]

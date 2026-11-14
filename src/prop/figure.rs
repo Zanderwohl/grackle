@@ -144,13 +144,16 @@ pub fn refresh_the_figure(
     mut commands: Commands,
     choice: Res<ScaleFigure>,
     builds: Res<crate::common::class::ClassBuilds>,
+    rig: Option<Res<FigureRig>>,
     existing: Query<Entity, With<ScaleFigureMarker>>,
-    mut last: Local<Option<ScaleFigure>>,
+    mut last: Local<Option<(ScaleFigure, Option<crate::common::skeleton::rig::Build>)>>,
 ) {
-    if *last == Some(*choice) && !existing.is_empty() && !builds.is_changed() {
+    let instead = rig.and_then(|rig| rig.0.clone());
+    let seen = (*choice, instead.as_ref().map(|rig| rig.build().clone()));
+    if last.as_ref() == Some(&seen) && !existing.is_empty() && !builds.is_changed() {
         return;
     }
-    *last = Some(*choice);
+    *last = Some(seen);
 
     for entity in &existing {
         commands.entity(entity).despawn();
@@ -168,9 +171,14 @@ pub fn refresh_the_figure(
         BodyTint(FIGURE_TINT),
         Name::new("Scale figure"),
         FigureReach([Reach::Impossible; 2]),
-        builds.rig_for(class),
+        instead.unwrap_or_else(|| builds.rig_for(class)),
     ));
 }
+
+/// A rig the figure stands up as instead of its class's: in the animation editor, the rig whose
+/// clip is being edited.
+#[derive(Resource, Default)]
+pub struct FigureRig(pub Option<Skeleton>);
 
 pub fn pose_the_figure(
     editor: Res<PropEditor>,

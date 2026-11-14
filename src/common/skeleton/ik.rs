@@ -408,7 +408,7 @@ pub fn animation_pose(
 fn clip_pose(
     clip: &Clip,
     inputs: &PoseInputs,
-    footfalls: Option<[f32; 2]>,
+    footfalls: Option<PerFoot<f32>>,
     skeleton: &Skeleton,
     root: &Transform,
 ) -> Pose {

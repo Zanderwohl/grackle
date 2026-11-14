@@ -90,7 +90,9 @@ pub struct Taunt {
     pub key: String,
     /// A file under the pack's `animations/`, without its extension.
     pub clip: String,
-    pub claims: Regions,
+    /// Region names, resolved against each body's rig as it taunts (`Anatomy::claims`), so one
+    /// taunt can claim a strider's tail and a humanoid's arms.
+    pub claims: Vec<String>,
     pub movement: TauntMovement,
     pub turning: TauntTurning,
     pub weapon: TauntWeapon,
@@ -131,7 +133,7 @@ pub enum TauntLength {
 #[derive(Clone, Debug, PartialEq)]
 pub struct TauntSpec {
     pub clip: String,
-    pub claims: Regions,
+    pub claims: Vec<String>,
     pub movement: TauntMovement,
     pub turning: TauntTurning,
     pub weapon: TauntWeapon,
@@ -142,7 +144,7 @@ impl TauntSpec {
     pub fn new(clip: String) -> TauntSpec {
         TauntSpec {
             clip,
-            claims: Regions::ALL,
+            claims: Regions::NAMED.iter().map(|(_, name)| name.to_string()).collect(),
             movement: TauntMovement::Stopped,
             turning: TauntTurning::Locked,
             weapon: TauntWeapon::Hidden,
@@ -182,7 +184,7 @@ impl TauntSpec {
             id: TauntId::of(key),
             key: key.to_string(),
             clip: self.clip.clone(),
-            claims: self.claims,
+            claims: self.claims.clone(),
             movement: self.movement,
             turning: self.turning,
             weapon: self.weapon,
@@ -213,11 +215,6 @@ enum LengthEntry {
 
 impl TauntEntry {
     fn spec(self) -> Result<TauntSpec, String> {
-        let mut claims = Regions::NONE;
-        for name in &self.claims {
-            let region = Regions::named(name).ok_or_else(|| format!("there is no body part called `{name}`"))?;
-            claims = claims.union(region);
-        }
         let length = match self.length {
             None => TauntLength::UntilAgain,
             Some(LengthEntry::Seconds(seconds)) => TauntLength::Seconds(seconds),
@@ -228,7 +225,7 @@ impl TauntEntry {
         };
         let spec = TauntSpec {
             clip: self.clip,
-            claims,
+            claims: self.claims,
             movement: self.movement,
             turning: self.turning,
             weapon: self.weapon,
@@ -350,7 +347,7 @@ pub fn write_taunts(existing: Option<&str>, specs: &[(String, TauntSpec)]) -> St
         };
         let fields = [
             ("clip", Some(Value::from(spec.clip.as_str()))),
-            ("claims", Some(Value::Array(spec.claims.names().collect::<Array>()))),
+            ("claims", Some(Value::Array(spec.claims.iter().map(String::as_str).collect::<Array>()))),
             ("movement", Some(movement)),
             ("turning", Some(turning)),
             ("weapon", Some(Value::from(weapon))),
@@ -425,8 +422,9 @@ mod tests {
         assert_eq!(wave.movement, TauntMovement::Stopped);
         assert_eq!(wave.weapon, TauntWeapon::Hidden);
         assert!(wave.length.is_some(), "the wave should end by itself");
-        assert!(wave.claims.overlaps(Regions::ARM_R));
-        assert!(wave.claims.overlaps(Regions::LEGS), "the wave left its legs to locomotion");
+        let claims = crate::common::skeleton::default_humanoid().anatomy().claims(wave.claims.iter().map(String::as_str));
+        assert!(claims.overlaps(Regions::ARM_R));
+        assert!(claims.overlaps(Regions::LEGS), "the wave left its legs to locomotion");
     }
 
     #[test]
@@ -437,7 +435,7 @@ mod tests {
         );
         assert_eq!(taunts.0[0].movement, TauntMovement::Free);
         assert_eq!(taunts.0[1].movement, TauntMovement::Slowed(0.5));
-        assert_eq!(taunts.0[1].claims, Regions::LEGS);
+        assert_eq!(taunts.0[1].claims, ["legs"]);
         assert_eq!(taunts.0[1].turning, TauntTurning::AtMost(90.0));
     }
 
@@ -474,11 +472,21 @@ mod tests {
     fn a_bad_entry_is_dropped_and_the_rest_kept() {
         let taunts = parse(
             "[good]\nclip = \"x\"\nclaims = []\nmovement = \"free\"\nturning = \"free\"\nweapon = \"shown\"\n\
-             [elbow]\nclip = \"x\"\nclaims = [\"elbow\"]\nmovement = \"free\"\nturning = \"free\"\nweapon = \"shown\"\n\
              [fast]\nclip = \"x\"\nclaims = []\nmovement = { slowed = 2.0 }\nturning = \"free\"\nweapon = \"shown\"\n",
         );
         let keys: Vec<&str> = taunts.0.iter().map(|taunt| taunt.key.as_str()).collect();
         assert_eq!(keys, ["good"]);
+    }
+
+    /// A claim names a region on some rig: one the humanoid lacks claims nothing on it.
+    #[test]
+    fn a_claim_on_another_rigs_region_is_kept_and_claims_nothing_here() {
+        let taunts = parse(
+            "[wag]\nclip = \"x\"\nclaims = [\"tail\", \"head\"]\nmovement = \"free\"\nturning = \"free\"\nweapon = \"shown\"\n",
+        );
+        assert_eq!(taunts.0[0].claims, ["tail", "head"]);
+        let humanoid = crate::common::skeleton::default_humanoid().anatomy();
+        assert_eq!(humanoid.claims(taunts.0[0].claims.iter().map(String::as_str)), Regions::HEAD);
     }
 
     /// Fails if `length = "clip"` does not resolve to the clip's length.

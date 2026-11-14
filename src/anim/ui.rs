@@ -16,7 +16,7 @@ use crate::common::skeleton::clip::{
 };
 use crate::common::skeleton::play::Layer;
 use crate::common::skeleton::state::AnimationState;
-use crate::common::skeleton::{default_humanoid, Interpolation};
+use crate::common::skeleton::Interpolation;
 use strum::IntoEnumIterator;
 use crate::common::app_mode::{mode_menu, AppMode};
 use crate::common::assets::Assets;
@@ -162,6 +162,11 @@ impl AnimTabs<'_> {
         selected_clip(self.anim, self.editor, self.body)
     }
 
+    /// The rig on screen: the one whose clip is picked, or the figure's class's.
+    fn rig(&self) -> crate::common::skeleton::Skeleton {
+        crate::anim::preview_rig(self.anim, self.body, self.builds, self.figure.0.unwrap_or(Class::Mercenary))
+    }
+
     fn edit(&mut self, change: impl FnOnce(&mut Clip)) {
         edit_selected(self.anim, self.editor, self.body, change);
     }
@@ -203,24 +208,21 @@ impl AnimTabs<'_> {
                 // Every state, with or without a clip, since a state with none still plays its built-in pose.
                 // Cloned because the rows edit the document they are drawn from.
                 let animations = self.body.animations().clone();
-                for state in AnimationState::iter() {
-                    let name = state.clip_name();
-                    match animations.get(name) {
-                        None => self.unmade_row(
-                            ui,
-                            ClipSource::Body,
-                            name,
-                            format!("animation.states.{name}"),
-                        ),
-                        Some(StateAnimation::Single(_)) => {
-                            self.library_row(ui, ClipSource::Body, name, &body_names)
-                        }
-                        Some(StateAnimation::Blend(variants)) => {
-                            self.blend_rows(ui, state, variants)
-                        }
-                    }
-                }
+                self.state_rows(ui, None, &animations, &body_names);
             });
+
+        // Each other rig's states, filed as `<rig>/<state>`, so it can be animated before a class
+        // is built on it.
+        let rigs: Vec<String> = self.body.rigs().keys().cloned().collect();
+        for rig in rigs {
+            egui::CollapsingHeader::new(get!("anim.library.rig", "rig", &rig))
+                .id_salt(("anim_library_rig", &rig))
+                .default_open(false)
+                .show(ui, |ui| {
+                    let animations = self.body.animations().clone();
+                    self.state_rows(ui, Some(&rig), &animations, &body_names);
+                });
+        }
 
         egui::CollapsingHeader::new(get!("anim.library.taunts"))
             .id_salt("anim_library_taunts")
@@ -416,8 +418,28 @@ impl AnimTabs<'_> {
         });
     }
 
-    fn blend_rows(&mut self, ui: &mut Ui, state: AnimationState, variants: &[Variant]) {
-        let name = state.clip_name();
+    /// Every state, with or without a clip, since a state with none still plays something.
+    fn state_rows(
+        &mut self,
+        ui: &mut Ui,
+        rig: Option<&str>,
+        animations: &std::collections::BTreeMap<String, StateAnimation>,
+        siblings: &[String],
+    ) {
+        for state in AnimationState::iter() {
+            let name = match rig {
+                Some(rig) => format!("{rig}/{}", state.clip_name()),
+                None => state.clip_name().to_string(),
+            };
+            match animations.get(&name) {
+                None => self.unmade_row(ui, ClipSource::Body, &name, format!("animation.states.{}", state.clip_name())),
+                Some(StateAnimation::Single(_)) => self.library_row(ui, ClipSource::Body, &name, siblings),
+                Some(StateAnimation::Blend(variants)) => self.blend_rows(ui, &name, state, variants),
+            }
+        }
+    }
+
+    fn blend_rows(&mut self, ui: &mut Ui, name: &str, state: AnimationState, variants: &[Variant]) {
         let header = ui.add(egui::Label::new(state.name()).selectable(false).sense(egui::Sense::click()));
         header.context_menu(|ui| {
             if ui.button(get!("anim.library.revert")).clicked() {
@@ -606,14 +628,23 @@ impl AnimTabs<'_> {
 
             ui.label(get!("anim.label.claims"));
             ui.horizontal_wrapped(|ui| {
-                for (region, name) in crate::common::skeleton::play::Regions::NAMED {
-                    let mut claimed = edited.claims.overlaps(region);
-                    let label = get!(&format!("anim.region.{}", name.replace('.', "_")));
+                let rig = self.rig();
+                let mut names: Vec<&str> = rig.anatomy().region_names.iter().map(|(name, _)| *name).collect();
+                // Claims of another rig's regions stay listed, so they can be let go of.
+                let foreign: Vec<String> =
+                    edited.claims.iter().filter(|name| !names.contains(&name.as_str())).cloned().collect();
+                names.extend(foreign.iter().map(String::as_str));
+                for name in names {
+                    let mut claimed = edited.claims.iter().any(|had| had == name);
+                    let mut label = egui::RichText::new(region_label(name));
+                    if foreign.iter().any(|other| other == name) {
+                        label = label.color(PROBLEM_COLOR);
+                    }
                     if ui.checkbox(&mut claimed, label).changed() {
-                        edited.claims = match claimed {
-                            true => edited.claims.union(region),
-                            false => edited.claims.without(region),
-                        };
+                        match claimed {
+                            true => edited.claims.push(name.to_string()),
+                            false => edited.claims.retain(|had| had != name),
+                        }
                     }
                 }
             });
@@ -764,10 +795,8 @@ impl AnimTabs<'_> {
         if layer != Layer::Locomotion {
             ui.horizontal_wrapped(|ui| {
                 ui.label(get!("anim.label.claims"));
-                let names: Vec<String> = claims
-                    .names()
-                    .map(|name| get!(&format!("anim.region.{}", name.replace('.', "_"))))
-                    .collect();
+                let rig = self.rig();
+                let names: Vec<String> = rig.anatomy().names_of(claims).map(region_label).collect();
                 ui.label(names.join(", "));
             });
 
@@ -903,8 +932,9 @@ impl AnimTabs<'_> {
 
         ui.separator();
         let mut made: Option<Channel> = None;
+        let rig = self.rig();
         ui.menu_button(get!("anim.add_track"), |ui| {
-            for (label, entry) in new_tracks() {
+            for (label, entry) in new_tracks(&rig) {
                 match entry {
                     NewTrack::One(channel) => {
                         if ui.button(get!(label)).clicked() {
@@ -950,7 +980,7 @@ impl AnimTabs<'_> {
     fn track_headers(&mut self, ui: &mut Ui, strip: Rect, zoom: f32) {
         use crate::anim::timeline::{row_top, track_name, NAMES_WIDTH, ROW_HEIGHT};
         let Some(clip) = self.clip() else { return };
-        let rig = self.builds.rig_for(self.figure.0.unwrap_or(Class::Mercenary));
+        let rig = self.rig();
         let problems = self.problems_of(&clip, &rig);
 
         let points = |x: f32, y: f32| egui::pos2(x / zoom, y / zoom);
@@ -1039,7 +1069,7 @@ impl AnimTabs<'_> {
 
     /// Tracks are picked, added, reordered and removed on the strip.
     fn track_section(&mut self, ui: &mut Ui, clip: &Clip) {
-        let rig = self.builds.rig_for(self.figure.0.unwrap_or(Class::Mercenary));
+        let rig = self.rig();
         if clip.tracks.is_empty() {
             ui.label(get!("anim.no_tracks"));
             return;
@@ -1065,13 +1095,17 @@ impl AnimTabs<'_> {
             ui.horizontal(|ui| {
                 ui.label(get!("anim.label.space"));
                 egui::ComboBox::from_id_salt("anim_space")
-                    .selected_text(get!(space_key(edited.space)))
+                    .selected_text(space_label(edited.space))
                     .show_ui(ui, |ui| {
                         for space in [Space::Body, Space::Carry, Space::Shoulders, Space::Weapon, Space::Grip, Space::Eye] {
-                            changed |= ui
-                                .selectable_value(&mut edited.space, space, get!(space_key(space)))
-                                .changed();
+                            changed |= ui.selectable_value(&mut edited.space, space, space_label(space)).changed();
                         }
+                        ui.menu_button(get!("anim.space.bone"), |ui| {
+                            for bone in rig.bones() {
+                                let space = Space::Bone(crate::common::skeleton::clip::BoneRef(bone.name));
+                                changed |= ui.selectable_value(&mut edited.space, space, bone.name).changed();
+                            }
+                        });
                     });
             });
             ui.horizontal(|ui| {
@@ -1097,12 +1131,10 @@ impl AnimTabs<'_> {
             ui.horizontal(|ui| {
                 ui.label(get!("anim.label.timing"));
                 egui::ComboBox::from_id_salt("anim_timing")
-                    .selected_text(get!(edited.timing.name_key()))
+                    .selected_text(edited.timing.label())
                     .show_ui(ui, |ui| {
-                        for timing in Timing::ALL {
-                            changed |= ui
-                                .selectable_value(&mut edited.timing, timing, get!(timing.name_key()))
-                                .changed();
+                        for timing in Timing::offered(rig.anatomy().feet.len()) {
+                            changed |= ui.selectable_value(&mut edited.timing, timing, timing.label()).changed();
                         }
                     });
             });
@@ -1167,12 +1199,11 @@ impl AnimTabs<'_> {
                 ui.horizontal(|ui| {
                     ui.label(get!("anim.label.chain"));
                     egui::ComboBox::from_id_salt("anim_chain")
-                        .selected_text(get!(chain_key(*chain)))
+                        .selected_text(chain.label())
                         .show_ui(ui, |ui| {
-                            for option in ChainRef::ALL {
-                                changed |= ui
-                                    .selectable_value(chain, option, get!(chain_key(option)))
-                                    .changed();
+                            for limb in &rig.anatomy().limbs {
+                                let option = ChainRef::named(limb.name);
+                                changed |= ui.selectable_value(chain, option, option.label()).changed();
                             }
                         });
                 });
@@ -1408,7 +1439,8 @@ impl AnimTabs<'_> {
     }
 
     fn played_as(&self) -> (Layer, crate::common::skeleton::play::Regions) {
-        crate::anim::played_as(self.anim, self.body, self.layer_claims)
+        let rig = self.rig();
+        crate::anim::played_as(self.anim, self.body, self.layer_claims, rig.anatomy())
     }
 
     /// The clip's own problems, and any track outside its layer's claim.
@@ -1418,13 +1450,19 @@ impl AnimTabs<'_> {
             problems.push(ClipProblem { track: Some(track), message: get!("anim.problem.unclaimed") });
         }
         for (index, track) in clip.tracks.iter().enumerate() {
-            let needs = match track.timing {
-                Timing::Clip => 0,
-                Timing::LeftFoot => 1,
-                Timing::RightFoot => 2,
-            };
-            if rig.anatomy().feet.len() < needs {
+            if track.timing.foot().is_some_and(|foot| foot >= rig.anatomy().feet.len()) {
                 problems.push(ClipProblem { track: Some(index), message: get!("anim.problem.no_foot") });
+            }
+            if let Space::Bone(bone) = track.space
+                && rig.index_of(bone.0).is_none()
+            {
+                problems.push(ClipProblem { track: Some(index), message: get!("anim.problem.unknown_bone", "bone", bone.0) });
+            }
+            if let Channel::Effector { chain, .. } = &track.channel
+                && rig.anatomy().limb(chain.key()).is_none()
+            {
+                let message = get!("anim.problem.unknown_limb", "limb", chain.label());
+                problems.push(ClipProblem { track: Some(index), message });
             }
         }
         problems
@@ -1433,7 +1471,7 @@ impl AnimTabs<'_> {
     fn problems(&mut self, ui: &mut Ui) {
         let Some(clip) = self.clip() else { return };
         // The rig on screen, so a bone missing on one build is reported against it.
-        let rig = self.builds.rig_for(self.figure.0.unwrap_or(Class::Mercenary));
+        let rig = self.rig();
         for problem in self.problems_of(&clip, &rig) {
             // Named as the strip names the row.
             let text = match problem.track.and_then(|index| clip.tracks.get(index)) {
@@ -1763,14 +1801,23 @@ fn clock_key(clock: Clock) -> &'static str {
     }
 }
 
-fn space_key(space: Space) -> &'static str {
+/// Every rig's six regions by their translated names; a rig's own as its file names them.
+fn region_label(name: &str) -> String {
+    match crate::common::skeleton::play::Regions::named(name) {
+        Some(_) => get!(&format!("anim.region.{}", name.replace('.', "_"))),
+        None => name.to_string(),
+    }
+}
+
+fn space_label(space: Space) -> String {
     match space {
-        Space::Body => "anim.space.body",
-        Space::Carry => "anim.space.carry",
-        Space::Shoulders => "anim.space.shoulders",
-        Space::Weapon => "anim.space.weapon",
-        Space::Eye => "anim.space.eye",
-        Space::Grip => "anim.space.grip",
+        Space::Body => get!("anim.space.body"),
+        Space::Carry => get!("anim.space.carry"),
+        Space::Shoulders => get!("anim.space.shoulders"),
+        Space::Weapon => get!("anim.space.weapon"),
+        Space::Eye => get!("anim.space.eye"),
+        Space::Grip => get!("anim.space.grip"),
+        Space::Bone(bone) => get!("anim.space.on_bone", "bone", bone.0),
     }
 }
 
@@ -1790,10 +1837,6 @@ fn combine_key(combine: Combine) -> &'static str {
     }
 }
 
-fn chain_key(chain: ChainRef) -> &'static str {
-    chain.name_key()
-}
-
 /// A track that drives a bone or limb is chosen in a submenu, so it arrives pointing at the right
 /// thing.
 enum NewTrack {
@@ -1802,8 +1845,8 @@ enum NewTrack {
 }
 
 /// Each with its emptiest form. A new channel joins here beside its arm in `apply`.
-fn new_tracks() -> [(&'static str, NewTrack); 5] {
-    let bones = default_humanoid()
+fn new_tracks(rig: &crate::common::skeleton::Skeleton) -> [(&'static str, NewTrack); 5] {
+    let bones = rig
         .bones()
         .iter()
         .map(|bone| {
@@ -1816,17 +1859,13 @@ fn new_tracks() -> [(&'static str, NewTrack); 5] {
             )
         })
         .collect();
-    let limbs = ChainRef::ALL
+    let limbs = rig
+        .anatomy()
+        .limbs
         .iter()
-        .map(|chain| {
-            (
-                get!(chain.name_key()),
-                Channel::Effector {
-                    chain: *chain,
-                    pole: None,
-                    keys: Vec::new(),
-                },
-            )
+        .map(|limb| {
+            let chain = ChainRef::named(limb.name);
+            (chain.label(), Channel::Effector { chain, pole: None, keys: Vec::new() })
         })
         .collect();
     [
@@ -1912,6 +1951,7 @@ pub fn strip_rect(reserved: Rect, zoom: f32) -> Rect {
 
 #[cfg(test)]
 mod tests {
+    use crate::common::skeleton::default_humanoid;
     use super::*;
 
     /// `clip1` taken and `clip2` free must give `clip2`; a repeated name would silently replace a clip
@@ -1996,7 +2036,7 @@ mod tests {
     #[test]
     fn every_kind_of_track_can_be_added() {
         let mut kinds = std::collections::BTreeSet::new();
-        for (_, entry) in new_tracks() {
+        for (_, entry) in new_tracks(default_humanoid()) {
             let channels: Vec<Channel> = match entry {
                 NewTrack::One(channel) => vec![channel],
                 NewTrack::Choose(options) => {
@@ -2015,7 +2055,7 @@ mod tests {
     #[test]
     fn the_bone_submenu_offers_every_bone() {
         let rig = default_humanoid();
-        let (_, NewTrack::Choose(options)) = &new_tracks()[0] else {
+        let (_, NewTrack::Choose(options)) = &new_tracks(rig)[0] else {
             panic!("bones are chosen from a submenu");
         };
         assert_eq!(options.len(), rig.bones().len());

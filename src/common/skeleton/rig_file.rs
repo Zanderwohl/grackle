@@ -194,14 +194,28 @@ pub fn build_rig(file: &RigFile, build: &Build) -> Result<Skeleton, String> {
     let bones = builder.bones;
 
     let bone = |name: &str| bones.iter().position(|bone| bone.name == name).ok_or_else(|| format!("no bone called {name}"));
-    let regions = file
-        .bones
-        .iter()
-        .map(|entry| match &entry.region {
-            None => Ok(Regions::NONE),
-            Some(name) => Regions::named(name).ok_or_else(|| format!("bone {}: no region called {name}", entry.name)),
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+    // Every rig's six, then a bit for each name of the rig's own, in the order its bones name them.
+    let mut region_names: Vec<(&'static str, Regions)> =
+        Regions::NAMED.into_iter().map(|(region, name)| (name, region)).collect();
+    let mut regions = Vec::with_capacity(file.bones.len());
+    for entry in &file.bones {
+        let Some(name) = &entry.region else {
+            regions.push(Regions::NONE);
+            continue;
+        };
+        let region = match region_names.iter().find(|(named, _)| named == name) {
+            Some((_, region)) => *region,
+            None => {
+                let index = Regions::FIRST_OWN + (region_names.len() - Regions::NAMED.len()) as u32;
+                if index >= u32::BITS {
+                    return Err(format!("bone {}: more regions than a rig may name", entry.name));
+                }
+                region_names.push((intern(name), Regions::bit(index)));
+                Regions::bit(index)
+            }
+        };
+        regions.push(region);
+    }
     let limbs = file
         .limbs
         .iter()
@@ -256,6 +270,7 @@ pub fn build_rig(file: &RigFile, build: &Build) -> Result<Skeleton, String> {
         look: file.look.iter().map(|look| Ok((bone(&look.bone)?, look.share))).collect::<Result<_, String>>()?,
         viewmodel: file.viewmodel.iter().map(|entry| Ok((bone(&entry.bone)?, entry.hand))).collect::<Result<_, String>>()?,
         regions,
+        region_names,
         leg,
         arm,
         hip,
@@ -352,5 +367,65 @@ mod tests {
             );
             assert!(pose.joint("thigh.l") != Quat::IDENTITY, "the strider's legs did not walk at stride {step}");
         }
+    }
+
+    /// A clip for another rig names its limbs, its bones as frames and its feet by number, and
+    /// survives being written and read back.
+    #[test]
+    fn a_clip_can_name_the_rigs_own_parts() {
+        use crate::common::skeleton::clip::{Clip, Space, Timing};
+        use crate::common::skeleton::play::{apply, Frames};
+
+        let text = r#"
+length = 1.0
+
+[[tracks]]
+combine = "replace"
+unit = "meters"
+enabled = true
+timing = { foot = 1 }
+
+[tracks.space]
+bone = "pelvis"
+
+[tracks.channel]
+channel = "effector"
+chain = "left_leg"
+
+[[tracks.channel.keys]]
+at = 0.0
+to = [0.0, -0.6, 0.1]
+"#;
+        let clip: Clip = toml::from_str(text).expect("the clip should read");
+        assert_eq!(clip.tracks[0].space, Space::Bone(crate::common::skeleton::clip::BoneRef::named("pelvis")));
+        assert_eq!(clip.tracks[0].timing, Timing::Foot(1));
+        let written = toml::to_string(&clip).unwrap();
+        assert_eq!(toml::from_str::<Clip>(&written).unwrap(), clip, "{written}");
+
+        let rig = sized(1.6, &[]);
+        let root = Transform::IDENTITY;
+        let mut pose = Pose::rest();
+        let ground = |_: Vec3| 0.0;
+        let frames = Frames::standing(root, root, &ground);
+        let reaches = apply(&clip, 0.0, &rig, &mut pose, &frames, None);
+        assert_eq!(reaches, [Reach::Reached], "the strider's own leg did not reach");
+
+        let pelvis = rig.posed_bone(&Pose::rest(), &root, rig.index_of("pelvis").unwrap());
+        let wanted = pelvis.tail + pelvis.rotation * Vec3::new(0.0, -0.6, 0.1);
+        let ankle = rig.posed_bone(&pose, &root, rig.index_of("shin.l").unwrap()).tail;
+        assert!(ankle.distance(wanted) < 1e-3, "the ankle is {} m off a target on the pelvis", ankle.distance(wanted));
+    }
+
+    /// A rig names regions of its own after every rig's six, and a claim by that name finds them.
+    #[test]
+    fn a_rig_names_its_own_regions() {
+        let rig = sized(1.6, &[]);
+        let anatomy = rig.anatomy();
+        let tail = anatomy.region_named("tail").expect("the strider names its tail");
+        assert_eq!(tail, Regions::bit(Regions::FIRST_OWN));
+        assert_eq!(anatomy.region_of(rig.index_of("tail").unwrap()), tail);
+        assert_eq!(anatomy.claims(["tail", "arm.l"]), tail.union(Regions::ARM_L));
+        assert_eq!(anatomy.names_of(tail).collect::<Vec<_>>(), ["tail"]);
+        assert!(crate::common::skeleton::default_humanoid().anatomy().region_named("tail").is_none());
     }
 }

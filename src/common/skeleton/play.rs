@@ -12,6 +12,7 @@
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use super::anatomy::PerFoot;
 use super::clip::{Axis, Channel, Clip, Combine, Key, Space, Unit};
 use super::ik::{self, Chain, Reach};
 use super::interpolation::Interpolation;
@@ -185,10 +186,9 @@ pub struct Frames<'a> {
     /// Floor height under a point. A closure so tests and the prop editor can
     /// answer with a plane and the game with a ray.
     pub ground: &'a dyn Fn(Vec3) -> f32,
-    /// Each foot's phase in its own cycle, left first; see
-    /// [`Timing`](super::clip::Timing). `None` puts the right foot half a
-    /// stride after the left.
-    pub footfalls: Option<[f32; 2]>,
+    /// Each foot's phase in its own cycle, in the rig's `feet` order; see
+    /// [`Timing`](super::clip::Timing). `None` spaces the feet half a stride apart.
+    pub footfalls: Option<PerFoot<f32>>,
 }
 
 impl Frames<'_> {
@@ -214,7 +214,15 @@ impl Frames<'_> {
             Space::Eye => self.eye,
             // `grip_offsets`' to read; the grip solves onto it.
             Space::Grip => None,
+            Space::Bone(_) => None,
         }
+    }
+
+    /// [`Frames::of`], and a bone's frame read off `pose` as it stands at this point in the stack.
+    fn of_on(&self, space: Space, skeleton: &Skeleton, pose: &Pose) -> Option<Transform> {
+        let Space::Bone(bone) = space else { return self.of(space) };
+        let posed = skeleton.posed_bone(pose, &self.body, skeleton.index_of(bone.0)?);
+        Some(Transform::from_translation(posed.tail).with_rotation(posed.rotation))
     }
 }
 
@@ -308,9 +316,10 @@ impl LayerClaims {
 }
 
 /// Parts of a body a layer can claim. `WEAPON` is the weapon's placement, not
-/// a bone.
+/// a bone. The six named below are every rig's; a rig names any others in the bits above them
+/// (`Anatomy::region_names`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct Regions(u8);
+pub struct Regions(u32);
 
 impl Regions {
     pub const NONE: Regions = Regions(0);
@@ -323,7 +332,13 @@ impl Regions {
     pub const ARM_R: Regions = Regions(1 << 4);
     pub const WEAPON: Regions = Regions(1 << 5);
     pub const ARMS: Regions = Regions::ARM_L.union(Regions::ARM_R);
-    pub const ALL: Regions = Regions(0b11_1111);
+    pub const ALL: Regions = Regions(u32::MAX);
+    /// The bits a rig's own regions start at.
+    pub const FIRST_OWN: u32 = 6;
+
+    pub const fn bit(index: u32) -> Regions {
+        Regions(1 << index)
+    }
 
     pub const fn union(self, other: Regions) -> Regions {
         Regions(self.0 | other.0)
@@ -602,15 +617,10 @@ fn resolve_point(
 
 /// A track's time given its clip's. A foot-timed track keeps the whole strides
 /// and swaps the fraction for its foot's phase.
-pub fn track_time(timing: super::clip::Timing, time: f32, footfalls: Option<[f32; 2]>) -> f32 {
-    use super::clip::Timing;
-    let foot = match timing {
-        Timing::Clip => return time,
-        Timing::LeftFoot => 0,
-        Timing::RightFoot => 1,
-    };
-    let fraction = match footfalls {
-        Some(feet) => feet[foot],
+pub fn track_time(timing: super::clip::Timing, time: f32, footfalls: Option<&[f32]>) -> f32 {
+    let Some(foot) = timing.foot() else { return time };
+    let fraction = match footfalls.and_then(|feet| feet.get(foot)) {
+        Some(fraction) => *fraction,
         None => (time + 0.5 * foot as f32).rem_euclid(1.0),
     };
     time.floor() + fraction
@@ -649,7 +659,7 @@ pub fn apply_masked(
         if !track.enabled || masked.overlaps(Regions::of_track(&track.channel, skeleton)) {
             continue;
         }
-        let time = track_time(track.timing, time, frames.footfalls);
+        let time = track_time(track.timing, time, frames.footfalls.as_deref());
 
         match &track.channel {
             Channel::Rotation { bone, keys } => {
@@ -682,7 +692,7 @@ pub fn apply_masked(
                 if to.iter().all(|axis| matches!(axis, Axis::Free)) {
                     continue;
                 }
-                let Some(frame) = frames.of(track.space) else {
+                let Some(frame) = frames.of_on(track.space, skeleton, pose) else {
                     continue;
                 };
                 let Some(limb) = skeleton.anatomy().limb(chain.key()).copied() else {
@@ -736,7 +746,7 @@ pub fn apply_masked(
                 let Some(to) = sample_key(keys, time, length, looping) else {
                     continue;
                 };
-                let Some(frame) = frames.of(track.space) else {
+                let Some(frame) = frames.of_on(track.space, skeleton, pose) else {
                     continue;
                 };
                 placed.translation = resolve_point(
@@ -759,7 +769,7 @@ pub fn apply_masked(
                 match track.combine {
                     // In the track's own space; free axes keep the hold's.
                     Combine::Replace => {
-                        if let Some(frame) = frames.of(track.space) {
+                        if let Some(frame) = frames.of_on(track.space, skeleton, pose) {
                             let beneath = frame.rotation.inverse() * placed.rotation;
                             placed.rotation =
                                 frame.rotation * quat_from_euler(angles_for(to, beneath));
@@ -990,7 +1000,7 @@ mod tests {
                 enabled: true,
                 timing: Default::default(),
                 channel: Channel::Effector {
-                    chain: ChainRef::RightLeg,
+                    chain: ChainRef::RIGHT_LEG,
                     pole: None,
                     keys: vec![Key {
                         at: 0.0,
@@ -1041,7 +1051,7 @@ mod tests {
                 enabled: true,
                 timing: Default::default(),
                 channel: Channel::Effector {
-                    chain: ChainRef::RightArm,
+                    chain: ChainRef::RIGHT_ARM,
                     pole: None,
                     keys: vec![Key {
                         at: 0.0,
@@ -1345,7 +1355,7 @@ mod tests {
             tracks: vec![Track {
                 space: Space::Grip,
                 channel: Channel::Effector {
-                    chain: ChainRef::LeftArm,
+                    chain: ChainRef::LEFT_ARM,
                     pole: None,
                     keys: vec![Key::all(0.0, [0.0, -0.1, 0.2], Interpolation::Linear)],
                 },

@@ -415,6 +415,17 @@ impl ClipLibrary {
         }
     }
 
+    pub fn remove_for(&mut self, rig: &str, state: AnimationState) {
+        match rig {
+            super::rig::HUMANOID => self.remove(state),
+            _ => {
+                if let Some(states) = self.by_rig.get_mut(rig) {
+                    states.remove(&state);
+                }
+            }
+        }
+    }
+
     /// Marks a rig's clips as read, whether or not it had any.
     pub fn add_rig(&mut self, rig: &str) {
         if rig != super::rig::HUMANOID {

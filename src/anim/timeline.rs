@@ -833,7 +833,7 @@ pub fn track_name(track: &crate::common::skeleton::clip::Track) -> String {
     use crate::common::skeleton::clip::Channel;
     match &track.channel {
         Channel::Rotation { bone, .. } => bone.clone(),
-        Channel::Effector { chain, .. } => crate::get!(chain.name_key()),
+        Channel::Effector { chain, .. } => chain.label(),
         other => crate::get!(other.kind_key()),
     }
 }

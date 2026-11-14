@@ -465,10 +465,12 @@ pub fn footfall(phase: f32, stance: f32) -> f32 {
     }
 }
 
-/// The [`footfall`]s of the rig's first two feet. `None` for a rig with fewer.
-pub fn footfalls(stride: f32, stance: f32, anatomy: &Anatomy) -> Option<[f32; 2]> {
-    let [left, right, ..] = anatomy.feet[..] else { return None };
-    Some([footfall(stride + left.phase, stance), footfall(stride + right.phase, stance)])
+/// Each of the rig's feet's [`footfall`], in its `feet` order. `None` for a rig with no feet.
+pub fn footfalls(stride: f32, stance: f32, anatomy: &Anatomy) -> Option<PerFoot<f32>> {
+    if anatomy.feet.is_empty() {
+        return None;
+    }
+    Some(anatomy.feet.iter().map(|foot| footfall(stride + foot.phase, stance)).collect())
 }
 
 /// Which way a state's feet travel, in the body's own frame. Only for bodies

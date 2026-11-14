@@ -14,7 +14,10 @@ use bevy::prelude::*;
 use strum::IntoEnumIterator;
 
 use crate::common::assets::{default_packs, Assets};
+use crate::common::class_file::{load_rig, RIGS_DIR};
 use crate::common::clip_file::{read_clip, NamedClips, CLIPS_DIR, CLIP_EXTENSION};
+use crate::common::skeleton::rig::HUMANOID;
+use crate::common::skeleton::rig_file::RigFile;
 use crate::common::taunt::{load_taunt_specs, taunt_specs_in, write_taunts, TauntSpec, Taunts, TAUNTS_FILE};
 use crate::common::skeleton::clip::{Clip, StateAnimation};
 use crate::common::skeleton::state::{AnimationState, ClipLibrary};
@@ -40,6 +43,9 @@ pub struct BodyClips {
     pending: Option<PackDoc>,
     generation: u64,
     pub dirty: bool,
+    /// Every rig file the packs hold, used or not, so another rig's clips can be edited before a
+    /// class is built on it. Not part of the document: the editor reads rigs and never writes them.
+    rigs: BTreeMap<String, RigFile>,
     /// The packs as last read or written, so a save leaves another pack's unchanged content alone.
     on_disk: PackDoc,
 }
@@ -118,7 +124,17 @@ impl BodyClips {
 
     /// `None` means a file nothing will play, most likely a typo.
     pub fn state_of(name: &str) -> Option<AnimationState> {
-        AnimationState::iter().find(|state| state.clip_name() == name)
+        Self::rig_and_state(name).map(|(_, state)| state)
+    }
+
+    /// Another rig's state clips are filed as `<rig>/<state>`, as their files are.
+    pub fn rig_and_state(name: &str) -> Option<(&str, AnimationState)> {
+        let (rig, stem) = name.split_once('/').unwrap_or((HUMANOID, name));
+        AnimationState::iter().find(|state| state.clip_name() == stem).map(|state| (rig, state))
+    }
+
+    pub fn rigs(&self) -> &BTreeMap<String, RigFile> {
+        &self.rigs
     }
 
     pub fn ensure_loaded(&mut self, assets: &Assets) {
@@ -127,6 +143,7 @@ impl BodyClips {
         }
         self.loaded = true;
         self.doc = read_the_packs(assets, &default_packs());
+        self.rigs = read_the_rigs(assets, &default_packs());
         self.on_disk = self.doc.clone();
         // Not an edit, but bumped so whatever rebuilds on the counter sees the clips arrive.
         self.generation += 1;
@@ -138,6 +155,7 @@ impl BodyClips {
         let fresh = read_the_packs(assets, &default_packs());
         let count = fresh.clips.len();
         self.loaded = true;
+        self.rigs = read_the_rigs(assets, &default_packs());
         self.on_disk = fresh.clone();
         self.edit_doc(|doc| *doc = fresh);
         // `edit` counts no change when the document was unedited, but `dirty` must come off either way.
@@ -217,6 +235,10 @@ impl BodyClips {
             let path = directory.join(format!("{name}.{CLIP_EXTENSION}"));
             if self.on_disk.clips.get(name) == Some(animation) && !path.exists() {
                 continue;
+            }
+            // Another rig's clips are in a directory of their own.
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
             }
             let text = animation.to_toml().map_err(|e| e.to_string())?;
             std::fs::write(&path, text).map_err(|e| format!("{}: {e}", path.display()))?;
@@ -350,6 +372,27 @@ fn read_the_packs(assets: &Assets, packs: &[PathBuf]) -> PackDoc {
                 Err(why) => warn!("{}: {why}", state.clip_name()),
             }
         }
+        for rig in rigs_on_disk(&[pack.clone()]) {
+            let dir = crate::common::clip_file::rig_clips_dir(&rig);
+            for state in AnimationState::iter() {
+                let relative = format!("{dir}/{}.{CLIP_EXTENSION}", state.clip_name());
+                match assets.read(pack, &relative) {
+                    Ok(bytes) => {
+                        let read = String::from_utf8(bytes)
+                            .map_err(|e| e.to_string())
+                            .and_then(|text| StateAnimation::from_toml(&text).map_err(|e| e.to_string()));
+                        match read {
+                            Ok(clip) => {
+                                clips.insert(format!("{rig}/{}", state.clip_name()), clip);
+                            }
+                            Err(why) => warn!("{}/{relative}: {why}", pack.display()),
+                        }
+                    }
+                    Err(crate::common::assets::AssetError::NotFound(_)) => {}
+                    Err(why) => warn!("{}/{relative}: {why}", pack.display()),
+                }
+            }
+        }
         for name in clips_played_by_name(pack) {
             let relative = format!("{CLIPS_DIR}/{name}.{CLIP_EXTENSION}");
             let read = assets
@@ -366,6 +409,33 @@ fn read_the_packs(assets: &Assets, packs: &[PathBuf]) -> PackDoc {
         }
     }
     PackDoc { clips, taunts: load_taunt_specs(assets, packs) }
+}
+
+/// Every rig file in the packs, by name. Listed off the disk, as the clips are.
+fn rigs_on_disk(packs: &[PathBuf]) -> std::collections::BTreeSet<String> {
+    packs
+        .iter()
+        .filter_map(|pack| std::fs::read_dir(pack.join(RIGS_DIR)).ok())
+        .flatten()
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|extension| extension == "toml"))
+        .filter_map(|path| path.file_stem()?.to_str().map(str::to_string))
+        .collect()
+}
+
+/// Each rig on disk that loads; one that does not is logged and left out.
+fn read_the_rigs(assets: &Assets, packs: &[PathBuf]) -> BTreeMap<String, RigFile> {
+    rigs_on_disk(packs)
+        .into_iter()
+        .filter_map(|name| match load_rig(assets, packs, &name) {
+            Ok(rig) => Some((name, rig)),
+            Err(why) => {
+                warn!("The {name} rig: {why}");
+                None
+            }
+        })
+        .collect()
 }
 
 /// Every clip in a pack that no state names. Listing a directory is authoring-only; the game is
@@ -404,11 +474,17 @@ pub fn publish_the_body_clips(
     }
     *seen = clips.generation();
 
-    // Every state, not every clip, so a deleted clip stops playing.
-    for state in AnimationState::iter() {
-        match clips.animations().get(state.clip_name()) {
-            Some(animation) => library.insert(state, animation.clone()),
-            None => library.remove(state),
+    // Every state of every rig, not every clip, so a deleted clip stops playing.
+    for rig in std::iter::once(HUMANOID).chain(clips.rigs().keys().map(String::as_str)) {
+        for state in AnimationState::iter() {
+            let name = match rig {
+                HUMANOID => state.clip_name().to_string(),
+                _ => format!("{rig}/{}", state.clip_name()),
+            };
+            match clips.animations().get(&name) {
+                Some(animation) => library.insert_for(rig, state, animation.clone()),
+                None => library.remove_for(rig, state),
+            }
         }
     }
 
@@ -592,12 +668,20 @@ mod tests {
         std::fs::write(target.join(TAUNTS_FILE), format!("[b]\n{}", entry("y"))).unwrap();
         let clip = |length: f32| StateAnimation::from(Clip { length, ..Clip::default() }).to_toml().unwrap();
         std::fs::write(lower.join(CLIPS_DIR).join("low.gpa"), clip(1.0)).unwrap();
+        // Another rig's state clip, beside its rig file.
+        std::fs::create_dir_all(lower.join(RIGS_DIR)).unwrap();
+        std::fs::copy("assets/default/rigs/strider.toml", lower.join(RIGS_DIR).join("strider.toml")).unwrap();
+        std::fs::create_dir_all(lower.join(CLIPS_DIR).join("strider")).unwrap();
+        std::fs::write(lower.join(CLIPS_DIR).join("strider").join("idle.gpa"), clip(3.0)).unwrap();
 
         let mut clips = BodyClips::default();
         clips.doc = read_the_packs(&Assets::default(), &[lower.clone(), target.clone()]);
         clips.on_disk = clips.doc.clone();
         assert_eq!(clips.taunts().len(), 2);
         assert!(clips.get("low").is_some(), "a clip played by name was not read");
+        assert_eq!(clips.get("strider/idle").map(|clip| clip.length), Some(3.0), "another rig's clip was not read");
+        assert_eq!(BodyClips::rig_and_state("strider/idle"), Some(("strider", AnimationState::Idle)));
+        assert_eq!(BodyClips::rig_and_state("idle"), Some((HUMANOID, AnimationState::Idle)));
 
         clips.taunt_mut("b").unwrap().movement = crate::common::taunt::TauntMovement::Stopped;
         clips.save(&target).unwrap();
@@ -608,7 +692,10 @@ mod tests {
 
         clips.taunt_mut("a").unwrap().movement = crate::common::taunt::TauntMovement::Stopped;
         clips.clip_mut("low").unwrap().length = 2.0;
+        clips.clip_mut("strider/idle").unwrap().length = 4.0;
         clips.save(&target).unwrap();
+        let rig_clip = target.join(CLIPS_DIR).join("strider").join("idle.gpa");
+        assert!(rig_clip.exists(), "an edited clip of another rig was not written in its own directory");
         let saved = taunt_specs_in(&std::fs::read_to_string(target.join(TAUNTS_FILE)).unwrap());
         assert_eq!(saved.len(), 2, "an edited taunt was not written");
         assert!(target.join(CLIPS_DIR).join("low.gpa").exists(), "an edited clip was not written");

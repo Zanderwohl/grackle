@@ -252,12 +252,13 @@ pub(crate) fn perform_conditions(
     taunts: Option<Res<Taunts>>,
     layer_claims: Option<Res<LayerClaims>>,
     timeline: Option<Res<LocalTimeline>>,
-    mut bodies: Query<(&Condition, &mut ClipStack)>,
+    mut bodies: Query<(&Condition, &mut ClipStack, Option<&crate::common::skeleton::Skeleton>)>,
 ) {
     let delta = time.delta_secs();
     let now = timeline.as_deref().map(LocalTimeline::tick);
     let clips = clips.as_deref();
-    for (condition, mut stack) in &mut bodies {
+    for (condition, mut stack, skeleton) in &mut bodies {
+        let anatomy = skeleton.map_or(crate::common::skeleton::default_humanoid().anatomy(), |rig| rig.anatomy());
         let humiliation = condition
             .humiliated
             .then(|| clips?.humiliated.as_ref())
@@ -271,7 +272,10 @@ pub(crate) fn perform_conditions(
         let taunt = condition
             .taunt
             .and_then(|id| taunts.as_deref()?.get(id))
-            .and_then(|taunt| Some((clips?.taunts.get(&taunt.clip)?.as_ref()?, taunt.claims)));
+            .and_then(|taunt| {
+                let claims = anatomy.claims(taunt.claims.iter().map(String::as_str));
+                Some((clips?.taunts.get(&taunt.clip)?.as_ref()?, claims))
+            });
 
         for (layer, wanted) in [(Layer::Humiliation, humiliation), (Layer::Taunt, taunt)] {
             let ours = |playing: Layer| playing == layer;
@@ -502,7 +506,8 @@ mod tests {
         let stack = world.get::<ClipStack>(body).unwrap();
         let on = |layer| stack.0.iter().find(|playing| playing.layer == layer && !playing.leaving);
         assert!(on(Layer::Humiliation).is_some(), "the taunt pushed humiliation off");
-        assert_eq!(on(Layer::Taunt).expect("no taunt playing").claims, wave.claims);
+        let claims = crate::common::skeleton::default_humanoid().anatomy().claims(wave.claims.iter().map(String::as_str));
+        assert_eq!(on(Layer::Taunt).expect("no taunt playing").claims, claims);
 
         assert!(!both.may_fire());
         assert!(both.forces_third_person());

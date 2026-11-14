@@ -305,6 +305,8 @@ fn bake_a_stride(seed: Seed, heading: f32) -> Clip {
             Timing::Clip => at,
             Timing::LeftFoot => whole + footfall(at, stance),
             Timing::RightFoot => whole + footfall(at + 0.5, stance),
+            // The humanoid has two feet.
+            Timing::Foot(_) => at,
         }
     };
 
