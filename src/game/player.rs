@@ -503,7 +503,7 @@ pub fn spawn_the_view(mut commands: Commands, existing: Query<(), With<PlayerCam
             fov: our_field_of_view(None),
             ..default()
         }),
-        RenderLayers::from_layers(&[render_layers::WORLD, render_layers::SUNLIT, render_layers::GIZMOS]),
+        RenderLayers::from_layers(&[render_layers::WORLD, render_layers::GIZMOS]),
         Transform::default(),
         Name::new("View"),
         children![crate::game::hud::hud_camera()],

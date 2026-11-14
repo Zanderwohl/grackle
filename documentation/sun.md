@@ -164,32 +164,35 @@ east (`+X`); altitude is degrees above the horizon.
 ### Things that move
 
 Bodies, corpses, projectiles and placed props are not lightmapped
-([`game/sunlit.rs`](../src/game/sunlit.rs)).
+([`game/sunlit.rs`](../src/game/sunlit.rs)). Each one's meshes get a `MeshTag`
+holding how it is lit where it stands, and a body's material (`BodyMaterial`,
+an extension of `StandardMaterial`, [`game/air_lit.wesl`](../src/game/air_lit.wesl))
+reads it. Props and projectiles ignore the tag for now.
 
-- **Sun** is a real `DirectionalLight` on two render layers no wall is on:
-  `SUNLIT`, which the world's cameras draw, and `SUNLIT_VIEWMODEL`, which only
-  the viewmodel camera draws, so first-person arms can be sunlit without that
-  camera drawing every sunlit body. Its illuminance is `SUN_BRIGHTNESS × π`:
-  Bevy's diffuse is albedo over π times illuminance, and a texel is albedo
-  times its value, so a body and a wall facing the sun are equally bright.
-  Each moving thing's meshes on `WORLD` join `SUNLIT` while one ray from it
-  reaches sky — from 1.2 m up for a body, 0.1 m up for anything else — and the
-  viewmodel's join `SUNLIT_VIEWMODEL` with the local body's. The ray is cast
-  against `OpenSky`, the map's surface rebuilt the moment the faces or what is
-  sky change, so it does not wait for a bake. It is a switch, not a fade, and
-  nothing casts a shadow from it.
+- **The sun is added by the body's shader, not by a `DirectionalLight`.** Bevy
+  0.20 filters a directional light by the *camera's* render layers only: any
+  camera that gathers it applies it to every mesh it draws, whatever the
+  mesh's layers. A sun light put on layers no wall was on still lit every
+  wall and floor, unshadowed, which washed the baked sunlight and shadows
+  out. So the tag's top bit says whether one ray from the thing — 1.2 m up for
+  a body, 0.1 m up otherwise — reaches sky in `OpenSky` (the map's surface,
+  rebuilt the moment the faces or what is sky change, so it does not wait for
+  a bake), and the shader adds Lambertian diffuse for it from the sun's
+  direction and illuminance on the material. The illuminance is
+  `SUN_BRIGHTNESS × π`: Bevy's diffuse is albedo over π times illuminance and a
+  texel is albedo times its value, so a body and a wall facing the sun are
+  equally bright. It is a switch, not a fade, and casts no shadow.
 - **Ambient** is `AirLight` ([`common/air_light.rs`](../src/common/air_light.rs)):
   the same sky-and-bounce gather averaged over the whole sphere, on a 2 m
   lattice fixed in the world and offset half a step from the meter grid, so no
   sample sits on a wall and neighboring rooms share samples. It is the bake's
-  last item, cached and kept like the lightmaps. Each moving thing reads it
-  trilinearly at the same point and gets its light over the global ambient as
-  an RGBE `MeshTag`. A body's material (`BodyMaterial`, an extension of
-  `StandardMaterial`, [`game/air_lit.wesl`](../src/game/air_lit.wesl))
-  multiplies Bevy's diffuse occlusion by it, which scales Bevy's own ambient
-  term rather than adding a second one. Props and projectiles ignore the tag
-  and keep the global ambient. Bevy's irradiance volumes would do this, but
-  they are disabled on wasm (`IRRADIANCE_VOLUMES_ARE_USABLE`).
+  last item, cached and kept like the lightmaps. The rest of the tag is the
+  air's light where the thing stands over the global ambient, which the shader
+  multiplies Bevy's diffuse occlusion by: that scales Bevy's own ambient term
+  rather than adding a second one. Bevy's irradiance volumes would do this,
+  but they are disabled on wasm (`IRRADIANCE_VOLUMES_ARE_USABLE`).
+- **The viewmodel's arms take the local body's tag**, so first person matches
+  third.
 
 ### Nothing reads a texel
 
@@ -224,7 +227,7 @@ same-sized image into its existing texture — so no slot goes a frame unlit.
 - [x] Off the main thread, on the async compute pool; light kept and carried over until a bake replaces it; a clear beside the Sunlight button
 - [ ] Chunked across frames on wasm, where the pool runs a task in one go: chunks of 8 ms through `BackgroundBake`, not yet run in a browser
 - [x] Cache under `cache/lightmap/` by content hash (`tool/bake_cache.rs`, shared with the nav graph); keyed by faces, sky, sun, sky time, the bake's constants and `FORMAT`
-- [x] `DirectionalLight` on `SUNLIT` and `SUNLIT_VIEWMODEL`; moving things join by a ray from the chest, the viewmodel with the local body
+- [x] The sun on bodies, in their shader, by a ray from the chest; the viewmodel's arms with the local body
 - [x] Ambient in the air on a 2 m world lattice, baked last, sampled per body into a `MeshTag` that scales a body's ambient
-- [ ] Ambient on props, projectiles and held weapons: they read no tag yet
+- [ ] Sun and ambient on props, projectiles and held weapons: they read no tag yet
 - [ ] Tests: a closed room is unlit; a sky ceiling lights the floor under it and not the room next door, except by bounce; coplanar floors across a threshold bake the same values on both sides

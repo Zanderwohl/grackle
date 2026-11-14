@@ -97,18 +97,21 @@ fn bounds(faces: &[Face]) -> Option<(Vec3, Vec3)> {
     Some(vertices.fold((first, first), |(lo, hi), v| (lo.min(v), hi.max(v))))
 }
 
-/// `light` as a `MeshTag`: RGBE, three 8-bit mantissas and an exponent biased by 128. Never 0, so
-/// a mesh with no tag can mean "unchanged". `air_lit.wesl` decodes it.
-pub fn pack(light: Vec3) -> u32 {
-    let light = light.max(Vec3::ZERO);
-    let largest = light.max_element();
-    if largest < 1e-20 {
-        return 1 << 24;
+/// How a thing that moves is lit where it stands, as a `MeshTag`: `ambient` (a multiple of the
+/// global ambient) as three 8-bit mantissas and a 7-bit exponent biased by 64, and whether it is in
+/// the sun in the top bit. Never 0, so a mesh with no tag can mean "unchanged". `air_lit.wesl`
+/// decodes it.
+pub fn pack(ambient: Vec3, sunlit: bool) -> u32 {
+    let sun = u32::from(sunlit) << 31;
+    let ambient = ambient.max(Vec3::ZERO);
+    let largest = ambient.max_element();
+    if largest < 1e-18 {
+        return sun | 1 << 24;
     }
     let exponent = largest.log2().floor() as i32 + 1;
-    let mantissa = (light / 2f32.powi(exponent) * 256.0).min(Vec3::splat(255.0)).as_uvec3();
-    let biased = (exponent + 128).clamp(1, 255) as u32;
-    mantissa.x | mantissa.y << 8 | mantissa.z << 16 | biased << 24
+    let mantissa = (ambient / 2f32.powi(exponent) * 256.0).min(Vec3::splat(255.0)).as_uvec3();
+    let biased = (exponent + 64).clamp(1, 127) as u32;
+    sun | mantissa.x | mantissa.y << 8 | mantissa.z << 16 | biased << 24
 }
 
 #[cfg(test)]
@@ -119,18 +122,21 @@ mod tests {
     use crate::common::world_surface::room_share;
     use crate::tool::room::{Room, RoomSlot};
 
-    fn unpack(tag: u32) -> Vec3 {
-        let exponent = ((tag >> 24) & 0xff) as i32 - 136;
-        Vec3::new((tag & 0xff) as f32, ((tag >> 8) & 0xff) as f32, ((tag >> 16) & 0xff) as f32) * 2f32.powi(exponent)
+    /// What `air_lit.wesl` reads back.
+    fn unpack(tag: u32) -> (Vec3, bool) {
+        let exponent = ((tag >> 24) & 0x7f) as i32 - 72;
+        let ambient = Vec3::new((tag & 0xff) as f32, ((tag >> 8) & 0xff) as f32, ((tag >> 16) & 0xff) as f32);
+        (ambient * 2f32.powi(exponent), tag >> 31 == 1)
     }
 
     #[test]
     fn a_packed_light_comes_back_within_a_step() {
-        for light in [Vec3::ONE, Vec3::new(0.1, 3.7, 15.0), Vec3::splat(0.003), Vec3::ZERO] {
-            let back = unpack(pack(light));
-            assert!((back - light).abs().max_element() <= light.max_element() / 128.0 + 1e-6, "{light} came back {back}");
+        for (ambient, sunlit) in [(Vec3::ONE, true), (Vec3::new(0.1, 3.7, 15.0), false), (Vec3::splat(0.003), true), (Vec3::ZERO, false)] {
+            let (back, sun) = unpack(pack(ambient, sunlit));
+            assert!((back - ambient).abs().max_element() <= ambient.max_element() / 128.0 + 1e-6, "{ambient} came back {back}");
+            assert_eq!(sun, sunlit);
         }
-        assert_ne!(pack(Vec3::ZERO), 0, "0 means no tag");
+        assert_ne!(pack(Vec3::ZERO, false), 0, "0 means no tag");
     }
 
     fn courtyard() -> [Room; 2] {

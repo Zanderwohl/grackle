@@ -181,7 +181,7 @@ fn give_the_view_its_own_camera(
                     near: VIEWMODEL_NEAR,
                     ..default()
                 }),
-                RenderLayers::from_layers(&[VIEWMODEL_LAYER, crate::common::render_layers::SUNLIT_VIEWMODEL]),
+                RenderLayers::layer(VIEWMODEL_LAYER),
                 Transform::IDENTITY,
                 Name::new("Viewmodel view"),
             ));

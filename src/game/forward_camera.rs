@@ -274,7 +274,7 @@ fn give_the_view_a_forward_camera(
             DebandDither::Disabled,
             Projection::Perspective(PerspectiveProjection::default()),
             // Not the gizmos: an overlay drawn from the eye would sit in the lens.
-            RenderLayers::from_layers(&[render_layers::WORLD, render_layers::SUNLIT]),
+            RenderLayers::layer(render_layers::WORLD),
             Transform::IDENTITY,
             Name::new("Forward camera"),
         ));

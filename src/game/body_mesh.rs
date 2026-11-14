@@ -88,15 +88,16 @@ pub fn body_look(
     }
 }
 
-/// A body's material: the standard one, lit by the light in the air where it stands rather than by
-/// the global ambient. [`crate::game::sunlit`] writes that light into each part's `MeshTag`.
+/// A body's material: the standard one, lit by where it stands — the light in the air instead of the
+/// global ambient, and the sun when it is in it — which [`crate::game::sunlit`] writes into each
+/// part's `MeshTag`.
 pub type BodyMaterial = ExtendedMaterial<StandardMaterial, AirLit>;
 
 #[derive(Asset, AsBindGroup, Reflect, Debug, Clone, Default)]
 pub struct AirLit {
-    // `ExtendedMaterial` will not take an extension with no bindings.
+    /// Unit, toward the sun, and its illuminance in `w`. The same on every body material.
     #[uniform(100)]
-    unused: f32,
+    pub sun: Vec4,
 }
 
 impl MaterialExtension for AirLit {
@@ -108,16 +109,30 @@ impl MaterialExtension for AirLit {
 /// One material per look: four teams alight or not is eight materials, not
 /// one per body.
 #[derive(Resource, Default)]
-pub struct BodyMaterials(HashMap<([u8; 4], bool), Handle<BodyMaterial>>);
+pub struct BodyMaterials {
+    made: HashMap<([u8; 4], bool), Handle<BodyMaterial>>,
+    sun: Vec4,
+}
 
 impl BodyMaterials {
+    /// Puts the sun on every body material, and on every one made from now on.
+    pub(crate) fn set_sun(&mut self, sun: Vec4, materials: &mut Assets<BodyMaterial>) {
+        self.sun = sun;
+        for handle in self.made.values() {
+            if let Some(mut material) = materials.get_mut(handle) {
+                material.extension.sun = sun;
+            }
+        }
+    }
+
     /// `pub(crate)` for the viewmodel's arms.
     pub(crate) fn get(
         &mut self,
         look: BodyLook,
         materials: &mut Assets<BodyMaterial>,
     ) -> Handle<BodyMaterial> {
-        self.0
+        let sun = self.sun;
+        self.made
             .entry(look.key())
             .or_insert_with(|| {
                 materials.add(ExtendedMaterial {
@@ -127,7 +142,7 @@ impl BodyMaterials {
                         perceptual_roughness: 0.85,
                         ..default()
                     },
-                    extension: AirLit::default(),
+                    extension: AirLit { sun },
                 })
             })
             .clone()
@@ -539,7 +554,7 @@ mod tests {
         assert_eq!(material(first), material(second), "two green bodies, two materials");
         assert_ne!(material(plain), material(first), "the tint was ignored");
         // The default and the green, and nothing else.
-        assert_eq!(app.world().resource::<BodyMaterials>().0.len(), 2);
+        assert_eq!(app.world().resource::<BodyMaterials>().made.len(), 2);
     }
 
     /// Changing build replaces the old parts rather than keeping them.
