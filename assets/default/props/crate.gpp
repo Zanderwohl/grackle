@@ -62,3 +62,70 @@ size = [0.6, 0.6, 0.6]
 
 [breakable]
 health = 75
+
+[[bones]]
+name = "body"
+pivot = [0.0, 0.0, 0.0]
+parts = [2]
+
+[animations.clips.hit]
+name_key = "anim.clips.hit"
+length = 0.3
+clock = "seconds"
+looping = false
+note = "A jolt when the crate is shot: it hops and rocks, and is still again before the next shot of most weapons."
+
+[[animations.clips.hit.tracks]]
+combine = "replace"
+space = "body"
+unit = "meters"
+enabled = true
+
+[animations.clips.hit.tracks.channel]
+channel = "prop_bone_offset"
+bone = "body"
+
+[[animations.clips.hit.tracks.channel.keys]]
+at = 0.0
+to = [0.0, 0.0, 0.0]
+ease = "cubic_out"
+
+[[animations.clips.hit.tracks.channel.keys]]
+at = 0.06
+to = [0.0, 0.03, 0.0]
+ease = "cubic_in"
+
+[[animations.clips.hit.tracks.channel.keys]]
+at = 0.16
+to = [0.0, 0.0, 0.0]
+ease = "linear"
+
+[[animations.clips.hit.tracks]]
+combine = "replace"
+space = "body"
+unit = "meters"
+enabled = true
+
+[animations.clips.hit.tracks.channel]
+channel = "prop_bone"
+bone = "body"
+
+[[animations.clips.hit.tracks.channel.keys]]
+at = 0.0
+to = [0.0, 0.0, 0.0]
+ease = "cubic_out"
+
+[[animations.clips.hit.tracks.channel.keys]]
+at = 0.06
+to = [0.0, 0.0, 0.04]
+ease = "smooth_step"
+
+[[animations.clips.hit.tracks.channel.keys]]
+at = 0.18
+to = [0.0, 0.0, -0.02]
+ease = "smooth_step"
+
+[[animations.clips.hit.tracks.channel.keys]]
+at = 0.3
+to = [0.0, 0.0, 0.0]
+ease = "linear"

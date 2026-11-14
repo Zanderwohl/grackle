@@ -27,7 +27,6 @@ use bevy::reflect::TypePath;
 use serde::de::{self, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use super::ik::{self, Chain};
 use super::interpolation::Interpolation;
 
 fn one() -> f32 {
@@ -64,6 +63,55 @@ pub enum Space {
     /// a key at zero is holding and a reload can take the support hand to a
     /// magazine and back. Read by the grip, never solved by the clip.
     Grip,
+    /// A bone's tail, turned with the bone as the pose has it then: a jaw, a tail tip, any part of
+    /// a rig the frames above do not name.
+    Bone(BoneRef),
+}
+
+/// A procedural pass a [`Channel::Weight`] track turns down: each acts on what the rig publishes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Controller {
+    /// The feet held on the floor.
+    Plant,
+    /// The look bones following the aim's pitch.
+    Look,
+    /// The hands on the weapon.
+    Hold,
+}
+
+impl Controller {
+    pub const ALL: [Controller; 3] = [Controller::Plant, Controller::Look, Controller::Hold];
+
+    pub fn name_key(self) -> &'static str {
+        match self {
+            Controller::Plant => "anim.controller.plant",
+            Controller::Look => "anim.controller.look",
+            Controller::Hold => "anim.controller.hold",
+        }
+    }
+}
+
+/// A bone by name, interned so a [`Space`] naming one stays `Copy`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct BoneRef(pub &'static str);
+
+impl BoneRef {
+    pub fn named(name: &str) -> BoneRef {
+        BoneRef(super::rig::intern(name))
+    }
+}
+
+impl Serialize for BoneRef {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for BoneRef {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<BoneRef, D::Error> {
+        String::deserialize(deserializer).map(|name| BoneRef::named(&name))
+    }
 }
 
 /// What a number on a key is measured in.
@@ -113,18 +161,37 @@ pub enum Timing {
     /// The clip's own clock.
     #[default]
     Clip,
+    /// The rig's first foot.
     LeftFoot,
+    /// Its second.
     RightFoot,
+    /// Any foot, by its place in the rig's `feet`.
+    Foot(u8),
 }
 
 impl Timing {
-    pub const ALL: [Timing; 3] = [Timing::Clip, Timing::LeftFoot, Timing::RightFoot];
+    /// Every timing a rig with `feet` feet offers, in menu order.
+    pub fn offered(feet: usize) -> impl Iterator<Item = Timing> {
+        let named = [Timing::Clip, Timing::LeftFoot, Timing::RightFoot].into_iter().take(1 + feet.min(2));
+        named.chain((2..feet.min(u8::MAX as usize + 1)).map(|foot| Timing::Foot(foot as u8)))
+    }
 
-    pub fn name_key(self) -> &'static str {
+    /// Which foot it times against, by its place in the rig's `feet`.
+    pub fn foot(self) -> Option<usize> {
         match self {
-            Timing::Clip => "anim.timing.clip",
-            Timing::LeftFoot => "anim.timing.left_foot",
-            Timing::RightFoot => "anim.timing.right_foot",
+            Timing::Clip => None,
+            Timing::LeftFoot => Some(0),
+            Timing::RightFoot => Some(1),
+            Timing::Foot(foot) => Some(foot as usize),
+        }
+    }
+
+    pub fn label(self) -> String {
+        match self {
+            Timing::Clip => crate::get!("anim.timing.clip"),
+            Timing::LeftFoot => crate::get!("anim.timing.left_foot"),
+            Timing::RightFoot => crate::get!("anim.timing.right_foot"),
+            Timing::Foot(foot) => crate::get!("anim.timing.foot", "foot", foot + 1),
         }
     }
 
@@ -133,55 +200,44 @@ impl Timing {
     }
 }
 
-/// Which two-bone chain an effector track drives.
-///
-/// An enum rather than bone names because `Pose::set` takes a `&'static str`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ChainRef {
-    LeftArm,
-    RightArm,
-    LeftLeg,
-    RightLeg,
-}
+/// Which [`Limb`](super::anatomy::Limb) an effector track drives, by the name its rig gives it.
+/// Interned, so a name read from a file is as cheap to copy and compare as the humanoid's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ChainRef(&'static str);
 
 impl ChainRef {
-    /// In menu order.
-    pub const ALL: [ChainRef; 4] = [
-        ChainRef::RightArm,
-        ChainRef::LeftArm,
-        ChainRef::RightLeg,
-        ChainRef::LeftLeg,
-    ];
+    pub const RIGHT_ARM: ChainRef = ChainRef("right_arm");
+    pub const LEFT_ARM: ChainRef = ChainRef("left_arm");
+    pub const RIGHT_LEG: ChainRef = ChainRef("right_leg");
+    pub const LEFT_LEG: ChainRef = ChainRef("left_leg");
+    const HUMANOID: [ChainRef; 4] = [ChainRef::RIGHT_ARM, ChainRef::LEFT_ARM, ChainRef::RIGHT_LEG, ChainRef::LEFT_LEG];
 
-    pub fn chain(self) -> Chain {
-        match self {
-            ChainRef::LeftArm => ik::LEFT_ARM,
-            ChainRef::RightArm => ik::RIGHT_ARM,
-            ChainRef::LeftLeg => ik::LEFT_LEG,
-            ChainRef::RightLeg => ik::RIGHT_LEG,
-        }
+    pub fn named(name: &str) -> ChainRef {
+        ChainRef(super::rig::intern(name))
     }
 
-    /// -1 on the left, 1 on the right; what a pole is mirrored by.
-    pub fn side(self) -> f32 {
-        match self {
-            ChainRef::LeftArm | ChainRef::LeftLeg => -1.0,
-            ChainRef::RightArm | ChainRef::RightLeg => 1.0,
-        }
+    pub fn key(self) -> &'static str {
+        self.0
     }
 
-    pub fn name_key(self) -> &'static str {
-        match self {
-            ChainRef::RightArm => "anim.chain.right_arm",
-            ChainRef::LeftArm => "anim.chain.left_arm",
-            ChainRef::RightLeg => "anim.chain.right_leg",
-            ChainRef::LeftLeg => "anim.chain.left_leg",
+    /// The humanoid's limbs by their translated names; any other rig's as the file names them.
+    pub fn label(self) -> String {
+        match ChainRef::HUMANOID.contains(&self) {
+            true => crate::get!(&format!("anim.chain.{}", self.0)),
+            false => self.0.to_string(),
         }
     }
+}
 
-    pub fn is_leg(self) -> bool {
-        matches!(self, ChainRef::LeftLeg | ChainRef::RightLeg)
+impl Serialize for ChainRef {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for ChainRef {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<ChainRef, D::Error> {
+        String::deserialize(deserializer).map(|name| ChainRef::named(&name))
     }
 }
 
@@ -304,6 +360,10 @@ pub struct Key {
     /// Used **leaving** this key. See [`Interpolation`].
     #[serde(default)]
     pub ease: Interpolation,
+    /// For a point, the space this key is measured in instead of its track's. Between keys in
+    /// different spaces the target is blended in world space.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub space: Option<Space>,
 }
 
 impl Key {
@@ -312,6 +372,7 @@ impl Key {
             at,
             to: to.map(Axis::Value),
             ease,
+            space: None,
         }
     }
 }
@@ -330,7 +391,7 @@ pub enum Channel {
         #[serde(default)]
         keys: Vec<Key>,
     },
-    /// A two-bone chain solved onto a target through [`ik::solve`].
+    /// A two-bone chain solved onto a target through [`super::ik::solve`].
     Effector {
         chain: ChainRef,
         /// Which way the elbow or knee points. Defaults per chain when absent.
@@ -359,9 +420,33 @@ pub enum Channel {
         #[serde(default)]
         keys: Vec<Key>,
     },
-    // Reserved: `Feature { feature: PropFeatureId, .. }`, for a dropped magazine.
-    // Needs `prop::baked` to bake per-feature groups rather than one mesh per
-    // surface.
+    /// Turns a bone so its length points at a target: a head at something, a tail, a turret. As
+    /// far as its joint allows.
+    LookAt {
+        bone: String,
+        #[serde(default)]
+        keys: Vec<Key>,
+    },
+    /// How much a procedural pass acts, 0 to 1, on each key's first axis: a taunt that lets the
+    /// feet leave the floor, or a head that stops following the aim.
+    Weight {
+        controller: Controller,
+        #[serde(default)]
+        keys: Vec<Key>,
+    },
+    /// A bone of the held or placed prop, turned about its pivot: Euler angles from rest. See
+    /// [`crate::prop::rig`].
+    PropBone {
+        bone: String,
+        #[serde(default)]
+        keys: Vec<Key>,
+    },
+    /// A prop bone moved from rest, in meters in its parent's frame: a magazine sliding out.
+    PropBoneOffset {
+        bone: String,
+        #[serde(default)]
+        keys: Vec<Key>,
+    },
 }
 
 impl Channel {
@@ -372,6 +457,10 @@ impl Channel {
             Channel::Effector { .. } => "anim.channel.effector",
             Channel::Weapon { .. } => "anim.channel.weapon",
             Channel::WeaponRotation { .. } => "anim.channel.weapon_rotation",
+            Channel::LookAt { .. } => "anim.channel.look_at",
+            Channel::Weight { .. } => "anim.channel.weight",
+            Channel::PropBone { .. } => "anim.channel.prop_bone",
+            Channel::PropBoneOffset { .. } => "anim.channel.prop_bone_offset",
         }
     }
 
@@ -381,7 +470,11 @@ impl Channel {
             | Channel::WeaponRotation { keys }
             | Channel::Effector { keys, .. }
             | Channel::Weapon { keys }
-            | Channel::Root { keys } => keys.len(),
+            | Channel::Root { keys }
+            | Channel::LookAt { keys, .. }
+            | Channel::Weight { keys, .. }
+            | Channel::PropBone { keys, .. }
+            | Channel::PropBoneOffset { keys, .. } => keys.len(),
         }
     }
 
@@ -391,7 +484,11 @@ impl Channel {
             | Channel::WeaponRotation { keys }
             | Channel::Effector { keys, .. }
             | Channel::Weapon { keys }
-            | Channel::Root { keys } => keys.iter().map(|key| key.at).collect(),
+            | Channel::Root { keys }
+            | Channel::LookAt { keys, .. }
+            | Channel::Weight { keys, .. }
+            | Channel::PropBone { keys, .. }
+            | Channel::PropBoneOffset { keys, .. } => keys.iter().map(|key| key.at).collect(),
         }
     }
 
@@ -401,7 +498,11 @@ impl Channel {
             | Channel::WeaponRotation { keys }
             | Channel::Effector { keys, .. }
             | Channel::Weapon { keys }
-            | Channel::Root { keys } => keys,
+            | Channel::Root { keys }
+            | Channel::LookAt { keys, .. }
+            | Channel::Weight { keys, .. }
+            | Channel::PropBone { keys, .. }
+            | Channel::PropBoneOffset { keys, .. } => keys,
         }
     }
 
@@ -411,14 +512,18 @@ impl Channel {
             | Channel::WeaponRotation { keys }
             | Channel::Effector { keys, .. }
             | Channel::Weapon { keys }
-            | Channel::Root { keys } => keys,
+            | Channel::Root { keys }
+            | Channel::LookAt { keys, .. }
+            | Channel::Weight { keys, .. }
+            | Channel::PropBone { keys, .. }
+            | Channel::PropBoneOffset { keys, .. } => keys,
         }
     }
 
     pub fn is_rotation(&self) -> bool {
         matches!(
             self,
-            Channel::Rotation { .. } | Channel::WeaponRotation { .. }
+            Channel::Rotation { .. } | Channel::WeaponRotation { .. } | Channel::PropBone { .. }
         )
     }
 
@@ -462,7 +567,11 @@ impl Channel {
             | Channel::WeaponRotation { keys }
             | Channel::Effector { keys, .. }
             | Channel::Weapon { keys }
-            | Channel::Root { keys } => shuffle(
+            | Channel::Root { keys }
+            | Channel::LookAt { keys, .. }
+            | Channel::Weight { keys, .. }
+            | Channel::PropBone { keys, .. }
+            | Channel::PropBoneOffset { keys, .. } => shuffle(
                 keys,
                 held,
                 by,
@@ -484,7 +593,11 @@ impl Channel {
             | Channel::WeaponRotation { keys }
             | Channel::Effector { keys, .. }
             | Channel::Weapon { keys }
-            | Channel::Root { keys } => {
+            | Channel::Root { keys }
+            | Channel::LookAt { keys, .. }
+            | Channel::Weight { keys, .. }
+            | Channel::PropBone { keys, .. }
+            | Channel::PropBoneOffset { keys, .. } => {
                 for index in doomed.iter().rev() {
                     if *index < keys.len() {
                         keys.remove(*index);
@@ -502,7 +615,11 @@ impl Channel {
             | Channel::WeaponRotation { keys }
             | Channel::Effector { keys, .. }
             | Channel::Weapon { keys }
-            | Channel::Root { keys } => keys.sort_by(|a, b| a.at.total_cmp(&b.at)),
+            | Channel::Root { keys }
+            | Channel::LookAt { keys, .. }
+            | Channel::Weight { keys, .. }
+            | Channel::PropBone { keys, .. }
+            | Channel::PropBoneOffset { keys, .. } => keys.sort_by(|a, b| a.at.total_cmp(&b.at)),
         }
     }
 }
@@ -526,18 +643,19 @@ pub struct Track {
 }
 
 impl Track {
-    pub fn rotation(bone: impl Into<String>) -> Track {
+    pub fn of(channel: Channel) -> Track {
         Track {
             combine: Combine::default(),
             space: Space::default(),
             unit: Unit::default(),
             enabled: true,
             timing: Default::default(),
-            channel: Channel::Rotation {
-                bone: bone.into(),
-                keys: Vec::new(),
-            },
+            channel,
         }
+    }
+
+    pub fn rotation(bone: impl Into<String>) -> Track {
+        Track::of(Channel::Rotation { bone: bone.into(), keys: Vec::new() })
     }
 }
 
@@ -641,7 +759,7 @@ impl Clip {
                 Channel::Rotation { bone, .. } if !known_bone(bone) => {
                     on_track(get!("anim.problem.unknown_bone", "bone", bone.clone()));
                 }
-                Channel::Rotation { keys, .. } | Channel::WeaponRotation { keys } => {
+                Channel::Rotation { keys, .. } | Channel::WeaponRotation { keys } | Channel::PropBone { keys, .. } => {
                     for key in keys {
                         // An angle has no floor under it.
                         if key.to.iter().any(|axis| axis.is_ground()) {
@@ -661,11 +779,19 @@ impl Clip {
                         }
                     }
                 }
+                Channel::LookAt { .. } | Channel::Weight { .. } => {}
                 Channel::Root { keys } => {
                     for key in keys {
                         // A root offset is already measured from where the floor put the body.
                         if key.to.iter().any(|axis| axis.is_ground()) {
                             on_track(get!("anim.problem.ground_root", "at", key.at.to_string()));
+                        }
+                    }
+                }
+                Channel::PropBoneOffset { keys, .. } => {
+                    for key in keys {
+                        if key.to.iter().any(|axis| axis.is_ground()) {
+                            on_track(get!("anim.problem.ground_prop_bone", "at", key.at.to_string()));
                         }
                     }
                 }
@@ -913,18 +1039,20 @@ mod tests {
                     enabled: true,
                     timing: Default::default(),
                     channel: Channel::Effector {
-                        chain: ChainRef::RightLeg,
+                        chain: ChainRef::RIGHT_LEG,
                         pole: None,
                         keys: vec![
                             Key {
                                 at: 0.0,
                                 to: [Axis::Value(0.25), Axis::Ground { clearance: 0.04 }, Axis::Free],
                                 ease: Interpolation::SmoothStep,
+                                space: None,
                             },
                             Key {
                                 at: 1.5,
                                 to: [Axis::Value(-0.25), Axis::Value(0.1), Axis::Free],
                                 ease: Interpolation::Linear,
+                                space: None,
                             },
                         ],
                     },
@@ -1037,6 +1165,7 @@ mod tests {
                     at: 0.5,
                     to: [Axis::ON_THE_GROUND, Axis::Free, Axis::Free],
                     ease: Interpolation::Linear,
+                    space: None,
                 }],
             },
         });
@@ -1080,6 +1209,7 @@ mod tests {
                     at: *at,
                     to: [Axis::Value(*at), Axis::Free, Axis::Free],
                     ease: Interpolation::Linear,
+                    space: None,
                 })
                 .collect(),
         }
@@ -1161,7 +1291,7 @@ mod tests {
         let mut channels = vec![
             Channel::Rotation { bone: "chest".into(), keys: vec![] },
             Channel::WeaponRotation { keys: vec![] },
-            Channel::Effector { chain: ChainRef::RightArm, pole: None, keys: vec![] },
+            Channel::Effector { chain: ChainRef::RIGHT_ARM, pole: None, keys: vec![] },
             Channel::Weapon { keys: vec![] },
             Channel::Root { keys: vec![] },
         ];
@@ -1189,6 +1319,7 @@ mod tests {
                         at: 0.0,
                         to: [Axis::ON_THE_GROUND, Axis::Free, Axis::Free],
                         ease: Interpolation::Linear,
+                        space: None,
                     }],
                 },
                 ..Track::rotation("chest")

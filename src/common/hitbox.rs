@@ -16,7 +16,7 @@
 use bevy::prelude::*;
 
 use crate::common::class::Stance;
-use crate::common::skeleton::rig::{bone, Pose, Skeleton};
+use crate::common::skeleton::rig::{Pose, Skeleton};
 
 /// Meters added on each side of the head bone, so a shot clipping an ear
 /// counts.
@@ -77,7 +77,7 @@ fn body_box(root: &Transform, stance: Stance) -> Box3 {
 /// it encloses the tilted head rather than an upright one that leaves the
 /// crown out.
 fn head_box(skeleton: &Skeleton, pose: &Pose, root: &Transform) -> Box3 {
-    let Some(index) = skeleton.index_of(bone::HEAD) else {
+    let Some(index) = skeleton.anatomy().head else {
         return Box3::default();
     };
     let posed = skeleton.posed_bone(pose, root, index);
@@ -91,6 +91,7 @@ fn head_box(skeleton: &Skeleton, pose: &Pose, root: &Transform) -> Box3 {
 
 #[cfg(test)]
 mod tests {
+    use crate::common::skeleton::rig::bone;
     use super::*;
     use crate::common::class::CLASS_HALF_EXTENTS;
     use crate::common::skeleton::state::{AnimationState, PoseInputs};
@@ -172,12 +173,10 @@ mod tests {
 
     #[test]
     fn every_class_is_boxed_around_its_own_head() {
-        use crate::common::class::Class;
         use crate::common::skeleton::humanoid;
-        use strum::IntoEnumIterator;
 
         let mut heights = Vec::new();
-        for class in Class::iter() {
+        for class in crate::common::class::ClassBuilds::shipped().humanoids() {
             let skeleton = humanoid(crate::common::class::ClassBuilds::shipped().of(class));
             let root = Transform::IDENTITY;
             let boxes = hitboxes(&skeleton, &Pose::rest(), &root, Stance::Standing);

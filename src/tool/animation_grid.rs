@@ -12,7 +12,7 @@ use crate::common::player_color::PlayerColor;
 use crate::common::team::Team;
 use crate::game::player::PhysicsBody;
 use crate::common::skeleton::{
-    default_humanoid, draw_skeleton, humanoid, AnimationPhase, DisplaySpeed, ForcedAnimation,
+    default_humanoid, draw_skeleton, AnimationPhase, DisplaySpeed, ForcedAnimation,
     Pose, SkeletonAnimator, SkeletonPalette,
 };
 use crate::common::skeleton::AnimationClock;
@@ -181,7 +181,7 @@ fn carousel_body(
 ) -> impl Bundle {
     let world = at.transform_point(placed.offset);
     (
-        humanoid(builds.of(placed.class)),
+        builds.rig_for(placed.class),
         Pose::rest(),
         SkeletonAnimator::default(),
         // From the cell, so phases vary but every machine agrees.

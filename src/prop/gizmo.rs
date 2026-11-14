@@ -13,7 +13,6 @@ use bevy::prelude::*;
 
 use crate::common::app_mode::AppMode;
 use crate::common::rotation::quat_from_euler;
-use crate::common::skeleton::rig::bone;
 use crate::common::skeleton::{Pose, Skeleton};
 use crate::editor::input::CurrentMouseInput;
 use crate::editor::multicam::Multicam;
@@ -482,7 +481,7 @@ fn drag_the_hold(
             points.push((Handle::Muzzle(axis), muzzle.point()));
         }
     }
-    let arm = figure.map(|(skeleton, ..)| skeleton.proportions().arm_meters());
+    let arm = figure.map(|(skeleton, ..)| skeleton.anatomy().arm);
     let carry_rotation = quat_from_euler(Vec3::from_array(hold.carry_rotation));
     if let Some(arm) = arm {
         let chest = carry_handle(&hold, carry_rotation, arm);
@@ -616,14 +615,9 @@ fn draw_hold(
 
     if let Some((skeleton, pose, root, reach)) = figure {
         let bones = skeleton.posed_bones(pose, root);
-        for (index, (name, target)) in [
-            (bone::HAND_R, Some(hold.grip())),
-            (bone::HAND_L, hold.support()),
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            let (Some(target), Some(at)) = (target, skeleton.index_of(name)) else { continue };
+        for (index, target) in [Some(hold.grip()), hold.support()].into_iter().enumerate() {
+            let hand = skeleton.anatomy().hand(index).and_then(|limb| limb.chain.tip);
+            let (Some(target), Some(at)) = (target, hand.and_then(|name| skeleton.index_of(name))) else { continue };
             if reach.0[index] == crate::common::skeleton::ik::Reach::Reached {
                 continue;
             }

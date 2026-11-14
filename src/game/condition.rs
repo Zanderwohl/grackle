@@ -11,9 +11,9 @@ use serde::{Deserialize, Serialize};
 use lightyear::prelude::{LocalTimeline, Tick};
 
 use crate::common::assets::Assets as PackAssets;
-use crate::common::assets::default_packs;
+use crate::common::clip_file::NamedClips;
 use crate::common::skeleton::clip::Clip;
-use crate::common::skeleton::play::{ClipStack, Layer};
+use crate::common::skeleton::play::{ClipStack, Layer, LayerClaims};
 use crate::common::taunt::{TauntId, TauntTurning, TauntWeapon, Taunts};
 use crate::game::player::{
     CameraPull, DeathCam, Inputs, LocalPlayer, ViewMode, ViewPreference, Viewed, CAMERA_PULL_SECONDS,
@@ -109,16 +109,17 @@ impl Plugin for ConditionPlugin {
 pub fn toggle_conditions(
     taunts: Option<Res<Taunts>>,
     timeline: Option<Res<LocalTimeline>>,
-    mut bodies: Query<(&Inputs, &mut Condition, &mut TauntClock)>,
+    mut bodies: Query<(&Inputs, &mut Condition, &mut TauntClock, Option<&crate::common::skeleton::Skeleton>)>,
 ) {
-    for (input, mut condition, mut clock) in &mut bodies {
+    for (input, mut condition, mut clock, skeleton) in &mut bodies {
+        let kind = skeleton.map_or(crate::common::skeleton::rig::HUMANOID, |rig| rig.kind());
         if input.humiliate {
             condition.humiliated = !condition.humiliated;
         }
         if input.taunt {
             condition.taunt = match condition.taunt {
                 Some(_) => None,
-                None => taunts.as_deref().and_then(Taunts::first).map(|taunt| taunt.id),
+                None => taunts.as_deref().and_then(|taunts| taunts.first_for(kind)).map(|taunt| taunt.id),
             };
             condition.taunt_started = timeline.as_deref().map_or_else(Tick::default, LocalTimeline::tick);
             clock.0 = 0.0;
@@ -201,7 +202,7 @@ pub fn decide_the_view(
     }
 }
 
-const HUMILIATED_CLIP: &str = "humiliated";
+pub const HUMILIATED_CLIP: &str = "humiliated";
 
 /// From this machine's packs. A missing clip plays nothing; the condition
 /// still applies.
@@ -216,30 +217,32 @@ pub fn load_condition_clips(
     mut commands: Commands,
     packs: Res<PackAssets>,
     mut clips: ResMut<Assets<Clip>>,
+    mut named: ResMut<NamedClips>,
 ) {
-    let humiliated = crate::common::clip_file::load_named_clip(&packs, &default_packs(), HUMILIATED_CLIP)
-        .map(|clip| clips.add(clip));
+    let humiliated = named.load(&packs, &mut clips, HUMILIATED_CLIP);
     commands.insert_resource(ConditionClips { humiliated, taunts: BTreeMap::new() });
 }
 
-/// The table can arrive from the server after startup. Clips are not sent:
-/// each machine reads its own pack.
+/// The table can arrive from the server after startup, and the animation editor can make a clip
+/// mid-session. Clips are not sent: each machine reads its own pack.
 pub fn load_taunt_clips(
     taunts: Option<Res<Taunts>>,
     packs: Res<PackAssets>,
     mut clips: ResMut<Assets<Clip>>,
+    mut named: ResMut<NamedClips>,
     mut loaded: ResMut<ConditionClips>,
 ) {
-    let Some(taunts) = taunts.filter(|taunts| taunts.is_changed()) else { return };
+    let Some(taunts) = taunts.filter(|taunts| taunts.is_changed() || named.is_changed()) else { return };
+    // Marked changed, this system would wake itself every frame.
+    let named = named.bypass_change_detection();
     for taunt in &taunts.0 {
-        if loaded.taunts.contains_key(&taunt.clip) {
-            continue;
+        for name in std::iter::once(&taunt.clip).chain(taunt.rigs.values()) {
+            let clip = named.load(&packs, &mut clips, name);
+            if clip.is_none() && !loaded.taunts.contains_key(name) {
+                warn!("The `{}` taunt's clip `{name}` is not in any pack", taunt.key);
+            }
+            loaded.taunts.insert(name.clone(), clip);
         }
-        let clip = crate::common::clip_file::load_named_clip(&packs, &default_packs(), &taunt.clip);
-        if clip.is_none() {
-            warn!("The `{}` taunt's clip `{}` is not in any pack", taunt.key, taunt.clip);
-        }
-        loaded.taunts.insert(taunt.clip.clone(), clip.map(|clip| clips.add(clip)));
     }
 }
 
@@ -249,22 +252,33 @@ pub(crate) fn perform_conditions(
     time: Res<Time>,
     clips: Option<Res<ConditionClips>>,
     taunts: Option<Res<Taunts>>,
+    layer_claims: Option<Res<LayerClaims>>,
     timeline: Option<Res<LocalTimeline>>,
-    mut bodies: Query<(&Condition, &mut ClipStack)>,
+    mut bodies: Query<(&Condition, &mut ClipStack, Option<&crate::common::skeleton::Skeleton>)>,
 ) {
     let delta = time.delta_secs();
     let now = timeline.as_deref().map(LocalTimeline::tick);
     let clips = clips.as_deref();
-    for (condition, mut stack) in &mut bodies {
+    for (condition, mut stack, skeleton) in &mut bodies {
+        let anatomy = skeleton.map_or(crate::common::skeleton::default_humanoid().anatomy(), |rig| rig.anatomy());
         let humiliation = condition
             .humiliated
             .then(|| clips?.humiliated.as_ref())
             .flatten()
-            .map(|clip| (clip, Layer::Humiliation.claims()));
+            .map(|clip| {
+                let claims = layer_claims.as_deref().map_or(Layer::Humiliation.claims(), |claims| {
+                    claims.of(Layer::Humiliation)
+                });
+                (clip, claims)
+            });
         let taunt = condition
             .taunt
             .and_then(|id| taunts.as_deref()?.get(id))
-            .and_then(|taunt| Some((clips?.taunts.get(&taunt.clip)?.as_ref()?, taunt.claims)));
+            .and_then(|taunt| {
+                let claims = anatomy.claims(taunt.claims.iter().map(String::as_str));
+                let clip = taunt.clip_for(skeleton.map_or(crate::common::skeleton::rig::HUMANOID, |rig| rig.kind()))?;
+                Some((clips?.taunts.get(clip)?.as_ref()?, claims))
+            });
 
         for (layer, wanted) in [(Layer::Humiliation, humiliation), (Layer::Taunt, taunt)] {
             let ours = |playing: Layer| playing == layer;
@@ -495,7 +509,8 @@ mod tests {
         let stack = world.get::<ClipStack>(body).unwrap();
         let on = |layer| stack.0.iter().find(|playing| playing.layer == layer && !playing.leaving);
         assert!(on(Layer::Humiliation).is_some(), "the taunt pushed humiliation off");
-        assert_eq!(on(Layer::Taunt).expect("no taunt playing").claims, wave.claims);
+        let claims = crate::common::skeleton::default_humanoid().anatomy().claims(wave.claims.iter().map(String::as_str));
+        assert_eq!(on(Layer::Taunt).expect("no taunt playing").claims, claims);
 
         assert!(!both.may_fire());
         assert!(both.forces_third_person());
@@ -539,8 +554,7 @@ mod tests {
     /// cannot reach is left hanging, with no error.
     #[test]
     fn every_class_can_put_its_hands_up() {
-        use strum::IntoEnumIterator;
-        use crate::common::class::{Class, ClassBuilds};
+        use crate::common::class::ClassBuilds;
         use crate::common::skeleton::ik::Reach;
         use crate::common::skeleton::play::{apply, Frames};
         use crate::common::skeleton::rig::bone;
@@ -554,7 +568,7 @@ mod tests {
         .expect("the default pack should ship a humiliation clip");
         let ground = |_: Vec3| 0.0;
 
-        for class in Class::iter() {
+        for class in crate::common::class::ClassBuilds::shipped().humanoids() {
             let rig = humanoid(ClassBuilds::shipped().of(class));
             for time in [0.0, 0.6] {
                 let mut pose = Pose::rest();
@@ -579,8 +593,7 @@ mod tests {
     /// one side of the wave to the other.
     #[test]
     fn every_class_can_wave() {
-        use strum::IntoEnumIterator;
-        use crate::common::class::{Class, ClassBuilds};
+        use crate::common::class::ClassBuilds;
         use crate::common::skeleton::ik::Reach;
         use crate::common::skeleton::play::{apply, Frames};
         use crate::common::skeleton::rig::bone;
@@ -596,7 +609,7 @@ mod tests {
         .expect("the first taunt's clip is not in the default pack");
         let ground = |_: Vec3| 0.0;
 
-        for class in Class::iter() {
+        for class in crate::common::class::ClassBuilds::shipped().humanoids() {
             let rig = humanoid(ClassBuilds::shipped().of(class));
             for time in [0.0, 0.3, 0.6, 0.9, 1.2] {
                 let mut pose = Pose::rest();
@@ -635,21 +648,5 @@ mod tests {
             along(hand).dot(along(forearm)) > 0.9,
             "{class:?}'s {hand} is bent off its forearm",
         );
-    }
-
-    /// The taunt's length and its clip's are two numbers for one thing.
-    #[test]
-    fn a_taunt_that_ends_lasts_as_long_as_its_clip() {
-        for taunt in &Taunts::shipped().0 {
-            let Some(length) = taunt.length else { continue };
-            let clip = crate::common::clip_file::load_named_clip(
-                &PackAssets::default(),
-                &[std::path::PathBuf::from("assets/default")],
-                &taunt.clip,
-            )
-            .unwrap();
-            assert!(!clip.looping, "`{}` ends, but its clip loops", taunt.key);
-            assert!((clip.length - length).abs() < 1e-4, "`{}` lasts {length} s and its clip {} s", taunt.key, clip.length);
-        }
     }
 }

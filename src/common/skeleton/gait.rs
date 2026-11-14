@@ -16,6 +16,7 @@
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use crate::common::skeleton::anatomy::{Anatomy, PerFoot};
 use crate::common::skeleton::rig::{bone, Pose};
 use crate::common::skeleton::state::{AnimationState, PoseInputs};
 
@@ -280,6 +281,17 @@ pub fn foot_offsets(phase: f32, travel: Vec2, shape: GaitShape) -> [FootOffset; 
     ]
 }
 
+pub fn feet_offsets(phase: f32, travel: Vec2, shape: GaitShape, anatomy: &Anatomy) -> PerFoot<FootOffset> {
+    anatomy
+        .feet
+        .iter()
+        .map(|foot| {
+            let side = anatomy.limbs.get(foot.limb).map_or(0.0, |limb| limb.side);
+            foot_offset(phase + foot.phase, travel, shape, side)
+        })
+        .collect()
+}
+
 /// One foot, `side` being which side of the body it is on: -1 left, +1 right.
 fn foot_offset(phase: f32, travel: Vec2, shape: GaitShape, side: f32) -> FootOffset {
     let stance = shape.stance;
@@ -453,10 +465,12 @@ pub fn footfall(phase: f32, stance: f32) -> f32 {
     }
 }
 
-/// Both feet's [`footfall`]s for a body at `stride` in a gait of this stance,
-/// left first.
-pub fn footfalls(stride: f32, stance: f32) -> [f32; 2] {
-    [footfall(stride, stance), footfall(stride + 0.5, stance)]
+/// Each of the rig's feet's [`footfall`], in its `feet` order. `None` for a rig with no feet.
+pub fn footfalls(stride: f32, stance: f32, anatomy: &Anatomy) -> Option<PerFoot<f32>> {
+    if anatomy.feet.is_empty() {
+        return None;
+    }
+    Some(anatomy.feet.iter().map(|foot| footfall(stride + foot.phase, stance)).collect())
 }
 
 /// Which way a state's feet travel, in the body's own frame. Only for bodies
@@ -483,11 +497,11 @@ mod tests {
 
     /// Every class's build plus the two extreme sample builds.
     fn every_build() -> Vec<Proportions> {
-        use crate::common::class::Class;
-        use strum::IntoEnumIterator;
 
-        Class::iter()
-            .map(|class| crate::common::class::ClassBuilds::shipped().of(class))
+        let builds = crate::common::class::ClassBuilds::shipped();
+        builds
+            .humanoids()
+            .map(|class| builds.of(class))
             .chain([Proportions::STOCKY, Proportions::LANKY])
             .collect()
     }
@@ -547,7 +561,7 @@ mod tests {
                     phase += step / (shape.stride_per_cycle(travel) * leg);
 
                     let root = Transform::from_xyz(0.0, 0.0, -traveled);
-                    let inputs = PoseInputs { seconds: 0.0, stride: phase, speed, travel: Vec2::Y };
+                    let inputs = PoseInputs { seconds: 0.0, stride: phase, speed, travel: Vec2::Y, ..Default::default() };
                     let pose =
                         finish_pose(&skeleton, AnimationState::RunForward, &inputs, &root, None);
                     let ankle = skeleton
@@ -601,6 +615,7 @@ mod tests {
                             stride: step as f32 / 16.0,
                             speed,
                             travel,
+                            ..Default::default()
                         };
                         for state in [
                             AnimationState::RunForward,
@@ -613,10 +628,10 @@ mod tests {
                                 &skeleton,
                                 &mut pose,
                                 &root,
-                                state.foot_offsets(&inputs),
+                                &state.foot_offsets(&inputs, skeleton.anatomy()),
                             );
                             assert_eq!(
-                                reached,
+                                reached[..],
                                 [Reach::Reached; 2],
                                 "in {state:?} going {travel} at stride {:.2} and speed {speed} \
                                  on {proportions:?} the legs cannot make the step",
@@ -855,6 +870,7 @@ mod tests {
                     stride: phase,
                     speed: 2.0,
                     travel: Vec2::new(toward, 0.0),
+                    ..Default::default()
                 };
                 let pose = finish_pose(&skeleton, state, &inputs, &root, None);
                 let ankle = skeleton
@@ -977,6 +993,7 @@ mod tests {
                 stride: phase,
                 speed: RUNNING,
                 travel,
+                ..Default::default()
             };
             let pose = finish_pose(&skeleton, AnimationState::RunForward, &inputs, &root, None);
             let ankle = skeleton
@@ -1073,6 +1090,7 @@ mod tests {
             stride: 0.15,
             speed: RUNNING,
             travel: Vec2::Y,
+            ..Default::default()
         };
         let running = gait_pose(&inputs, Vec2::Y, GaitStyle::upright(RUNNING));
 
@@ -1093,6 +1111,7 @@ mod tests {
                         stride: step as f32 / 32.0,
                         speed: RUNNING,
                         travel: Vec2::Y,
+                        ..Default::default()
                     };
                     hand(&gait_pose(&inputs, Vec2::Y, GaitStyle::upright(RUNNING)), name).x
                 })

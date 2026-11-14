@@ -64,7 +64,10 @@ impl Side {
 
 /// The numbers a body's shape is built from, as fractions of `height` so that
 /// changing `height` alone scales the body.
+/// Absent fields are [`Proportions::DEFAULT`]'s, so a file rig's build need state only `height`
+/// and `girth`.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Proportions {
     /// Ground to crown, in meters.
     pub height: f32,
@@ -164,13 +167,71 @@ pub struct Bone {
     pub length: f32,
     /// Full width on the bone's local X and Z.
     pub thickness: Vec2,
+    /// What the ragdoll lets it do, in its own rest frame.
+    pub limit: super::joints::JointLimit,
+    pub profile: super::mesh::Profile,
 }
 
 /// A rig: bones in dependency order, plus the numbers they were built from.
 #[derive(Component, Clone, Debug)]
 pub struct Skeleton {
+    build: Build,
     bones: Vec<Bone>,
-    proportions: Proportions,
+    anatomy: super::anatomy::Anatomy,
+}
+
+/// What a rig is built from: a rig file's name, or `None` for the humanoid built in code, and
+/// the numbers that size it. A humanoid reads all of `proportions`; a file rig reads `height` and
+/// `girth`, and scales each of its bone groups by `scales`.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Build {
+    pub rig: Option<String>,
+    pub proportions: Proportions,
+    pub scales: std::collections::BTreeMap<String, f32>,
+}
+
+/// What [`Build::kind`] answers for the humanoid.
+pub const HUMANOID: &str = "humanoid";
+
+impl Build {
+    pub fn humanoid(proportions: Proportions) -> Build {
+        Build { rig: None, proportions, scales: Default::default() }
+    }
+
+    pub fn kind(&self) -> &str {
+        self.rig.as_deref().unwrap_or(HUMANOID)
+    }
+}
+
+/// A list of names read from a file, made `&'static` once per distinct list, so a chain holding
+/// one stays `Copy`.
+pub fn intern_list(names: &[String]) -> &'static [&'static str] {
+    use std::collections::BTreeSet;
+    use std::sync::Mutex;
+    static LISTS: OnceLock<Mutex<BTreeSet<&'static [&'static str]>>> = OnceLock::new();
+    let wanted: Vec<&'static str> = names.iter().map(|name| intern(name)).collect();
+    let mut lists = LISTS.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(known) = lists.get(wanted.as_slice()) {
+        return known;
+    }
+    let leaked: &'static [&'static str] = Box::leak(wanted.into_boxed_slice());
+    lists.insert(leaked);
+    leaked
+}
+
+/// A bone or limb name read from a file, made `&'static` as a [`Pose`] keys it. Leaked once per
+/// distinct name, which is bounded by the rigs a pack ships.
+pub fn intern(name: &str) -> &'static str {
+    use std::collections::BTreeSet;
+    use std::sync::Mutex;
+    static NAMES: OnceLock<Mutex<BTreeSet<&'static str>>> = OnceLock::new();
+    let mut names = NAMES.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(known) = names.get(name) {
+        return known;
+    }
+    let leaked: &'static str = Box::leak(name.to_owned().into_boxed_str());
+    names.insert(leaked);
+    leaked
 }
 
 impl Skeleton {
@@ -185,7 +246,24 @@ impl Skeleton {
     }
 
     pub fn proportions(&self) -> Proportions {
-        self.proportions
+        self.build.proportions
+    }
+
+    pub fn build(&self) -> &Build {
+        &self.build
+    }
+
+    pub(super) fn from_parts(build: Build, bones: Vec<Bone>, anatomy: super::anatomy::Anatomy) -> Skeleton {
+        Skeleton { build, bones, anatomy }
+    }
+
+    pub fn anatomy(&self) -> &super::anatomy::Anatomy {
+        &self.anatomy
+    }
+
+    /// The rig file's name, or [`HUMANOID`].
+    pub fn kind(&self) -> &str {
+        self.build.kind()
     }
 
     /// Forward kinematics into world space. `root` places the feet, the same
@@ -252,7 +330,7 @@ impl Skeleton {
         // The offset is in hip-heights, so a crouch authored on one body is
         // the same crouch on a taller one. Applied in the root's own frame so
         // it turns with the body.
-        root.translation += root.rotation * (pose.root_offset * self.proportions.hip_meters());
+        root.translation += root.rotation * (pose.root_offset * self.anatomy.hip);
         root
     }
 
@@ -486,7 +564,86 @@ pub fn humanoid(proportions: Proportions) -> Skeleton {
         builder.bone(names.foot, Some(names.shin), ankle, toe, Vec2::new(0.09, 0.06) * girth * h);
     }
 
-    Skeleton { bones: builder.bones, proportions }
+    let anatomy = humanoid_anatomy(&builder.bones, proportions);
+    for problem in anatomy.problems(&builder.bones) {
+        warn!("The humanoid rig: {problem}");
+    }
+    Skeleton { build: Build::humanoid(proportions), bones: builder.bones, anatomy }
+}
+
+/// How much of the aim's pitch the neck takes; the head takes the rest. A head alone at eighty
+/// degrees reads as a broken neck.
+const NECK_SHARE: f32 = 0.4;
+
+fn humanoid_anatomy(bones: &[Bone], proportions: Proportions) -> super::anatomy::Anatomy {
+    use super::anatomy::{Anatomy, Foot, Limb};
+    use super::ik;
+    use super::play::Regions;
+
+    let index = |name: &str| bones.iter().position(|bone| bone.name == name);
+    let arm = |name, chain, side: f32, region| Limb {
+        name,
+        chain,
+        side,
+        pole: ik::elbow_pole(side),
+        region,
+        straightens: false,
+    };
+    // Knees bend forwards, even in a sidestep.
+    let leg = |name, chain, side| Limb { name, chain, side, pole: Vec3::NEG_Z, region: Regions::LEGS, straightens: true };
+    use super::clip::ChainRef;
+    let limbs = vec![
+        arm(ChainRef::RIGHT_ARM.key(), ik::RIGHT_ARM, 1.0, Regions::ARM_R),
+        arm(ChainRef::LEFT_ARM.key(), ik::LEFT_ARM, -1.0, Regions::ARM_L),
+        leg(ChainRef::RIGHT_LEG.key(), ik::RIGHT_LEG, 1.0),
+        leg(ChainRef::LEFT_LEG.key(), ik::LEFT_LEG, -1.0),
+    ];
+    let limb = |chain: ChainRef| limbs.iter().position(|limb| limb.name == chain.key());
+    let leg_meters = [ik::LEFT_LEG.upper, ik::LEFT_LEG.lower]
+        .iter()
+        .filter_map(|name| index(name))
+        .map(|bone| bones[bone].length)
+        .sum();
+
+    Anatomy {
+        feet: [(ChainRef::LEFT_LEG, 0.0), (ChainRef::RIGHT_LEG, 0.5)]
+            .into_iter()
+            .filter_map(|(chain, phase)| Some(Foot { limb: limb(chain)?, phase }))
+            .collect(),
+        hands: [limb(ChainRef::RIGHT_ARM), limb(ChainRef::LEFT_ARM)],
+        carry: index(bone::CHEST),
+        mount: None,
+        head: index(bone::HEAD),
+        look: [(bone::NECK, NECK_SHARE), (bone::HEAD, 1.0 - NECK_SHARE)]
+            .into_iter()
+            .filter_map(|(name, share)| Some((index(name)?, share)))
+            .collect(),
+        // Forearms and hands only: an upper arm runs back to a shoulder beside the camera and at a
+        // 5 mm near plane reads as a slab in the screen corner.
+        viewmodel: [(bone::FOREARM_R, 0), (bone::HAND_R, 0), (bone::FOREARM_L, 1), (bone::HAND_L, 1)]
+            .into_iter()
+            .filter_map(|(name, hand)| Some((index(name)?, hand)))
+            .collect(),
+        regions: bones.iter().map(|bone| humanoid_region(bone.name)).collect(),
+        region_names: Regions::NAMED.into_iter().map(|(region, name)| (name, region)).collect(),
+        leg: leg_meters,
+        arm: proportions.arm_meters(),
+        hip: proportions.hip_meters(),
+        limbs,
+    }
+}
+
+fn humanoid_region(name: &str) -> super::play::Regions {
+    use super::play::Regions;
+    match name {
+        bone::PELVIS => Regions::LEGS,
+        bone::CHEST => Regions::TORSO,
+        bone::NECK | bone::HEAD => Regions::HEAD,
+        bone::CLAVICLE_L | bone::UPPER_ARM_L | bone::FOREARM_L | bone::HAND_L => Regions::ARM_L,
+        bone::CLAVICLE_R | bone::UPPER_ARM_R | bone::FOREARM_R | bone::HAND_R => Regions::ARM_R,
+        bone::THIGH_L | bone::SHIN_L | bone::FOOT_L | bone::THIGH_R | bone::SHIN_R | bone::FOOT_R => Regions::LEGS,
+        _ => Regions::NONE,
+    }
 }
 
 /// A limb's bone names per side. Names are `&'static str`, so they cannot be
@@ -525,14 +682,28 @@ impl LimbNames {
 
 /// Turns world-space landmarks into parent-relative bones.
 #[derive(Default)]
-struct Builder {
-    bones: Vec<Bone>,
+pub(super) struct Builder {
+    pub(super) bones: Vec<Bone>,
     /// Each bone's rest orientation and head position in world rest space.
     rest: Vec<(Quat, Vec3)>,
 }
 
 impl Builder {
     fn bone(&mut self, name: &'static str, parent: Option<&'static str>, head: Vec3, tail: Vec3, thickness: Vec2) {
+        let shape = (super::joints::limit_of(name), super::mesh::profile(name));
+        self.bone_shaped(name, parent, head, tail, thickness, shape);
+    }
+
+    /// Parents first: panics on a parent not yet added, which a rig file is checked for.
+    pub(super) fn bone_shaped(
+        &mut self,
+        name: &'static str,
+        parent: Option<&'static str>,
+        head: Vec3,
+        tail: Vec3,
+        thickness: Vec2,
+        (limit, profile): (super::joints::JointLimit, super::mesh::Profile),
+    ) {
         let parent = parent.map(|parent| {
             self.bones
                 .iter()
@@ -553,7 +724,16 @@ impl Builder {
             None => (head, rest_global),
         };
 
-        self.bones.push(Bone { name, parent, head: local_head, rest: local_rest, length, thickness });
+        self.bones.push(Bone {
+            name,
+            parent,
+            head: local_head,
+            rest: local_rest,
+            length,
+            thickness,
+            limit,
+            profile,
+        });
         self.rest.push((rest_global, head));
     }
 }
@@ -592,6 +772,26 @@ mod tests {
     }
 
     /// A floating or sunken rig disagrees with the spawn clearance check.
+    /// Fails if the humanoid's anatomy names a bone or limb it lacks, or points a foot or hand at
+    /// the wrong limb.
+    #[test]
+    fn every_build_publishes_an_anatomy_that_names_its_own_bones() {
+        for class in crate::common::class::ClassBuilds::shipped().humanoids() {
+            let skeleton = humanoid(crate::common::class::ClassBuilds::shipped().of(class));
+            let anatomy = skeleton.anatomy();
+            assert_eq!(anatomy.problems(skeleton.bones()), Vec::<String>::new(), "{class:?}");
+            let named = |limb: Option<&super::super::anatomy::Limb>| limb.map(|limb| limb.name);
+            assert_eq!(named(anatomy.hand(0)), Some("right_arm"), "{class:?}: the trigger hand");
+            assert_eq!(named(anatomy.hand(1)), Some("left_arm"), "{class:?}: the support hand");
+            let feet: Vec<_> = anatomy.feet.iter().map(|foot| anatomy.limbs[foot.limb].name).collect();
+            assert_eq!(feet, ["left_leg", "right_leg"], "{class:?}: the feet");
+            assert!(anatomy.carry.is_some() && anatomy.head.is_some(), "{class:?}: no carry or head");
+            let shares: f32 = anatomy.look.iter().map(|(_, share)| share).sum();
+            assert!((shares - 1.0).abs() < 1e-6, "{class:?}: the look shares come to {shares}");
+            assert!((anatomy.leg - super::super::ik::chain_length(&skeleton, &super::super::ik::LEFT_LEG)).abs() < 1e-6);
+        }
+    }
+
     #[test]
     fn a_rest_pose_stands_on_the_ground_at_its_stated_height() {
         for proportions in [Proportions::DEFAULT, Proportions::STOCKY, Proportions::LANKY] {
@@ -613,10 +813,8 @@ mod tests {
     /// must keep their stated shoulders.
     #[test]
     fn no_build_starts_its_arms_inside_its_own_chest() {
-        use crate::common::class::Class;
-        use strum::IntoEnumIterator;
 
-        for class in Class::iter() {
+        for class in crate::common::class::ClassBuilds::shipped().humanoids() {
             let proportions = crate::common::class::ClassBuilds::shipped().of(class);
             let skeleton = humanoid(proportions);
             let bones = posed(&skeleton, &Pose::rest());

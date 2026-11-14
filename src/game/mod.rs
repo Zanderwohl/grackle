@@ -114,6 +114,7 @@ impl Plugin for GamePlugin {
                 Startup,
                 crate::common::clip_file::load_body_clips_at_startup,
             )
+            .add_systems(Update, crate::common::clip_file::load_clips_for_new_rigs)
 
             .init_resource::<CollisionWorld>()
             .init_resource::<MovementRules>()
@@ -944,6 +945,82 @@ mod tests {
         let landed = player_position(&mut app) - Vec3::Y * stance.half_extents().y;
         let (across, height) = ((landed - baked).xz().length(), (landed.y - baked.y).abs());
         assert!(across < nav::SPACING && height < 0.1, "baked to land at {baked}, landed at {landed}");
+    }
+
+    /// A class built on a rig file plays a round as anybody does: it spawns as that rig, walks,
+    /// shoots from its mount, taunts with its own clip, and dies into a corpse of its own rig.
+    #[test]
+    fn a_strider_plays_a_round() {
+        use crate::common::class::Class;
+        use crate::common::weapon::Ammo;
+        use crate::game::condition::Condition;
+
+        let mut app = armed(&[room(Vec3::new(-10.0, 0.0, -10.0), Vec3::new(10.0, 4.0, 10.0))]);
+        // The trigger alone: the rest of `WeaponPlugin` draws, and a headless game has no renderer.
+        {
+            use crate::game::weapon::{pull_trigger, reload_weapons, select_weapons, WeaponActionFired};
+            app.add_message::<WeaponActionFired>().add_systems(
+                FixedUpdate,
+                (select_weapons, reload_weapons, pull_trigger)
+                    .chain()
+                    .after(crate::game::player::step_player)
+                    .before(crate::game::damage::DamageSystems::Deal),
+            );
+        }
+        app.insert_resource(crate::common::game_rules::GameRules(crate::common::game_rules::ModeRules {
+            classes: vec![Class::Strider],
+            ..default()
+        }));
+        enter(&mut app);
+        // The game's tests run without the skeleton plugin, which needs a renderer; dressed as it
+        // would dress the body.
+        {
+            use bevy::ecs::system::RunSystemOnce;
+            app.world_mut().run_system_once(crate::game::skeleton::dress_new_players).unwrap();
+        }
+        app.update();
+        tick(&mut app, 30);
+
+        let (kind, class) = {
+            let mut bodies = app.world_mut().query_filtered::<(&crate::common::skeleton::Skeleton, &Class), With<LocalPlayer>>();
+            let (rig, class) = bodies.single(app.world()).expect("no strider body");
+            (rig.kind().to_string(), *class)
+        };
+        assert_eq!((kind.as_str(), class), ("strider", Class::Strider));
+
+        let from = player_position(&mut app);
+        latch(&mut app).0.movement = Vec2::Y;
+        tick(&mut app, 30);
+        latch(&mut app).0.movement = Vec2::ZERO;
+        assert!((player_position(&mut app) - from).with_y(0.0).length() > 0.5, "the strider would not walk");
+
+        let rounds = |app: &mut App| {
+            let mut bodies = app.world_mut().query_filtered::<&Ammo, With<LocalPlayer>>();
+            bodies.single(app.world()).unwrap().weapons.iter().map(|(_, state)| state.clip).sum::<u32>()
+        };
+        let before = rounds(&mut app);
+        latch(&mut app).0.attack = true;
+        latch(&mut app).0.attack_held = true;
+        tick(&mut app, 2);
+        latch(&mut app).0.attack_held = false;
+        assert!(rounds(&mut app) < before, "the strider could not shoot");
+
+        tick(&mut app, 64);
+        latch(&mut app).0.taunt = true;
+        tick(&mut app, 1);
+        let taunt = app.world_mut().query_filtered::<&Condition, With<LocalPlayer>>().single(app.world()).unwrap().taunt;
+        assert!(taunt.is_some(), "the strider was offered no taunt");
+
+        latch(&mut app).0.suicide = true;
+        tick(&mut app, 2);
+        app.update();
+        let corpses: Vec<String> = app
+            .world_mut()
+            .query_filtered::<&crate::game::ragdoll::CorpseBuild, With<crate::game::ragdoll::Ragdoll>>()
+            .iter(app.world())
+            .map(|build| build.0.kind().to_string())
+            .collect();
+        assert_eq!(corpses, ["strider"], "the strider left no corpse of its own rig");
     }
 
     #[test]

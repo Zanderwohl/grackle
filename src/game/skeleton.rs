@@ -24,9 +24,8 @@ use crate::common::class::{Class, ClassBuilds};
 use crate::common::skeleton::ik::ducked_pose;
 use crate::common::skeleton::play::{ClipStack, Layer, Regions};
 use crate::common::skeleton::state::{AnimationState, ClipLibrary};
-use crate::common::skeleton::rig::bone;
 use crate::common::skeleton::{
-    draw_skeleton, animator_pose, humanoid, leg_length, AnimationClock, AnimationPhase, BodyRequests,
+    draw_skeleton, animator_pose, leg_length, AnimationClock, AnimationPhase, BodyRequests,
     direction_of, DisplaySpeed, ForcedAnimation, Gait, Pose, PoseInputs, Skeleton,
     SkeletonAnimator,
     SkeletonPalette,
@@ -75,10 +74,12 @@ impl Plugin for SkeletonPlugin {
             .add_systems(Update, toggle_bones)
             // Here rather than in `ConditionPlugin`: the clips are assets, and
             // the game's tests run without the asset plugins.
+            .init_resource::<crate::common::clip_file::NamedClips>()
             .add_systems(Startup, crate::game::condition::load_condition_clips)
             .add_systems(Update, crate::game::condition::load_taunt_clips)
             .init_resource::<crate::common::skeleton::play::LayerBlends>()
-            .add_systems(Startup, crate::common::layer_file::load_blends_at_startup)
+            .init_resource::<crate::common::skeleton::play::LayerClaims>()
+            .add_systems(Startup, crate::common::layer_file::load_layers_at_startup)
             .add_systems(Update, (
                 describe_player_bodies
                     .run_if(crate::common::app_mode::simulating)
@@ -302,7 +303,7 @@ fn describe_player_bodies(
 /// error.
 ///
 /// Must not decide a corpse's build: `CorpseBuild` is read off the rig.
-fn dress_new_players(
+pub(crate) fn dress_new_players(
     mut commands: Commands,
     builds: Res<ClassBuilds>,
     players: Query<(Entity, &Class), (With<Player>, Without<Skeleton>)>,
@@ -311,7 +312,7 @@ fn dress_new_players(
         // `insert_if_new`: a replicated body may already carry the server's
         // `Stance`.
         commands.entity(player).insert_if_new((
-            humanoid(builds.of(*class)),
+            builds.rig_for(*class),
             Pose::rest(),
             SkeletonAnimator::default(),
             BodyRequests::default(),
@@ -323,13 +324,6 @@ fn dress_new_players(
         ));
     }
 }
-
-/// How much of a body's pitch each joint takes.
-///
-/// Split because a head alone at eighty degrees reads as a broken neck. The
-/// shares sum to one.
-const NECK_SHARE: f32 = 0.4;
-const HEAD_SHARE: f32 = 1.0 - NECK_SHARE;
 
 /// How far the head will follow the look direction, up and down.
 ///
@@ -350,21 +344,49 @@ fn head_pitch(look: f32) -> f32 {
 /// up, hence the negation. Composes onto the pose `advance_animators` left.
 /// Runs on every `Player`, since `pitch` is replicated; yaw is
 /// [`face_bodies`](crate::game::player::face_bodies)'s.
-fn look_with_the_head(mut bodies: Query<(&Player, &mut Pose)>) {
-    for (player, mut pose) in &mut bodies {
-        if player.pitch == 0.0 && pose.joint(bone::NECK) == Quat::IDENTITY {
+fn look_with_the_head(
+    clips: Option<Res<Assets<crate::common::skeleton::clip::Clip>>>,
+    mut bodies: Query<(&Player, &Skeleton, &mut Pose, Option<&ClipStack>)>,
+) {
+    for (player, skeleton, mut pose, stack) in &mut bodies {
+        let pitch = player.pitch * look_weight(stack, clips.as_deref());
+        let unturned = skeleton.anatomy().look.iter().all(|(bone, _)| {
+            pose.joint(skeleton.bones()[*bone].name) == Quat::IDENTITY
+        });
+        if pitch == 0.0 && unturned {
             // Skipping keeps a still body from dirtying its pose every frame.
             continue;
         }
-        look(&mut pose, player.pitch);
+        look(skeleton, &mut pose, pitch);
+    }
+}
+
+/// How far the look bones follow the aim: a clip's `Weight` on `Controller::Look`, and not
+/// where a layer above the weapon claims the head, which it then owns.
+pub(crate) fn look_weight(stack: Option<&ClipStack>, clips: Option<&Assets<crate::common::skeleton::clip::Clip>>) -> f32 {
+    let Some(stack) = stack else { return 1.0 };
+    let keyed = clips.map_or(1.0, |clips| {
+        crate::common::skeleton::play::controller_weight(stack, clips, crate::common::skeleton::clip::Controller::Look)
+    });
+    keyed * (1.0 - stack.cover(Regions::HEAD, Layer::Weapon))
+}
+
+/// How far a clip's `Weight` on `Controller::Plant` lets the feet go.
+pub(crate) fn feet_free(stack: Option<&ClipStack>, clips: Option<&Assets<crate::common::skeleton::clip::Clip>>) -> f32 {
+    match (stack, clips) {
+        (Some(stack), Some(clips)) => {
+            1.0 - crate::common::skeleton::play::controller_weight(stack, clips, crate::common::skeleton::clip::Controller::Plant)
+        }
+        _ => 0.0,
     }
 }
 
 /// Bend the neck and head toward `pitch`, onto whatever the pose has them
 /// doing. Shared with the hitboxes, which must put the head where it is drawn.
-pub(crate) fn look(pose: &mut Pose, pitch: f32) {
+pub(crate) fn look(skeleton: &Skeleton, pose: &mut Pose, pitch: f32) {
     let pitch = head_pitch(pitch);
-    for (joint, share) in [(bone::NECK, NECK_SHARE), (bone::HEAD, HEAD_SHARE)] {
+    for &(bone, share) in &skeleton.anatomy().look {
+        let joint = skeleton.bones()[bone].name;
         let animated = pose.joint(joint);
         pose.set(joint, animated * Quat::from_rotation_x(-pitch * share));
     }
@@ -385,7 +407,7 @@ fn dress_bodies_from_elsewhere(
 ) {
     for (body, class) in &bodies {
         commands.entity(body).insert_if_new((
-            humanoid(builds.of(*class)),
+            builds.rig_for(*class),
             Pose::rest(),
             SkeletonAnimator::default(),
             BodyRequests::default(),
@@ -407,16 +429,20 @@ fn rebuild_rigs_for_new_builds(
     mut commands: Commands,
     builds: Res<ClassBuilds>,
     bodies: Query<(Entity, &Class, &Skeleton), Without<crate::game::ragdoll::Ragdoll>>,
+    mut rigs_seen: Local<std::collections::BTreeMap<String, crate::common::skeleton::rig_file::RigFile>>,
 ) {
     if !builds.is_changed() {
         return;
     }
+    // A rig file can change under an unchanged build, as when the server's replaces this pack's.
+    let changed = |kind: &str| rigs_seen.get(kind) != builds.rigs.get(kind);
     for (body, class, skeleton) in &bodies {
-        let wanted = builds.of(*class);
-        if skeleton.proportions() != wanted {
-            commands.entity(body).insert(humanoid(wanted));
+        let wanted = builds.build(*class);
+        if *skeleton.build() != wanted || changed(skeleton.kind()) {
+            commands.entity(body).insert(builds.skeleton(&wanted));
         }
     }
+    *rigs_seen = builds.rigs.clone();
 }
 
 /// Put each body at its own point in the animation cycle, from its network id.
@@ -446,6 +472,7 @@ fn advance_animators(
     clock: Res<AnimationClock>,
     // Absent: every state is a Rust function.
     library: Option<Res<ClipLibrary>>,
+    layer_clips: Option<Res<Assets<crate::common::skeleton::clip::Clip>>>,
     mut bodies: Query<(
         &Skeleton,
         &mut SkeletonAnimator,
@@ -482,6 +509,7 @@ fn advance_animators(
             stride: gait.phase(),
             speed: gait.speed(),
             travel: gait.travel(),
+            feet_free: feet_free(stack, layer_clips.as_deref()),
         };
         let root = skeleton_root(global, offset);
         *pose = animator_pose(skeleton, &animator, &inputs, &root, clips, crouch);
@@ -512,20 +540,24 @@ pub(crate) fn stand_where_claimed(
     stack: &ClipStack,
     still: impl FnOnce() -> Pose,
 ) {
-    let regions = [Regions::LEGS, Regions::TORSO, Regions::HEAD, Regions::ARM_L, Regions::ARM_R];
-    let cover = regions.map(|region| stack.cover(region, Layer::Weapon));
-    if cover.iter().all(|cover| *cover <= 0.0) {
+    let anatomy = skeleton.anatomy();
+    let cover_of = |region: Regions| stack.cover(region, Layer::Weapon);
+    if anatomy.bone_regions().all(|region| cover_of(region) <= 0.0) {
         return;
     }
     let still = still();
-    for bone in skeleton.bones() {
-        let region = Regions::of_bone(bone.name);
-        let Some(index) = regions.iter().position(|claimed| *claimed == region) else { continue };
-        if cover[index] > 0.0 {
-            pose.set(bone.name, pose.joint(bone.name).slerp(still.joint(bone.name), cover[index]));
+    for region in anatomy.bone_regions() {
+        let cover = cover_of(region);
+        if cover <= 0.0 {
+            continue;
+        }
+        for (index, bone) in skeleton.bones().iter().enumerate() {
+            if anatomy.region_of(index) == region {
+                pose.set(bone.name, pose.joint(bone.name).slerp(still.joint(bone.name), cover));
+            }
         }
     }
-    let legs = cover[0];
+    let legs = cover_of(Regions::LEGS);
     if legs > 0.0 {
         pose.root_offset = pose.root_offset.lerp(still.root_offset, legs);
     }
@@ -554,6 +586,7 @@ pub fn draw_skeletons(
 
 #[cfg(test)]
 mod tests {
+    use crate::common::skeleton::rig::{bone, default_humanoid};
     use lightyear::prelude::input::native::ActionState;
 
     use crate::common::app_mode::AppMode;
@@ -813,7 +846,7 @@ mod tests {
         let mut app = App::new();
         let body = app
             .world_mut()
-            .spawn((Player { pitch, ..default() }, Pose::rest()))
+            .spawn((Player { pitch, ..default() }, default_humanoid().clone(), Pose::rest()))
             .id();
         app.world_mut().run_system_once(look_with_the_head).unwrap();
         face_of(app.world().get::<Pose>(body).unwrap())
@@ -881,7 +914,7 @@ mod tests {
         let pitch = 0.7;
         let body = app
             .world_mut()
-            .spawn((Player { pitch, ..default() }, Pose::rest()))
+            .spawn((Player { pitch, ..default() }, default_humanoid().clone(), Pose::rest()))
             .id();
         app.world_mut().run_system_once(look_with_the_head).unwrap();
 
@@ -993,5 +1026,18 @@ mod tests {
         world.run_system_once(describe_player_bodies).unwrap();
         assert!(world.get::<BodyRequests>(free).unwrap().running_forward);
         assert!(!world.get::<BodyRequests>(waving).unwrap().moving(), "the waving body was described as running");
+    }
+
+    /// A layer above the weapon that claims the head owns it, so the look lets go of it.
+    #[test]
+    fn the_look_yields_the_head_to_a_layer_that_claims_it() {
+        use crate::common::skeleton::clip::Clip;
+        use crate::common::skeleton::play::{Layer, Playing, Regions};
+        let mut clips = Assets::<Clip>::default();
+        let clip = clips.add(Clip { length: 1.0, ..Clip::default() });
+        let arms = ClipStack(vec![Playing { claims: Regions::ARMS, ..Playing::new(Layer::Taunt, clip.clone(), 0.0) }]);
+        assert_eq!(look_weight(Some(&arms), Some(&clips)), 1.0);
+        let head = ClipStack(vec![Playing { claims: Regions::HEAD, ..Playing::new(Layer::Taunt, clip, 0.0) }]);
+        assert_eq!(look_weight(Some(&head), Some(&clips)), 0.0, "the look kept turning a claimed head");
     }
 }

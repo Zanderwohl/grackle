@@ -70,6 +70,11 @@ impl Modes {
 #[derive(Resource, Clone, Debug, Default, PartialEq, Deref)]
 pub struct GameRules(pub ModeRules);
 
+/// `--class KEY`: everybody plays as this class, ahead of what the mode allows. A stand-in until a
+/// class can be picked; read only by `publish_game_rules`.
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PlayAs(pub Option<Class>);
+
 /// As written on disk: classes and weapons by name. A rule the game does not
 /// have yet is refused rather than read as nothing.
 #[derive(Deserialize)]

@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use strum_macros::EnumIter;
 
 use crate::common::skeleton::gait::{
-    arms_at_sides, crouch_posture, direction_of, foot_offsets as gait_foot_offsets, gait_pose,
+    arms_at_sides, crouch_posture, direction_of, feet_offsets, gait_pose,
     FootOffset, GaitStyle,
 };
 use crate::common::skeleton::rig::{bone, Pose};
@@ -43,6 +43,9 @@ pub struct PoseInputs {
     pub speed: f32,
     /// Which way it is going, in its own frame: `x` right, `y` forwards.
     pub travel: Vec2,
+    /// How far the feet are let go of the floor, 0 to 1: one less a clip's `Weight` on
+    /// `Controller::Plant`. Zero, the default, plants them.
+    pub feet_free: f32,
 }
 
 /// The clock every animation is sampled against.
@@ -373,11 +376,11 @@ impl AnimationState {
         super::gait::heading_between(direction_of(*self), self.travel(inputs))
     }
 
-    pub fn foot_offsets(&self, inputs: &PoseInputs) -> [FootOffset; 2] {
-        if self.uses_gait() {
-            gait_foot_offsets(inputs.stride, self.travel(inputs), self.gait_style(inputs).shape)
-        } else {
-            [FootOffset::default(); 2]
+    /// One per foot the rig plants, in [`Anatomy::feet`](super::anatomy::Anatomy::feet) order.
+    pub fn foot_offsets(&self, inputs: &PoseInputs, anatomy: &super::anatomy::Anatomy) -> super::anatomy::PerFoot<FootOffset> {
+        match self.uses_gait() {
+            true => feet_offsets(inputs.stride, self.travel(inputs), self.gait_style(inputs).shape, anatomy),
+            false => anatomy.feet.iter().map(|_| FootOffset::default()).collect(),
         }
     }
 }
@@ -387,12 +390,54 @@ impl AnimationState {
 /// Owned here rather than behind handles: this resource is the single copy.
 #[derive(Resource, Debug, Default, Clone)]
 pub struct ClipLibrary {
+    /// The humanoid's.
     by_state: HashMap<AnimationState, StateAnimation>,
+    /// Every other rig's, by its name: their clips name bones the humanoid's do not.
+    by_rig: HashMap<String, HashMap<AnimationState, StateAnimation>>,
 }
 
 impl ClipLibrary {
     pub fn get(&self, state: AnimationState) -> Option<&StateAnimation> {
         self.by_state.get(&state)
+    }
+
+    /// `rig` as [`Skeleton::kind`](super::rig::Skeleton::kind) names it.
+    pub fn get_for(&self, rig: &str, state: AnimationState) -> Option<&StateAnimation> {
+        match rig {
+            super::rig::HUMANOID => self.get(state),
+            _ => self.by_rig.get(rig)?.get(&state),
+        }
+    }
+
+    pub fn insert_for(&mut self, rig: &str, state: AnimationState, animation: StateAnimation) {
+        match rig {
+            super::rig::HUMANOID => self.insert(state, animation),
+            _ => {
+                self.by_rig.entry(rig.to_string()).or_default().insert(state, animation);
+            }
+        }
+    }
+
+    pub fn remove_for(&mut self, rig: &str, state: AnimationState) {
+        match rig {
+            super::rig::HUMANOID => self.remove(state),
+            _ => {
+                if let Some(states) = self.by_rig.get_mut(rig) {
+                    states.remove(&state);
+                }
+            }
+        }
+    }
+
+    /// Marks a rig's clips as read, whether or not it had any.
+    pub fn add_rig(&mut self, rig: &str) {
+        if rig != super::rig::HUMANOID {
+            self.by_rig.entry(rig.to_string()).or_default();
+        }
+    }
+
+    pub fn has_rig(&self, rig: &str) -> bool {
+        rig == super::rig::HUMANOID || self.by_rig.contains_key(rig)
     }
 
     pub fn insert(&mut self, state: AnimationState, animation: impl Into<StateAnimation>) {

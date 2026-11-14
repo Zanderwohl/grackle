@@ -84,7 +84,7 @@ fn dress_hats(
             let meshes = baked.parts.clone();
             // Before the parts: a carousel body is spawned without one.
             commands.entity(body).insert_if_new(Visibility::default()).with_children(|body| {
-                for (mesh, material) in meshes {
+                for crate::prop::baked::BakedPart { mesh, material, .. } in meshes {
                     parts.push(
                         body.spawn((
                             HatPart,

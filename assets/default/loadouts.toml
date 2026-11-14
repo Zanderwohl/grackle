@@ -48,3 +48,11 @@ default = "pill_launcher"
 [loadouts.mercenary.special]
 permitted = ["rpg"]
 default = "rpg"
+
+# Built on the strider rig, with no hands: its weapon rides on the rig's mount.
+[loadouts.strider]
+health = 125
+
+[loadouts.strider.secondary]
+permitted = ["pistol", "rocket_launcher"]
+default = "pistol"

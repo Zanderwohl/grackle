@@ -21,7 +21,6 @@ use bevy::prelude::*;
 use crate::common::app_mode::AppMode;
 use crate::common::flame::Burning;
 use crate::common::skeleton::ik::Reach;
-use crate::common::skeleton::rig::bone;
 use crate::common::skeleton::{Pose, Skeleton};
 use crate::common::player_color::PlayerColor;
 use crate::common::team::Team;
@@ -29,6 +28,7 @@ use crate::common::weapon::{WeaponCatalog, WeaponId};
 use crate::game::body_mesh::{body_look, BodyMaterials, BodyMeshCache, BodyTint};
 use crate::common::skeleton::clip::Clip;
 use crate::common::skeleton::play::{apply_stack, grip_offsets, ClipStack, Frames};
+use crate::prop::rig::{place_part, OnPropBone};
 use crate::game::held::{perform, HeldModel, HeldPart, Performance, SharedWeaponClips};
 use crate::game::player::{place_camera, LocalPlayer, PlayerCamera, ViewMode, Viewed, PLAY_CAMERA_ORDER};
 use crate::prop::hold::grip_hands;
@@ -59,15 +59,6 @@ pub struct ViewmodelArm {
     /// Index into [`grip_hands`]'s answer: 0 trigger hand, 1 support.
     hand: usize,
 }
-
-/// Forearms and hands only: an upper arm runs back to a shoulder beside the
-/// camera and at a 5 mm near plane reads as a slab in the screen corner.
-const ARM_BONES: [(&str, usize); 4] = [
-    (bone::FOREARM_R, 0),
-    (bone::HAND_R, 0),
-    (bone::FOREARM_L, 1),
-    (bone::HAND_L, 1),
-];
 
 /// Fraction of the way up the head bone the eye sits. Taken off the rig rather
 /// than the movement hull, whose 1.8 m is the same for every class.
@@ -206,7 +197,7 @@ pub fn dress_the_viewmodel(
     held: Query<&HeldModel, Viewed>,
     // Copied off the body's own parts rather than a second cache lookup that
     // could disagree.
-    drawn: Query<(&Mesh3d, &MeshMaterial3d<StandardMaterial>), With<HeldPart>>,
+    drawn: Query<(&Mesh3d, &MeshMaterial3d<StandardMaterial>, Option<&OnPropBone>), With<HeldPart>>,
     mut views: Query<(Entity, &mut Viewmodel)>,
     cameras: Query<Entity, With<ViewmodelCamera>>,
 ) {
@@ -238,20 +229,20 @@ pub fn dress_the_viewmodel(
         let mut parts = Vec::new();
         commands.entity(camera).with_children(|camera| {
             for part in held.parts() {
-                let Ok((mesh, material)) = drawn.get(*part) else { continue };
-                parts.push(
-                    camera
-                        .spawn((
-                            ViewmodelPart,
-                            mesh.clone(),
-                            material.clone(),
-                            RenderLayers::layer(VIEWMODEL_LAYER),
-                            // Written by `place_the_viewmodel`, which needs the
-                            // camera's shape.
-                            Transform::IDENTITY,
-                        ))
-                        .id(),
-                );
+                let Ok((mesh, material, bone)) = drawn.get(*part) else { continue };
+                let mut spawning = camera.spawn((
+                    ViewmodelPart,
+                    mesh.clone(),
+                    material.clone(),
+                    RenderLayers::layer(VIEWMODEL_LAYER),
+                    // Written by `place_the_viewmodel`, which needs the
+                    // camera's shape.
+                    Transform::IDENTITY,
+                ));
+                if let Some(bone) = bone {
+                    spawning.insert(*bone);
+                }
+                parts.push(spawning.id());
             }
         });
         viewmodel.parts = parts;
@@ -281,7 +272,7 @@ fn place_the_viewmodel(
     held: Query<(&HeldModel, &Skeleton), Viewed>,
     mut views: Query<(&mut Viewmodel, &ClipStack)>,
     cameras: Query<(&Camera, &Projection, &Children, &ChildOf), With<ViewmodelCamera>>,
-    mut parts: Query<&mut Transform, With<ViewmodelPart>>,
+    mut parts: Query<(&mut Transform, Option<&OnPropBone>), With<ViewmodelPart>>,
 ) {
     let Ok((held, skeleton)) = held.single() else { return };
     let spec = held.viewmodel();
@@ -302,11 +293,13 @@ fn place_the_viewmodel(
         if viewmodel.grips != grips {
             viewmodel.grips = grips;
         }
+        let deltas = held.rig().deltas_for(stack, &clips);
         for child in children.iter() {
-            let Ok(mut transform) = parts.get_mut(child) else { continue };
+            let Ok((mut transform, bone)) = parts.get_mut(child) else { continue };
+            let wanted = place_part(placed, &deltas, bone);
             // Compared first: this runs every frame, and an unchanged
             // transform marked changed is a propagation for nothing.
-            transform.set_if_neq(placed);
+            transform.set_if_neq(wanted);
         }
     }
 }
@@ -407,8 +400,7 @@ fn dress_the_viewmodel_arms(
 
         let mut arms = Vec::new();
         commands.entity(camera).with_children(|camera| {
-            for (name, hand) in ARM_BONES {
-                let Some(bone) = skeleton.index_of(name) else { continue };
+            for &(bone, hand) in &skeleton.anatomy().viewmodel {
                 let Some(handle) = handles.get(bone) else { continue };
                 arms.push(
                     camera
@@ -504,7 +496,8 @@ fn place_the_viewmodel_arms(
 fn eye_space(skeleton: &Skeleton) -> Transform {
     let bones = skeleton.posed_bones(&Pose::rest(), &Transform::IDENTITY);
     let eye = skeleton
-        .index_of(bone::HEAD)
+        .anatomy()
+        .head
         .map(|head| bones[head].head.lerp(bones[head].tail, EYE_UP_THE_HEAD))
         .unwrap_or_default();
     Transform::from_translation(-eye)
@@ -527,9 +520,9 @@ fn show_it_only_in_first_person(
 
 #[cfg(test)]
 mod tests {
+    use crate::common::skeleton::rig::bone;
     use bevy::ecs::system::RunSystemOnce;
 
-    use strum::IntoEnumIterator;
     use crate::common::class::Class;
     use crate::common::skeleton::humanoid;
     use crate::common::skeleton::ik::Reach;
@@ -561,7 +554,7 @@ mod tests {
         let hold = HoldSpec::default();
         let weapon = ViewmodelSpec::default().transform(VIEWMODEL_FOV, 16.0 / 9.0);
 
-        for class in Class::iter() {
+        for class in crate::common::class::ClassBuilds::shipped().humanoids() {
             let skeleton = humanoid(crate::common::class::ClassBuilds::shipped().of(class));
             let mut pose = Pose::rest();
             let reached = grip_with(&skeleton, &mut pose, &eye_space(&skeleton), &hold, &weapon);
@@ -576,7 +569,7 @@ mod tests {
     /// The eye is the rig's own, with the shoulders below it.
     #[test]
     fn the_eye_is_the_rigs_own_and_the_shoulders_hang_below_it() {
-        for class in Class::iter() {
+        for class in crate::common::class::ClassBuilds::shipped().humanoids() {
             let skeleton = humanoid(crate::common::class::ClassBuilds::shipped().of(class));
             let root = eye_space(&skeleton);
             let bones = skeleton.posed_bones(&Pose::rest(), &root);
@@ -610,7 +603,7 @@ mod tests {
             "a support hand with nothing to hold reported holding it",
         );
         assert_eq!(
-            ARM_BONES.iter().filter(|(_, hand)| *hand == 1).count(),
+            skeleton.anatomy().viewmodel.iter().filter(|(_, hand)| *hand == 1).count(),
             2,
             "the support hand's bones are no longer the ones this hides",
         );
@@ -627,7 +620,7 @@ mod tests {
         .expect("the shipped launcher parses");
 
         let weapon = doc.viewmodel.transform(VIEWMODEL_FOV, 16.0 / 9.0);
-        for class in Class::iter() {
+        for class in crate::common::class::ClassBuilds::shipped().humanoids() {
             let skeleton = humanoid(crate::common::class::ClassBuilds::shipped().of(class));
             let hold = doc.hold.for_class(Some(class));
             let mut pose = Pose::rest();
@@ -788,10 +781,7 @@ mod tests {
     /// leaves, without the meshes it needs a renderer for.
     fn a_viewmodel_with_arms(world: &mut World) -> (Entity, Entity, Vec<Entity>) {
         let skeleton = humanoid(crate::common::class::ClassBuilds::shipped().of(Class::Soldier));
-        let arms: Vec<(usize, usize)> = ARM_BONES
-            .iter()
-            .map(|(name, hand)| (skeleton.index_of(name).expect("a rig has arms"), *hand))
-            .collect();
+        let arms = skeleton.anatomy().viewmodel.clone();
         let body = world.spawn((LocalPlayer, skeleton, HeldModel::default())).id();
 
         let mut camera = Camera::default();

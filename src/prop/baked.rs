@@ -17,6 +17,7 @@ use std::path::{Path, PathBuf};
 use crate::common::skeleton::clip::{Clip, ClipSet};
 use crate::prop::archetype::{Archetype, BreakableSpec, Collider, HatSpec, PickupSpec};
 use crate::prop::hold::{HoldSpec, MuzzleSpec, ViewmodelSpec};
+use crate::prop::rig::PropRig;
 use crate::prop::surface::{Style, Surface};
 
 /// Materials cached per surface for the life of the process, since a drag
@@ -46,12 +47,18 @@ impl SurfaceMaterials {
 }
 
 /// One mesh per body per distinct surface. Not merged across bodies, because
-/// the body is the unit the editor outlines and picks.
+/// the body is the unit the editor outlines and picks, and a bone carries bodies.
 pub fn parts(evaluated: &Evaluated) -> Vec<(Surface, Mesh)> {
+    parts_of_bodies(evaluated).into_iter().map(|(_, surface, mesh)| (surface, mesh)).collect()
+}
+
+/// [`parts`], each with the index into `evaluated.bodies` it came from.
+pub fn parts_of_bodies(evaluated: &Evaluated) -> Vec<(usize, Surface, Mesh)> {
     evaluated
         .bodies
         .iter()
-        .flat_map(|(_, solid)| solid.meshes())
+        .enumerate()
+        .flat_map(|(index, (_, solid))| solid.meshes().into_iter().map(move |(surface, mesh)| (index, surface, mesh)))
         .collect()
 }
 
@@ -119,8 +126,17 @@ fn lens_uvs(positions: &[[f32; 3]], indices: &[u32], facing: Quat) -> Vec<[f32; 
         .collect()
 }
 
+#[derive(Clone)]
+pub struct BakedPart {
+    pub mesh: Handle<Mesh>,
+    pub material: Handle<StandardMaterial>,
+    /// Into [`BakedProp::rig`]; `None` rides on the prop itself.
+    pub bone: Option<usize>,
+}
+
 pub struct BakedProp {
-    pub parts: Vec<(Handle<Mesh>, Handle<StandardMaterial>)>,
+    pub parts: Vec<BakedPart>,
+    pub rig: PropRig,
     pub hold: HoldSpec,
     pub viewmodel: ViewmodelSpec,
     pub muzzle: Option<MuzzleSpec>,
@@ -281,19 +297,25 @@ fn bake_doc(
         warn!("prop {name}: {}", problem.message);
     }
 
+    for problem in crate::prop::rig::problems(&doc.bones) {
+        warn!("prop {name}: {problem}");
+    }
+
     let facing = doc.viewmodel.rotation();
-    let parts = parts(&built)
+    let bones = crate::prop::rig::bone_of_each_body(&doc.features, &doc.bones, &built);
+    let parts = parts_of_bodies(&built)
         .into_iter()
-        .map(|(surface, mut mesh)| {
+        .map(|(body, surface, mut mesh)| {
             if surface.style == Style::ForwardCamera {
                 fit_the_view_to_the_lens(&mut mesh, facing);
             }
-            (meshes.add(mesh), surfaces.get(surface, materials))
+            BakedPart { mesh: meshes.add(mesh), material: surfaces.get(surface, materials), bone: bones[body] }
         })
         .collect();
     info!("Baked prop {name}");
     BakedProp {
         parts,
+        rig: PropRig::of(&doc.bones),
         hold: doc.hold.clone(),
         viewmodel: doc.viewmodel,
         muzzle: doc.muzzle,

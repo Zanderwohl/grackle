@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use crate::common::app_mode::AppMode;
 use crate::common::assets::Assets as PackAssets;
 use crate::common::class::Stance;
-use crate::common::damage::{Armor, Damageable, Healed, PlayerId};
+use crate::common::damage::{Armor, DamageDealt, Damageable, Healed, PlayerId};
 use crate::common::hitbox::{Box3, Hitboxes};
 use crate::common::skeleton::clip::Clip;
 use crate::common::weapon::{Ammo, Equipped, WeaponCatalog, WeaponId};
@@ -23,6 +23,7 @@ use crate::game::player::{PhysicsBody, Player};
 use crate::game::weapon::{draw, Trigger};
 use crate::prop::archetype::{Archetype, Collider, ColliderShape, PickupKind, PickupSpec, PickupStyle, RoundedBox};
 use crate::prop::baked::{BakedProp, PropCache, SurfaceMaterials};
+use crate::prop::rig::{place_part, OnPropBone, PropPose};
 
 /// A placed prop, as every machine sees it. One component so a viewer is
 /// never handed a model with nowhere to put it.
@@ -98,11 +99,24 @@ struct Kitted {
 
 /// What is drawn for an instance, and for which bake.
 #[derive(Component)]
+#[require(PropPerformance)]
 struct DrawnProp {
     model: String,
     generation: u64,
     parts: Vec<Entity>,
 }
+
+/// An event clip over the idle, and seconds into it. Drawn only: each machine starts it from the
+/// event it reads.
+#[derive(Component, Default)]
+pub struct PropPerformance {
+    playing: Option<(&'static str, f32)>,
+}
+
+/// What a placed prop loops, on every machine's clock.
+pub const IDLE_CLIP: &str = "idle";
+/// What a placed prop plays when it is hurt.
+pub const HIT_CLIP: &str = "hit";
 
 #[derive(Component)]
 struct WorldPropPart;
@@ -158,7 +172,11 @@ impl Plugin for WorldPropPlugin {
                     .run_if(in_state(AppMode::Play)),
             )
             // Ungated: a client draws what it is sent.
-            .add_systems(Update, (place_world_props, dress_world_props, float_pickups, box_breakables).chain())
+            .add_message::<DamageDealt>()
+            .add_systems(
+                Update,
+                (place_world_props, dress_world_props, start_hit_clips, place_world_prop_parts, box_breakables).chain(),
+            )
             // With the bones on F6: both are what a body is measured against.
             .add_systems(
                 PostUpdate,
@@ -392,7 +410,7 @@ fn dress_world_props(
             if weapon {
                 let lowest = parts
                     .iter()
-                    .filter_map(|(mesh, _)| match meshes.get(mesh)?.attribute(Mesh::ATTRIBUTE_POSITION)? {
+                    .filter_map(|part| match meshes.get(&part.mesh)?.attribute(Mesh::ATTRIBUTE_POSITION)? {
                         bevy::mesh::VertexAttributeValues::Float32x3(positions) => {
                             positions.iter().map(|p| p[1]).reduce(f32::min)
                         }
@@ -402,12 +420,13 @@ fn dress_world_props(
                 commands.entity(entity).insert(RestsOn(if lowest.is_finite() { -lowest } else { 0.0 }));
             }
             commands.entity(entity).with_children(|instance| {
-                for (mesh, material) in parts {
-                    spawned.push(
-                        instance
-                            .spawn((WorldPropPart, Mesh3d(mesh), MeshMaterial3d(material), visibility))
-                            .id(),
-                    );
+                for part in parts {
+                    let mut spawning =
+                        instance.spawn((WorldPropPart, Mesh3d(part.mesh), MeshMaterial3d(part.material), visibility));
+                    if let Some(bone) = part.bone {
+                        spawning.insert(OnPropBone(bone));
+                    }
+                    spawned.push(spawning.id());
                 }
             });
         }
@@ -419,50 +438,100 @@ fn dress_world_props(
     }
 }
 
+fn start_hit_clips(mut dealt: MessageReader<DamageDealt>, mut props: Query<&mut PropPerformance>) {
+    for hit in dealt.read() {
+        if let Ok(mut performance) = props.get_mut(hit.target) {
+            performance.playing = Some((HIT_CLIP, 0.0));
+        }
+    }
+}
+
 /// Lift and turn the parts of a hovering pickup, leaving the instance where it
-/// stands so its trigger does not move with the drawing. Purely drawn: the
-/// angle is this machine's clock, and nobody needs to agree on it.
-/// Still while authoring, so a mapper lines up a pickup that is not turning,
-/// but lifted, so it stands at the height it will in a round.
-fn float_pickups(
+/// stands so its trigger does not move with the drawing, and move each part by
+/// its bone. Purely drawn: the angle is this machine's clock, and nobody needs
+/// to agree on it. A pickup is still while authoring, so a mapper lines up one
+/// that is not turning, but lifted, so it stands at the height it will in a round.
+#[allow(clippy::type_complexity)]
+fn place_world_prop_parts(
     time: Res<Time>,
     mode: Res<State<AppMode>>,
     cache: Res<PropCache>,
-    instances: Query<(&WorldProp, &DrawnProp, Option<&GivesWeapon>, Option<&RestsOn>)>,
-    mut parts: Query<&mut Transform, With<WorldPropPart>>,
+    clips: Res<Assets<Clip>>,
+    mut instances: Query<(&WorldProp, &DrawnProp, &mut PropPerformance, Option<&GivesWeapon>, Option<&RestsOn>)>,
+    mut parts: Query<(&mut Transform, Option<&OnPropBone>), With<WorldPropPart>>,
 ) {
     // Wrapped, or an `f32` of seconds steps visibly after a day. The wrap
     // period is a whole number of turns at this speed, so there is no jump.
+    let clock = time.elapsed_secs_wrapped();
     let spin = if mode.is_authoring() {
         Quat::IDENTITY
     } else {
-        Quat::from_rotation_y((time.elapsed_secs_wrapped() * SPIN_DEGREES_PER_SECOND).to_radians())
+        Quat::from_rotation_y((clock * SPIN_DEGREES_PER_SECOND).to_radians())
     };
-    for (prop, drawn, gives, rests) in &instances {
+    // In `f64`: an idle's length has nothing to do with the wrap period above.
+    let idle_clock = time.elapsed_secs_f64();
+    let mut pose = PropPose::default();
+    for (prop, drawn, mut performance, gives, rests) in &mut instances {
         let lift = match (gives, rests) {
             (Some(_), Some(rests)) => rests.0 + WEAPON_HOVER,
             (Some(_), None) => WEAPON_HOVER,
             (None, _) => 0.0,
         };
+        let baked = cache.get(&prop.model);
         let style = gives.map(|gives| gives.style).or_else(|| {
-            cache
-                .get(&prop.model)
-                .filter(|baked| baked.archetype == Archetype::Pickup)
-                .map(|baked| baked.pickup.style)
+            baked.filter(|baked| baked.archetype == Archetype::Pickup).map(|baked| baked.pickup.style)
         });
         let wanted = match style {
             Some(PickupStyle::Tf2) if gives.is_some() => Transform::from_xyz(0.0, lift, 0.0).with_rotation(spin),
             Some(PickupStyle::Tf2) => Transform::from_xyz(0.0, lift + HOVER, 0.0).with_rotation(spin),
             _ => Transform::from_xyz(0.0, lift, 0.0),
         };
+        let deltas = match baked {
+            Some(baked) if !baked.rig.is_empty() => {
+                pose_placed(baked, &clips, idle_clock, time.delta_secs(), &mut performance, &mut pose);
+                baked.rig.deltas(&pose)
+            }
+            // No bones, so a started clip has nothing to play on.
+            _ => {
+                if performance.playing.is_some() {
+                    performance.playing = None;
+                }
+                vec![]
+            }
+        };
         for part in &drawn.parts {
-            // Compared first, so a still pickup is not a changed one.
-            if let Ok(mut transform) = parts.get_mut(*part)
-                && *transform != wanted
-            {
-                *transform = wanted;
+            let Ok((mut transform, bone)) = parts.get_mut(*part) else { continue };
+            let placed = place_part(wanted, &deltas, bone);
+            // Compared first, so a still prop is not a changed one.
+            if *transform != placed {
+                *transform = placed;
             }
         }
+    }
+}
+
+/// The idle at `clock`, then whatever event clip is playing over it until it ends.
+fn pose_placed(
+    baked: &BakedProp,
+    clips: &Assets<Clip>,
+    clock: f64,
+    delta: f32,
+    performance: &mut PropPerformance,
+    pose: &mut PropPose,
+) {
+    *pose = PropPose::rest(&baked.rig);
+    let clip = |name: &str| baked.clips.get(name).and_then(|handle| clips.get(handle));
+    if let Some(idle) = clip(IDLE_CLIP) {
+        let time = if idle.looping && idle.length > 0.0 { clock % idle.length as f64 } else { clock };
+        crate::prop::rig::apply_clip(idle, time as f32, &baked.rig, pose);
+    }
+    let Some((name, seconds)) = performance.playing.as_mut() else { return };
+    *seconds += delta;
+    match clip(name) {
+        Some(event) if event.looping || *seconds <= event.length => {
+            crate::prop::rig::apply_clip(event, *seconds, &baked.rig, pose)
+        }
+        _ => performance.playing = None,
     }
 }
 
@@ -912,6 +981,42 @@ mod tests {
         assert_eq!(collision.props.len(), 1, "the crate is not solid");
     }
 
+    /// The shipped crate jolts when it is hurt and is still again once its `hit` clip ends.
+    #[test]
+    fn a_hurt_crate_plays_its_hit_clip_and_settles() {
+        if std::fs::metadata("assets/default/props/crate.gpp").is_err() {
+            return;
+        }
+        let mut app = app_with_assets();
+        app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(std::time::Duration::from_millis(40)));
+        app.world_mut().spawn((PropMarker, PropModel("crate".into()), Transform::default()));
+        app.update();
+        app.update();
+        let (instance, part) = {
+            let world = app.world_mut();
+            let (instance, drawn) = world.query::<(Entity, &DrawnProp)>().single(world).unwrap();
+            (instance, drawn.parts[0])
+        };
+        let at = |app: &App| *app.world().get::<Transform>(part).unwrap();
+        assert_eq!(at(&app), Transform::IDENTITY, "a crate nobody hurt is moving");
+
+        app.world_mut().write_message(DamageDealt {
+            target: instance,
+            source: crate::common::damage::DamageSource::World,
+            amount: 10,
+            remaining: 65,
+            point: Vec3::ZERO,
+            from: None,
+            cause: default(),
+        });
+        app.update();
+        assert!(at(&app).translation.y > 0.01, "the crate did not jolt: {:?}", at(&app));
+        for _ in 0..10 {
+            app.update();
+        }
+        assert_eq!(at(&app), Transform::IDENTITY, "the crate never settled");
+    }
+
     fn adopt_pickup(app: &mut App, style: PickupStyle) {
         let mut doc = crate::prop::document::PropDoc::new("hovering");
         doc.push(crate::prop::feature::FeatureOp::Primitive {
@@ -921,17 +1026,56 @@ mod tests {
         });
         doc.archetype = Archetype::Pickup;
         doc.pickup.style = style;
+        adopt(app, "hovering", &doc);
+    }
+
+    fn adopt(app: &mut App, name: &str, doc: &crate::prop::document::PropDoc) {
         let world = app.world_mut();
         world.resource_scope(|world, mut cache: Mut<PropCache>| {
             world.resource_scope(|world, mut meshes: Mut<Assets<Mesh>>| {
                 world.resource_scope(|world, mut materials: Mut<Assets<StandardMaterial>>| {
                     world.resource_scope(|world, mut surfaces: Mut<SurfaceMaterials>| {
                         let mut clips = world.resource_mut::<Assets<Clip>>();
-                        cache.adopt("hovering", &doc, &mut meshes, &mut materials, &mut surfaces, &mut clips, None);
+                        cache.adopt(name, doc, &mut meshes, &mut materials, &mut surfaces, &mut clips, None);
                     });
                 });
             });
         });
+    }
+
+    #[test]
+    fn a_placed_fan_turns_on_its_idle() {
+        use crate::common::skeleton::clip::{Channel, Key, Track};
+        use crate::common::skeleton::interpolation::Interpolation;
+
+        let mut app = app_with_assets();
+        app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(std::time::Duration::from_millis(100)));
+        let mut doc = crate::prop::document::PropDoc::new("fan");
+        let blade = doc.push(crate::prop::feature::FeatureOp::Primitive {
+            shape: crate::prop::solid::Shape::Box { size: [0.6, 0.02, 0.1] },
+            placement: Default::default(),
+            surface: Default::default(),
+        });
+        doc.archetype = Archetype::Obstacle;
+        doc.bones.push(crate::prop::rig::PropBone { parts: vec![blade], ..crate::prop::rig::PropBone::new("rotor", Vec3::ZERO) });
+        let mut idle = Clip { length: 1.0, looping: true, ..default() };
+        idle.tracks.push(Track::of(Channel::PropBone {
+            bone: "rotor".into(),
+            keys: vec![
+                Key::all(0.0, [0.0, 0.0, 0.0], Interpolation::Linear),
+                Key::all(1.0, [0.0, std::f32::consts::PI, 0.0], Interpolation::Linear),
+            ],
+        }));
+        doc.animations.clips.insert(IDLE_CLIP.into(), idle);
+        adopt(&mut app, "fan", &doc);
+        app.world_mut().spawn((PropMarker, PropModel("fan".into()), Transform::default()));
+        for _ in 0..4 {
+            app.update();
+        }
+        let world = app.world_mut();
+        let drawn = world.query::<&DrawnProp>().single(world).unwrap();
+        let turned = world.get::<Transform>(drawn.parts[0]).unwrap().rotation;
+        assert!(turned.angle_between(Quat::IDENTITY) > 0.1, "the fan stood still");
     }
 
     /// Fails if a TF2 pickup turns while it is being placed, or stops turning
@@ -1122,6 +1266,7 @@ mod tests {
             world.insert_resource(Time::<()>::default());
             world.insert_resource(State::new(AppMode::Editor));
             world.init_resource::<PropCache>();
+            world.insert_resource(Assets::<Clip>::default());
             let part = world.spawn((WorldPropPart, Transform::IDENTITY)).id();
             world.spawn((
                 WorldProp { model: "launcher".into(), at: Vec3::ZERO, rotation: Quat::IDENTITY },
@@ -1131,7 +1276,7 @@ mod tests {
                 RestsOn(0.2),
             ));
 
-            world.run_system_once(float_pickups).unwrap();
+            world.run_system_once(place_world_prop_parts).unwrap();
             assert_eq!(world.get::<Transform>(part).unwrap().translation.y, 0.2 + WEAPON_HOVER, "{style:?}");
         }
     }

@@ -15,8 +15,7 @@ use serde::{Deserialize, Serialize};
 use crate::common::class::Class;
 
 use crate::common::rotation::quat_from_euler;
-use crate::common::skeleton::ik::{self, reach_or_leave, Reach, LEFT_ARM, RIGHT_ARM};
-use crate::common::skeleton::rig::bone;
+use crate::common::skeleton::ik::{self, reach_or_leave, Reach};
 use crate::common::skeleton::{Pose, Skeleton};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -263,10 +262,16 @@ pub fn weapon_transform(
     hold: &HoldSpec,
     aim: Quat,
 ) -> Option<Transform> {
-    let chest = skeleton.index_of(bone::CHEST)?;
-    // The chest's tail is the point between the shoulders.
-    let pivot = skeleton.posed_bone(pose, root, chest).tail;
-    let arm = skeleton.proportions().arm_meters();
+    if let Some((bone, offset)) = skeleton.anatomy().mount {
+        let pivot = skeleton.posed_bone(pose, root, bone).tail;
+        return Some(
+            Transform::from_translation(pivot + aim * offset)
+                .with_rotation(aim * quat_from_euler(Vec3::from_array(hold.carry_rotation))),
+        );
+    }
+    let carry = skeleton.anatomy().carry?;
+    let pivot = skeleton.posed_bone(pose, root, carry).tail;
+    let arm = skeleton.anatomy().arm;
 
     Some(
         Transform::from_translation(pivot + aim * hold.carry(arm))
@@ -283,8 +288,8 @@ pub fn carry_frame(
     root: &Transform,
     aim: Quat,
 ) -> Option<Transform> {
-    let chest = skeleton.index_of(bone::CHEST)?;
-    let pivot = skeleton.posed_bone(pose, root, chest).tail;
+    let carry = skeleton.anatomy().carry?;
+    let pivot = skeleton.posed_bone(pose, root, carry).tail;
     Some(Transform::from_translation(pivot).with_rotation(aim))
 }
 
@@ -314,17 +319,15 @@ pub fn grip_hands(
     offsets: [Vec3; 2],
 ) -> [Reach; 2] {
     let mut reached = [Reach::Impossible; 2];
-    let hands = [
-        (RIGHT_ARM, bone::HAND_R, 1.0, Some(hold.grip_frame())),
-        (LEFT_ARM, bone::HAND_L, -1.0, hold.support_frame()),
-    ];
+    let frames = [Some(hold.grip_frame()), hold.support_frame()];
 
-    for (index, (chain, hand, side, frame)) in hands.into_iter().enumerate() {
+    for (index, frame) in frames.into_iter().enumerate() {
+        let Some(limb) = skeleton.anatomy().hand(index).copied() else { continue };
         let Some(mut frame) = frame.filter(|_| which[index]) else { continue };
         frame.translation += offsets[index];
         let placed = weapon.mul_transform(frame);
-        reached[index] = reach_or_leave(skeleton, pose, root, &chain, placed.translation, root.rotation * ik::elbow_pole(side));
-        if reached[index] == Reach::Reached {
+        reached[index] = reach_or_leave(skeleton, pose, root, &limb.chain, placed.translation, root.rotation * limb.pole);
+        if let (Reach::Reached, Some(hand)) = (reached[index], limb.chain.tip) {
             // After the solve: a world rotation depends on where the arm ended up.
             ik::set_world_rotation(skeleton, pose, root, hand, placed.rotation);
         }
@@ -337,8 +340,27 @@ pub fn grip_hands(
 
 #[cfg(test)]
 mod tests {
+
+    /// A body with no hands holds its weapon on its mount, turned by the aim, whatever the hold's
+    /// carry says; nothing grips.
+    #[test]
+    fn a_body_without_hands_wears_its_weapon_on_its_mount() {
+        let builds = crate::common::class::ClassBuilds::shipped();
+        let strider = builds.rig_for(Class::Strider);
+        let (bone, offset) = strider.anatomy().mount.expect("the strider has a mount");
+        let root = Transform::IDENTITY;
+        let aim = Quat::from_rotation_y(0.4) * Quat::from_rotation_x(0.2);
+        let hold = HoldSpec { carry: [0.3, -0.2, -0.5], ..HoldSpec::default() };
+        let placed = weapon_transform(&strider, &Pose::rest(), &root, &hold, aim).unwrap();
+        let mount = strider.posed_bone(&Pose::rest(), &root, bone).tail + aim * offset;
+        assert!(placed.translation.distance(mount) < 1e-5, "the weapon is {} m off the mount", placed.translation.distance(mount));
+
+        let mut pose = Pose::rest();
+        assert_eq!(grip_with(&strider, &mut pose, &root, &hold, &placed), [Reach::Impossible; 2]);
+    }
+    use crate::common::skeleton::rig::bone;
+    use crate::common::skeleton::ik::{LEFT_ARM, RIGHT_ARM};
     use super::*;
-    use strum::IntoEnumIterator;
     use crate::common::class::Class;
     use crate::common::skeleton::humanoid;
 
@@ -411,14 +433,14 @@ mod tests {
                 continue;
             }
 
-            for class in Class::iter() {
+            for class in crate::common::class::ClassBuilds::shipped().humanoids() {
                 let hold = doc.hold.for_class(Some(class));
                 let skeleton = humanoid(crate::common::class::ClassBuilds::shipped().of(class));
                 let mut pose = Pose::rest();
                 let root = Transform::IDENTITY;
 
                 let chest = skeleton.index_of(bone::CHEST).expect("bone is in the rig");
-                let arm = skeleton.proportions().arm_meters();
+                let arm = skeleton.anatomy().arm;
                 let pivot = skeleton.posed_bones(&pose, &root)[chest].tail;
                 let placed = Transform::from_translation(pivot + hold.carry(arm));
 

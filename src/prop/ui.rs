@@ -74,6 +74,7 @@ impl Default for PropFileDialog {
 enum PropTab {
     Features,
     Inspector,
+    Bones,
     Hold,
     Problems,
 }
@@ -108,7 +109,7 @@ impl Default for PropPanels {
     fn default() -> Self {
         Self {
             left: DockState::new(vec![PropTab::Features]),
-            right_model: DockState::new(vec![PropTab::Inspector]),
+            right_model: DockState::new(vec![PropTab::Inspector, PropTab::Bones]),
             right_fit: DockState::new(vec![PropTab::Hold]),
             bottom: DockState::new(vec![PropTab::Problems]),
             workspace: Workspace::Model,
@@ -185,6 +186,7 @@ impl<'a> TabViewer for PropTabs<'a> {
         Id::new(match tab {
             PropTab::Features => "prop_features",
             PropTab::Inspector => "prop_inspector",
+            PropTab::Bones => "prop_bones",
             PropTab::Hold => "prop_hold",
             PropTab::Problems => "prop_problems",
         })
@@ -194,6 +196,7 @@ impl<'a> TabViewer for PropTabs<'a> {
         match tab {
             PropTab::Features => get!("prop.panels.features").into(),
             PropTab::Inspector => get!("prop.panels.inspector").into(),
+            PropTab::Bones => get!("prop.panels.bones").into(),
             PropTab::Hold => match self.editor.doc().archetype {
                 Archetype::Hat => get!("prop.panels.hat").into(),
                 _ => get!("prop.panels.hold").into(),
@@ -213,6 +216,7 @@ impl<'a> TabViewer for PropTabs<'a> {
                 Some(sketch) => sketch_inspector(ui, self.editor, self.session, sketch),
                 None => inspector(ui, self.editor, self.build, self.plane, self.requests, self.tool),
             },
+            PropTab::Bones => bones_ui(ui, self.editor, self.build),
             PropTab::Hold => match self.editor.doc().archetype {
                 Archetype::Held => {
                     let front = self.build.evaluated.bounds().map(front_of);
@@ -1828,6 +1832,156 @@ fn pickup_ui(ui: &mut Ui, editor: &mut PropEditor) {
 }
 
 /// Adding and removing are whole steps; dragging a number is a gesture.
+/// Parts are the bodies standing at the end of the feature list.
+fn bones_ui(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
+    let mut bones = editor.doc().bones.clone();
+    let mut changed = false;
+    let mut renamed: Option<(String, String)> = None;
+    let mut remove = None;
+    let bodies: Vec<(PropFeatureId, String)> = build
+        .evaluated
+        .bodies
+        .iter()
+        .map(|(id, _)| (*id, editor.doc().feature(*id).map_or_else(|| id.to_string(), |f| f.name.clone())))
+        .collect();
+    // Ticked for the bone a body rides on, which may come through a feature it ate.
+    let riding = crate::prop::rig::bone_of_each_body(editor.shown(), &bones, &build.evaluated);
+    let lineages: Vec<Vec<PropFeatureId>> =
+        bodies.iter().map(|(id, _)| crate::prop::rig::lineage(*id, editor.shown())).collect();
+
+    egui::ScrollArea::vertical().show(ui, |ui| {
+        for index in 0..bones.len() {
+            let others_named = |name: &str, names: &[String]| {
+                names.iter().enumerate().any(|(other, named)| other != index && named == name)
+            };
+            let taken: Vec<String> = bones.iter().map(|bone| bone.name.clone()).collect();
+            let earlier: Vec<String> = bones[..index].iter().map(|bone| bone.name.clone()).collect();
+            let bone = &mut bones[index];
+            ui.push_id(("prop_bone", index), |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(get!("prop.inspector.name"));
+                    // Carried on leaving the field, from the name on entering it, so a name typed
+                    // past another bone's takes none of its tracks.
+                    let response = ui.text_edit_singleline(&mut bone.name);
+                    let started = ui.id().with("name_when_entered");
+                    if response.gained_focus() {
+                        let was = taken[index].clone();
+                        ui.data_mut(|data| data.insert_temp(started, was));
+                    }
+                    changed |= response.changed();
+                    if response.lost_focus()
+                        && let Some(was) = ui.data_mut(|data| data.remove_temp::<String>(started))
+                        && was != bone.name
+                        && !others_named(&was, &taken)
+                        && !others_named(&bone.name, &taken)
+                    {
+                        changed = true;
+                        renamed = Some((was, bone.name.clone()));
+                    }
+                    if ui.button(get!("prop.inspector.remove_point")).on_hover_text(get!("prop.bones.remove")).clicked() {
+                        remove = Some(index);
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.label(get!("prop.bones.parent"));
+                    let shown = bone.parent.clone().unwrap_or_else(|| get!("prop.bones.no_parent"));
+                    egui::ComboBox::from_id_salt("parent").selected_text(shown).show_ui(ui, |ui| {
+                        changed |= ui.selectable_value(&mut bone.parent, None, get!("prop.bones.no_parent")).changed();
+                        for name in &earlier {
+                            changed |= ui.selectable_value(&mut bone.parent, Some(name.clone()), name).changed();
+                        }
+                    });
+                });
+                changed |= vec3_ui(ui, get!("prop.bones.pivot"), &mut bone.pivot, 0.001, "m");
+                ui.label(get!("prop.bones.parts"));
+                for (body, (id, name)) in bodies.iter().enumerate() {
+                    let mut bound = riding[body] == Some(index);
+                    if ui.checkbox(&mut bound, name).changed() {
+                        changed = true;
+                        match bound {
+                            true => bone.parts.push(*id),
+                            // Whichever binding reached it.
+                            false => bone.parts.retain(|part| !lineages[body].contains(part)),
+                        }
+                    }
+                }
+                // Bindings that reach no body: kept, since a later edit may bring the body back.
+                let gone: Vec<PropFeatureId> = bone
+                    .parts
+                    .iter()
+                    .copied()
+                    .filter(|part| !lineages.iter().any(|lineage| lineage.contains(part)))
+                    .collect();
+                for part in gone {
+                    let name = editor.doc().feature(part).map_or_else(|| part.to_string(), |f| f.name.clone());
+                    let mut bound = true;
+                    if ui.checkbox(&mut bound, egui::RichText::new(name).weak()).changed() {
+                        changed = true;
+                        bone.parts.retain(|kept| *kept != part);
+                    }
+                }
+                ui.separator();
+            });
+        }
+
+        for problem in crate::prop::rig::problems(&bones) {
+            ui.label(
+                egui::RichText::new(format!("{} {problem}", get!("prop.problems.marker")))
+                    .color(egui::Color32::from_rgb(230, 130, 80)),
+            );
+        }
+
+        if ui.button(get!("prop.bones.add")).clicked() {
+            let picked: Vec<PropFeatureId> =
+                editor.picks().iter().filter_map(|pick| pick.body(&build.evaluated)).collect();
+            let pivot = build.evaluated.bounds_of_bodies(&picked).map_or(Vec3::ZERO, |(min, max)| (min + max) / 2.0);
+            let name = (1..)
+                .map(|n| get!("prop.bones.default_name", "number", n))
+                .find(|name| !bones.iter().any(|bone| &bone.name == name))
+                .unwrap_or_default();
+            editor.edit(|doc| {
+                doc.bones.push(crate::prop::rig::PropBone { parts: picked, ..crate::prop::rig::PropBone::new(name, pivot) })
+            });
+            changed = false;
+            remove = None;
+        }
+    });
+
+    if let Some(index) = remove {
+        editor.edit(|doc| {
+            let gone = doc.bones.remove(index).name;
+            for bone in &mut doc.bones {
+                if bone.parent.as_deref() == Some(gone.as_str()) {
+                    bone.parent = None;
+                }
+            }
+        });
+        return;
+    }
+    if changed {
+        editor.begin_gesture();
+        let doc = editor.doc_mut();
+        if let Some((was, now)) = renamed {
+            for bone in &mut bones {
+                if bone.parent.as_deref() == Some(was.as_str()) {
+                    bone.parent = Some(now.clone());
+                }
+            }
+            for clip in doc.animations.clips.values_mut() {
+                for track in &mut clip.tracks {
+                    if let crate::common::skeleton::clip::Channel::PropBone { bone, .. }
+                    | crate::common::skeleton::clip::Channel::PropBoneOffset { bone, .. } = &mut track.channel
+                        && *bone == was
+                    {
+                        *bone = now.clone();
+                    }
+                }
+            }
+        }
+        doc.bones = bones;
+    }
+}
+
 fn colliders_ui(ui: &mut Ui, editor: &mut PropEditor) {
     let mut colliders = editor.doc().colliders.clone();
     let mut changed = false;

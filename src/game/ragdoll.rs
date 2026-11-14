@@ -43,10 +43,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::common::app_mode::AppMode;
 use crate::common::net::has_authority;
-use crate::common::skeleton::rig::{humanoid, Proportions, Scratch, BONES_ON_THE_STACK};
+use crate::common::class::ClassBuilds;
+use crate::common::skeleton::rig::{humanoid, Build, Scratch, BONES_ON_THE_STACK};
 use crate::common::damage::{falloff, PlayerId};
 use crate::common::movement_rules::MovementRules;
-use crate::common::skeleton::joints::limit_of;
 use crate::common::skeleton::{Bone, Pose, Skeleton};
 use crate::common::player_color::PlayerColor;
 use crate::common::team::Team;
@@ -135,12 +135,11 @@ pub struct RagdollShove {
     pub radius: f32,
 }
 
-/// What a corpse was built from.
-/// What a corpse was built from: the [`Proportions`] taken off the dying
-/// body's own [`Skeleton`], since a `Skeleton` never crosses the wire. Read off
-/// the rig rather than a class, because not every body has a class.
-#[derive(Component, Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-pub struct CorpseBuild(pub Proportions);
+/// What a corpse was built from: the [`Build`] taken off the dying body's own [`Skeleton`], since
+/// a `Skeleton` never crosses the wire. Read off the rig rather than a class, because not every
+/// body has a class.
+#[derive(Component, Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CorpseBuild(pub Build);
 
 /// So the death cam can find its own. Only a player's corpse has one.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -454,7 +453,7 @@ impl Ragdoll {
         // Limits are in the bone's own rest frame, which is why one table
         // covers both sides of the body.
         let rest = frames[parent] * bone.rest;
-        let direction = rest * limit_of(bone.name).nearest(rest.inverse() * along);
+        let direction = rest * bone.limit.nearest(rest.inverse() * along);
         (rest, Quat::from_rotation_arc(rest * Vec3::Y, direction) * rest, direction)
     }
 
@@ -631,7 +630,7 @@ pub fn raise_ragdolls(
         }
 
         // Read off the rig the body actually had.
-        corpse.insert(CorpseBuild(skeleton.proportions()));
+        corpse.insert(CorpseBuild(skeleton.build().clone()));
 
         commands.entity(entity).insert(Ragdolled);
     }
@@ -648,10 +647,14 @@ pub fn raise_ragdolls(
 /// the seed a late build leaves the corpse invisible forever.
 pub fn dress_corpses_from_elsewhere(
     mut commands: Commands,
+    builds: Option<Res<ClassBuilds>>,
     corpses: Query<(Entity, &Ragdoll, &CorpseBuild), Without<Skeleton>>,
 ) {
     for (entity, ragdoll, build) in &corpses {
-        let skeleton = humanoid(build.0);
+        let skeleton = match builds.as_deref() {
+            Some(builds) => builds.skeleton(&build.0),
+            None => humanoid(build.0.proportions),
+        };
         let (transform, pose) = ragdoll.pose(&skeleton);
         commands
             .entity(entity)
@@ -1038,32 +1041,42 @@ mod tests {
     /// feeding energy back into the solver, not a constant to nudge.
     #[test]
     fn every_corpse_settles_however_it_lands() {
-        let skeleton = rig();
+        let strider = crate::common::class_file::tests::builds_with_a_strider()
+            .rig_for(crate::common::class::Class::Mercenary);
         let world = a_room();
 
-        let mut restless = Vec::new();
-        for case in 0..40 {
-            // Deterministic: a randomized sweep that failed one run in ten
-            // would be worse than none.
-            let a = case as f32 * 0.9;
-            let pose = Pose::rest()
-                .with(bone::CHEST, Quat::from_rotation_x(a.sin() * 0.5))
-                .with(bone::THIGH_L, Quat::from_rotation_x(a.cos() * 0.5));
-            let root = Transform::from_translation(Vec3::new(a.cos(), 0.0, a.sin()))
-                .with_rotation(Quat::from_rotation_y(a));
+        // The strider's long neck and tail can rest balanced and then roll: one drop in forty
+        // topples at five seconds and is still by thirteen, losing motion every second after.
+        for (skeleton, seconds) in [(rig(), 12), (strider, 16)] {
+            let anatomy = skeleton.anatomy();
+            let name = |bone: Option<usize>| skeleton.bones()[bone.expect("the rig has it")].name;
+            let (torso, head) = (name(anatomy.carry), name(anatomy.head));
+            let thigh = anatomy.limbs[anatomy.feet[0].limb].chain.upper;
 
-            let mut corpse =
-                Ragdoll::from_body(&skeleton, &pose, &root, Vec3::new(a.sin(), 0.0, a.cos()) * 0.1);
-            let (head, _) = corpse.bone_points(skeleton.index_of(bone::HEAD).unwrap());
-            corpse.shove(head, Push::Along(Vec3::new(a.cos() * 9.0, 2.0, a.sin() * 9.0)), 0.4, DT);
+            let mut restless = Vec::new();
+            for case in 0..40 {
+                // Deterministic: a randomized sweep that failed one run in ten
+                // would be worse than none.
+                let a = case as f32 * 0.9;
+                let pose = Pose::rest()
+                    .with(torso, Quat::from_rotation_x(a.sin() * 0.5))
+                    .with(thigh, Quat::from_rotation_x(a.cos() * 0.5));
+                let root = Transform::from_translation(Vec3::new(a.cos(), 0.0, a.sin()))
+                    .with_rotation(Quat::from_rotation_y(a));
 
-            run(&mut corpse, &skeleton, &world, 64 * 12);
-            if !corpse.is_asleep() {
-                restless.push(case);
+                let mut corpse =
+                    Ragdoll::from_body(&skeleton, &pose, &root, Vec3::new(a.sin(), 0.0, a.cos()) * 0.1);
+                let (head, _) = corpse.bone_points(skeleton.index_of(head).unwrap());
+                corpse.shove(head, Push::Along(Vec3::new(a.cos() * 9.0, 2.0, a.sin() * 9.0)), 0.4, DT);
+
+                run(&mut corpse, &skeleton, &world, 64 * seconds);
+                if !corpse.is_asleep() {
+                    restless.push(case);
+                }
             }
-        }
 
-        assert!(restless.is_empty(), "still moving after twelve seconds: {restless:?}");
+            assert!(restless.is_empty(), "a {} still moving after {seconds} seconds: {restless:?}", skeleton.kind());
+        }
     }
 
     /// A shove wakes a settled corpse.
@@ -1360,7 +1373,7 @@ mod tests {
         app.add_systems(Update, dress_corpses_from_elsewhere);
         let corpse = app
             .world_mut()
-            .spawn((seed, CorpseBuild(Proportions::DEFAULT)))
+            .spawn((seed, CorpseBuild(Build::humanoid(crate::common::skeleton::rig::Proportions::DEFAULT))))
             .id();
         app.update();
 
@@ -1424,8 +1437,8 @@ mod tests {
             .single(app.world())
             .expect("no corpse, or a corpse nobody else could draw");
         assert_eq!(
-            build.0,
-            rig().proportions(),
+            &build.0,
+            rig().build(),
             "the corpse was built from something other than the rig it came from"
         );
     }
@@ -1607,6 +1620,24 @@ mod tests {
             assert_eq!(reused.joint(bone.name), fresh.joint(bone.name), "{}", bone.name);
         }
     }
+
+    /// Fails if a corpse of a rig-file body does not cross the wire, or is drawn as a humanoid.
+    #[test]
+    fn a_corpse_comes_back_as_the_rig_it_was() {
+        use bevy::ecs::system::RunSystemOnce;
+        let builds = crate::common::class_file::tests::builds_with_a_strider();
+        let body = builds.rig_for(crate::common::class::Class::Mercenary);
+        let sent = CorpseBuild(body.build().clone());
+        let wire = postcard::to_allocvec(&sent).expect("a corpse's build goes on the wire");
+        let back: CorpseBuild = postcard::from_bytes(&wire).expect("and comes back off it");
+        assert_eq!(back, sent);
+
+        let mut world = World::new();
+        world.insert_resource(builds);
+        let seed = Ragdoll::from_body(&body, &Pose::rest(), &Transform::IDENTITY, Vec3::ZERO);
+        let corpse = world.spawn((seed, back)).id();
+        world.run_system_once(dress_corpses_from_elsewhere).unwrap();
+        world.flush();
+        assert_eq!(world.get::<Skeleton>(corpse).map(|rig| rig.kind().to_string()), Some("strider".into()));
+    }
 }
-
-

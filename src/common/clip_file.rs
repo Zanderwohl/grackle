@@ -23,7 +23,21 @@ pub fn read_clip(
     pack: &Path,
     state: AnimationState,
 ) -> Result<Option<StateAnimation>, String> {
-    let relative = format!("{CLIPS_DIR}/{}.{CLIP_EXTENSION}", state.clip_name());
+    read_state_clip(assets, pack, CLIPS_DIR, state)
+}
+
+/// Another rig's state clips are under `animations/<rig>/`, since they name other bones.
+pub fn rig_clips_dir(rig: &str) -> String {
+    format!("{CLIPS_DIR}/{rig}")
+}
+
+fn read_state_clip(
+    assets: &Assets,
+    pack: &Path,
+    dir: &str,
+    state: AnimationState,
+) -> Result<Option<StateAnimation>, String> {
+    let relative = format!("{dir}/{}.{CLIP_EXTENSION}", state.clip_name());
     let bytes = match assets.read(pack, &relative) {
         Ok(bytes) => bytes,
         Err(AssetError::NotFound(_)) => return Ok(None),
@@ -86,6 +100,63 @@ pub fn load_named_clip(assets: &Assets, packs: &[PathBuf], name: &str) -> Option
         }
     }
     found
+}
+
+/// One handle per named clip, so an edit in the animation editor refills it under every system
+/// holding it. A miss is cached too.
+#[derive(Resource, Default)]
+pub struct NamedClips(std::collections::BTreeMap<String, Option<Handle<Clip>>>);
+
+impl NamedClips {
+    pub fn load(
+        &mut self,
+        assets: &Assets,
+        clips: &mut bevy::asset::Assets<Clip>,
+        name: &str,
+    ) -> Option<Handle<Clip>> {
+        self.0
+            .entry(name.to_string())
+            .or_insert_with(|| load_named_clip(assets, &default_packs(), name).map(|clip| clips.add(clip)))
+            .clone()
+    }
+
+    pub fn publish(&mut self, clips: &mut bevy::asset::Assets<Clip>, name: &str, clip: &Clip) {
+        match self.0.get(name) {
+            Some(Some(handle)) => crate::common::skeleton::play::refill(clips, handle, clip),
+            _ => {
+                self.0.insert(name.to_string(), Some(clips.add(clip.clone())));
+            }
+        }
+    }
+}
+
+/// Each rig the class builds name that the library has not read yet, as the builds arrive: at
+/// startup, and on a client when the server's builds replace its own.
+pub fn load_clips_for_new_rigs(
+    assets: Res<Assets>,
+    builds: Res<crate::common::class::ClassBuilds>,
+    library: Option<ResMut<ClipLibrary>>,
+) {
+    let Some(mut library) = library else { return };
+    if !builds.is_changed() && !library.is_added() {
+        return;
+    }
+    for rig in builds.rigs.keys() {
+        if library.has_rig(rig) {
+            continue;
+        }
+        library.add_rig(rig);
+        let dir = rig_clips_dir(rig);
+        for pack in default_packs() {
+            for state in AnimationState::iter() {
+                match read_state_clip(&assets, &pack, &dir, state) {
+                    Ok(Some(clip)) => library.insert_for(rig, state, clip),
+                    Ok(None) => {}
+                    Err(why) => warn!("{}/{dir}/{}.{CLIP_EXTENSION}: {why}", pack.display(), state.clip_name()),
+                }
+            }
+        }
+    }
 }
 
 pub fn load_body_clips_at_startup(mut commands: Commands, assets: Res<Assets>) {
@@ -289,5 +360,32 @@ mod tests {
     fn a_pack_with_no_animations_says_nothing() {
         let library = load_body_clips(&Assets::default(), &[PathBuf::from("assets/nonexistent")]);
         assert!(library.is_empty());
+    }
+
+    /// A named clip that will not parse plays nothing and logs only a warning.
+    #[test]
+    fn every_clip_the_default_pack_ships_parses() {
+        let directory = Path::new("assets/default").join(CLIPS_DIR);
+        let mut read = 0;
+        // Another rig's clips are a directory down.
+        let paths: Vec<std::path::PathBuf> = std::fs::read_dir(&directory)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .flat_map(|path| match path.is_dir() {
+                true => std::fs::read_dir(&path).unwrap().map(|entry| entry.unwrap().path()).collect(),
+                false => vec![path],
+            })
+            .collect();
+        for path in paths {
+            if path.extension().is_none_or(|extension| extension != CLIP_EXTENSION) {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).unwrap();
+            if let Err(why) = StateAnimation::from_toml(&text) {
+                panic!("{} will not parse: {why}", path.display());
+            }
+            read += 1;
+        }
+        assert!(read > 13, "only {read} clips were read");
     }
 }

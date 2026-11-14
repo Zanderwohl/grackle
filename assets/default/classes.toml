@@ -118,3 +118,11 @@ shoulder_half_width = 0.115
 hip_half_width = 0.055
 girth = 1.0
 belly = 1.0
+
+# Built on a rig file rather than the humanoid: `rigs/strider.toml` states its
+# bones, and a build of one names it with `rig`, a `height` and a `girth`, and a
+# scale per bone group.
+[builds.strider]
+rig = "strider"
+height = 1.6
+girth = 1.0

@@ -1,12 +1,15 @@
 # Seconds each animation layer takes to fade in over what is beneath it, and
 # back out. A layer not named here snaps. A clip may override either number
-# with `blend_in` or `blend_out` of its own.
+# with `blend_in` or `blend_out` of its own. Humiliation also states the parts
+# it takes from the layers beneath (legs, torso, head, arm.l, arm.r, weapon);
+# a taunt states its own in taunts.toml.
 
 [weapon]
 blend_in = 0.0
 blend_out = 0.12
 
 [humiliation]
+claims = ["torso", "head", "arm.l", "arm.r", "weapon"]
 blend_in = 0.25
 blend_out = 0.2
 

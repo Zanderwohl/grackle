@@ -14,7 +14,7 @@ use bevy::prelude::*;
 
 use crate::common::class::Class;
 use crate::common::skeleton::ik::Reach;
-use crate::common::skeleton::{humanoid, Pose, Skeleton};
+use crate::common::skeleton::{Pose, Skeleton};
 use crate::game::body_mesh::BodyTint;
 use crate::prop::camera::ViewmodelPreview;
 use crate::prop::document::PropEditor;
@@ -46,6 +46,30 @@ pub struct FigurePerformance(pub ClipStack);
 pub struct FigureCorrections(
     pub Option<(crate::common::skeleton::state::AnimationState, crate::common::skeleton::state::PoseInputs)>,
 );
+
+/// What the animator would pose beneath the figure's performance, how far the body has turned,
+/// and whether the top layer hides the weapon. The performance plays over it as in a match,
+/// with `stand_where_claimed` first.
+#[derive(Resource, Debug, Default, Clone, Copy, PartialEq)]
+pub struct FigureBeneath {
+    pub state: Option<(
+        crate::common::skeleton::state::AnimationState,
+        crate::common::skeleton::state::PoseInputs,
+    )>,
+    /// Radians about the feet.
+    pub yaw: f32,
+    pub hides_weapon: bool,
+}
+
+/// What `stand_where_claimed` stands a claimed region in.
+fn still_of(state: crate::common::skeleton::state::AnimationState) -> crate::common::skeleton::state::AnimationState {
+    use crate::common::skeleton::state::{AnimationState, BodyRequests};
+    AnimationState::from_requests(&BodyRequests {
+        crouching: state.ducks(),
+        airborne: matches!(state, AnimationState::Airborne | AnimationState::CrouchAirborne),
+        ..default()
+    })
+}
 
 /// Where the prop is being held, once a performance has moved it.
 ///
@@ -120,13 +144,16 @@ pub fn refresh_the_figure(
     mut commands: Commands,
     choice: Res<ScaleFigure>,
     builds: Res<crate::common::class::ClassBuilds>,
+    rig: Option<Res<FigureRig>>,
     existing: Query<Entity, With<ScaleFigureMarker>>,
-    mut last: Local<Option<ScaleFigure>>,
+    mut last: Local<Option<(ScaleFigure, Option<crate::common::skeleton::rig::Build>)>>,
 ) {
-    if *last == Some(*choice) && !existing.is_empty() && !builds.is_changed() {
+    let instead = rig.and_then(|rig| rig.0.clone());
+    let seen = (*choice, instead.as_ref().map(|rig| rig.build().clone()));
+    if last.as_ref() == Some(&seen) && !existing.is_empty() && !builds.is_changed() {
         return;
     }
-    *last = Some(*choice);
+    *last = Some(seen);
 
     for entity in &existing {
         commands.entity(entity).despawn();
@@ -144,9 +171,19 @@ pub fn refresh_the_figure(
         BodyTint(FIGURE_TINT),
         Name::new("Scale figure"),
         FigureReach([Reach::Impossible; 2]),
-        humanoid(builds.of(class)),
+        instead.unwrap_or_else(|| builds.rig_for(class)),
     ));
 }
+
+/// Where the strip's clip aims each effector and look-at track this frame, by track index, in the
+/// figure's own frame so the drawing follows it.
+#[derive(Resource, Default)]
+pub struct FigureTargets(pub Vec<(usize, Vec3)>);
+
+/// A rig the figure stands up as instead of its class's: in the animation editor, the rig whose
+/// clip is being edited.
+#[derive(Resource, Default)]
+pub struct FigureRig(pub Option<Skeleton>);
 
 pub fn pose_the_figure(
     editor: Res<PropEditor>,
@@ -157,6 +194,9 @@ pub fn pose_the_figure(
     mut held: Option<ResMut<FigureWeapon>>,
     stage: Option<Res<FigureStage>>,
     corrections: Option<Res<FigureCorrections>>,
+    beneath: Option<Res<FigureBeneath>>,
+    library: Option<Res<crate::common::skeleton::state::ClipLibrary>>,
+    mut targets: Option<ResMut<FigureTargets>>,
     mode: Option<Res<State<crate::common::app_mode::AppMode>>>,
     mut figures: Query<
         (&Skeleton, &mut Pose, &mut Transform, &mut FigureReach, &mut Visibility),
@@ -165,6 +205,8 @@ pub fn pose_the_figure(
 ) {
     let hold = editor.doc().hold.for_class(choice.0);
     let stage = stage_in_force(stage.as_deref(), mode.as_deref());
+    let beneath = beneath.as_deref().copied().unwrap_or_default();
+    let holding = stage.holding && !beneath.hides_weapon;
     for (skeleton, mut pose, mut transform, mut reach, mut visibility) in &mut figures {
         // Hidden during the viewmodel preview: the eye is inside this head.
         let wanted = match preview.0 {
@@ -211,30 +253,55 @@ pub fn pose_the_figure(
                 .with_rotation(rotation),
             Anchor::Floor => Transform::IDENTITY,
         };
+        // The weapon's facing comes from the aim, not the root.
+        let aim = Quat::from_rotation_y(beneath.yaw);
+        let root = Transform::from_rotation(aim) * root;
 
-        let mut placed = match stage.anchor {
-            Anchor::Weapon => Transform::IDENTITY,
-            Anchor::Floor => local,
-        };
+        if let Some((state, inputs)) = beneath.state {
+            let library = library.as_deref();
+            standing = crate::common::skeleton::ik::finish_pose(skeleton, state, &inputs, &root, library);
+            if let Some(performance) = performance.as_deref() {
+                crate::game::skeleton::stand_where_claimed(skeleton, &mut standing, &performance.0, || {
+                    crate::common::skeleton::ik::finish_pose(skeleton, still_of(state), &inputs, &root, library)
+                });
+            }
+        }
+
+        let mut placed = Transform::from_rotation(aim)
+            * match stage.anchor {
+                Anchor::Weapon => Transform::IDENTITY,
+                Anchor::Floor => local,
+            };
         let at_rest = placed;
         if let (Some(performance), Some(clips)) = (performance.as_deref(), clips.as_deref()) {
             let ground = move |_: Vec3| root.translation.y;
             let frames = Frames {
                 body: root,
-                carry: carry_frame(skeleton, &standing, &root, Quat::IDENTITY)
+                carry: carry_frame(skeleton, &standing, &root, aim)
                     .unwrap_or(root),
-                weapon: stage.holding.then_some(placed),
+                weapon: holding.then_some(placed),
                 eye: None,
                 ground: &ground,
                 // Same answer `ik::animation_pose` gives in a match.
-                footfalls: corrections.as_deref().and_then(|c| c.0).and_then(|(state, inputs)| {
+                footfalls: corrections.as_deref().and_then(|c| c.0).or(beneath.state).and_then(|(state, inputs)| {
                     state
                         .stance(&inputs)
-                        .map(|stance| crate::common::skeleton::gait::footfalls(inputs.stride, stance))
+                        .and_then(|stance| crate::common::skeleton::gait::footfalls(inputs.stride, stance, skeleton.anatomy()))
                 }),
             };
-            let weapon = stage.holding.then_some(&mut placed);
+            let weapon = holding.then_some(&mut placed);
+            let before = standing.clone();
             apply_stack(&performance.0, clips, skeleton, &mut standing, &frames, weapon);
+            // The strip's clip is the last pushed; its targets read off the pose beneath it.
+            if let Some(targets) = targets.as_deref_mut() {
+                let found = performance.0 .0.last().and_then(|playing| Some((playing, clips.get(&playing.clip)?)));
+                targets.0 = found.map_or_else(Vec::new, |(playing, clip)| {
+                    crate::common::skeleton::play::track_targets(clip, playing.time, skeleton, &before, &frames)
+                        .into_iter()
+                        .map(|(track, at)| (track, root.to_matrix().inverse().transform_point3(at)))
+                        .collect()
+                });
+            }
         }
         // The game's body-clip corrections, before the weapon is placed from
         // the pose they leave.
@@ -250,9 +317,9 @@ pub fn pose_the_figure(
 
         // On the floor the weapon follows the animated chest, as in the game,
         // with the weapon clip's change from rest carried on top.
-        if stage.anchor == Anchor::Floor && stage.holding {
+        if stage.anchor == Anchor::Floor && holding {
             if let Some(animated) =
-                weapon_transform(skeleton, &standing, &root, &hold, Quat::IDENTITY)
+                weapon_transform(skeleton, &standing, &root, &hold, aim)
             {
                 let moved = placed.compute_affine() * at_rest.compute_affine().inverse();
                 placed = Transform::from_matrix(Mat4::from(moved * animated.compute_affine()));
@@ -265,7 +332,7 @@ pub fn pose_the_figure(
             }
         }
 
-        if stage.holding {
+        if holding {
             let grips = match (performance.as_deref(), clips.as_deref()) {
                 (Some(performance), Some(clips)) => grip_offsets(&performance.0, clips, skeleton),
                 _ => [Vec3::ZERO; 2],
@@ -292,12 +359,22 @@ pub fn clear_the_figure(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::common::skeleton::humanoid;
     use crate::common::skeleton::rig::bone;
     use crate::prop::hold::{grip_with, HoldSpec};
 
     fn staged(stage: FigureStage, mode: crate::common::app_mode::AppMode) -> (World, Entity) {
+        staged_beneath(stage, mode, FigureBeneath::default())
+    }
+
+    fn staged_beneath(
+        stage: FigureStage,
+        mode: crate::common::app_mode::AppMode,
+        beneath: FigureBeneath,
+    ) -> (World, Entity) {
         use bevy::ecs::system::RunSystemOnce;
         let mut world = World::new();
+        world.insert_resource(beneath);
         world.insert_resource(PropEditor::default());
         world.insert_resource(ScaleFigure(Some(Class::Mercenary)));
         world.insert_resource(ViewmodelPreview::default());
@@ -348,6 +425,23 @@ mod tests {
         let index = skeleton.index_of(bone::HAND_R).expect("bone is in the rig");
         let hand = skeleton.posed_bones(pose, root)[index].head;
         (hand - HoldSpec::default().grip()).length()
+    }
+
+    /// Fails if a turned figure's weapon does not turn with it under either anchor.
+    #[test]
+    fn a_turned_figure_turns_its_weapon_with_it() {
+        use crate::common::app_mode::AppMode;
+        let turn = Quat::from_rotation_y(0.7);
+        for anchor in Anchor::ALL {
+            let stage = FigureStage { holding: true, anchor };
+            let ahead = staged(stage, AppMode::Animation).0.resource::<FigureWeapon>().0;
+            let turned = staged_beneath(stage, AppMode::Animation, FigureBeneath { yaw: 0.7, ..default() })
+                .0
+                .resource::<FigureWeapon>()
+                .0;
+            assert!(turned.rotation.angle_between(turn * ahead.rotation) < 1e-3, "{anchor:?}: the weapon did not turn");
+            assert!((turned.translation - turn * ahead.translation).length() < 1e-3, "{anchor:?}: the weapon was left behind");
+        }
     }
 
     #[test]

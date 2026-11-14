@@ -1,0 +1,30 @@
+name_key = ""
+length = 2.0
+clock = "shared"
+looping = true
+note = "The tail swung slowly from side to side behind the strider, solved by FABRIK within its joints. Measured in meters in the body's frame."
+
+[[tracks]]
+combine = "replace"
+space = "body"
+unit = "meters"
+enabled = true
+
+[tracks.channel]
+channel = "effector"
+chain = "tail"
+
+[[tracks.channel.keys]]
+at = 0.0
+to = [0.15, 0.95, 0.6]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 1.0
+to = [-0.15, 0.95, 0.6]
+ease = "smoother_step"
+
+[[tracks.channel.keys]]
+at = 2.0
+to = [0.15, 0.95, 0.6]
+ease = "smoother_step"

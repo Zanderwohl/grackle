@@ -104,6 +104,7 @@ pub fn update_hitboxes(
             stride: gait.phase(),
             speed: gait.speed(),
             travel: gait.travel(),
+            feet_free: crate::game::skeleton::feet_free(stack, layer_clips.as_deref()),
         };
         let mut pose = animator_pose(skeleton, animator, &inputs, &root, clips, crouch);
         // The body box is the hull, wherever a duck draws the feet: blasts and shots are measured
@@ -120,7 +121,7 @@ pub fn update_hitboxes(
             });
         }
         let pitch = player.map_or(0.0, |player| player.pitch);
-        look(&mut pose, pitch);
+        look(skeleton, &mut pose, pitch * crate::game::skeleton::look_weight(stack, layer_clips.as_deref()));
         if let (Some(stack), Some(layer_clips)) = (stack, layer_clips.as_deref()) {
             let floor = root.translation.y;
             let ground = move |_: Vec3| floor;

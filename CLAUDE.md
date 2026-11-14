@@ -199,6 +199,40 @@ with no build is drawn as `Proportions::DEFAULT` rather than not at all. Tests
 and tools read `ClassBuilds::shipped()`; there is no table in Rust to drift
 from the file.
 
+A build may name a **rig file** instead (`rig = "strider"`, with `height`,
+`girth` and `[scales]` per bone group): `rigs/<name>.toml`
+([`src/common/skeleton/rig_file.rs`](src/common/skeleton/rig_file.rs)), loaded
+because a build names it and checked by building it. The rigs ride in
+`ClassBuilds`, so a client is sent them with the builds. Everything that rigs a
+body asks `ClassBuilds::rig_for` or `skeleton(build)`, never `humanoid`
+directly, and a `Build` — rig, proportions, scales — is what a skeleton, a
+corpse and the mesh cache remember. Another rig's state clips are
+`animations/<rig>/<state>.gpa`; without one a state stands in rest. The
+animation editor lists every rig on disk, each with its states, and previews
+a rig's clip on that rig (`FigureRig`).
+
+A clip names a rig's parts by name: an effector's `chain` is any limb
+(`ChainRef`, interned), `Space::Bone` measures from any bone's tail, and
+`Timing::Foot(n)` times against any foot. A rig may name regions of its own
+after the six every rig has (`Anatomy::region_names`); a taunt's claims are
+names, resolved against each body's rig as it taunts.
+
+**`Class::Strider`** is the first class on a rig file: two legs, a neck, a tail
+and no hands, so its weapon rides on the rig's `mount` and nothing grips. A
+taunt names another rig's clip in its `rigs`, and a body is offered only the
+taunts it has a clip for. `--class KEY` plays every body as that class until
+a class can be picked (`PlayAs`, read by `publish_game_rules`). The humanoid's
+own tests loop over `ClassBuilds::humanoids()`.
+
+A chain of three or more bones (a limb's `between`) is solved by FABRIK within
+each joint's limit, at a fixed round count so every machine agrees; two bones
+stay on the exact solver. A clip's `LookAt` turns a bone toward a target, and
+its `Weight` tracks turn down the procedural passes — feet planted, head
+following the aim, hands on the weapon (`play::controller_weight`). The look
+yields the head to any layer above the weapon that claims it. A key may name
+its own space; between keys in different spaces the target blends in world
+space.
+
 Usability is decided by `CollisionWorld::fits` — the body box must be in the
 map and touching no wall. There is no separate notion of "headroom": a low
 ceiling *is* a slab the body overlaps. Unusable spawns are skipped with a
@@ -492,7 +526,12 @@ the first taunt in `assets/default/taunts.toml` (a wave, which ends by itself;
 suicide, 1000 damage credited to yourself, a debug key for the death cam; nobody
 crouches while taunting; each taunt states what it claims, whether it
 shows the weapon, how far you can move, and how far your body (never the
-camera) can turn. What each slot
+camera) can turn — all of it edited in the animation editor's **Taunts**
+section (`write_taunts` edits the file in place, so its comments survive).
+`length = "clip"` lasts as long as the clip (until `G` again if the clip is
+in no pack); it is resolved to a number where the table is loaded, so a client
+is sent the authority's number. Saving writes what changed and what the target
+pack already holds, never an unchanged taunt or clip another pack supplies. What each slot
 holds is a property of the class, which is read off disk; see "What a weapon is" below.
 
 ## Modeling a prop
@@ -976,6 +1015,18 @@ sends a clip out with `ClipStack::keep` rather than removing it, and
 `fade_the_layers` is the only thing that takes one off. A region claimed by a
 layer above the weapon stands still beneath it (`stand_where_claimed`), so a
 taunt that claims the legs owns them whether or not it keys them.
+Humiliation's claims are in `layers.toml` too (`LayerClaims`); a taunt's are
+its own.
+
+**The animation editor edits every clip under a pack's `animations/`**: the
+states', the taunts', and those played by name (`humiliated`, `flinch_*`,
+`recoil`, `reload`), which it lists off the disk since the game is told each
+name by whatever plays it. A clip played by name is one handle per name in
+`NamedClips`, so an edit refills it under every system holding it. Each
+previews on the layer it plays on, over a chosen body state posed as the
+animator would pose it (`FigureBeneath`), and a taunt can be previewed
+**Moving**: at its speed, turning no faster than it allows after an aim swept
+side to side.
 
 `every_class_can_reach_every_shipped_props_grip` is what keeps a hold
 authorable: a build whose hand cannot get to the grip holds nothing while its
@@ -1040,6 +1091,21 @@ is an `Option<String>` naming a prop under a pack's `props/`; it crosses the
 wire with the rest of the catalog, so each machine builds the model from its
 own pack — the same arrangement `Equipped` already has, one level down.
 Nothing draws it. That is the next piece, not a gap in this one.
+
+**A prop may have bones** ([`src/prop/rig.rs`](src/prop/rig.rs)): a
+`[[bones]]` section, each a pivot, a parent listed above it and the features
+whose bodies ride on it, edited in the **Bones** tab beside the Inspector. A
+body takes the bone of its own feature, else of the first operand it ate that
+has one, so cutting a bore through a bound barrel keeps it bound. Meshes stay
+in prop space and a part is moved by its bone's change from rest, so baking
+re-centers nothing. Clips key them with `PropBone` (a turn about the pivot) and
+`PropBoneOffset` (a move in the parent's frame), posed into a `PropPose` by
+`prop::rig::apply_stack` from whatever stack is already playing — the body's
+for a held part, the viewmodel's, the figure's on the editor's stage — and
+masked where a layer above claims the weapon. A placed prop loops its `idle`
+and plays `hit` on each `DamageDealt` naming it, which is relayed, so every
+machine draws it; hats and thumbnails stand in rest. The pistol's slide kicks
+on `fire` and its magazine drops in its reloads; the crate jolts on `hit`.
 
 ## What a prop can be
 
@@ -1463,6 +1529,16 @@ across a shape — so a limb is a stack of cross-sections, and welding two parts
 later means sharing a ring rather than rewriting a shape. Winding is
 counter-clockwise seen from outside, everywhere; get it backwards and a part is
 not missing, it is inside out.
+
+**Nothing outside the rig's builder names a bone.** A `Skeleton` publishes its
+`Anatomy` ([`src/common/skeleton/anatomy.rs`](src/common/skeleton/anatomy.rs)):
+its limbs by the names clips use, the feet it plants and at what phase, the two
+hands, the bone a weapon hangs from, the head, the look shares, the viewmodel's
+bones, a region per bone, and leg, arm and hip in meters. Clips, the grip, hats,
+hitboxes, the viewmodel, the look pass, foot planting and the ragdoll all ask
+it, so a rig of another shape is a new builder; see
+[documentation/rigs.md](documentation/rigs.md). A pose stays keyed by bone name,
+so one pose fits every build.
 
 A bone's shape is a `Profile`: a handful of rings down its length, each a
 multiplier on the bone's own thickness. So nothing here is a second opinion
@@ -2523,7 +2599,7 @@ What crosses is the **seed**, not the simulation. `Ragdoll` is
 `replicate_once`: two points per bone at the moment of death, sent once and
 never again, and each machine runs the same solver over them from there —
 twenty bones of physics per corpse once, not per tick. A `Skeleton` still never
-crosses; the corpse carries a `CorpseBuild` — the `Proportions` read straight
+crosses; the corpse carries a `CorpseBuild` — the `Build` read straight
 off the rig the body had — and `dress_corpses_from_elsewhere` puts the rig
 back from it.
 

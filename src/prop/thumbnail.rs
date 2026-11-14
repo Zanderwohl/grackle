@@ -380,7 +380,7 @@ fn photograph(
         let points = baked
             .parts
             .iter()
-            .filter_map(|(mesh, _)| meshes.get(mesh))
+            .filter_map(|part| meshes.get(&part.mesh))
             .filter_map(|mesh| mesh.attribute(Mesh::ATTRIBUTE_POSITION)?.as_float3())
             .flatten()
             .map(|&p| Vec3::from(p));
@@ -431,8 +431,8 @@ fn photograph(
                         layer.clone(),
                     ));
                 }
-                for (mesh, material) in &baked.parts {
-                    studio.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(material.clone()), layer.clone()));
+                for part in &baked.parts {
+                    studio.spawn((Mesh3d(part.mesh.clone()), MeshMaterial3d(part.material.clone()), layer.clone()));
                 }
             })
             .id();

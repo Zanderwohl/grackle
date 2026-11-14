@@ -125,6 +125,9 @@ pub struct PropDoc {
     /// last feature cannot make the next one reuse its id.
     #[serde(default)]
     next_id: u32,
+    /// Parents first. See [`crate::prop::rig`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bones: Vec<crate::prop::rig::PropBone>,
     /// Fire, reload, deploy. Here rather than in `weapons.toml` because a clip
     /// is stated relative to the hold.
     ///
@@ -149,6 +152,7 @@ impl PropDoc {
             pickup: PickupSpec::default(),
             hat: HatSpec::default(),
             next_id: 0,
+            bones: vec![],
             animations: ClipSet::default(),
         }
     }
@@ -779,11 +783,13 @@ mod tests {
                                 at: 0.0,
                                 to: [Axis::Free, Axis::Value(-0.8), Axis::Free],
                                 ease: Interpolation::CubicOut,
+                                space: None,
                             },
                             Key {
                                 at: 0.45,
                                 to: [Axis::Free, Axis::Value(0.0), Axis::Free],
                                 ease: Interpolation::Linear,
+                                space: None,
                             },
                         ],
                     },
@@ -1067,11 +1073,9 @@ mod tests {
     /// at the keys.
     #[test]
     fn every_clip_the_default_pack_ships_samples_on_every_class() {
-        use crate::common::class::Class;
         use crate::common::skeleton::play::{apply, Frames};
         use crate::common::skeleton::rig::humanoid;
         use crate::common::skeleton::Pose;
-        use strum::IntoEnumIterator;
 
         // Past the end, because a one-shot holds there.
         const OVERSHOOT: f32 = 1.2;
@@ -1092,7 +1096,7 @@ mod tests {
             let named = path.display();
 
             for (name, clip) in &doc.animations.clips {
-                for class in Class::iter() {
+                for class in crate::common::class::ClassBuilds::shipped().humanoids() {
                     let rig = humanoid(crate::common::class::ClassBuilds::shipped().of(class));
                     let problems = clip.problems(|bone| rig.index_of(bone).is_some());
                     assert!(

@@ -6,7 +6,7 @@
 
 use bevy::prelude::*;
 
-use crate::common::assets::{default_packs, Assets as PackAssets};
+use crate::common::assets::Assets as PackAssets;
 use crate::common::damage::{DamageDealt, DamageSource, PlayerId};
 use crate::common::skeleton::clip::Clip;
 use crate::common::skeleton::play::{ClipStack, Layer};
@@ -65,6 +65,7 @@ pub struct FlinchPlugin;
 impl Plugin for FlinchPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<FlinchClips>()
+            .init_resource::<crate::common::clip_file::NamedClips>()
             .add_systems(Startup, load_flinch_clips)
             .add_systems(
                 Update,
@@ -76,11 +77,19 @@ impl Plugin for FlinchPlugin {
     }
 }
 
-fn load_flinch_clips(packs: Res<PackAssets>, mut clips: ResMut<Assets<Clip>>, mut loaded: ResMut<FlinchClips>) {
+fn load_flinch_clips(
+    packs: Res<PackAssets>,
+    mut clips: ResMut<Assets<Clip>>,
+    mut named: ResMut<crate::common::clip_file::NamedClips>,
+    mut loaded: ResMut<FlinchClips>,
+) {
     for (index, push) in Push::ALL.into_iter().enumerate() {
-        loaded.0[index] = crate::common::clip_file::load_named_clip(&packs, &default_packs(), push.clip_name())
-            .map(|clip| clips.add(clip));
+        loaded.0[index] = named.load(&packs, &mut clips, push.clip_name());
     }
+}
+
+pub fn is_a_flinch_clip(name: &str) -> bool {
+    Push::ALL.iter().any(|push| push.clip_name() == name)
 }
 
 /// A hit this big flinches fully; anything bigger flinches no more.
