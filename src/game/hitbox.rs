@@ -28,8 +28,8 @@ use crate::game::skeleton::{
 };
 use crate::prop::hold::carry_frame;
 
-/// Whether hitboxes, and the debug laser aimed at them, are drawn. `F4`
-/// toggles both. Off by default: a debug view, and the laser traces every body.
+/// Whether hitboxes, the debug laser aimed at them and each shot's line are
+/// drawn. `F4` toggles all three. Off by default: a debug view, and the laser traces every body.
 #[derive(Resource, Debug, Default)]
 pub struct ShowHitboxes(pub bool);
 

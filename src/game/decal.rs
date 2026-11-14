@@ -625,14 +625,7 @@ fn age_transients(
     }
 }
 
-const WARM_UP_FRAMES: u32 = 10;
-
-#[derive(Component)]
-struct DecalWarmUp;
-
-/// Draws every decal material once, with and without a lightmap, through a camera set up as the
-/// play camera is. Bevy compiles a pipeline on the frame something is first drawn with it,
-/// synchronously on macOS and wasm. Follows the lens warm-up in [`crate::game::forward_camera`].
+/// Every decal material, with and without a lightmap, for [`crate::game::warm_up`].
 fn warm_up_decals(
     mut commands: Commands,
     art: Res<DecalArt>,
@@ -641,22 +634,8 @@ fn warm_up_decals(
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     use bevy::camera::visibility::{NoFrustumCulling, RenderLayers};
-    use bevy::camera::{Hdr, RenderTarget};
-    use bevy::core_pipeline::tonemapping::Tonemapping;
-    use bevy::render::render_resource::TextureFormat;
 
     let layer = RenderLayers::layer(crate::common::render_layers::WARM_UP);
-    let target = images.add(Image::new_target_texture(4, 4, TextureFormat::Rgba16Float, None));
-    commands.spawn((
-        DecalWarmUp,
-        Camera3d::default(),
-        RenderTarget::Image(target.into()),
-        Hdr,
-        Tonemapping::TonyMcMapface,
-        bevy::camera::Projection::Perspective(PerspectiveProjection::default()),
-        layer.clone(),
-        Name::new("Decal warm-up camera"),
-    ));
     // Laid out as a cut piece is, with all three corners in one place so nothing is rasterized.
     let point = decal::Piece {
         positions: vec![[0.0, 0.0, -1.0]; 3],
@@ -672,7 +651,7 @@ fn warm_up_decals(
     let multiplied = art.transient.iter().flatten().cloned();
     for (material, lit) in multiplied.map(|m| (m, false)).chain([(blended.clone(), false), (blended, true)]) {
         let mut piece = commands.spawn((
-            DecalWarmUp,
+            crate::game::warm_up::WarmUp,
             Mesh3d(mesh.clone()),
             MeshMaterial3d(material),
             layer.clone(),
@@ -684,19 +663,6 @@ fn warm_up_decals(
         if lit {
             piece.insert(Lightmap { image: lightmap.clone(), uv_rect: Rect::new(0.0, 0.0, 1.0, 1.0), bicubic_sampling: false });
         }
-    }
-}
-
-fn end_the_warm_up(mut commands: Commands, mut frames: Local<u32>, drawn: Query<Entity, With<DecalWarmUp>>) {
-    if drawn.is_empty() {
-        return;
-    }
-    *frames += 1;
-    if *frames < WARM_UP_FRAMES {
-        return;
-    }
-    for entity in &drawn {
-        commands.entity(entity).despawn();
     }
 }
 
@@ -714,13 +680,13 @@ pub struct DecalPlugin;
 
 impl Plugin for DecalPlugin {
     fn build(&self, app: &mut App) {
+        crate::game::warm_up::ensure(app);
         app.init_resource::<DecalArt>()
             .init_resource::<TransientDecals>()
             .init_resource::<MapDecalArt>()
             // Also registered by `RagdollPlugin`; here so decals work without it.
             .add_message::<GibImpact>()
             .add_systems(Startup, (load_decal_art, warm_up_decals).chain())
-            .add_systems(Update, end_the_warm_up)
             // Ungated: the map's decals and sprays stand in the editor too, and the map can
             // change during a round.
             .add_systems(
