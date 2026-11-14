@@ -1,8 +1,9 @@
-// A body's material: the standard one, lit by where the body stands, which `game::sunlit` packs
-// into the mesh's `MeshTag` (`common::air_light::pack`): the ambient term scaled by the light in
-// the air, and the sun added when the body is in it. The sun is added here rather than by a
-// `DirectionalLight` because Bevy applies a directional light to every mesh a camera draws,
-// walls included, whatever their render layers. Forward only, as every camera here is.
+// The material for things that move: the standard one, lit by where the thing stands, which
+// `game::sunlit` packs into the mesh's `MeshTag` (`common::air_light::pack`): the ambient term
+// scaled by the light in the air, and the sun added when the thing is in it. The sun is added
+// here rather than by a `DirectionalLight` because Bevy applies a directional light to every mesh
+// a camera draws, walls included, whatever their render layers. Forward only, as every camera
+// here is.
 
 import bevy_pbr::render::{
     forward_io::{VertexOutput, FragmentOutput},

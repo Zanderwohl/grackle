@@ -9,13 +9,11 @@
 //! Meshes are cached per build ([`Build`]), not per body: sixty bodies in
 //! an animation grid are ten meshes.
 
-use bevy::asset::embedded_asset;
-use bevy::pbr::{ExtendedMaterial, MaterialExtension};
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
-use bevy::render::render_resource::AsBindGroup;
-use bevy::shader::ShaderRef;
 use bevy::transform::TransformSystems;
+
+use crate::common::air_lit::{self, lit, LitMaterial};
 
 use crate::common::flame::Burning;
 use crate::common::skeleton::mesh::body_meshes;
@@ -88,62 +86,29 @@ pub fn body_look(
     }
 }
 
-/// A body's material: the standard one, lit by where it stands — the light in the air instead of the
-/// global ambient, and the sun when it is in it — which [`crate::game::sunlit`] writes into each
-/// part's `MeshTag`.
-pub type BodyMaterial = ExtendedMaterial<StandardMaterial, AirLit>;
-
-#[derive(Asset, AsBindGroup, Reflect, Debug, Clone, Default)]
-pub struct AirLit {
-    /// Unit, toward the sun, and its illuminance in `w`. The same on every body material.
-    #[uniform(100)]
-    pub sun: Vec4,
-}
-
-impl MaterialExtension for AirLit {
-    fn fragment_shader() -> ShaderRef {
-        "embedded://grackle/game/air_lit.wesl".into()
-    }
-}
-
 /// One material per look: four teams alight or not is eight materials, not
 /// one per body.
 #[derive(Resource, Default)]
 pub struct BodyMaterials {
-    made: HashMap<([u8; 4], bool), Handle<BodyMaterial>>,
-    sun: Vec4,
+    made: HashMap<([u8; 4], bool), Handle<LitMaterial>>,
 }
 
 impl BodyMaterials {
-    /// Puts the sun on every body material, and on every one made from now on.
-    pub(crate) fn set_sun(&mut self, sun: Vec4, materials: &mut Assets<BodyMaterial>) {
-        self.sun = sun;
-        for handle in self.made.values() {
-            if let Some(mut material) = materials.get_mut(handle) {
-                material.extension.sun = sun;
-            }
-        }
-    }
-
     /// `pub(crate)` for the viewmodel's arms.
     pub(crate) fn get(
         &mut self,
         look: BodyLook,
-        materials: &mut Assets<BodyMaterial>,
-    ) -> Handle<BodyMaterial> {
-        let sun = self.sun;
+        materials: &mut Assets<LitMaterial>,
+    ) -> Handle<LitMaterial> {
         self.made
             .entry(look.key())
             .or_insert_with(|| {
-                materials.add(ExtendedMaterial {
-                    base: StandardMaterial {
-                        base_color: look.color,
-                        emissive: if look.burning { BURNING_GLOW } else { LinearRgba::BLACK },
-                        perceptual_roughness: 0.85,
-                        ..default()
-                    },
-                    extension: AirLit { sun },
-                })
+                materials.add(lit(StandardMaterial {
+                    base_color: look.color,
+                    emissive: if look.burning { BURNING_GLOW } else { LinearRgba::BLACK },
+                    perceptual_roughness: 0.85,
+                    ..default()
+                }))
             })
             .clone()
     }
@@ -196,9 +161,8 @@ pub struct BodyMeshPlugin;
 
 impl Plugin for BodyMeshPlugin {
     fn build(&self, app: &mut App) {
-        embedded_asset!(app, "air_lit.wesl");
-        app.add_plugins(MaterialPlugin::<BodyMaterial>::default())
-            .init_resource::<BodyMeshCache>()
+        air_lit::ensure(app);
+        app.init_resource::<BodyMeshCache>()
             .init_resource::<BodyMaterials>()
             // `recolor_bodies` after the build, so a body lit on the frame it
             // is dressed ends up lit.
@@ -218,7 +182,7 @@ fn build_body_meshes(
     mut meshes: ResMut<Assets<Mesh>>,
     mut cache: ResMut<BodyMeshCache>,
     mut palette: ResMut<BodyMaterials>,
-    mut materials: ResMut<Assets<BodyMaterial>>,
+    mut materials: ResMut<Assets<LitMaterial>>,
     bodies: Query<
         (
             Entity,
@@ -276,11 +240,11 @@ fn build_body_meshes(
 /// ten times a second.
 fn recolor_bodies(
     mut palette: ResMut<BodyMaterials>,
-    mut materials: ResMut<Assets<BodyMaterial>>,
+    mut materials: ResMut<Assets<LitMaterial>>,
     mut extinguished: RemovedComponents<Burning>,
     lit: Query<Entity, Added<Burning>>,
     bodies: Query<(&BodyMesh, Option<&Team>, Option<&PlayerColor>, Option<&BodyTint>, Option<&Burning>)>,
-    mut parts: Query<&mut MeshMaterial3d<BodyMaterial>>,
+    mut parts: Query<&mut MeshMaterial3d<LitMaterial>>,
 ) {
     // Both edges, or a body stays scorched after the fire is out.
     for body in lit.iter().chain(extinguished.read()) {
@@ -545,7 +509,7 @@ mod tests {
         let material = |body: Entity| {
             let part = app.world().get::<BodyMesh>(body).expect("dressed").parts[0];
             app.world()
-                .get::<MeshMaterial3d<BodyMaterial>>(part)
+                .get::<MeshMaterial3d<LitMaterial>>(part)
                 .expect("a part is painted")
                 .0
                 .clone()

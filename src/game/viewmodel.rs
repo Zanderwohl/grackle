@@ -25,7 +25,8 @@ use crate::common::skeleton::{Pose, Skeleton};
 use crate::common::player_color::PlayerColor;
 use crate::common::team::Team;
 use crate::common::weapon::{WeaponCatalog, WeaponId};
-use crate::game::body_mesh::{body_look, BodyMaterial, BodyMaterials, BodyMeshCache, BodyTint};
+use crate::common::air_lit::LitMaterial;
+use crate::game::body_mesh::{body_look, BodyMaterials, BodyMeshCache, BodyTint};
 use crate::common::skeleton::clip::Clip;
 use crate::common::skeleton::play::{apply_stack, grip_offsets, ClipStack, Frames};
 use crate::prop::rig::{place_part, OnPropBone};
@@ -197,7 +198,7 @@ pub fn dress_the_viewmodel(
     held: Query<&HeldModel, Viewed>,
     // Copied off the body's own parts rather than a second cache lookup that
     // could disagree.
-    drawn: Query<(&Mesh3d, &MeshMaterial3d<StandardMaterial>, Option<&OnPropBone>), With<HeldPart>>,
+    drawn: Query<(&Mesh3d, &MeshMaterial3d<LitMaterial>, Option<&OnPropBone>), With<HeldPart>>,
     mut views: Query<(Entity, &mut Viewmodel)>,
     cameras: Query<Entity, With<ViewmodelCamera>>,
 ) {
@@ -370,7 +371,7 @@ fn dress_the_viewmodel_arms(
     mut cache: ResMut<BodyMeshCache>,
     mut palette: ResMut<BodyMaterials>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<BodyMaterial>>,
+    mut materials: ResMut<Assets<LitMaterial>>,
     bodies: Query<
         (Entity, &Skeleton, Option<&Team>, Option<&PlayerColor>, Option<&BodyTint>, Option<&Burning>),
         Viewed,

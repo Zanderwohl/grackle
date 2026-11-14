@@ -165,9 +165,13 @@ east (`+X`); altitude is degrees above the horizon.
 
 Bodies, corpses, projectiles and placed props are not lightmapped
 ([`game/sunlit.rs`](../src/game/sunlit.rs)). Each one's meshes get a `MeshTag`
-holding how it is lit where it stands, and a body's material (`BodyMaterial`,
-an extension of `StandardMaterial`, [`game/air_lit.wesl`](../src/game/air_lit.wesl))
-reads it. Props and projectiles ignore the tag for now.
+holding how it is lit where it stands, and their material reads it:
+`LitMaterial`, an extension of `StandardMaterial`
+([`common/air_lit.rs`](../src/common/air_lit.rs),
+[`air_lit.wesl`](../src/common/air_lit.wesl)), which body parts, every prop
+surface (held weapons, the viewmodel's, hats, placed props, pickups) and
+projectiles are drawn with. A mesh with no tag — the prop editor, a
+thumbnail — draws as plain standard.
 
 - **The sun is added by the body's shader, not by a `DirectionalLight`.** Bevy
   0.20 filters a directional light by the *camera's* render layers only: any
@@ -178,7 +182,8 @@ reads it. Props and projectiles ignore the tag for now.
   a body, 0.1 m up otherwise — reaches sky in `OpenSky` (the map's surface,
   rebuilt the moment the faces or what is sky change, so it does not wait for
   a bake), and the shader adds Lambertian diffuse for it from the sun's
-  direction and illuminance on the material. The illuminance is
+  direction and illuminance on every lit material, which `sunlit` keeps
+  current, a material made since the sun last moved included. The illuminance is
   `SUN_BRIGHTNESS × π`: Bevy's diffuse is albedo over π times illuminance and a
   texel is albedo times its value, so a body and a wall facing the sun are
   equally bright. It is a switch, not a fade, and casts no shadow.
@@ -229,5 +234,5 @@ same-sized image into its existing texture — so no slot goes a frame unlit.
 - [x] Cache under `cache/lightmap/` by content hash (`tool/bake_cache.rs`, shared with the nav graph); keyed by faces, sky, sun, sky time, the bake's constants and `FORMAT`
 - [x] The sun on bodies, in their shader, by a ray from the chest; the viewmodel's arms with the local body
 - [x] Ambient in the air on a 2 m world lattice, baked last, sampled per body into a `MeshTag` that scales a body's ambient
-- [ ] Sun and ambient on props, projectiles and held weapons: they read no tag yet
+- [x] Sun and ambient on props, projectiles and held weapons: one `LitMaterial` for everything that moves
 - [ ] Tests: a closed room is unlit; a sky ceiling lights the floor under it and not the room next door, except by bounce; coplanar floors across a threshold bake the same values on both sides

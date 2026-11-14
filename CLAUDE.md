@@ -1505,8 +1505,10 @@ lightmap replaces the ambient on walls, so `GlobalAmbientLight` lights only
 what moves. **Things that move are lit where they stand** ([`src/game/sunlit.rs`](src/game/sunlit.rs)):
 each one's meshes get a `MeshTag` packing whether one ray from it reaches sky
 in `OpenSky` and the bake's `AirLight` (the gather on a 2 m world lattice) at
-that point, and a body's `BodyMaterial` adds the sun and scales its ambient by
-it. **Not a `DirectionalLight`**: Bevy applies one to every mesh a camera
+that point, and their `LitMaterial` ([`src/common/air_lit.rs`](src/common/air_lit.rs)) —
+body parts, every prop surface, projectiles — adds the sun and scales its
+ambient by it. A plugin that makes one calls `air_lit::ensure`, since those
+plugins also stand alone in tests. **Not a `DirectionalLight`**: Bevy applies one to every mesh a camera
 draws whatever the mesh's render layers, so it lit every wall unshadowed and
 washed the lightmaps out. Anything else that moves ignores the tag.
 

@@ -37,6 +37,8 @@
 
 use bevy::prelude::*;
 
+use crate::common::air_lit::LitMaterial;
+
 use crate::common::app_mode::AppMode;
 use crate::common::assets::{default_packs, Assets};
 use crate::prop::document::{prop_path, PropDoc, PropEditor};
@@ -71,6 +73,7 @@ pub struct PropEditorPlugin;
 
 impl Plugin for PropEditorPlugin {
     fn build(&self, app: &mut App) {
+        crate::common::air_lit::ensure(app);
         // Also initialized by `GamePlugin`; done again here so reading pack
         // files does not depend on the game layer being wired up first.
         app.init_resource::<Assets>()
@@ -127,7 +130,7 @@ fn publish_the_saved_prop(
     mut cache: ResMut<baked::PropCache>,
     mut surfaces: ResMut<baked::SurfaceMaterials>,
     mut meshes: ResMut<bevy::asset::Assets<Mesh>>,
-    mut materials: ResMut<bevy::asset::Assets<StandardMaterial>>,
+    mut materials: ResMut<bevy::asset::Assets<LitMaterial>>,
     mut clips: ResMut<bevy::asset::Assets<crate::common::skeleton::clip::Clip>>,
     mut seen: Local<u64>,
 ) {
@@ -176,6 +179,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins((bevy::asset::AssetPlugin::default(), bevy::render::mesh::MeshPlugin));
         app.init_asset::<StandardMaterial>();
+        app.init_asset::<crate::common::air_lit::LitMaterial>();
         app.add_plugins(crate::common::skeleton::ClipAssetsPlugin);
         app.init_resource::<baked::PropCache>()
             .init_resource::<baked::SurfaceMaterials>()

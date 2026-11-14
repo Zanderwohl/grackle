@@ -8,6 +8,8 @@
 
 use bevy::prelude::*;
 
+use crate::common::air_lit::LitMaterial;
+
 use crate::common::assets::Assets as PackAssets;
 use crate::common::class::Class;
 use std::collections::BTreeMap;
@@ -215,6 +217,7 @@ pub struct HeldWeaponPlugin;
 
 impl Plugin for HeldWeaponPlugin {
     fn build(&self, app: &mut App) {
+        crate::common::air_lit::ensure(app);
         app.add_plugins(ClipAssetsPlugin)
             .init_resource::<PropCache>()
             .init_resource::<SurfaceMaterials>()
@@ -265,7 +268,7 @@ fn bake_what_we_carry(
     mut cache: ResMut<PropCache>,
     mut surfaces: ResMut<SurfaceMaterials>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut materials: ResMut<Assets<LitMaterial>>,
     mut clips: ResMut<Assets<Clip>>,
     ours: Option<Single<&Equipped, With<LocalPlayer>>>,
 ) {
@@ -288,7 +291,7 @@ fn dress_held_weapons(
     mut cache: ResMut<PropCache>,
     mut surfaces: ResMut<SurfaceMaterials>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut materials: ResMut<Assets<LitMaterial>>,
     mut clip_assets: ResMut<Assets<Clip>>,
     view: Res<ViewMode>,
     taunts: Option<Res<Taunts>>,
@@ -781,7 +784,7 @@ mod tests {
     fn a_modeled_weapon_reaches_the_hand() {
         let mut world = World::new();
         world.insert_resource(Assets::<Mesh>::default());
-        world.insert_resource(Assets::<StandardMaterial>::default());
+        world.insert_resource(Assets::<LitMaterial>::default());
         world.insert_resource(Assets::<Clip>::default());
         world.init_resource::<PropCache>();
         world.init_resource::<SurfaceMaterials>();
@@ -947,7 +950,7 @@ mod tests {
 
         let mut cache = PropCache::default();
         let mut meshes = Assets::<Mesh>::default();
-        let mut materials = Assets::<StandardMaterial>::default();
+        let mut materials = Assets::<LitMaterial>::default();
         let mut surfaces = SurfaceMaterials::default();
         let mut assets = Assets::<Clip>::default();
         cache.adopt("launcher", &saved(0.5), &mut meshes, &mut materials, &mut surfaces, &mut assets, None);

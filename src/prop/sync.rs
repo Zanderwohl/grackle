@@ -10,6 +10,8 @@
 //! [`PropCache::generation`].
 
 use bevy::prelude::*;
+
+use crate::common::air_lit::LitMaterial;
 use lightyear::prelude::server::ClientOf;
 use lightyear::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -173,7 +175,7 @@ fn adopt_the_servers_models(
     mut cache: ResMut<PropCache>,
     mut surfaces: ResMut<SurfaceMaterials>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut materials: ResMut<Assets<LitMaterial>>,
     mut clips: ResMut<Assets<crate::common::skeleton::clip::Clip>>,
 ) {
     if role.is_authority() {

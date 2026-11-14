@@ -1,8 +1,8 @@
 //! How things that move are lit, since they carry no lightmap: bodies, corpses, placed props and
 //! projectiles. Each one's meshes get a `MeshTag` ([`air_light::pack`]) holding the light in the
-//! air where it stands ([`AirLight`]) and whether a ray from it reaches sky ([`OpenSky`]), and a
-//! body's material ([`BodyMaterial`]) scales its ambient by the first and adds the sun by the
-//! second. Anything else that moves ignores its tag. See "Things that move" in documentation/sun.md.
+//! air where it stands ([`AirLight`]) and whether a ray from it reaches sky ([`OpenSky`]), and their
+//! material ([`LitMaterial`]) scales its ambient by the first and adds the sun by the second. See
+//! "Things that move" in documentation/sun.md.
 //!
 //! The sun is a switch, not a fade: a body half out of a doorway is one or the other. It is not a
 //! `DirectionalLight`, which Bevy would apply to every mesh a camera draws, walls included.
@@ -19,7 +19,7 @@ use crate::common::lightmap::{BASE_AMBIENT, SUN_BRIGHTNESS};
 use crate::common::render_layers::VIEWMODEL;
 use crate::common::skeleton::rig::Skeleton;
 use crate::common::sky::SunPosition;
-use crate::game::body_mesh::{BodyMaterial, BodyMaterials};
+use crate::common::air_lit::LitMaterial;
 use crate::game::player::LocalPlayer;
 use crate::game::projectile::Projectile;
 use crate::game::world_prop::WorldProp;
@@ -36,9 +36,16 @@ const ABOVE_ORIGIN: f32 = 0.1;
 /// value, so this makes a body facing the sun as bright as a wall facing it.
 const SUN_ILLUMINANCE: f32 = SUN_BRIGHTNESS * PI;
 
-fn aim_the_sun(position: Res<SunPosition>, mut palette: ResMut<BodyMaterials>, mut materials: ResMut<Assets<BodyMaterial>>) {
-    if position.is_changed() {
-        palette.set_sun(position.toward().extend(SUN_ILLUMINANCE), &mut materials);
+/// Every lit material carries the sun, so one made since it last moved is caught too. Read before
+/// it is written, so a material already right is not marked changed.
+fn keep_the_sun_on_lit_materials(position: Res<SunPosition>, mut materials: ResMut<Assets<LitMaterial>>) {
+    let sun = position.toward().extend(SUN_ILLUMINANCE);
+    let stale: Vec<AssetId<LitMaterial>> =
+        materials.iter().filter(|(_, material)| material.extension.sun != sun).map(|(id, _)| id).collect();
+    for id in stale {
+        if let Some(mut material) = materials.get_mut(id) {
+            material.extension.sun = sun;
+        }
     }
 }
 
@@ -103,6 +110,6 @@ pub struct SunlitPlugin;
 impl Plugin for SunlitPlugin {
     fn build(&self, app: &mut App) {
         // Ungated: bodies stand in the editor too.
-        app.add_systems(Update, (aim_the_sun, light_what_moves));
+        app.add_systems(Update, (keep_the_sun_on_lit_materials, light_what_moves));
     }
 }

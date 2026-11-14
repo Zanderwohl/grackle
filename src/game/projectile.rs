@@ -15,6 +15,8 @@
 //! interpolation: at 30 m/s a rocket drawn at the tick visibly stutters.
 
 use bevy::prelude::*;
+
+use crate::common::air_lit::{lit, LitMaterial};
 use serde::{Deserialize, Serialize};
 
 use crate::common::app_mode::AppMode;
@@ -377,7 +379,7 @@ pub fn advance(
 #[derive(Resource, Default)]
 struct ProjectileAssets {
     mesh: Option<Handle<Mesh>>,
-    material: Option<Handle<StandardMaterial>>,
+    material: Option<Handle<LitMaterial>>,
 }
 
 /// `spin` is replicated and drawn here rather than in the step, which only
@@ -394,7 +396,7 @@ fn dress_projectiles(
     mut commands: Commands,
     mut assets: ResMut<ProjectileAssets>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut materials: ResMut<Assets<LitMaterial>>,
     mut undressed: Query<
         (Entity, &Projectile, Option<&PhysicsBody>, Option<&mut Transform>),
         Without<Mesh3d>,
@@ -411,11 +413,11 @@ fn dress_projectiles(
     let material = assets
         .material
         .get_or_insert_with(|| {
-            materials.add(StandardMaterial {
+            materials.add(lit(StandardMaterial {
                 base_color: Color::srgb(0.9, 0.35, 0.1),
                 emissive: LinearRgba::rgb(3.0, 0.8, 0.1),
                 ..default()
-            })
+            }))
         })
         .clone();
 
@@ -532,7 +534,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(bevy::asset::AssetPlugin::default());
         app.init_asset::<Mesh>();
-        app.init_asset::<StandardMaterial>();
+        app.init_asset::<LitMaterial>();
         app.init_resource::<ProjectileAssets>();
 
         // As replication delivers one: the component and nothing else.

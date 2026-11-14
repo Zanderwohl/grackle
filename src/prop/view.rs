@@ -19,6 +19,8 @@ use bevy::platform::collections::HashMap;
 use bevy::platform::time::Instant;
 use bevy::prelude::*;
 
+use crate::common::air_lit::LitMaterial;
+
 use crate::common::app_mode::AppMode;
 use crate::editor::multicam::viewport_layers;
 use crate::prop::baked::{parts_of_bodies, SurfaceMaterials};
@@ -94,6 +96,7 @@ pub struct PropViewPlugin;
 
 impl Plugin for PropViewPlugin {
     fn build(&self, app: &mut App) {
+        crate::common::air_lit::ensure(app);
         app.init_resource::<PropBuild>()
             .init_resource::<SurfaceMaterials>()
             .init_resource::<HiddenForModeling>()
@@ -279,7 +282,7 @@ fn rebuild_the_prop(
     time: Res<Time>,
     mut build: ResMut<PropBuild>,
     mut surfaces: ResMut<SurfaceMaterials>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut materials: ResMut<Assets<LitMaterial>>,
     mut meshes: ResMut<Assets<Mesh>>,
     stage: Query<Entity, With<PropStage>>,
 ) {
@@ -637,7 +640,7 @@ mod tests {
         world.insert_resource(Time::<()>::default());
         world.init_resource::<PropBuild>();
         world.init_resource::<SurfaceMaterials>();
-        world.init_resource::<Assets<StandardMaterial>>();
+        world.init_resource::<Assets<LitMaterial>>();
         world.init_resource::<Assets<Mesh>>();
         let mut editor = PropEditor::default();
         let first = editor.edit(|doc| doc.push(FeatureOp::default()));

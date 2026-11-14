@@ -849,6 +849,7 @@ mod tests {
             .add_plugins((crate::game::hitbox::HitboxPlugin, crate::game::weapon::WeaponPlugin))
             .init_resource::<Assets<Mesh>>()
             .init_resource::<Assets<StandardMaterial>>()
+            .init_resource::<Assets<crate::common::air_lit::LitMaterial>>()
             .add_plugins(RangePlugin);
         let mut editor = WeaponEditor::default();
         editor.open(crate::common::weapon_file::read_pack_weapons(
