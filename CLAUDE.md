@@ -1502,7 +1502,13 @@ The bake runs on the async compute pool from a copy of the faces; entering Play
 waits only when the light is stale. Each texel is the base ambient, the sun, and sky
 light plus one bounce gathered every meter (`LitSurface::ambient`). The
 lightmap replaces the ambient on walls, so `GlobalAmbientLight` lights only
-what moves.
+what moves. **Things that move get the sun live** ([`src/game/sunlit.rs`](src/game/sunlit.rs)):
+a `DirectionalLight` on `SUNLIT` and `SUNLIT_VIEWMODEL`, layers no wall is on,
+which a moving thing's meshes join while one ray from it reaches sky in
+`OpenSky`; the viewmodel follows the local body. The bake's last item is
+`AirLight`, the gather on a 2 m world lattice, and each moving thing gets the
+air's light where it stands as a `MeshTag`, which a body's `BodyMaterial`
+multiplies its ambient by. Anything else that moves ignores the tag.
 
 **Every bake reports the same way**
 ([`src/tool/bake_job.rs`](src/tool/bake_job.rs)): a `BakeStatus` per

@@ -25,7 +25,7 @@ use crate::common::skeleton::{Pose, Skeleton};
 use crate::common::player_color::PlayerColor;
 use crate::common::team::Team;
 use crate::common::weapon::{WeaponCatalog, WeaponId};
-use crate::game::body_mesh::{body_look, BodyMaterials, BodyMeshCache, BodyTint};
+use crate::game::body_mesh::{body_look, BodyMaterial, BodyMaterials, BodyMeshCache, BodyTint};
 use crate::common::skeleton::clip::Clip;
 use crate::common::skeleton::play::{apply_stack, grip_offsets, ClipStack, Frames};
 use crate::prop::rig::{place_part, OnPropBone};
@@ -181,7 +181,7 @@ fn give_the_view_its_own_camera(
                     near: VIEWMODEL_NEAR,
                     ..default()
                 }),
-                RenderLayers::layer(VIEWMODEL_LAYER),
+                RenderLayers::from_layers(&[VIEWMODEL_LAYER, crate::common::render_layers::SUNLIT_VIEWMODEL]),
                 Transform::IDENTITY,
                 Name::new("Viewmodel view"),
             ));
@@ -370,7 +370,7 @@ fn dress_the_viewmodel_arms(
     mut cache: ResMut<BodyMeshCache>,
     mut palette: ResMut<BodyMaterials>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut materials: ResMut<Assets<BodyMaterial>>,
     bodies: Query<
         (Entity, &Skeleton, Option<&Team>, Option<&PlayerColor>, Option<&BodyTint>, Option<&Burning>),
         Viewed,

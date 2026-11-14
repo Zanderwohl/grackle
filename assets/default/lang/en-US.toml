@@ -75,6 +75,7 @@ auto_sunlight = "Auto-bake Sunlight"
 
 [bakes.doing]
 surface = "The map's surface"
+air = "The air"
 copy = "{ name }, copy { image }"
 unnamed = "Unnamed volume"
 floors = "Floors"

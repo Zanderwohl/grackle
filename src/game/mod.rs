@@ -58,6 +58,7 @@ pub mod hud;
 pub mod name_tag;
 pub mod pickup_beam;
 pub mod rounds;
+pub mod sunlit;
 pub mod score;
 pub mod telemetry;
 pub mod spectate;

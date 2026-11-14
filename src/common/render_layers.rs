@@ -31,6 +31,15 @@ pub const GIZMOS: usize = 4;
 /// needed. See [`crate::game::forward_camera`].
 pub const WARM_UP: usize = 5;
 
+/// The sun on things that move: the sun and the cameras that draw the world are on it, and a
+/// mesh on [`WORLD`] joins it while it stands in the sun. No wall is ever on it, so the sun cannot
+/// light a wall the lightmaps say is in shade. See documentation/sun.md.
+pub const SUNLIT: usize = 6;
+
+/// [`SUNLIT`] for the viewmodel: a layer of its own, since the viewmodel camera would draw every
+/// sunlit body if it shared [`SUNLIT`].
+pub const SUNLIT_VIEWMODEL: usize = 7;
+
 /// The editor's 2D shape painter and the egui camera.
 pub const PAINTER: usize = 31;
 
@@ -40,7 +49,7 @@ mod tests {
 
     #[test]
     fn no_two_features_share_a_layer() {
-        let all = [WORLD, VIEWMODEL, EDITOR_ONLY, THUMBNAIL, GIZMOS, WARM_UP, PAINTER];
+        let all = [WORLD, VIEWMODEL, EDITOR_ONLY, THUMBNAIL, GIZMOS, WARM_UP, SUNLIT, SUNLIT_VIEWMODEL, PAINTER];
         for (i, a) in all.iter().enumerate() {
             for b in &all[i + 1..] {
                 assert_ne!(a, b, "two features claim layer {a}");

@@ -163,20 +163,33 @@ east (`+X`); altitude is degrees above the horizon.
 
 ### Things that move
 
-Bodies, corpses, projectiles and placed props are not lightmapped.
+Bodies, corpses, projectiles and placed props are not lightmapped
+([`game/sunlit.rs`](../src/game/sunlit.rs)).
 
-- **Sun** is a real `DirectionalLight` on its own render layer
-  (`render_layers::SUNLIT`) that no wall is on, so it can never leak indoors
-  or put a glint on a wall in the shade. A body joins the layer while a ray
-  from its chest reaches sky, which is one ray per body per frame against the
-  same accelerator. It is a switch, not a fade: a body half out of a doorway is
-  one or the other. Bodies cast no shadow on a sunlit floor, since the floor is
-  not on that layer.
-- **Ambient** is a coarse grid of the same sky-and-bounce gather, a few meters a
-  voxel per room, sampled on the CPU at each body and handed to its shader in a
-  `MeshTag`. Bevy's irradiance volumes would do this, but they are disabled
-  outright on wasm (`IRRADIANCE_VOLUMES_ARE_USABLE`), and a browser is the
-  target. Until this lands, things that move keep `GlobalAmbientLight`.
+- **Sun** is a real `DirectionalLight` on two render layers no wall is on:
+  `SUNLIT`, which the world's cameras draw, and `SUNLIT_VIEWMODEL`, which only
+  the viewmodel camera draws, so first-person arms can be sunlit without that
+  camera drawing every sunlit body. Its illuminance is `SUN_BRIGHTNESS × π`:
+  Bevy's diffuse is albedo over π times illuminance, and a texel is albedo
+  times its value, so a body and a wall facing the sun are equally bright.
+  Each moving thing's meshes on `WORLD` join `SUNLIT` while one ray from it
+  reaches sky — from 1.2 m up for a body, 0.1 m up for anything else — and the
+  viewmodel's join `SUNLIT_VIEWMODEL` with the local body's. The ray is cast
+  against `OpenSky`, the map's surface rebuilt the moment the faces or what is
+  sky change, so it does not wait for a bake. It is a switch, not a fade, and
+  nothing casts a shadow from it.
+- **Ambient** is `AirLight` ([`common/air_light.rs`](../src/common/air_light.rs)):
+  the same sky-and-bounce gather averaged over the whole sphere, on a 2 m
+  lattice fixed in the world and offset half a step from the meter grid, so no
+  sample sits on a wall and neighboring rooms share samples. It is the bake's
+  last item, cached and kept like the lightmaps. Each moving thing reads it
+  trilinearly at the same point and gets its light over the global ambient as
+  an RGBE `MeshTag`. A body's material (`BodyMaterial`, an extension of
+  `StandardMaterial`, [`game/air_lit.wesl`](../src/game/air_lit.wesl))
+  multiplies Bevy's diffuse occlusion by it, which scales Bevy's own ambient
+  term rather than adding a second one. Props and projectiles ignore the tag
+  and keep the global ambient. Bevy's irradiance volumes would do this, but
+  they are disabled on wasm (`IRRADIANCE_VOLUMES_ARE_USABLE`).
 
 ### Nothing reads a texel
 
@@ -211,6 +224,7 @@ same-sized image into its existing texture — so no slot goes a frame unlit.
 - [x] Off the main thread, on the async compute pool; light kept and carried over until a bake replaces it; a clear beside the Sunlight button
 - [ ] Chunked across frames on wasm, where the pool runs a task in one go: chunks of 8 ms through `BackgroundBake`, not yet run in a browser
 - [x] Cache under `cache/lightmap/` by content hash (`tool/bake_cache.rs`, shared with the nav graph); keyed by faces, sky, sun, sky time, the bake's constants and `FORMAT`
-- [ ] `DirectionalLight` on a `SUNLIT` layer; bodies join it by a ray from the chest
-- [ ] Ambient grid per room, sampled per body into a `MeshTag`
+- [x] `DirectionalLight` on `SUNLIT` and `SUNLIT_VIEWMODEL`; moving things join by a ray from the chest, the viewmodel with the local body
+- [x] Ambient in the air on a 2 m world lattice, baked last, sampled per body into a `MeshTag` that scales a body's ambient
+- [ ] Ambient on props, projectiles and held weapons: they read no tag yet
 - [ ] Tests: a closed room is unlit; a sky ceiling lights the floor under it and not the room next door, except by bounce; coplanar floors across a threshold bake the same values on both sides

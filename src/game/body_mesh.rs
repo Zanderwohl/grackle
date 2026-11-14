@@ -9,8 +9,12 @@
 //! Meshes are cached per build ([`Build`]), not per body: sixty bodies in
 //! an animation grid are ten meshes.
 
+use bevy::asset::embedded_asset;
+use bevy::pbr::{ExtendedMaterial, MaterialExtension};
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
+use bevy::render::render_resource::AsBindGroup;
+use bevy::shader::ShaderRef;
 use bevy::transform::TransformSystems;
 
 use crate::common::flame::Burning;
@@ -84,26 +88,46 @@ pub fn body_look(
     }
 }
 
+/// A body's material: the standard one, lit by the light in the air where it stands rather than by
+/// the global ambient. [`crate::game::sunlit`] writes that light into each part's `MeshTag`.
+pub type BodyMaterial = ExtendedMaterial<StandardMaterial, AirLit>;
+
+#[derive(Asset, AsBindGroup, Reflect, Debug, Clone, Default)]
+pub struct AirLit {
+    // `ExtendedMaterial` will not take an extension with no bindings.
+    #[uniform(100)]
+    unused: f32,
+}
+
+impl MaterialExtension for AirLit {
+    fn fragment_shader() -> ShaderRef {
+        "embedded://grackle/game/air_lit.wesl".into()
+    }
+}
+
 /// One material per look: four teams alight or not is eight materials, not
 /// one per body.
 #[derive(Resource, Default)]
-pub struct BodyMaterials(HashMap<([u8; 4], bool), Handle<StandardMaterial>>);
+pub struct BodyMaterials(HashMap<([u8; 4], bool), Handle<BodyMaterial>>);
 
 impl BodyMaterials {
     /// `pub(crate)` for the viewmodel's arms.
     pub(crate) fn get(
         &mut self,
         look: BodyLook,
-        materials: &mut Assets<StandardMaterial>,
-    ) -> Handle<StandardMaterial> {
+        materials: &mut Assets<BodyMaterial>,
+    ) -> Handle<BodyMaterial> {
         self.0
             .entry(look.key())
             .or_insert_with(|| {
-                materials.add(StandardMaterial {
-                    base_color: look.color,
-                    emissive: if look.burning { BURNING_GLOW } else { LinearRgba::BLACK },
-                    perceptual_roughness: 0.85,
-                    ..default()
+                materials.add(ExtendedMaterial {
+                    base: StandardMaterial {
+                        base_color: look.color,
+                        emissive: if look.burning { BURNING_GLOW } else { LinearRgba::BLACK },
+                        perceptual_roughness: 0.85,
+                        ..default()
+                    },
+                    extension: AirLit::default(),
                 })
             })
             .clone()
@@ -157,7 +181,8 @@ pub struct BodyMeshPlugin;
 
 impl Plugin for BodyMeshPlugin {
     fn build(&self, app: &mut App) {
-        app
+        embedded_asset!(app, "air_lit.wesl");
+        app.add_plugins(MaterialPlugin::<BodyMaterial>::default())
             .init_resource::<BodyMeshCache>()
             .init_resource::<BodyMaterials>()
             // `recolor_bodies` after the build, so a body lit on the frame it
@@ -178,7 +203,7 @@ fn build_body_meshes(
     mut meshes: ResMut<Assets<Mesh>>,
     mut cache: ResMut<BodyMeshCache>,
     mut palette: ResMut<BodyMaterials>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut materials: ResMut<Assets<BodyMaterial>>,
     bodies: Query<
         (
             Entity,
@@ -236,11 +261,11 @@ fn build_body_meshes(
 /// ten times a second.
 fn recolor_bodies(
     mut palette: ResMut<BodyMaterials>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut materials: ResMut<Assets<BodyMaterial>>,
     mut extinguished: RemovedComponents<Burning>,
     lit: Query<Entity, Added<Burning>>,
     bodies: Query<(&BodyMesh, Option<&Team>, Option<&PlayerColor>, Option<&BodyTint>, Option<&Burning>)>,
-    mut parts: Query<&mut MeshMaterial3d<StandardMaterial>>,
+    mut parts: Query<&mut MeshMaterial3d<BodyMaterial>>,
 ) {
     // Both edges, or a body stays scorched after the fire is out.
     for body in lit.iter().chain(extinguished.read()) {
@@ -505,7 +530,7 @@ mod tests {
         let material = |body: Entity| {
             let part = app.world().get::<BodyMesh>(body).expect("dressed").parts[0];
             app.world()
-                .get::<MeshMaterial3d<StandardMaterial>>(part)
+                .get::<MeshMaterial3d<BodyMaterial>>(part)
                 .expect("a part is painted")
                 .0
                 .clone()
