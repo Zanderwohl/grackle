@@ -203,6 +203,22 @@ impl Build {
     }
 }
 
+/// A list of names read from a file, made `&'static` once per distinct list, so a chain holding
+/// one stays `Copy`.
+pub fn intern_list(names: &[String]) -> &'static [&'static str] {
+    use std::collections::BTreeSet;
+    use std::sync::Mutex;
+    static LISTS: OnceLock<Mutex<BTreeSet<&'static [&'static str]>>> = OnceLock::new();
+    let wanted: Vec<&'static str> = names.iter().map(|name| intern(name)).collect();
+    let mut lists = LISTS.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(known) = lists.get(wanted.as_slice()) {
+        return known;
+    }
+    let leaked: &'static [&'static str] = Box::leak(wanted.into_boxed_slice());
+    lists.insert(leaked);
+    leaked
+}
+
 /// A bone or limb name read from a file, made `&'static` as a [`Pose`] keys it. Leaked once per
 /// distinct name, which is bounded by the rigs a pack ships.
 pub fn intern(name: &str) -> &'static str {

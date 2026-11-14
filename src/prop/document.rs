@@ -779,11 +779,13 @@ mod tests {
                                 at: 0.0,
                                 to: [Axis::Free, Axis::Value(-0.8), Axis::Free],
                                 ease: Interpolation::CubicOut,
+                                space: None,
                             },
                             Key {
                                 at: 0.45,
                                 to: [Axis::Free, Axis::Value(0.0), Axis::Free],
                                 ease: Interpolation::Linear,
+                                space: None,
                             },
                         ],
                     },

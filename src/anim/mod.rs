@@ -102,6 +102,7 @@ impl Plugin for AnimPlugin {
             .init_resource::<crate::prop::figure::FigureWeapon>()
             .init_resource::<crate::prop::figure::FigureBeneath>()
             .init_resource::<crate::prop::figure::FigureRig>()
+            .init_resource::<crate::prop::figure::FigureTargets>()
             .init_resource::<crate::common::clip_file::NamedClips>()
             .init_resource::<crate::common::skeleton::play::LayerClaims>()
             .init_resource::<crate::common::taunt::Taunts>()
@@ -134,6 +135,7 @@ impl Plugin for AnimPlugin {
                     // Before the scene poses the figure, so a scrub shows on the same frame.
                     drive_the_preview.before(PropSceneSystems::Build),
                     draw_the_swept_aim,
+                    draw_the_targets,
                 )
                     .chain()
                     .run_if(in_state(AppMode::Animation)),
@@ -1043,6 +1045,25 @@ fn preview_beneath(
     }
 }
 
+/// Each target the strip's clip aims a limb or bone at, the picked track's larger.
+fn draw_the_targets(
+    anim: Res<AnimEditor>,
+    targets: Res<crate::prop::figure::FigureTargets>,
+    figures: Query<&GlobalTransform, With<crate::prop::figure::ScaleFigureMarker>>,
+    mut gizmos: Gizmos,
+) {
+    for figure in &figures {
+        for (track, at) in &targets.0 {
+            let picked = anim.track == Some(*track);
+            let (radius, color) = match picked {
+                true => (0.04, Color::srgb(1.0, 0.85, 0.2)),
+                false => (0.025, Color::srgb(0.7, 0.7, 0.75)),
+            };
+            gizmos.sphere(Isometry3d::from_translation(figure.transform_point(*at)), radius, color);
+        }
+    }
+}
+
 fn draw_the_swept_aim(
     anim: Res<AnimEditor>,
     cursor: Res<TimelineCursor>,
@@ -1156,6 +1177,7 @@ mod tests {
                                 at: *at,
                                 to: [Axis::Value(*at), Axis::Free, Axis::Free],
                                 ease: Interpolation::Linear,
+                                space: None,
                             })
                             .collect(),
                     },

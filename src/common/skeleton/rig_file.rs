@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use super::anatomy::{Anatomy, Foot, Limb};
 use super::ik::Chain;
 use super::play::Regions;
-use super::rig::{intern, Build, Builder, Skeleton};
+use super::rig::{intern, intern_list, Build, Builder, Skeleton};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -73,6 +73,10 @@ pub struct BoneEntry {
 pub struct LimbEntry {
     pub name: String,
     pub upper: String,
+    /// Bones between `upper` and `lower`, root first: a chain of three or more is solved by
+    /// FABRIK, within each bone's joint limit.
+    #[serde(default)]
+    pub between: Vec<String>,
     pub lower: String,
     #[serde(default)]
     pub tip: Option<String>,
@@ -222,6 +226,9 @@ pub fn build_rig(file: &RigFile, build: &Build) -> Result<Skeleton, String> {
         .map(|limb| {
             let upper = bone(&limb.upper)?;
             bone(&limb.lower)?;
+            for name in &limb.between {
+                bone(name)?;
+            }
             if let Some(tip) = &limb.tip {
                 bone(tip)?;
             }
@@ -232,7 +239,12 @@ pub fn build_rig(file: &RigFile, build: &Build) -> Result<Skeleton, String> {
             };
             Ok(Limb {
                 name: intern(&limb.name),
-                chain: Chain { upper: intern(&limb.upper), lower: intern(&limb.lower), tip: limb.tip.as_deref().map(intern) },
+                chain: Chain {
+                    upper: intern(&limb.upper),
+                    middle: intern_list(&limb.between),
+                    lower: intern(&limb.lower),
+                    tip: limb.tip.as_deref().map(intern),
+                },
                 side: limb.side,
                 pole,
                 region: regions[upper],
@@ -252,7 +264,7 @@ pub fn build_rig(file: &RigFile, build: &Build) -> Result<Skeleton, String> {
     }
     let reach = |limb: usize| {
         let chain = &limbs[limb].chain;
-        [chain.upper, chain.lower].iter().filter_map(|name| bones.iter().find(|bone| bone.name == *name)).map(|bone| bone.length).sum::<f32>()
+        chain.bones().filter_map(|name| bones.iter().find(|bone| bone.name == name)).map(|bone| bone.length).sum::<f32>()
     };
     let leg = reach(limb(&file.measures.leg)?);
     let arm = match &file.measures.arm {
@@ -359,7 +371,7 @@ mod tests {
         assert_eq!(reached[..], [Reach::Reached; 2]);
 
         for step in 0..16 {
-            let inputs = PoseInputs { seconds: 0.0, stride: step as f32 / 16.0, speed: 4.0, travel: Vec2::Y };
+            let inputs = PoseInputs { seconds: 0.0, stride: step as f32 / 16.0, speed: 4.0, travel: Vec2::Y, ..Default::default() };
             let pose = finish_pose(&rig, AnimationState::RunForward, &inputs, &root, None);
             assert!(
                 pose.joint("chest") == Quat::IDENTITY && pose.joint("upper_arm.l") == Quat::IDENTITY,
@@ -423,9 +435,90 @@ to = [0.0, -0.6, 0.1]
         let anatomy = rig.anatomy();
         let tail = anatomy.region_named("tail").expect("the strider names its tail");
         assert_eq!(tail, Regions::bit(Regions::FIRST_OWN));
-        assert_eq!(anatomy.region_of(rig.index_of("tail").unwrap()), tail);
+        assert_eq!(anatomy.region_of(rig.index_of("tail.2").unwrap()), tail);
         assert_eq!(anatomy.claims(["tail", "arm.l"]), tail.union(Regions::ARM_L));
         assert_eq!(anatomy.names_of(tail).collect::<Vec<_>>(), ["tail"]);
         assert!(crate::common::skeleton::default_humanoid().anatomy().region_named("tail").is_none());
+    }
+
+    /// A chain of three bones reaches what it can, stays inside every joint's limit, comes out the
+    /// same every time, and points straight at what it cannot reach.
+    #[test]
+    fn a_longer_limb_reaches_within_its_joints() {
+        use crate::common::skeleton::ik::solve;
+        let rig = sized(1.6, &[]);
+        let tail = *rig.anatomy().limb("tail").expect("the strider's tail is a limb");
+        assert_eq!(tail.chain.middle, ["tail.2"]);
+        let root = Transform::IDENTITY;
+        let base = rig.posed_bone(&Pose::rest(), &root, rig.index_of("tail.1").unwrap()).head;
+        let pole = Vec3::Y;
+
+        let target = base + Vec3::new(0.15, 0.25, 0.45);
+        let mut pose = Pose::rest();
+        assert_eq!(solve(&rig, &mut pose, &root, &tail.chain, target, pole), Reach::Reached);
+        let tip = rig.posed_bone(&pose, &root, rig.index_of("tail.3").unwrap()).tail;
+        assert!(tip.distance(target) < 1e-3, "the tail tip is {} m off", tip.distance(target));
+
+        for name in tail.chain.bones() {
+            let index = rig.index_of(name).unwrap();
+            let bone = &rig.bones()[index];
+            let parent = rig.posed_bone(&pose, &root, bone.parent.unwrap()).rotation;
+            let along = (parent * bone.rest).inverse() * rig.posed_bone(&pose, &root, index).rotation * Vec3::Y;
+            assert!(bone.limit.nearest(along).distance(along) < 1e-3, "{name} is outside its joint");
+        }
+
+        let mut again = Pose::rest();
+        solve(&rig, &mut again, &root, &tail.chain, target, pole);
+        for name in tail.chain.bones() {
+            assert_eq!(again.joint(name), pose.joint(name), "{name} came out different the second time");
+        }
+
+        let far = base + Vec3::new(0.0, 0.0, 5.0);
+        let mut stretched = Pose::rest();
+        assert_eq!(solve(&rig, &mut stretched, &root, &tail.chain, far, pole), Reach::Short);
+        let tip = rig.posed_bone(&stretched, &root, rig.index_of("tail.3").unwrap()).tail;
+        assert!(tip.is_finite() && (tip - base).normalize().dot(Vec3::Z) > 0.99, "a short tail does not point at its target");
+    }
+
+    /// Feet let go by a clip's plant weight are where the walk put them, not on the floor.
+    #[test]
+    fn feet_let_go_are_not_planted() {
+        let rig = sized(1.6, &[]);
+        let root = Transform::IDENTITY;
+        let inputs = PoseInputs { seconds: 0.0, stride: 0.3, speed: 4.0, travel: Vec2::Y, feet_free: 0.0 };
+        let planted = finish_pose(&rig, AnimationState::RunForward, &inputs, &root, None);
+        let free = finish_pose(&rig, AnimationState::RunForward, &PoseInputs { feet_free: 1.0, ..inputs }, &root, None);
+        assert_ne!(planted.joint("thigh.l"), free.joint("thigh.l"), "letting the feet go changed nothing");
+        assert_eq!(free.joint("thigh.l"), Quat::IDENTITY, "a let-go strider leg was posed anyway");
+    }
+
+    /// Keys in different spaces are each placed in their own and blended in world space.
+    #[test]
+    fn a_track_blends_between_keys_in_different_spaces() {
+        use crate::common::skeleton::clip::{BoneRef, Channel, ChainRef, Clip, Key, Space, Track};
+        use crate::common::skeleton::play::{apply, Frames};
+        use crate::common::skeleton::Interpolation;
+
+        let rig = sized(1.6, &[]);
+        let root = Transform::IDENTITY;
+        let in_body = Vec3::new(-0.12, 0.2, -0.15);
+        let on_pelvis = Vec3::new(0.0, -0.55, 0.0);
+        let key = |at: f32, to: Vec3, space| Key { space, ..Key::all(at, to.to_array(), Interpolation::Linear) };
+        let mut track = Track::rotation("thigh.l");
+        track.channel = Channel::Effector {
+            chain: ChainRef::LEFT_LEG,
+            pole: None,
+            keys: vec![key(0.0, in_body, None), key(1.0, on_pelvis, Some(Space::Bone(BoneRef::named("pelvis"))))],
+        };
+        let clip = Clip { length: 1.0, tracks: vec![track], ..Clip::default() };
+        let ground = |_: Vec3| 0.0;
+        let frames = Frames::standing(root, root, &ground);
+        let mut pose = Pose::rest();
+        assert_eq!(apply(&clip, 0.5, &rig, &mut pose, &frames, None), [Reach::Reached]);
+
+        let pelvis = rig.posed_bone(&Pose::rest(), &root, rig.index_of("pelvis").unwrap());
+        let wanted = in_body.lerp(pelvis.tail + pelvis.rotation * on_pelvis, 0.5);
+        let ankle = rig.posed_bone(&pose, &root, rig.index_of("shin.l").unwrap()).tail;
+        assert!(ankle.distance(wanted) < 1e-3, "the ankle is {} m off the halfway point", ankle.distance(wanted));
     }
 }

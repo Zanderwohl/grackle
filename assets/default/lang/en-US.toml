@@ -607,6 +607,8 @@ claims = "Claims"
 anchor = "Grid Frame"
 at = "At"
 snap = "Snap"
+controller = "Pass"
+key_space = "Measured from"
 blend_in = "Fade in"
 blend_out = "Fade out"
 moving = "Moving"
@@ -660,6 +662,14 @@ until_again = "Until pressed again"
 seconds = " s"
 degrees_per_second = "°/s"
 percent = "%"
+
+[anim.track]
+look_at = "{ bone } looks at"
+
+[anim.controller]
+plant = "Feet planted"
+look = "Head follows aim"
+hold = "Hands on weapon"
 
 [anim.underlay]
 rest = "Rest"
@@ -729,8 +739,11 @@ rotation = "Bone"
 effector = "Reach"
 weapon = "Weapon"
 weapon_rotation = "Weapon turn"
+look_at = "Look at"
+weight = "Weight"
 
 [anim.space]
+track = "The track's"
 bone = "A bone"
 on_bone = "{ bone }"
 body = "Body"

@@ -834,6 +834,8 @@ pub fn track_name(track: &crate::common::skeleton::clip::Track) -> String {
     match &track.channel {
         Channel::Rotation { bone, .. } => bone.clone(),
         Channel::Effector { chain, .. } => chain.label(),
+        Channel::LookAt { bone, .. } => crate::get!("anim.track.look_at", "bone", bone),
+        Channel::Weight { controller, .. } => crate::get!(controller.name_key()),
         other => crate::get!(other.kind_key()),
     }
 }
@@ -889,6 +891,7 @@ mod tests {
                             at,
                             to: [Axis::Free; 3],
                             ease: Interpolation::Linear,
+                            space: None,
                         })
                         .collect(),
                 },

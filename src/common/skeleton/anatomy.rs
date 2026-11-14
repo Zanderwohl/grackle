@@ -89,7 +89,7 @@ impl Anatomy {
         let mut problems = Vec::new();
         let has = |name: &str| bones.iter().any(|bone| bone.name == name);
         for limb in &self.limbs {
-            for name in [limb.chain.upper, limb.chain.lower].into_iter().chain(limb.chain.tip) {
+            for name in limb.chain.bones().chain(limb.chain.tip) {
                 if !has(name) {
                     problems.push(format!("limb {} names a bone it does not have, {name}", limb.name));
                 }

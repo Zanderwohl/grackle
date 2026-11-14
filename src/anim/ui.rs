@@ -11,7 +11,7 @@ use crate::anim::timeline::{KeyAt, TimelineCursor, TimelineSelection, TimelineVi
 use crate::anim::body::{BodyClipDialog, BodyClips};
 use crate::anim::{edit_selected, selected_clip, AnimEditor, ClipSource};
 use crate::common::skeleton::clip::{
-    Axis, ChainRef, Channel, Clip, ClipProblem, Clock, Combine, Key, Space, StateAnimation, Timing, Track,
+    Axis, ChainRef, Channel, Clip, ClipProblem, Clock, Combine, Controller, Key, Space, StateAnimation, Timing, Track,
     Unit, Variant,
 };
 use crate::common::skeleton::play::Layer;
@@ -1089,7 +1089,7 @@ impl AnimTabs<'_> {
         // (a displacement in hip-heights with no frame).
         let positional = matches!(
             edited.channel,
-            Channel::Effector { .. } | Channel::Weapon { .. }
+            Channel::Effector { .. } | Channel::Weapon { .. } | Channel::LookAt { .. }
         );
         if positional {
             ui.horizontal(|ui| {
@@ -1158,7 +1158,7 @@ impl AnimTabs<'_> {
         });
 
         match &mut edited.channel {
-            Channel::Rotation { bone, .. } => {
+            Channel::Rotation { bone, .. } | Channel::LookAt { bone, .. } => {
                 ui.horizontal(|ui| {
                     ui.label(get!("anim.label.bone"));
                     egui::ComboBox::from_id_salt("anim_bone")
@@ -1171,6 +1171,18 @@ impl AnimTabs<'_> {
                                     *bone = name.to_string();
                                     changed = true;
                                 }
+                            }
+                        });
+                });
+            }
+            Channel::Weight { controller, .. } => {
+                ui.horizontal(|ui| {
+                    ui.label(get!("anim.label.controller"));
+                    egui::ComboBox::from_id_salt("anim_controller")
+                        .selected_text(get!(controller.name_key()))
+                        .show_ui(ui, |ui| {
+                            for option in Controller::ALL {
+                                changed |= ui.selectable_value(controller, option, get!(option.name_key())).changed();
                             }
                         });
                 });
@@ -1354,6 +1366,27 @@ impl AnimTabs<'_> {
                         changed = true;
                     }
                 }
+            });
+        }
+
+        // A point may be measured from another space than its track's, and blends there in the world.
+        if matches!(track.channel, Channel::Effector { .. } | Channel::Weapon { .. } | Channel::LookAt { .. }) {
+            ui.horizontal(|ui| {
+                ui.label(get!("anim.label.key_space"));
+                let shown = key.space.map_or_else(|| get!("anim.space.track"), space_label);
+                egui::ComboBox::from_id_salt("anim_key_space").selected_text(shown).show_ui(ui, |ui| {
+                    changed |= ui.selectable_value(&mut key.space, None, get!("anim.space.track")).changed();
+                    for space in [Space::Body, Space::Carry, Space::Shoulders, Space::Weapon, Space::Eye] {
+                        changed |= ui.selectable_value(&mut key.space, Some(space), space_label(space)).changed();
+                    }
+                    let rig = self.rig();
+                    ui.menu_button(get!("anim.space.bone"), |ui| {
+                        for bone in rig.bones() {
+                            let space = Some(Space::Bone(crate::common::skeleton::clip::BoneRef(bone.name)));
+                            changed |= ui.selectable_value(&mut key.space, space, bone.name).changed();
+                        }
+                    });
+                });
             });
         }
 
@@ -1845,7 +1878,7 @@ enum NewTrack {
 }
 
 /// Each with its emptiest form. A new channel joins here beside its arm in `apply`.
-fn new_tracks(rig: &crate::common::skeleton::Skeleton) -> [(&'static str, NewTrack); 5] {
+fn new_tracks(rig: &crate::common::skeleton::Skeleton) -> [(&'static str, NewTrack); 7] {
     let bones = rig
         .bones()
         .iter()
@@ -1868,8 +1901,19 @@ fn new_tracks(rig: &crate::common::skeleton::Skeleton) -> [(&'static str, NewTra
             (chain.label(), Channel::Effector { chain, pole: None, keys: Vec::new() })
         })
         .collect();
+    let looks = rig
+        .bones()
+        .iter()
+        .map(|bone| (bone.name.to_string(), Channel::LookAt { bone: bone.name.to_string(), keys: Vec::new() }))
+        .collect();
+    let weights = Controller::ALL
+        .iter()
+        .map(|controller| (get!(controller.name_key()), Channel::Weight { controller: *controller, keys: Vec::new() }))
+        .collect();
     [
         ("anim.channel.rotation", NewTrack::Choose(bones)),
+        ("anim.channel.look_at", NewTrack::Choose(looks)),
+        ("anim.channel.weight", NewTrack::Choose(weights)),
         ("anim.channel.effector", NewTrack::Choose(limbs)),
         ("anim.channel.root", NewTrack::One(Channel::Root { keys: Vec::new() })),
         ("anim.channel.weapon", NewTrack::One(Channel::Weapon { keys: Vec::new() })),
@@ -1886,6 +1930,8 @@ fn new_tracks(rig: &crate::common::skeleton::Skeleton) -> [(&'static str, NewTra
 pub struct KeyEdit {
     pub axes: [Option<Axis>; 3],
     pub ease: Option<Interpolation>,
+    /// `Some(None)` puts a key back on its track's space.
+    pub space: Option<Option<Space>>,
 }
 
 impl KeyEdit {
@@ -1898,6 +1944,9 @@ impl KeyEdit {
         }
         if before.ease != after.ease {
             edit.ease = Some(after.ease);
+        }
+        if before.space != after.space {
+            edit.space = Some(after.space);
         }
         edit
     }
@@ -1917,6 +1966,9 @@ impl KeyEdit {
             }
             if let Some(ease) = self.ease {
                 key.ease = ease;
+            }
+            if let Some(space) = self.space {
+                key.space = space;
             }
         }
     }
@@ -2049,7 +2101,7 @@ mod tests {
                 kinds.insert(channel.kind_key());
             }
         }
-        assert_eq!(kinds.len(), 5, "a kind of track cannot be made: {kinds:?}");
+        assert_eq!(kinds.len(), 7, "a kind of track cannot be made: {kinds:?}");
     }
 
     #[test]

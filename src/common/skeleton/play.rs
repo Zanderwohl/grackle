@@ -13,7 +13,7 @@ use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use super::anatomy::PerFoot;
-use super::clip::{Axis, Channel, Clip, Combine, Key, Space, Unit};
+use super::clip::{Axis, Channel, Clip, Combine, Controller, Key, Space, Unit};
 use super::ik::{self, Chain, Reach};
 use super::interpolation::Interpolation;
 use super::rig::{Pose, Skeleton};
@@ -156,7 +156,7 @@ pub fn key_the_channel(channel: &mut Channel, at: f32, length: f32, looping: boo
 
     let to = sample_key(keys, at, length, looping).unwrap_or([Axis::Free; 3]);
     let ease = keys.last().map(|key| key.ease).unwrap_or_default();
-    keys.push(Key { at, to, ease });
+    keys.push(Key { at, to, ease, space: None });
     keys.sort_by(|a, b| a.at.total_cmp(&b.at));
     keys.iter().position(|key| key.at == at).unwrap_or(0)
 }
@@ -399,6 +399,17 @@ impl Regions {
             }
             Channel::Weapon { .. } | Channel::WeaponRotation { .. } => Regions::WEAPON,
             Channel::Root { .. } => Regions::LEGS,
+            Channel::LookAt { bone, .. } => Regions::of_bone(skeleton, bone),
+            Channel::Weight { controller, .. } => Regions::of_controller(*controller),
+        }
+    }
+
+    /// What a procedural pass moves, so a layer above that claims it masks a weight beneath.
+    pub fn of_controller(controller: Controller) -> Regions {
+        match controller {
+            Controller::Plant => Regions::LEGS,
+            Controller::Look => Regions::HEAD,
+            Controller::Hold => Regions::ARMS.union(Regions::WEAPON),
         }
     }
 }
@@ -615,6 +626,77 @@ fn resolve_point(
     target
 }
 
+/// Where each effector and look-at track of `clip` aims at `time`, measured from `pose`: what the
+/// animation editor draws, by track index.
+pub fn track_targets(clip: &Clip, time: f32, skeleton: &Skeleton, pose: &Pose, frames: &Frames) -> Vec<(usize, Vec3)> {
+    let time = clip.wrap(time);
+    clip.tracks
+        .iter()
+        .enumerate()
+        .filter(|(_, track)| track.enabled)
+        .filter_map(|(index, track)| {
+            let time = track_time(track.timing, time, frames.footfalls.as_deref());
+            let (keys, tip) = match &track.channel {
+                Channel::Effector { chain, keys, .. } => {
+                    let limb = skeleton.anatomy().limb(chain.key())?;
+                    (keys, chain_tip(skeleton, pose, &frames.body, &limb.chain)?)
+                }
+                Channel::LookAt { bone, keys } => {
+                    (keys, skeleton.posed_bone(pose, &frames.body, skeleton.index_of(bone)?).tail)
+                }
+                _ => return None,
+            };
+            let target = sample_point(keys, time, clip.length, clip.looping, track, tip, frames, skeleton, pose)?;
+            Some((index, target))
+        })
+        .collect()
+}
+
+/// Where a point track puts its target this frame, from `tip` where the layers beneath left it.
+/// `None` when every axis is free: re-solving onto the current tip is not the identity, since
+/// `ik::solve` re-derives roll.
+///
+/// A key may name its own space; keys placed in different spaces are each resolved and blended
+/// in world space, so one track can take a hand from a weapon's magazine to the belt.
+#[allow(clippy::too_many_arguments)]
+fn sample_point(
+    keys: &[Key],
+    time: f32,
+    length: f32,
+    looping: bool,
+    track: &super::clip::Track,
+    tip: Vec3,
+    frames: &Frames,
+    skeleton: &Skeleton,
+    pose: &Pose,
+) -> Option<Vec3> {
+    let scale = meters_per(track.unit, skeleton);
+    if keys.iter().all(|key| key.space.is_none()) {
+        let to = sample_key(keys, time, length, looping)?;
+        if to.iter().all(|axis| matches!(axis, Axis::Free)) {
+            return None;
+        }
+        let frame = frames.of_on(track.space, skeleton, pose)?;
+        return Some(resolve_point(to, tip, &frame, scale, track.combine, frames.ground));
+    }
+    let placed = |key: &Key| {
+        let frame = frames.of_on(key.space.unwrap_or(track.space), skeleton, pose)?;
+        Some(resolve_point(key.to, tip, &frame, scale, track.combine, frames.ground))
+    };
+    sample_at(keys, time, length, looping, |key| key.at, placed, |key| key.ease, |from, to, ease, along| {
+        match (from, to) {
+            (Some(from), Some(to)) => Some(Vec3::new(
+                ease.f32(from.x, to.x, along),
+                ease.f32(from.y, to.y, along),
+                ease.f32(from.z, to.z, along),
+            )),
+            // A space with no frame now (an empty hand) has no halfway; switch on arrival.
+            (from, to) => if ease.ease(along) >= 1.0 { to } else { from },
+        }
+    })
+    .flatten()
+}
+
 /// A track's time given its clip's. A foot-timed track keeps the whole strides
 /// and swaps the fraction for its foot's phase.
 pub fn track_time(timing: super::clip::Timing, time: f32, footfalls: Option<&[f32]>) -> f32 {
@@ -684,17 +766,6 @@ pub fn apply_masked(
             }
 
             Channel::Effector { chain, pole, keys } => {
-                let Some(to) = sample_key(keys, time, length, looping) else {
-                    continue;
-                };
-                // Skip rather than re-solve onto the current tip: `solve`
-                // re-derives roll, so that is not the identity.
-                if to.iter().all(|axis| matches!(axis, Axis::Free)) {
-                    continue;
-                }
-                let Some(frame) = frames.of_on(track.space, skeleton, pose) else {
-                    continue;
-                };
                 let Some(limb) = skeleton.anatomy().limb(chain.key()).copied() else {
                     continue;
                 };
@@ -702,15 +773,9 @@ pub fn apply_masked(
                 let Some(tip) = chain_tip(skeleton, pose, &frames.body, &solved) else {
                     continue;
                 };
-
-                let target = resolve_point(
-                    to,
-                    tip,
-                    &frame,
-                    meters_per(track.unit, skeleton),
-                    track.combine,
-                    frames.ground,
-                );
+                let Some(target) = sample_point(keys, time, length, looping, track, tip, frames, skeleton, pose) else {
+                    continue;
+                };
                 // Authored and default poles alike are in the body's frame.
                 let pole = frames.body.rotation * pole.map(Vec3::from_array).unwrap_or(limb.pole);
 
@@ -720,6 +785,27 @@ pub fn apply_masked(
                     ik::reach_or_leave(skeleton, pose, &frames.body, &solved, target, pole)
                 });
             }
+
+            Channel::LookAt { bone, keys } => {
+                let Some(index) = skeleton.index_of(bone) else { continue };
+                let posed = skeleton.posed_bone(pose, &frames.body, index);
+                let Some(target) = sample_point(keys, time, length, looping, track, posed.tail, frames, skeleton, pose)
+                else {
+                    continue;
+                };
+                let Some(wanted) = (target - posed.head).try_normalize() else { continue };
+                let rig_bone = &skeleton.bones()[index];
+                let parent = rig_bone
+                    .parent
+                    .map_or(frames.body.rotation, |parent| skeleton.posed_bone(pose, &frames.body, parent).rotation);
+                let rest = parent * rig_bone.rest;
+                let allowed = rest * rig_bone.limit.nearest(rest.inverse() * wanted);
+                let turned = Quat::from_rotation_arc(posed.rotation * Vec3::Y, allowed) * posed.rotation;
+                pose.set(rig_bone.name, rest.inverse() * turned);
+            }
+
+            // Read by the pass it weighs; see `controller_weight`.
+            Channel::Weight { .. } => {}
 
             Channel::Root { keys } => {
                 let Some(to) = sample_key(keys, time, length, looping) else {
@@ -743,20 +829,11 @@ pub fn apply_masked(
                 let Some(placed) = weapon.as_deref_mut() else {
                     continue;
                 };
-                let Some(to) = sample_key(keys, time, length, looping) else {
-                    continue;
-                };
-                let Some(frame) = frames.of_on(track.space, skeleton, pose) else {
-                    continue;
-                };
-                placed.translation = resolve_point(
-                    to,
-                    placed.translation,
-                    &frame,
-                    meters_per(track.unit, skeleton),
-                    track.combine,
-                    frames.ground,
-                );
+                if let Some(target) =
+                    sample_point(keys, time, length, looping, track, placed.translation, frames, skeleton, pose)
+                {
+                    placed.translation = target;
+                }
             }
 
             Channel::WeaponRotation { keys } => {
@@ -790,6 +867,35 @@ pub fn apply_masked(
 /// from the grip, in the weapon's axes. A clip that keys no hand leaves it
 /// where the clips beneath put it, so a kick over a reload does not snap it
 /// back.
+/// How much `controller` acts on a body playing `stack`, 0 to 1: every `Weight` track for it,
+/// lowest layer first, each blended over what is beneath by how far its clip is shown. A layer
+/// above that claims the controller's region masks a weight beneath, as it masks any track.
+pub fn controller_weight(stack: &ClipStack, clips: &Assets<Clip>, controller: Controller) -> f32 {
+    let mut weight = 1.0;
+    let ranked = Layer::ALL
+        .into_iter()
+        .flat_map(|layer| stack.0.iter().filter(move |playing| playing.layer == layer));
+    for playing in ranked {
+        let shown = (playing.weight * playing.strength).clamp(0.0, 1.0);
+        let Some(clip) = clips.get(&playing.clip).filter(|_| shown > 0.0) else { continue };
+        if stack.claimed_above(playing.layer).overlaps(Regions::of_controller(controller)) {
+            continue;
+        }
+        let time = clip.wrap(playing.time);
+        for track in clip.tracks.iter().filter(|track| track.enabled) {
+            let Channel::Weight { controller: weighs, keys } = &track.channel else { continue };
+            if *weighs != controller {
+                continue;
+            }
+            let time = track_time(track.timing, time, None);
+            if let Some([Axis::Value(keyed), ..]) = sample_key(keys, time, clip.length, clip.looping) {
+                weight = weight + (keyed.clamp(0.0, 1.0) - weight) * shown;
+            }
+        }
+    }
+    weight
+}
+
 pub fn grip_offsets(stack: &ClipStack, clips: &Assets<Clip>, skeleton: &Skeleton) -> [Vec3; 2] {
     let mut offsets = [Vec3::ZERO; 2];
     if stack.0.is_empty() {
@@ -885,6 +991,7 @@ mod tests {
                 at: *at,
                 to: [Axis::Value(index as f32), Axis::Free, Axis::Free],
                 ease: Interpolation::Linear,
+                space: None,
             })
             .collect()
     }
@@ -955,8 +1062,8 @@ mod tests {
     #[test]
     fn a_change_of_kind_switches_rather_than_blending() {
         let keys = vec![
-            Key { at: 0.0, to: [Axis::Free, Axis::ON_THE_GROUND, Axis::Free], ease: Interpolation::Linear },
-            Key { at: 1.0, to: [Axis::Free, Axis::Value(0.5), Axis::Free], ease: Interpolation::Linear },
+            Key { at: 0.0, to: [Axis::Free, Axis::ON_THE_GROUND, Axis::Free], ease: Interpolation::Linear, space: None },
+            Key { at: 1.0, to: [Axis::Free, Axis::Value(0.5), Axis::Free], ease: Interpolation::Linear, space: None },
         ];
         assert_eq!(sample_key(&keys, 0.5, 1.0, false).unwrap()[1], Axis::ON_THE_GROUND);
         assert_eq!(sample_key(&keys, 1.0, 1.0, false).unwrap()[1], Axis::Value(0.5));
@@ -1006,6 +1113,7 @@ mod tests {
                         at: 0.0,
                         to: [Axis::Free, Axis::Ground { clearance }, Axis::Free],
                         ease: Interpolation::Linear,
+                        space: None,
                     }],
                 },
             }],
@@ -1057,6 +1165,7 @@ mod tests {
                         at: 0.0,
                         to: [Axis::Free; 3],
                         ease: Interpolation::Linear,
+                        space: None,
                     }],
                 },
             }],
@@ -1095,6 +1204,7 @@ mod tests {
             at: 0.0,
             to: [Axis::Value(0.3), Axis::Free, Axis::Free],
             ease: Interpolation::Linear,
+            space: None,
         });
 
         let beneath = quat_from_euler(Vec3::new(-0.9, 0.4, -0.25));
@@ -1127,6 +1237,7 @@ mod tests {
             at: 0.0,
             to: [Axis::Value(0.2), Axis::Free, Axis::Free],
             ease: Interpolation::Linear,
+            space: None,
         });
 
         let beneath = quat_from_euler(Vec3::new(0.0, 0.5, 0.0));
@@ -1242,6 +1353,7 @@ mod tests {
                         at: 0.0,
                         to: [Axis::Free, Axis::Value(-0.2), Axis::Free],
                         ease: Interpolation::Linear,
+                        space: None,
                     }],
                 },
             }],
@@ -1277,7 +1389,7 @@ mod tests {
                 enabled: true,
                 timing: Default::default(),
                 channel: Channel::Weapon {
-                    keys: vec![Key { at: 0.0, to: [Axis::Value(1.0); 3], ease: Interpolation::Linear }],
+                    keys: vec![Key { at: 0.0, to: [Axis::Value(1.0); 3], ease: Interpolation::Linear, space: None }],
                 },
             }],
             ..Clip::default()
@@ -1295,8 +1407,8 @@ mod tests {
     fn inserting_a_key_holds_what_the_track_already_said() {
         let mut channel = Channel::Weapon {
             keys: vec![
-                Key { at: 0.0, to: [Axis::Value(0.0), Axis::Free, Axis::Free], ease: Interpolation::Linear },
-                Key { at: 1.0, to: [Axis::Value(1.0), Axis::Free, Axis::Free], ease: Interpolation::Linear },
+                Key { at: 0.0, to: [Axis::Value(0.0), Axis::Free, Axis::Free], ease: Interpolation::Linear, space: None },
+                Key { at: 1.0, to: [Axis::Value(1.0), Axis::Free, Axis::Free], ease: Interpolation::Linear, space: None },
             ],
         };
 
@@ -1319,8 +1431,8 @@ mod tests {
     #[test]
     fn inserting_a_key_does_not_bend_the_curve_around_it() {
         let keys = vec![
-            Key { at: 0.0, to: [Axis::Value(0.0), Axis::Free, Axis::Free], ease: Interpolation::Linear },
-            Key { at: 1.0, to: [Axis::Value(1.0), Axis::Free, Axis::Free], ease: Interpolation::Linear },
+            Key { at: 0.0, to: [Axis::Value(0.0), Axis::Free, Axis::Free], ease: Interpolation::Linear, space: None },
+            Key { at: 1.0, to: [Axis::Value(1.0), Axis::Free, Axis::Free], ease: Interpolation::Linear, space: None },
         ];
         let before: Vec<f32> = (0..=20)
             .map(|step| {
@@ -1609,5 +1721,61 @@ mod tests {
             &clips, &rig, &mut pose, &frames, None,
         );
         assert_eq!(pose.joint(bone::CHEST), Quat::IDENTITY);
+    }
+
+    fn weighing(controller: Controller, keyed: f32) -> Clip {
+        let mut track = Track::rotation(bone::CHEST);
+        track.channel = Channel::Weight { controller, keys: vec![Key::all(0.0, [keyed, 0.0, 0.0], Interpolation::Linear)] };
+        Clip { length: 1.0, tracks: vec![track], ..Clip::default() }
+    }
+
+    /// A weight is blended over the one beneath by how far its clip is shown, and a layer above
+    /// claiming what the controller moves masks it.
+    #[test]
+    fn a_weight_track_turns_a_controller_down() {
+        let mut clips = Assets::<Clip>::default();
+        let loose = clips.add(weighing(Controller::Plant, 0.0));
+        let stack = |playing: Vec<Playing>| ClipStack(playing);
+
+        assert_eq!(controller_weight(&stack(vec![]), &clips, Controller::Plant), 1.0);
+        let full = stack(vec![Playing::new(Layer::Weapon, loose.clone(), 0.0)]);
+        assert_eq!(controller_weight(&full, &clips, Controller::Plant), 0.0);
+        assert_eq!(controller_weight(&full, &clips, Controller::Look), 1.0, "a plant weight turned the look down");
+
+        let half = stack(vec![Playing { weight: 0.5, ..Playing::new(Layer::Weapon, loose.clone(), 0.0) }]);
+        assert!((controller_weight(&half, &clips, Controller::Plant) - 0.5).abs() < 1e-6);
+
+        let still = clips.add(Clip { length: 1.0, ..Clip::default() });
+        let masked = stack(vec![
+            Playing::new(Layer::Weapon, loose, 0.0),
+            Playing { claims: Regions::LEGS, ..Playing::new(Layer::Taunt, still, 0.0) },
+        ]);
+        assert_eq!(controller_weight(&masked, &clips, Controller::Plant), 1.0, "a claim above did not mask the weight");
+    }
+
+    /// A bone turned to look at a point points at it, within its joint.
+    #[test]
+    fn a_look_at_track_points_a_bone_at_its_target() {
+        let rig = default_humanoid().clone();
+        let root = Transform::IDENTITY;
+        let ground = |_: Vec3| 0.0;
+        let frames = Frames::standing(root, root, &ground);
+        let shoulder = rig.posed_bone(&Pose::rest(), &root, rig.index_of(bone::UPPER_ARM_R).unwrap()).head;
+        let target = shoulder + Vec3::new(0.2, 0.1, -0.5);
+
+        let mut track = Track::rotation(bone::UPPER_ARM_R);
+        track.channel = Channel::LookAt {
+            bone: bone::UPPER_ARM_R.into(),
+            keys: vec![Key::all(0.0, target.to_array(), Interpolation::Linear)],
+        };
+        let clip = Clip { length: 1.0, tracks: vec![track], ..Clip::default() };
+        let drawn = track_targets(&clip, 0.0, &rig, &Pose::rest(), &frames);
+        assert!(matches!(drawn[..], [(0, at)] if at.distance(target) < 1e-5), "the editor would draw {drawn:?}");
+        let mut pose = Pose::rest();
+        apply(&clip, 0.0, &rig, &mut pose, &frames, None);
+
+        let arm = rig.posed_bone(&pose, &root, rig.index_of(bone::UPPER_ARM_R).unwrap());
+        let along = (arm.tail - arm.head).normalize();
+        assert!(along.dot((target - shoulder).normalize()) > 0.999, "the arm points along {along}");
     }
 }

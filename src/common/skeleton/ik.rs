@@ -23,35 +23,49 @@ use crate::common::skeleton::state::{AnimationState, ClipLibrary, PoseInputs, Sk
 /// bend plane undefined. Small enough that full stretch still counts as reached.
 const STRAIGHT_MARGIN: f32 = 1e-5;
 
-/// Two bones and, optionally, a `tip` that keeps its world orientation through
-/// the solve, so a sole stays flat while the knee bends.
+/// `upper`, any `middle` bones, and `lower`, root first, and optionally a `tip` that keeps its
+/// world orientation through the solve, so a sole stays flat while the knee bends. Two bones are
+/// solved exactly; more by [`fabrik`].
 #[derive(Clone, Copy, Debug)]
 pub struct Chain {
     pub upper: &'static str,
+    /// Interned (`rig::intern_list`), so a chain stays `Copy`.
+    pub middle: &'static [&'static str],
     pub lower: &'static str,
     pub tip: Option<&'static str>,
 }
 
+impl Chain {
+    /// Root first, without the tip.
+    pub fn bones(&self) -> impl Iterator<Item = &'static str> + '_ {
+        std::iter::once(self.upper).chain(self.middle.iter().copied()).chain(std::iter::once(self.lower))
+    }
+}
+
 pub const LEFT_LEG: Chain = Chain {
     upper: bone::THIGH_L,
+    middle: &[],
     lower: bone::SHIN_L,
     tip: Some(bone::FOOT_L),
 };
 
 pub const RIGHT_LEG: Chain = Chain {
     upper: bone::THIGH_R,
+    middle: &[],
     lower: bone::SHIN_R,
     tip: Some(bone::FOOT_R),
 };
 
 pub const LEFT_ARM: Chain = Chain {
     upper: bone::UPPER_ARM_L,
+    middle: &[],
     lower: bone::FOREARM_L,
     tip: Some(bone::HAND_L),
 };
 
 pub const RIGHT_ARM: Chain = Chain {
     upper: bone::UPPER_ARM_R,
+    middle: &[],
     lower: bone::FOREARM_R,
     tip: Some(bone::HAND_R),
 };
@@ -79,6 +93,9 @@ pub fn solve(
     target: Vec3,
     pole: Vec3,
 ) -> Reach {
+    if !chain.middle.is_empty() {
+        return fabrik(skeleton, pose, root, chain, target, pole);
+    }
     let bones = skeleton.bones();
     let (Some(upper), Some(lower)) = (skeleton.index_of(chain.upper), skeleton.index_of(chain.lower))
     else {
@@ -195,8 +212,8 @@ pub fn reach_or_leave(
     target: Vec3,
     pole: Vec3,
 ) -> Reach {
-    let before = [chain.upper, chain.lower]
-        .into_iter()
+    let before = chain
+        .bones()
         .chain(chain.tip)
         .map(|joint| (joint, pose.joint(joint)))
         .collect::<Vec<_>>();
@@ -234,11 +251,7 @@ pub fn elbow_pole(side: f32) -> Vec3 {
 /// Fully extended length, excluding the tip.
 pub fn chain_length(skeleton: &Skeleton, chain: &Chain) -> f32 {
     let bones = skeleton.bones();
-    [chain.upper, chain.lower]
-        .iter()
-        .filter_map(|name| skeleton.index_of(name))
-        .map(|index| bones[index].length)
-        .sum()
+    chain.bones().filter_map(|name| skeleton.index_of(name)).map(|index| bones[index].length).sum()
 }
 
 /// The unit a gait's strides are measured in.
@@ -328,7 +341,7 @@ pub fn ducked_pose(
                 lift: from.lift.lerp(to.lift, crouch),
             })
             .collect();
-        plant_feet(skeleton, &mut pose, root, &offsets);
+        plant_by(skeleton, &mut pose, root, &offsets, inputs.feet_free);
     }
     pose
 }
@@ -375,7 +388,24 @@ pub fn correct_for_state(
         duck_under(skeleton, pose, root, CROUCH_HEIGHT);
     }
     if state.plants_feet() {
-        plant_feet(skeleton, pose, root, &state.foot_offsets(inputs, skeleton.anatomy()));
+        plant_by(skeleton, pose, root, &state.foot_offsets(inputs, skeleton.anatomy()), inputs.feet_free);
+    }
+}
+
+/// [`plant_feet`], blended back toward the unplanted legs by `free`.
+fn plant_by(skeleton: &Skeleton, pose: &mut Pose, root: &Transform, offsets: &[FootOffset], free: f32) {
+    if free >= 1.0 {
+        return;
+    }
+    let loose = (free > 0.0).then(|| pose.clone());
+    plant_feet(skeleton, pose, root, offsets);
+    let Some(loose) = loose else { return };
+    let anatomy = skeleton.anatomy();
+    for foot in &anatomy.feet {
+        let Some(limb) = anatomy.limbs.get(foot.limb) else { continue };
+        for name in limb.chain.bones().chain(limb.chain.tip) {
+            pose.set(name, pose.joint(name).slerp(loose.joint(name), free));
+        }
     }
 }
 
@@ -425,6 +455,94 @@ fn clip_pose(
     };
     apply(clip, clip.time_from(inputs), skeleton, &mut pose, &frames, None);
     pose
+}
+
+/// Rounds of [`fabrik`]: positions, then rotations through each joint's limit, then positions
+/// again from where the limits left the joints. Fixed, so a hitbox rebuilt on the tick is the
+/// same on every machine.
+const FABRIK_ROUNDS: usize = 4;
+/// Back-and-forth passes over the positions in each round.
+const FABRIK_PASSES: usize = 8;
+/// How close the tip must come to count as reached, meters.
+const FABRIK_REACHED: f32 = 1e-3;
+
+/// A chain of three or more bones onto `target`, bending toward `pole` (world space). FABRIK:
+/// joint positions are pulled to the target and back to the root, then each bone is turned to
+/// its new direction as far as its [`JointLimit`](super::joints::JointLimit) allows.
+fn fabrik(skeleton: &Skeleton, pose: &mut Pose, root: &Transform, chain: &Chain, target: Vec3, pole: Vec3) -> Reach {
+    let bones = skeleton.bones();
+    let Some(indices) = chain.bones().map(|name| skeleton.index_of(name)).collect::<Option<Vec<_>>>() else {
+        return Reach::Impossible;
+    };
+    let tip = chain.tip.and_then(|tip| {
+        let index = skeleton.index_of(tip)?;
+        Some((tip, index, skeleton.posed_bone(pose, root, index).rotation))
+    });
+    let lengths: Vec<f32> = indices.iter().map(|index| bones[*index].length).collect();
+    let pole = pole.normalize_or_zero();
+
+    let joints = |pose: &Pose| -> Vec<Vec3> {
+        let mut points: Vec<Vec3> = indices.iter().map(|index| skeleton.posed_bone(pose, root, *index).head).collect();
+        if let Some(last) = indices.last() {
+            points.push(skeleton.posed_bone(pose, root, *last).tail);
+        }
+        points
+    };
+    let base = joints(pose)[0];
+    if (target - base).length() < 1e-5 {
+        return Reach::Impossible;
+    }
+
+    for round in 0..FABRIK_ROUNDS {
+        let mut points = joints(pose);
+        if round == 0 {
+            // Bowed toward the pole, so the chain settles bending that way rather than whichever
+            // way it started.
+            let span = lengths.iter().sum::<f32>() * 0.05;
+            let count = points.len();
+            for point in points.iter_mut().take(count - 1).skip(1) {
+                *point += pole * span;
+            }
+        }
+        for _ in 0..FABRIK_PASSES {
+            let last = points.len() - 1;
+            points[last] = target;
+            for at in (0..last).rev() {
+                let toward = (points[at] - points[at + 1]).normalize_or(Vec3::Y);
+                points[at] = points[at + 1] + toward * lengths[at];
+            }
+            points[0] = base;
+            for at in 0..last {
+                let toward = (points[at + 1] - points[at]).normalize_or(Vec3::Y);
+                points[at + 1] = points[at] + toward * lengths[at];
+            }
+        }
+
+        // Root first, each from where the bones before it actually ended up.
+        for (at, index) in indices.iter().enumerate() {
+            let bone = &bones[*index];
+            let head = skeleton.posed_bone(pose, root, *index).head;
+            let parent = match bone.parent {
+                Some(parent) => skeleton.posed_bone(pose, root, parent).rotation,
+                None => root.rotation,
+            };
+            let frame = parent * bone.rest;
+            let wanted = (points[at + 1] - head).normalize_or(frame * Vec3::Y);
+            let allowed = frame * bone.limit.nearest(frame.inverse() * wanted);
+            let rotation = aim(allowed, allowed.cross(pole));
+            pose.set(bone.name, frame.inverse() * rotation);
+        }
+    }
+
+    if let Some((tip, index, was)) = tip {
+        let lower = skeleton.posed_bone(pose, root, *indices.last().unwrap_or(&index)).rotation;
+        pose.set(tip, (lower * bones[index].rest).inverse() * was);
+    }
+    let reached = joints(pose).last().copied().unwrap_or(base);
+    match reached.distance(target) <= FABRIK_REACHED {
+        true => Reach::Reached,
+        false => Reach::Short,
+    }
 }
 
 /// Points local `+Y` along `along` with local `+X` along `hinge`. The roll
@@ -654,6 +772,7 @@ mod tests {
                         stride: step as f32 / 400.0,
                         speed,
                         travel,
+                        ..Default::default()
                     };
                     let pose = finish_pose(&skeleton, state, &inputs, &root, None);
 

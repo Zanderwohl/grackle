@@ -60,11 +60,31 @@ limit = "head"
 profile = "head"
 
 [[bones]]
-name = "tail"
+name = "tail.1"
 parent = "pelvis"
 head = [0.0, 0.9, 0.05]
+tail = [0.0, 0.87, 0.25]
+thickness = [0.11, 0.11]
+group = "tail"
+region = "tail"
+limit = "spine"
+
+[[bones]]
+name = "tail.2"
+parent = "tail.1"
+head = [0.0, 0.87, 0.25]
+tail = [0.0, 0.84, 0.45]
+thickness = [0.09, 0.09]
+group = "tail"
+region = "tail"
+limit = "spine"
+
+[[bones]]
+name = "tail.3"
+parent = "tail.2"
+head = [0.0, 0.84, 0.45]
 tail = [0.0, 0.8, 0.65]
-thickness = [0.1, 0.1]
+thickness = [0.07, 0.07]
 group = "tail"
 region = "tail"
 limit = "spine"
@@ -150,6 +170,15 @@ lower = "shin.r"
 tip = "foot.r"
 side = 1.0
 straightens = true
+
+# Three bones, so solved by FABRIK within each joint's limit; it bends up.
+[[limbs]]
+name = "tail"
+upper = "tail.1"
+between = ["tail.2"]
+lower = "tail.3"
+side = 0.0
+pole = [0.0, 1.0, 0.0]
 
 [[feet]]
 limb = "left_leg"

@@ -68,6 +68,30 @@ pub enum Space {
     Bone(BoneRef),
 }
 
+/// A procedural pass a [`Channel::Weight`] track turns down: each acts on what the rig publishes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Controller {
+    /// The feet held on the floor.
+    Plant,
+    /// The look bones following the aim's pitch.
+    Look,
+    /// The hands on the weapon.
+    Hold,
+}
+
+impl Controller {
+    pub const ALL: [Controller; 3] = [Controller::Plant, Controller::Look, Controller::Hold];
+
+    pub fn name_key(self) -> &'static str {
+        match self {
+            Controller::Plant => "anim.controller.plant",
+            Controller::Look => "anim.controller.look",
+            Controller::Hold => "anim.controller.hold",
+        }
+    }
+}
+
 /// A bone by name, interned so a [`Space`] naming one stays `Copy`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct BoneRef(pub &'static str);
@@ -336,6 +360,10 @@ pub struct Key {
     /// Used **leaving** this key. See [`Interpolation`].
     #[serde(default)]
     pub ease: Interpolation,
+    /// For a point, the space this key is measured in instead of its track's. Between keys in
+    /// different spaces the target is blended in world space.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub space: Option<Space>,
 }
 
 impl Key {
@@ -344,6 +372,7 @@ impl Key {
             at,
             to: to.map(Axis::Value),
             ease,
+            space: None,
         }
     }
 }
@@ -391,6 +420,20 @@ pub enum Channel {
         #[serde(default)]
         keys: Vec<Key>,
     },
+    /// Turns a bone so its length points at a target: a head at something, a tail, a turret. As
+    /// far as its joint allows.
+    LookAt {
+        bone: String,
+        #[serde(default)]
+        keys: Vec<Key>,
+    },
+    /// How much a procedural pass acts, 0 to 1, on each key's first axis: a taunt that lets the
+    /// feet leave the floor, or a head that stops following the aim.
+    Weight {
+        controller: Controller,
+        #[serde(default)]
+        keys: Vec<Key>,
+    },
     // Reserved: `Feature { feature: PropFeatureId, .. }`, for a dropped magazine.
     // Needs `prop::baked` to bake per-feature groups rather than one mesh per
     // surface.
@@ -404,6 +447,8 @@ impl Channel {
             Channel::Effector { .. } => "anim.channel.effector",
             Channel::Weapon { .. } => "anim.channel.weapon",
             Channel::WeaponRotation { .. } => "anim.channel.weapon_rotation",
+            Channel::LookAt { .. } => "anim.channel.look_at",
+            Channel::Weight { .. } => "anim.channel.weight",
         }
     }
 
@@ -413,7 +458,9 @@ impl Channel {
             | Channel::WeaponRotation { keys }
             | Channel::Effector { keys, .. }
             | Channel::Weapon { keys }
-            | Channel::Root { keys } => keys.len(),
+            | Channel::Root { keys }
+            | Channel::LookAt { keys, .. }
+            | Channel::Weight { keys, .. } => keys.len(),
         }
     }
 
@@ -423,7 +470,9 @@ impl Channel {
             | Channel::WeaponRotation { keys }
             | Channel::Effector { keys, .. }
             | Channel::Weapon { keys }
-            | Channel::Root { keys } => keys.iter().map(|key| key.at).collect(),
+            | Channel::Root { keys }
+            | Channel::LookAt { keys, .. }
+            | Channel::Weight { keys, .. } => keys.iter().map(|key| key.at).collect(),
         }
     }
 
@@ -433,7 +482,9 @@ impl Channel {
             | Channel::WeaponRotation { keys }
             | Channel::Effector { keys, .. }
             | Channel::Weapon { keys }
-            | Channel::Root { keys } => keys,
+            | Channel::Root { keys }
+            | Channel::LookAt { keys, .. }
+            | Channel::Weight { keys, .. } => keys,
         }
     }
 
@@ -443,7 +494,9 @@ impl Channel {
             | Channel::WeaponRotation { keys }
             | Channel::Effector { keys, .. }
             | Channel::Weapon { keys }
-            | Channel::Root { keys } => keys,
+            | Channel::Root { keys }
+            | Channel::LookAt { keys, .. }
+            | Channel::Weight { keys, .. } => keys,
         }
     }
 
@@ -494,7 +547,9 @@ impl Channel {
             | Channel::WeaponRotation { keys }
             | Channel::Effector { keys, .. }
             | Channel::Weapon { keys }
-            | Channel::Root { keys } => shuffle(
+            | Channel::Root { keys }
+            | Channel::LookAt { keys, .. }
+            | Channel::Weight { keys, .. } => shuffle(
                 keys,
                 held,
                 by,
@@ -516,7 +571,9 @@ impl Channel {
             | Channel::WeaponRotation { keys }
             | Channel::Effector { keys, .. }
             | Channel::Weapon { keys }
-            | Channel::Root { keys } => {
+            | Channel::Root { keys }
+            | Channel::LookAt { keys, .. }
+            | Channel::Weight { keys, .. } => {
                 for index in doomed.iter().rev() {
                     if *index < keys.len() {
                         keys.remove(*index);
@@ -534,7 +591,9 @@ impl Channel {
             | Channel::WeaponRotation { keys }
             | Channel::Effector { keys, .. }
             | Channel::Weapon { keys }
-            | Channel::Root { keys } => keys.sort_by(|a, b| a.at.total_cmp(&b.at)),
+            | Channel::Root { keys }
+            | Channel::LookAt { keys, .. }
+            | Channel::Weight { keys, .. } => keys.sort_by(|a, b| a.at.total_cmp(&b.at)),
         }
     }
 }
@@ -693,6 +752,7 @@ impl Clip {
                         }
                     }
                 }
+                Channel::LookAt { .. } | Channel::Weight { .. } => {}
                 Channel::Root { keys } => {
                     for key in keys {
                         // A root offset is already measured from where the floor put the body.
@@ -952,11 +1012,13 @@ mod tests {
                                 at: 0.0,
                                 to: [Axis::Value(0.25), Axis::Ground { clearance: 0.04 }, Axis::Free],
                                 ease: Interpolation::SmoothStep,
+                                space: None,
                             },
                             Key {
                                 at: 1.5,
                                 to: [Axis::Value(-0.25), Axis::Value(0.1), Axis::Free],
                                 ease: Interpolation::Linear,
+                                space: None,
                             },
                         ],
                     },
@@ -1069,6 +1131,7 @@ mod tests {
                     at: 0.5,
                     to: [Axis::ON_THE_GROUND, Axis::Free, Axis::Free],
                     ease: Interpolation::Linear,
+                    space: None,
                 }],
             },
         });
@@ -1112,6 +1175,7 @@ mod tests {
                     at: *at,
                     to: [Axis::Value(*at), Axis::Free, Axis::Free],
                     ease: Interpolation::Linear,
+                    space: None,
                 })
                 .collect(),
         }
@@ -1221,6 +1285,7 @@ mod tests {
                         at: 0.0,
                         to: [Axis::ON_THE_GROUND, Axis::Free, Axis::Free],
                         ease: Interpolation::Linear,
+                        space: None,
                     }],
                 },
                 ..Track::rotation("chest")

@@ -43,6 +43,9 @@ pub struct PoseInputs {
     pub speed: f32,
     /// Which way it is going, in its own frame: `x` right, `y` forwards.
     pub travel: Vec2,
+    /// How far the feet are let go of the floor, 0 to 1: one less a clip's `Weight` on
+    /// `Controller::Plant`. Zero, the default, plants them.
+    pub feet_free: f32,
 }
 
 /// The clock every animation is sampled against.

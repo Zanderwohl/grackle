@@ -359,14 +359,26 @@ None of these is animation, but a creature is not playable without them:
       game, and stands the preview figure up as that rig (`FigureRig`).
 
 ### Stage 3: IK
-- [ ] FABRIK with joint limits, fixed iterations; tested for reach, limits,
-      and determinism.
-- [ ] Controllers (`Plant`, `Look`, `Hold`, `Aim`) declared on the rig; each
-      drives only the regions it won.
-- [ ] `LookAt` and `Weight { controller }` channels.
-- [ ] Per-key target spaces, blended in world space between keys.
-- [ ] Editor: target-space per key, controller weight tracks, IK targets
-      drawn in the viewport.
+- [x] A `Chain` may have `middle` bones (a rig file's limb `between`), and
+      `ik::solve` hands a chain of three or more to FABRIK: positions pulled
+      to the target and back, then each bone turned within its joint limit,
+      four rounds of eight passes, fixed so every machine agrees. Tested for
+      reach, limits, determinism and pointing at what it cannot reach. The
+      strider's tail is a three-bone limb.
+- [x] Controllers are the passes the anatomy already feeds — `Plant` (its
+      feet), `Look` (its look shares), `Hold` (its hands) — and a clip's
+      `Weight` track turns each down (`play::controller_weight`), masked by a
+      claim above like any track. Look now yields the head to a layer above
+      the weapon that claims it. `Aim`, for a weapon mounted on a body, waits
+      for Stage 4's creature.
+- [x] `LookAt { bone }` turns a bone's length toward a target, within its
+      joint; `Weight { controller }` keys how much a pass acts.
+- [x] Per-key target spaces (`Key::space`): keys in different spaces are
+      each placed in their own and blended in world space
+      (`play::sample_point`), for effectors, look-ats and the weapon.
+- [x] Editor: Look at and Weight tracks, a key's own space, and every
+      effector and look-at target drawn on the figure, the picked track's
+      larger (`FigureTargets`).
 
 ### Stage 4: the first creature
 - [ ] Rig file, mesh profiles, joint limits; state clips; a taunt.

@@ -635,7 +635,11 @@ pub(crate) fn grip_the_weapon(
         }
         let anatomy = skeleton.anatomy();
         let arms = [0, 1].map(|hand| anatomy.hand(hand).map_or(Regions::NONE, |limb| limb.region));
-        let cover = arms.map(|arm| stack.map_or(0.0, |stack| stack.cover(arm, Layer::Weapon)));
+        // A clip's `Weight` on `Controller::Hold` lets go as a layer covering the arm would.
+        let holding = stack.map_or(1.0, |stack| {
+            crate::common::skeleton::play::controller_weight(stack, &clips, crate::common::skeleton::clip::Controller::Hold)
+        });
+        let cover = arms.map(|arm| stack.map_or(0.0, |stack| stack.cover(arm, Layer::Weapon)).max(1.0 - holding));
         if cover.iter().all(|cover| *cover >= 1.0) {
             continue;
         }
@@ -1015,6 +1019,7 @@ mod tests {
                         at: 0.0,
                         to: [Axis::Free, Axis::Value(-0.2), Axis::Free],
                         ease: Interpolation::Linear,
+                        space: None,
                     }],
                 },
             }],

@@ -215,6 +215,15 @@ A clip names a rig's parts by name: an effector's `chain` is any limb
 after the six every rig has (`Anatomy::region_names`); a taunt's claims are
 names, resolved against each body's rig as it taunts.
 
+A chain of three or more bones (a limb's `between`) is solved by FABRIK within
+each joint's limit, at a fixed round count so every machine agrees; two bones
+stay on the exact solver. A clip's `LookAt` turns a bone toward a target, and
+its `Weight` tracks turn down the procedural passes — feet planted, head
+following the aim, hands on the weapon (`play::controller_weight`). The look
+yields the head to any layer above the weapon that claims it. A key may name
+its own space; between keys in different spaces the target blends in world
+space.
+
 Usability is decided by `CollisionWorld::fits` — the body box must be in the
 map and touching no wall. There is no separate notion of "headroom": a low
 ceiling *is* a slab the body overlaps. Unusable spawns are skipped with a

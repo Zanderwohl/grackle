@@ -175,6 +175,11 @@ pub fn refresh_the_figure(
     ));
 }
 
+/// Where the strip's clip aims each effector and look-at track this frame, by track index, in the
+/// figure's own frame so the drawing follows it.
+#[derive(Resource, Default)]
+pub struct FigureTargets(pub Vec<(usize, Vec3)>);
+
 /// A rig the figure stands up as instead of its class's: in the animation editor, the rig whose
 /// clip is being edited.
 #[derive(Resource, Default)]
@@ -191,6 +196,7 @@ pub fn pose_the_figure(
     corrections: Option<Res<FigureCorrections>>,
     beneath: Option<Res<FigureBeneath>>,
     library: Option<Res<crate::common::skeleton::state::ClipLibrary>>,
+    mut targets: Option<ResMut<FigureTargets>>,
     mode: Option<Res<State<crate::common::app_mode::AppMode>>>,
     mut figures: Query<
         (&Skeleton, &mut Pose, &mut Transform, &mut FigureReach, &mut Visibility),
@@ -284,7 +290,18 @@ pub fn pose_the_figure(
                 }),
             };
             let weapon = holding.then_some(&mut placed);
+            let before = standing.clone();
             apply_stack(&performance.0, clips, skeleton, &mut standing, &frames, weapon);
+            // The strip's clip is the last pushed; its targets read off the pose beneath it.
+            if let Some(targets) = targets.as_deref_mut() {
+                let found = performance.0 .0.last().and_then(|playing| Some((playing, clips.get(&playing.clip)?)));
+                targets.0 = found.map_or_else(Vec::new, |(playing, clip)| {
+                    crate::common::skeleton::play::track_targets(clip, playing.time, skeleton, &before, &frames)
+                        .into_iter()
+                        .map(|(track, at)| (track, root.to_matrix().inverse().transform_point3(at)))
+                        .collect()
+                });
+            }
         }
         // The game's body-clip corrections, before the weapon is placed from
         // the pose they leave.

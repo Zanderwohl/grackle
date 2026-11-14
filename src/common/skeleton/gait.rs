@@ -561,7 +561,7 @@ mod tests {
                     phase += step / (shape.stride_per_cycle(travel) * leg);
 
                     let root = Transform::from_xyz(0.0, 0.0, -traveled);
-                    let inputs = PoseInputs { seconds: 0.0, stride: phase, speed, travel: Vec2::Y };
+                    let inputs = PoseInputs { seconds: 0.0, stride: phase, speed, travel: Vec2::Y, ..Default::default() };
                     let pose =
                         finish_pose(&skeleton, AnimationState::RunForward, &inputs, &root, None);
                     let ankle = skeleton
@@ -615,6 +615,7 @@ mod tests {
                             stride: step as f32 / 16.0,
                             speed,
                             travel,
+                            ..Default::default()
                         };
                         for state in [
                             AnimationState::RunForward,
@@ -869,6 +870,7 @@ mod tests {
                     stride: phase,
                     speed: 2.0,
                     travel: Vec2::new(toward, 0.0),
+                    ..Default::default()
                 };
                 let pose = finish_pose(&skeleton, state, &inputs, &root, None);
                 let ankle = skeleton
@@ -991,6 +993,7 @@ mod tests {
                 stride: phase,
                 speed: RUNNING,
                 travel,
+                ..Default::default()
             };
             let pose = finish_pose(&skeleton, AnimationState::RunForward, &inputs, &root, None);
             let ankle = skeleton
@@ -1087,6 +1090,7 @@ mod tests {
             stride: 0.15,
             speed: RUNNING,
             travel: Vec2::Y,
+            ..Default::default()
         };
         let running = gait_pose(&inputs, Vec2::Y, GaitStyle::upright(RUNNING));
 
@@ -1107,6 +1111,7 @@ mod tests {
                         stride: step as f32 / 32.0,
                         speed: RUNNING,
                         travel: Vec2::Y,
+                        ..Default::default()
                     };
                     hand(&gait_pose(&inputs, Vec2::Y, GaitStyle::upright(RUNNING)), name).x
                 })

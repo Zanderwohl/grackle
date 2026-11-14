@@ -344,16 +344,40 @@ fn head_pitch(look: f32) -> f32 {
 /// up, hence the negation. Composes onto the pose `advance_animators` left.
 /// Runs on every `Player`, since `pitch` is replicated; yaw is
 /// [`face_bodies`](crate::game::player::face_bodies)'s.
-fn look_with_the_head(mut bodies: Query<(&Player, &Skeleton, &mut Pose)>) {
-    for (player, skeleton, mut pose) in &mut bodies {
+fn look_with_the_head(
+    clips: Option<Res<Assets<crate::common::skeleton::clip::Clip>>>,
+    mut bodies: Query<(&Player, &Skeleton, &mut Pose, Option<&ClipStack>)>,
+) {
+    for (player, skeleton, mut pose, stack) in &mut bodies {
+        let pitch = player.pitch * look_weight(stack, clips.as_deref());
         let unturned = skeleton.anatomy().look.iter().all(|(bone, _)| {
             pose.joint(skeleton.bones()[*bone].name) == Quat::IDENTITY
         });
-        if player.pitch == 0.0 && unturned {
+        if pitch == 0.0 && unturned {
             // Skipping keeps a still body from dirtying its pose every frame.
             continue;
         }
-        look(skeleton, &mut pose, player.pitch);
+        look(skeleton, &mut pose, pitch);
+    }
+}
+
+/// How far the look bones follow the aim: a clip's `Weight` on `Controller::Look`, and not
+/// where a layer above the weapon claims the head, which it then owns.
+pub(crate) fn look_weight(stack: Option<&ClipStack>, clips: Option<&Assets<crate::common::skeleton::clip::Clip>>) -> f32 {
+    let Some(stack) = stack else { return 1.0 };
+    let keyed = clips.map_or(1.0, |clips| {
+        crate::common::skeleton::play::controller_weight(stack, clips, crate::common::skeleton::clip::Controller::Look)
+    });
+    keyed * (1.0 - stack.cover(Regions::HEAD, Layer::Weapon))
+}
+
+/// How far a clip's `Weight` on `Controller::Plant` lets the feet go.
+pub(crate) fn feet_free(stack: Option<&ClipStack>, clips: Option<&Assets<crate::common::skeleton::clip::Clip>>) -> f32 {
+    match (stack, clips) {
+        (Some(stack), Some(clips)) => {
+            1.0 - crate::common::skeleton::play::controller_weight(stack, clips, crate::common::skeleton::clip::Controller::Plant)
+        }
+        _ => 0.0,
     }
 }
 
@@ -448,6 +472,7 @@ fn advance_animators(
     clock: Res<AnimationClock>,
     // Absent: every state is a Rust function.
     library: Option<Res<ClipLibrary>>,
+    layer_clips: Option<Res<Assets<crate::common::skeleton::clip::Clip>>>,
     mut bodies: Query<(
         &Skeleton,
         &mut SkeletonAnimator,
@@ -484,6 +509,7 @@ fn advance_animators(
             stride: gait.phase(),
             speed: gait.speed(),
             travel: gait.travel(),
+            feet_free: feet_free(stack, layer_clips.as_deref()),
         };
         let root = skeleton_root(global, offset);
         *pose = animator_pose(skeleton, &animator, &inputs, &root, clips, crouch);
@@ -998,5 +1024,18 @@ mod tests {
         world.run_system_once(describe_player_bodies).unwrap();
         assert!(world.get::<BodyRequests>(free).unwrap().running_forward);
         assert!(!world.get::<BodyRequests>(waving).unwrap().moving(), "the waving body was described as running");
+    }
+
+    /// A layer above the weapon that claims the head owns it, so the look lets go of it.
+    #[test]
+    fn the_look_yields_the_head_to_a_layer_that_claims_it() {
+        use crate::common::skeleton::clip::Clip;
+        use crate::common::skeleton::play::{Layer, Playing, Regions};
+        let mut clips = Assets::<Clip>::default();
+        let clip = clips.add(Clip { length: 1.0, ..Clip::default() });
+        let arms = ClipStack(vec![Playing { claims: Regions::ARMS, ..Playing::new(Layer::Taunt, clip.clone(), 0.0) }]);
+        assert_eq!(look_weight(Some(&arms), Some(&clips)), 1.0);
+        let head = ClipStack(vec![Playing { claims: Regions::HEAD, ..Playing::new(Layer::Taunt, clip, 0.0) }]);
+        assert_eq!(look_weight(Some(&head), Some(&clips)), 0.0, "the look kept turning a claimed head");
     }
 }
