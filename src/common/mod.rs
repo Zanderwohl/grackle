@@ -40,6 +40,7 @@ pub(crate) mod ray;
 pub mod item;
 pub mod csg;
 pub mod world_surface;
+pub mod decal;
 pub mod cuboid;
 pub mod rotation;
 pub mod triangulate;

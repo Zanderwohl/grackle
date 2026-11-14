@@ -192,7 +192,7 @@ shape is a new producer and not a rewrite of every consumer — see
 | `src/lang_editor/` | The lang editor: a pack's strings for one language. See "Editing a lang file". |
 | `src/common/` | Shared: i18n, geometry, rays, gamemodes, items. |
 | `src/unlock/` | The crate-drop prototype. Orthogonal — see above. |
-| `src/bin/` | `ensure_lang` (fills missing translation keys), `new_map_template` (writes the new-map, demo-scene, arena and cloister blueprints), `map_stats` (bakes a blueprint's nav graph headless and prints its statistics and top-down charts of each field), `bake_body_clips` (seeds a pack's body animations from the pose functions they replace), `default_materials` (writes the default pack's materials), `crate_drop`. |
+| `src/bin/` | `ensure_lang` (fills missing translation keys), `new_map_template` (writes the new-map, demo-scene, arena and cloister blueprints), `map_stats` (bakes a blueprint's nav graph headless and prints its statistics and top-down charts of each field), `decal_images` (rasterizes the default pack's decal SVGs), `bake_body_clips` (seeds a pack's body animations from the pose functions they replace), `default_materials` (writes the default pack's materials), `crate_drop`. |
 | `assets/default/` | The default pack: `lang/`, `blueprints/`, `servers/` (example `--server-config` files). |
 | `assets/user/` | The user pack: gitignored, made at startup, last in `default_packs()` so it overrides the shipped one. A new map or prop is saved here unless the document already has a folder. |
 | `cache/` | Gitignored, derived from the packs and maps: `thumbnail/props/{name}.png`, `nav/{hash}.bin`, `lightmap/{hash}.bin`, `rounds/{map}/*.jsonl`. Safe to delete. |
@@ -545,7 +545,7 @@ cannot stick). **`H`** toggles humiliation, a debug key until there are
 rounds to lose: hands up, no weapon, no firing, third person. **`G`** starts
 the first taunt in `assets/default/taunts.toml` (a wave, which ends by itself;
 `G` again ends it early), and works while humiliated, as in TF2; **`O`** is
-suicide, 1000 damage credited to yourself, a debug key for the death cam; nobody
+suicide, **`T`** puts your spray on the surface you look at within 2 m, or moves it there (see "Decals"), 1000 damage credited to yourself, a debug key for the death cam; nobody
 crouches while taunting; each taunt states what it claims, whether it
 shows the weapon, how far you can move, and how far your body (never the
 camera) can turn — all of it edited in the animation editor's **Taunts**
@@ -1386,6 +1386,36 @@ GPU path draws them ([`src/material/library.rs`](src/material/library.rs),
   pickup's weapon (pictured by its model) use it too.
 - **Not sent to clients.** Materials are pack content like props, but nothing
   syncs them yet; a client without the file draws that slot as the default.
+
+## Decals
+
+Marks on the map's surface ([`src/common/decal.rs`](src/common/decal.rs),
+[`src/game/decal.rs`](src/game/decal.rs), [documentation/decals.md](documentation/decals.md)).
+**Not Bevy's decals**: `ClusteredDecal` is off on Metal and in browsers, and `ForwardDecal`
+needs a depth prepass on every camera and paints bodies. A decal is a box cut out of the baked
+`world_surface` faces it covers, one `DecalPiece` mesh per room, each `DecalPieceOf` its root
+and `PaintedOn` its room's `BakedRoomGeometry` (both `linked_spawn`), with `UV_1` from the
+room's lightmap chart. A root marked `Uncut` is cut next frame; a room rebaked in place recuts
+the lasting decals on it and drops the transient ones.
+
+- **Three lifetimes, one marker each**: `MapDecal` (an `EditorDecal` feature: a picture under a
+  pack's `decals/`, pressed along its `-Z`), `Spray` (its owner's connection, and cleared on leaving Play) and `Transient`
+  (bullet holes, scorch and blood: a ring per kind capped by this machine's `PlayerSettings::debris`, fading out over their last
+  seconds, cleared on entering and leaving Play).
+- **Transient marks are drawn, not sent**: every machine places them from the `Effect`s and
+  `DamageDealt`s it already gets. They are `AlphaMode::Multiply` and unlit, so they take no
+  light and overlap in any order; sprays and map decals blend, lit by their room's lightmap
+  (`light_decals`, as `attach_lightmaps` does walls).
+- **Sprays** ([`src/game/spray.rs`](src/game/spray.rs)): a client paints a 512×512 picture (a
+  disk in its HUD color, its name in black, "Player" when blank) and sends it as a PNG; the server
+  numbers each link's owner (`SprayOwner`, the host is 0) and relays every picture. `T` places a
+  replicated `SprayAt` on the authority; on a server it is `SprayedBy` its link, so a
+  disconnect despawns it. There is no way to pick another picture yet.
+- **Their pipelines are compiled at startup** (`warm_up_decals`), drawn once through a camera set
+  up as the play camera is; a material or camera setting added later must join it, or the first
+  mark of a session is a hitch.
+- The pictures are SVGs in `assets/default/decals/svg/`, rasterized by
+  `cargo run --bin decal_images`; a decal image gets its mip chain on load (`with_mips`).
 
 ## Thumbnails
 
@@ -3018,7 +3048,7 @@ machine, and things happen in it.
 The core abstraction is `FeatureTrait` in
 [`src/editor/editable.rs`](src/editor/editable.rs) — a `#[typetag::serde]`
 trait object. Implementors today: `GlobalPoint`, `GracklePointLight`,
-`EditorRoom`, `FootprintRoom`, `EditorTrigger`, `EditorBlock`, `SpawnPoint`, `SpectatorCamera`, `Prop`, `WeaponPickup`,
+`EditorRoom`, `FootprintRoom`, `EditorTrigger`, `EditorBlock`, `SpawnPoint`, `SpectatorCamera`, `EditorDecal`, `Prop`, `WeaponPickup`,
 `AnimationDisplay`, `AnimationGrid` and `Mirror`.
 
 A feature does not store bare coordinates. It stores `PointRef`s, which are

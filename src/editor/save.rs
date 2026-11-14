@@ -184,6 +184,7 @@ mod tests {
     use crate::editor::spawn_point::SpawnPoint;
     use crate::editor::weapon_pickup::WeaponPickup;
     use crate::editor::spectator_camera::{SpectatorCamera, Viewers};
+    use crate::editor::decal::EditorDecal;
     use crate::editor::trigger::EditorTrigger;
     use crate::editor::block::EditorBlock;
     use crate::common::trigger::TriggerEffect;
@@ -228,6 +229,7 @@ mod tests {
                 .with_order(3)
                 .with_viewers(Viewers { blue: false, unassigned: false, local_team: false, ..Default::default() }),
         ));
+        timeline.apply_feature(Box::new(EditorDecal::new(0.5, 0.0, 0.5).with_rotation(Vec3::new(0.0, 1.0, 0.0)).with_picture("blood_2.png")));
         timeline.apply_feature(Box::new(
             EditorTrigger::from_room(EditorRoom::from_min_and_size(
                 PointRef::reference_with_offset(min, 0.0, -1.0, 0.0),

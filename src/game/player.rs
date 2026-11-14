@@ -226,6 +226,8 @@ pub struct PlayerInput {
     pub taunt: bool,
     /// A debug key until there is a kill command.
     pub suicide: bool,
+    /// Put this player's spray on the wall in front of them, or move it there.
+    pub spray: bool,
     /// Look direction about world Y, radians. An input because facing decides
     /// which way "forward" is, so a server needs it to reproduce movement.
     pub yaw: f32,
@@ -569,6 +571,7 @@ pub fn gather_input(
     input.humiliate |= keys.just_pressed(KeyCode::KeyH);
     input.taunt |= keys.just_pressed(KeyCode::KeyG);
     input.suicide |= keys.just_pressed(KeyCode::KeyO);
+    input.spray |= keys.just_pressed(KeyCode::KeyT);
 
     input.sprint = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
     input.crouch = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
@@ -619,6 +622,7 @@ pub fn write_client_inputs(
     latch.0.humiliate = false;
     latch.0.taunt = false;
     latch.0.suicide = false;
+    latch.0.spray = false;
     latch.0.select = None;
 }
 

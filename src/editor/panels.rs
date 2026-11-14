@@ -691,23 +691,32 @@ fn player_panel_ui(ui: &mut egui::Ui, settings: &mut PlayerSettings) -> bool {
             .changed();
     });
     changed |= ui.checkbox(&mut settings.auto_reload, get!("editor.player.auto_reload")).changed();
-    // Held aside while dragged: every change saves the file and goes to the server.
-    let id = ui.id().with("field_of_view");
-    let mut fov = ui.data(|data| data.get_temp::<u32>(id)).unwrap_or(settings.field_of_view);
-    let response = ui.add(
-        egui::Slider::new(&mut fov, crate::common::player_settings::FIELD_OF_VIEW_RANGE)
-            .text(get!("editor.player.field_of_view"))
-            .suffix("\u{b0}"),
-    );
+    let fov = crate::common::player_settings::FIELD_OF_VIEW_RANGE;
+    changed |= held_slider(ui, "field_of_view", &mut settings.field_of_view, fov, get!("editor.player.field_of_view"), "\u{b0}");
+
+    ui.separator();
+    ui.label(get!("editor.player.debris"));
+    let range = crate::common::player_settings::DEBRIS_RANGE;
+    let debris = &mut settings.debris;
+    changed |= held_slider(ui, "bullet_holes", &mut debris.bullet_holes, range.clone(), get!("editor.player.bullet_holes"), "");
+    changed |= held_slider(ui, "blood", &mut debris.blood, range.clone(), get!("editor.player.blood"), "");
+    changed |= held_slider(ui, "scorch", &mut debris.scorch, range, get!("editor.player.scorch"), "");
+    changed
+}
+
+/// A slider whose value is held aside while it is dragged: every change saves the settings file
+/// and goes to the server. Returns whether `value` changed.
+fn held_slider(ui: &mut egui::Ui, key: &str, value: &mut u32, range: std::ops::RangeInclusive<u32>, text: String, suffix: &str) -> bool {
+    let id = ui.id().with(key);
+    let mut shown = ui.data(|data| data.get_temp::<u32>(id)).unwrap_or(*value);
+    let response = ui.add(egui::Slider::new(&mut shown, range).text(text).suffix(suffix));
     if response.dragged() {
-        ui.data_mut(|data| data.insert_temp(id, fov));
-    } else {
-        ui.data_mut(|data| data.remove::<u32>(id));
-        if fov != settings.field_of_view {
-            settings.field_of_view = fov;
-            changed = true;
-        }
+        ui.data_mut(|data| data.insert_temp(id, shown));
+        return false;
     }
+    ui.data_mut(|data| data.remove::<u32>(id));
+    let changed = shown != *value;
+    *value = shown;
     changed
 }
 

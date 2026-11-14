@@ -29,6 +29,8 @@ use grackle::game::GamePlugin;
 use grackle::game::sunlit::SunlitPlugin;
 use grackle::game::world_prop::WorldPropPlugin;
 use grackle::game::forward_camera::ForwardCameraPlugin;
+use grackle::game::decal::DecalPlugin;
+use grackle::game::spray::SprayPlugin;
 use grackle::anim::{AnimPlugin, StartInAnimEditor};
 use grackle::material::{MaterialEditorPlugin, StartInMaterialEditor};
 use grackle::lang_editor::{LangEditorPlugin, StartInLangEditor};
@@ -104,7 +106,7 @@ fn main() {
             PropEditorPlugin,
             (AnimPlugin, MaterialEditorPlugin, grackle::weapon_editor::WeaponEditorPlugin, LangEditorPlugin),
             GamePlugin,
-            (WorldPropPlugin, ThumbnailPlugin, ForwardCameraPlugin, SunlitPlugin),
+            (WorldPropPlugin, ThumbnailPlugin, ForwardCameraPlugin, SunlitPlugin, DecalPlugin, SprayPlugin),
             SkeletonPlugin,
             (PerfPlugin, FontsPlugin, grackle::common::icons::IconsPlugin, UiShapePlugin, grackle::common::player_settings::PlayerSettingsPlugin { profile: editor_params.profile }),
             ))

@@ -74,6 +74,7 @@ impl Plugin for NetTransportPlugin {
             // A client told about a weapon but not its model draws empty hands.
             .add_plugins(crate::prop::sync::PropSyncPlugin)
             .add_plugins(crate::common::net_events::NetEventsPlugin)
+            .add_plugins(crate::game::spray::SpraySyncPlugin)
             // Prediction is gated on this resource existing, so it stays: a
             // host now may be a client after the next menu click.
             .insert_resource(PredictionManager::default())

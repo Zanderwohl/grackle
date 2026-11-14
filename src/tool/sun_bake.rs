@@ -66,6 +66,11 @@ impl Default for SunBake {
 }
 
 impl SunBake {
+    /// The light standing for `room`, if it is for the layout `faces_hash` charts.
+    pub fn light_for(&self, room: Entity, faces_hash: u64) -> Option<&Handle<Image>> {
+        self.lit.get(&room).filter(|light| light.faces_hash == faces_hash).map(|light| &light.image)
+    }
+
     pub fn auto(&self) -> bool {
         self.bake.auto()
     }
@@ -512,11 +517,6 @@ fn report_sunlight(state: Res<SunBake>, mut progress: ResMut<BakeProgress>) {
 /// Every frame, as `paint_rooms` is: a slot takes its room's lightmap while it is drawn with a
 /// `StandardMaterial`, which is the only material that reads one, and while that light is for the
 /// layout its `UV_1` is. A sky slot never has one.
-///
-/// Two things about Bevy 0.20 shape this. Adding or removing a `Lightmap` does not re-specialize
-/// the mesh's pipeline, so the bind group and pipeline disagree and wgpu stops the frame; marking
-/// the material changed is what does. And a lightmap's image is only read when the component
-/// first arrives, so a new image is a removal one frame and an insertion the next.
 fn attach_lightmaps(
     mut commands: Commands,
     state: Res<SunBake>,
@@ -530,27 +530,36 @@ fn attach_lightmaps(
             }
             continue;
         };
-        let wanted = bakes
-            .get(parent.parent())
-            .ok()
-            .and_then(|baked| state.lit.get(&baked.room).filter(|light| light.faces_hash == baked.faces_hash))
-            .map(|light| &light.image);
-        match (wanted, drawn) {
-            (Some(image), Some(drawn)) if drawn.image == *image => continue,
-            (None, None) => continue,
-            (Some(image), None) => {
-                commands.entity(entity).insert(Lightmap {
-                    image: image.clone(),
-                    uv_rect: Rect::new(0.0, 0.0, 1.0, 1.0),
-                    bicubic_sampling: false,
-                });
-            }
-            (_, Some(_)) => {
-                commands.entity(entity).remove::<Lightmap>();
-            }
-        }
-        material.set_changed();
+        let wanted = bakes.get(parent.parent()).ok().and_then(|baked| state.light_for(baked.room, baked.faces_hash));
+        keep_lightmap(&mut commands, entity, wanted, drawn, &mut material);
     }
+}
+
+/// Gives `entity` the lightmap `wanted`, or takes its own away, for anything drawn with a
+/// `StandardMaterial` that takes a room's light: wall slots and decal pieces.
+///
+/// Two things about Bevy 0.20 shape this. Adding or removing a `Lightmap` does not re-specialize
+/// the mesh's pipeline, so the bind group and pipeline disagree and wgpu stops the frame; marking
+/// the material changed is what does. And a lightmap's image is only read when the component
+/// first arrives, so a new image is a removal one frame and an insertion the next.
+pub fn keep_lightmap(
+    commands: &mut Commands,
+    entity: Entity,
+    wanted: Option<&Handle<Image>>,
+    drawn: Option<&Lightmap>,
+    material: &mut Mut<MeshMaterial3d<StandardMaterial>>,
+) {
+    match (wanted, drawn) {
+        (Some(image), Some(drawn)) if drawn.image == *image => return,
+        (None, None) => return,
+        (Some(image), None) => {
+            commands.entity(entity).insert(Lightmap { image: image.clone(), uv_rect: Rect::new(0.0, 0.0, 1.0, 1.0), bicubic_sampling: false });
+        }
+        (_, Some(_)) => {
+            commands.entity(entity).remove::<Lightmap>();
+        }
+    }
+    material.set_changed();
 }
 
 pub struct SunBakePlugin;

@@ -84,6 +84,9 @@ impl Plugin for ProtocolPlugin {
         app.component::<crate::game::world_prop::Pickup>().replicate();
         app.component::<crate::game::world_prop::GivesWeapon>().replicate();
 
+        // Where a spray is and whose; each machine cuts it from its own walls.
+        app.component::<crate::game::spray::SprayAt>().replicate();
+
         // Once. Animation phase is derived from it, so every client puts a body
         // at the same point in its cycle.
         app.component::<PlayerId>().replicate_once();

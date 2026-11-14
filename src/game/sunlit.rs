@@ -50,13 +50,15 @@ fn keep_the_sun_on_lit_materials(
     }
 }
 
+/// `try_`: a part can be despawned later in the frame its tag was asked for, as a body is rebuilt
+/// or a projectile goes off.
 fn retag(entity: Entity, tag: Option<u32>, current: Option<&MeshTag>, commands: &mut Commands) {
     match (tag, current.map(|current| current.value)) {
         (Some(wanted), current) if current != Some(wanted) => {
-            commands.entity(entity).insert(MeshTag::new(wanted));
+            commands.entity(entity).try_insert(MeshTag::new(wanted));
         }
         (None, Some(_)) => {
-            commands.entity(entity).remove::<MeshTag>();
+            commands.entity(entity).try_remove::<MeshTag>();
         }
         _ => {}
     }

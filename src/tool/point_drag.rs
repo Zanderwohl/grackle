@@ -65,6 +65,7 @@ fn is_point_like(type_key: &str) -> bool {
         || type_key == "prop"
         || type_key == "weapon_pickup"
         || type_key == "spectator_camera"
+        || type_key == "decal"
         || type_key == "animation_display"
         || type_key == "animation_grid"
         || type_key == "mirror"

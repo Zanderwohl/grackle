@@ -396,7 +396,8 @@ fn bake_one(
     let slots = world_surface::slot_meshes(&faces);
     let volume = &volumes[index];
     let air = (volume.fill == world_surface::Fill::Air).then(|| volume.shape.bounds());
-    let geometry = BakedRoomGeometry { room: entity, faces_hash: lightmap::faces_hash(&faces), faces, air };
+    let bounds = crate::common::decal::bounds_of(&faces);
+    let geometry = BakedRoomGeometry { room: entity, faces_hash: lightmap::faces_hash(&faces), faces, bounds, air };
     let mut baked = match existing {
         Some(baked) => {
             let mut baked = commands.entity(baked);
@@ -423,6 +424,8 @@ pub struct BakedRoomGeometry {
     pub faces: Vec<world_surface::Face>,
     /// [`lightmap::faces_hash`] of `faces`: which lightmap layout its meshes' `UV_1` is.
     pub faces_hash: u64,
+    /// The box around `faces`; `None` when there are none.
+    pub bounds: Option<(Vec3, Vec3)>,
     /// `None` for a solid. Not its faces' bounds, which miss the air of a room whose walls
     /// neighbors opened up.
     pub air: Option<(Vec3, Vec3)>,

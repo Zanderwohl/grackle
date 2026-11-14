@@ -61,6 +61,11 @@ texture-graph-editor = { git = "https://github.com/Zanderwohl/texture-graph", br
 # wgpu types it bakes with. Must match what `cargo tree -i wgpu` shows.
 wgpu = "30.0.1"
 egui_extras = { version = "0.36.1", default-features = false, features = ["svg"] }
+# Rasterizes the default pack's decal SVGs (`decal_images`); already in the tree through egui_extras.
+resvg = { version = "0.45.1", default-features = false }
+# A client paints its spray with these; both already in the tree, through resvg and egui.
+tiny-skia = "0.11.4"
+ab_glyph = "0.2.32"
 
 # The encoding Lightyear puts messages on the wire in, already in the tree
 # through it. The nav cache writes with it; the tests encode with it because a

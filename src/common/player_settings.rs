@@ -25,6 +25,30 @@ pub const NAME_LIMIT: usize = 24;
 /// Degrees, vertical.
 pub const DEFAULT_FIELD_OF_VIEW: u32 = 90;
 pub const FIELD_OF_VIEW_RANGE: std::ops::RangeInclusive<u32> = 60..=120;
+/// The most of each kind of debris decal this machine keeps.
+pub const DEBRIS_RANGE: std::ops::RangeInclusive<u32> = 0..=512;
+
+/// Drawing only: each machine places its own marks, so these change nobody else's view.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DebrisDecals {
+    pub bullet_holes: u32,
+    pub blood: u32,
+    pub scorch: u32,
+}
+
+impl Default for DebrisDecals {
+    fn default() -> Self {
+        Self { bullet_holes: 200, blood: 64, scorch: 32 }
+    }
+}
+
+impl DebrisDecals {
+    fn clamped(self) -> Self {
+        let clamp = |n: u32| n.clamp(*DEBRIS_RANGE.start(), *DEBRIS_RANGE.end());
+        Self { bullet_holes: clamp(self.bullet_holes), blood: clamp(self.blood), scorch: clamp(self.scorch) }
+    }
+}
 
 #[derive(Resource, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -35,11 +59,12 @@ pub struct PlayerSettings {
     pub auto_reload: bool,
     /// Degrees, vertical.
     pub field_of_view: u32,
+    pub debris: DebrisDecals,
 }
 
 impl Default for PlayerSettings {
     fn default() -> Self {
-        Self { name: String::new(), auto_reload: true, field_of_view: DEFAULT_FIELD_OF_VIEW }
+        Self { name: String::new(), auto_reload: true, field_of_view: DEFAULT_FIELD_OF_VIEW, debris: DebrisDecals::default() }
     }
 }
 
@@ -50,6 +75,7 @@ impl PlayerSettings {
         let printable: String = self.name.chars().filter(|c| !c.is_control()).collect();
         self.name = printable.trim().chars().take(NAME_LIMIT).collect();
         self.field_of_view = self.field_of_view.clamp(*FIELD_OF_VIEW_RANGE.start(), *FIELD_OF_VIEW_RANGE.end());
+        self.debris = self.debris.clamped();
         self
     }
 }
@@ -183,6 +209,14 @@ mod tests {
         assert!(path(Profile(None)).ends_with("player.toml"));
         assert!(path(Profile(Some(2))).ends_with("player-2.toml"));
         assert_ne!(path(Profile(Some(2))), path(Profile(Some(3))));
+    }
+
+    #[test]
+    fn debris_limits_are_kept_in_range_and_default_when_missing() {
+        let wild = PlayerSettings { debris: DebrisDecals { bullet_holes: 9000, blood: 3, scorch: 0 }, ..Default::default() }.cleaned();
+        assert_eq!(wild.debris, DebrisDecals { bullet_holes: 512, blood: 3, scorch: 0 });
+        let old: PlayerSettings = toml::from_str("name = \"Ada\"").unwrap();
+        assert_eq!(old.debris, DebrisDecals::default());
     }
 
     #[test]

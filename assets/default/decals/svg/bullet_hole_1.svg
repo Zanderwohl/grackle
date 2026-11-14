@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <defs>
+    <radialGradient id="soot" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#1a1714" stop-opacity="0.85"/>
+      <stop offset="0.35" stop-color="#3a3530" stop-opacity="0.55"/>
+      <stop offset="0.7" stop-color="#5a544c" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#6a645c" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="hole" cx="0.45" cy="0.42" r="0.6">
+      <stop offset="0" stop-color="#000000"/>
+      <stop offset="0.7" stop-color="#0b0a09"/>
+      <stop offset="1" stop-color="#2a2622"/>
+    </radialGradient>
+  </defs>
+  <circle cx="128" cy="128" r="118" fill="url(#soot)"/>
+  <path d="M128 92 L141 97 L156 95 L158 110 L167 124 L158 137 L161 153 L146 156 L134 167 L121 159 L105 161 L102 146 L90 134 L99 121 L96 105 L111 101 Z"
+        fill="#3b3631" fill-opacity="0.75"/>
+  <circle cx="128" cy="128" r="22" fill="url(#hole)"/>
+  <g stroke="#14110f" stroke-opacity="0.8" stroke-linecap="round" fill="none">
+    <path d="M146 116 L170 104 L186 106" stroke-width="2.5"/>
+    <path d="M112 142 L92 158 L84 176" stroke-width="2"/>
+    <path d="M140 146 L152 170" stroke-width="1.8"/>
+    <path d="M115 113 L104 92 L106 80" stroke-width="1.6"/>
+  </g>
+</svg>
