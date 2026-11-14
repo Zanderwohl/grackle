@@ -149,6 +149,13 @@ impl Plugin for PropViewPlugin {
 #[derive(Component, Clone, Copy)]
 pub struct StageBody(usize);
 
+/// [`carry_the_prop`]'s rig and each body's bone, keyed on the generation and build.
+pub struct StageRig {
+    key: (u64, Option<u64>),
+    rig: crate::prop::rig::PropRig,
+    bones: Vec<Option<usize>>,
+}
+
 /// Moves the prop where an animation holds it (identity while modeling), poses
 /// its bones from the figure's clips, and hides it when the staged figure is
 /// holding nothing. Separate from the rebuild, which only runs on edits.
@@ -164,22 +171,29 @@ pub fn carry_the_prop(
     mode: Option<Res<State<AppMode>>>,
     mut stage: Query<(&mut Transform, &mut Visibility), With<PropStage>>,
     mut parts: Query<(&StageBody, &mut Transform), Without<PropStage>>,
+    mut rigged: Local<Option<StageRig>>,
 ) {
-    let doc = editor.doc();
-    let rig = crate::prop::rig::PropRig::of(&doc.bones);
-    let mut pose = crate::prop::rig::PropPose::rest(&rig);
-    if let (Some(performance), Some(clips)) = (performance.as_deref(), clips.as_deref()) {
-        crate::prop::rig::apply_stack(&performance.0, clips, &rig, &mut pose);
+    let key = (editor.generation(), build.built);
+    if rigged.as_ref().is_none_or(|rigged| rigged.key != key) {
+        let doc = editor.doc();
+        *rigged = Some(StageRig {
+            key,
+            rig: crate::prop::rig::PropRig::of(&doc.bones),
+            bones: crate::prop::rig::bone_of_each_body(editor.shown(), &doc.bones, &build.evaluated),
+        });
     }
-    let deltas = rig.deltas(&pose);
-    let bones = crate::prop::rig::bone_of_each_body(editor.shown(), &doc.bones, &build.evaluated);
+    let Some(rigged) = rigged.as_ref() else { return };
+    let deltas = match (performance.as_deref(), clips.as_deref()) {
+        (Some(performance), Some(clips)) => rigged.rig.deltas_for(&performance.0, clips),
+        _ => vec![],
+    };
     for (body, mut transform) in &mut parts {
-        let wanted = bones.get(body.0).copied().flatten().and_then(|bone| deltas.get(bone)).copied().unwrap_or_default();
+        let bone = rigged.bones.get(body.0).copied().flatten().map(crate::prop::rig::OnPropBone);
+        let wanted = crate::prop::rig::place_part(Transform::IDENTITY, &deltas, bone.as_ref());
         if *transform != wanted {
             *transform = wanted;
         }
     }
-
     let staged = crate::prop::figure::stage_in_force(figure.as_deref(), mode.as_deref());
     let hidden = beneath.is_some_and(|beneath| beneath.hides_weapon);
     let wanted = match staged.holding && !hidden {
@@ -369,7 +383,6 @@ fn draw_the_bench(
         gizmos.line(Vec3::ZERO, b, positive);
         gizmos.line(a, Vec3::ZERO, negative);
     }
-    // Each bone's pivot as a cross, joined to its parent's.
     let rig = crate::prop::rig::PropRig::of(&editor.doc().bones);
     for bone in &rig.bones {
         for axis in [Vec3::X, Vec3::Y, Vec3::Z] {

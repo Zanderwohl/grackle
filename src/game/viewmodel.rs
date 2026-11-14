@@ -28,7 +28,7 @@ use crate::common::weapon::{WeaponCatalog, WeaponId};
 use crate::game::body_mesh::{body_look, BodyMaterials, BodyMeshCache, BodyTint};
 use crate::common::skeleton::clip::Clip;
 use crate::common::skeleton::play::{apply_stack, grip_offsets, ClipStack, Frames};
-use crate::prop::rig::{OnPropBone, PropPose};
+use crate::prop::rig::{place_part, OnPropBone};
 use crate::game::held::{perform, HeldModel, HeldPart, Performance, SharedWeaponClips};
 use crate::game::player::{place_camera, LocalPlayer, PlayerCamera, ViewMode, Viewed, PLAY_CAMERA_ORDER};
 use crate::prop::hold::grip_hands;
@@ -275,7 +275,6 @@ fn place_the_viewmodel(
     mut parts: Query<(&mut Transform, Option<&OnPropBone>), With<ViewmodelPart>>,
 ) {
     let Ok((held, skeleton)) = held.single() else { return };
-    let mut pose = PropPose::default();
     let spec = held.viewmodel();
 
     for (camera, projection, children, view) in &cameras {
@@ -294,19 +293,10 @@ fn place_the_viewmodel(
         if viewmodel.grips != grips {
             viewmodel.grips = grips;
         }
-        let deltas = match held.rig().is_empty() {
-            true => vec![],
-            false => {
-                crate::prop::rig::apply_stack(stack, &clips, held.rig(), &mut pose);
-                held.rig().deltas(&pose)
-            }
-        };
+        let deltas = held.rig().deltas_for(stack, &clips);
         for child in children.iter() {
             let Ok((mut transform, bone)) = parts.get_mut(child) else { continue };
-            let wanted = match bone.and_then(|bone| deltas.get(bone.0)) {
-                Some(delta) => placed * *delta,
-                None => placed,
-            };
+            let wanted = place_part(placed, &deltas, bone);
             // Compared first: this runs every frame, and an unchanged
             // transform marked changed is a propagation for nothing.
             transform.set_if_neq(wanted);

@@ -711,6 +711,43 @@ to = [
 ]
 ease = "linear"
 
+[[animations.clips.recoil.tracks]]
+combine = "replace"
+space = "body"
+unit = "meters"
+enabled = true
+
+[animations.clips.recoil.tracks.channel]
+channel = "prop_bone_offset"
+bone = "slide"
+
+[[animations.clips.recoil.tracks.channel.keys]]
+at = 0.0
+to = [
+    0.0,
+    0.0,
+    0.0,
+]
+ease = "linear"
+
+[[animations.clips.recoil.tracks.channel.keys]]
+at = 0.03
+to = [
+    0.0,
+    0.0,
+    0.025,
+]
+ease = "cubic_out"
+
+[[animations.clips.recoil.tracks.channel.keys]]
+at = 0.1
+to = [
+    0.0,
+    0.0,
+    0.0,
+]
+ease = "linear"
+
 [animations.clips.reload]
 name_key = "anim.clips.reload"
 length = 1.0

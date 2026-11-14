@@ -25,7 +25,7 @@ use crate::game::player::{LocalPlayer, Player, ViewMode};
 use crate::game::skeleton::SkeletonRoot;
 use crate::prop::baked::{PropCache, SurfaceMaterials};
 use crate::game::collision::CollisionWorld;
-use crate::prop::rig::{OnPropBone, PropPose, PropRig};
+use crate::prop::rig::{place_part, OnPropBone, PropRig};
 use crate::prop::hold::{carry_frame, grip_hands, weapon_transform, HoldSpec, ViewmodelSpec};
 
 /// Meters above a point to start looking for the floor, and below it to keep
@@ -708,28 +708,17 @@ fn show_held_weapons(
     }
 }
 
-/// The prop's bones are posed here from the body's stack rather than in the pose chain, since
-/// nothing but the drawing reads them.
+/// Prop bones are posed here rather than in the pose chain, since only the drawing reads them.
 fn place_held_weapons(
     clips: Res<Assets<Clip>>,
     bodies: Query<(&HeldModel, &WeaponInHand, &ClipStack)>,
     mut parts: Query<(&mut Transform, Option<&OnPropBone>), With<HeldPart>>,
 ) {
-    let mut pose = PropPose::default();
     for (held, weapon, stack) in &bodies {
-        let deltas = match held.rig.is_empty() {
-            true => vec![],
-            false => {
-                crate::prop::rig::apply_stack(stack, &clips, &held.rig, &mut pose);
-                held.rig.deltas(&pose)
-            }
-        };
+        let deltas = held.rig.deltas_for(stack, &clips);
         for part in &held.parts {
             let Ok((mut transform, bone)) = parts.get_mut(*part) else { continue };
-            *transform = match bone.and_then(|bone| deltas.get(bone.0)) {
-                Some(delta) => weapon.0 * *delta,
-                None => weapon.0,
-            };
+            *transform = place_part(weapon.0, &deltas, bone);
         }
     }
 }
@@ -1225,7 +1214,6 @@ mod tests {
         assert_eq!(*world.get::<Transform>(part).unwrap(), decided);
     }
 
-    /// A part on a bone is drawn where the weapon is, moved by what the stack keys on the bone.
     #[test]
     fn a_held_part_follows_its_bone() {
         use crate::common::skeleton::clip::{Channel, Key, Track};

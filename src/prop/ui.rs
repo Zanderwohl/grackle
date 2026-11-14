@@ -1832,8 +1832,7 @@ fn pickup_ui(ui: &mut Ui, editor: &mut PropEditor) {
 }
 
 /// Adding and removing are whole steps; dragging a number is a gesture.
-/// A prop's bones, parents first. A body is bound by its own feature, so the list offers the
-/// bodies standing at the end of the feature list.
+/// Parts are the bodies standing at the end of the feature list.
 fn bones_ui(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
     let mut bones = editor.doc().bones.clone();
     let mut changed = false;
@@ -1845,16 +1844,37 @@ fn bones_ui(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
         .iter()
         .map(|(id, _)| (*id, editor.doc().feature(*id).map_or_else(|| id.to_string(), |f| f.name.clone())))
         .collect();
+    // Ticked for the bone a body rides on, which may come through a feature it ate.
+    let riding = crate::prop::rig::bone_of_each_body(editor.shown(), &bones, &build.evaluated);
+    let lineages: Vec<Vec<PropFeatureId>> =
+        bodies.iter().map(|(id, _)| crate::prop::rig::lineage(*id, editor.shown())).collect();
 
     egui::ScrollArea::vertical().show(ui, |ui| {
         for index in 0..bones.len() {
+            let others_named = |name: &str, names: &[String]| {
+                names.iter().enumerate().any(|(other, named)| other != index && named == name)
+            };
+            let taken: Vec<String> = bones.iter().map(|bone| bone.name.clone()).collect();
             let earlier: Vec<String> = bones[..index].iter().map(|bone| bone.name.clone()).collect();
             let bone = &mut bones[index];
             ui.push_id(("prop_bone", index), |ui| {
                 ui.horizontal(|ui| {
                     ui.label(get!("prop.inspector.name"));
-                    let was = bone.name.clone();
-                    if ui.text_edit_singleline(&mut bone.name).changed() {
+                    // Carried on leaving the field, from the name on entering it, so a name typed
+                    // past another bone's takes none of its tracks.
+                    let response = ui.text_edit_singleline(&mut bone.name);
+                    let started = ui.id().with("name_when_entered");
+                    if response.gained_focus() {
+                        let was = taken[index].clone();
+                        ui.data_mut(|data| data.insert_temp(started, was));
+                    }
+                    changed |= response.changed();
+                    if response.lost_focus()
+                        && let Some(was) = ui.data_mut(|data| data.remove_temp::<String>(started))
+                        && was != bone.name
+                        && !others_named(&was, &taken)
+                        && !others_named(&bone.name, &taken)
+                    {
                         changed = true;
                         renamed = Some((was, bone.name.clone()));
                     }
@@ -1874,20 +1894,24 @@ fn bones_ui(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
                 });
                 changed |= vec3_ui(ui, get!("prop.bones.pivot"), &mut bone.pivot, 0.001, "m");
                 ui.label(get!("prop.bones.parts"));
-                for (id, name) in &bodies {
-                    let mut bound = bone.parts.contains(id);
+                for (body, (id, name)) in bodies.iter().enumerate() {
+                    let mut bound = riding[body] == Some(index);
                     if ui.checkbox(&mut bound, name).changed() {
                         changed = true;
                         match bound {
                             true => bone.parts.push(*id),
-                            false => bone.parts.retain(|part| part != id),
+                            // Whichever binding reached it.
+                            false => bone.parts.retain(|part| !lineages[body].contains(part)),
                         }
                     }
                 }
-                // Bound to something that no longer stands at the end: kept, since a later edit
-                // may bring it back, but shown so it can be let go.
-                let gone: Vec<PropFeatureId> =
-                    bone.parts.iter().copied().filter(|part| !bodies.iter().any(|(id, _)| id == part)).collect();
+                // Bindings that reach no body: kept, since a later edit may bring the body back.
+                let gone: Vec<PropFeatureId> = bone
+                    .parts
+                    .iter()
+                    .copied()
+                    .filter(|part| !lineages.iter().any(|lineage| lineage.contains(part)))
+                    .collect();
                 for part in gone {
                     let name = editor.doc().feature(part).map_or_else(|| part.to_string(), |f| f.name.clone());
                     let mut bound = true;
@@ -1937,7 +1961,6 @@ fn bones_ui(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
     if changed {
         editor.begin_gesture();
         let doc = editor.doc_mut();
-        // A rename carries the bone's children and every clip track keyed on it.
         if let Some((was, now)) = renamed {
             for bone in &mut bones {
                 if bone.parent.as_deref() == Some(was.as_str()) {

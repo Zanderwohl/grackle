@@ -23,7 +23,7 @@ use crate::game::player::{PhysicsBody, Player};
 use crate::game::weapon::{draw, Trigger};
 use crate::prop::archetype::{Archetype, Collider, ColliderShape, PickupKind, PickupSpec, PickupStyle, RoundedBox};
 use crate::prop::baked::{BakedProp, PropCache, SurfaceMaterials};
-use crate::prop::rig::{OnPropBone, PropPose};
+use crate::prop::rig::{place_part, OnPropBone, PropPose};
 
 /// A placed prop, as every machine sees it. One component so a viewer is
 /// never handed a model with nowhere to put it.
@@ -106,8 +106,8 @@ struct DrawnProp {
     parts: Vec<Entity>,
 }
 
-/// A clip a placed prop plays on an event, over its idle, and seconds into it. Drawn only, so
-/// each machine starts it from the event it reads.
+/// An event clip over the idle, and seconds into it. Drawn only: each machine starts it from the
+/// event it reads.
 #[derive(Component, Default)]
 pub struct PropPerformance {
     playing: Option<(&'static str, f32)>,
@@ -468,6 +468,8 @@ fn place_world_prop_parts(
     } else {
         Quat::from_rotation_y((clock * SPIN_DEGREES_PER_SECOND).to_radians())
     };
+    // In `f64`: an idle's length has nothing to do with the wrap period above.
+    let idle_clock = time.elapsed_secs_f64();
     let mut pose = PropPose::default();
     for (prop, drawn, mut performance, gives, rests) in &mut instances {
         let lift = match (gives, rests) {
@@ -486,17 +488,20 @@ fn place_world_prop_parts(
         };
         let deltas = match baked {
             Some(baked) if !baked.rig.is_empty() => {
-                pose_placed(baked, &clips, clock, time.delta_secs(), &mut performance, &mut pose);
+                pose_placed(baked, &clips, idle_clock, time.delta_secs(), &mut performance, &mut pose);
                 baked.rig.deltas(&pose)
             }
-            _ => vec![],
+            // No bones, so a started clip has nothing to play on.
+            _ => {
+                if performance.playing.is_some() {
+                    performance.playing = None;
+                }
+                vec![]
+            }
         };
         for part in &drawn.parts {
             let Ok((mut transform, bone)) = parts.get_mut(*part) else { continue };
-            let placed = match bone.and_then(|bone| deltas.get(bone.0)) {
-                Some(delta) => wanted * *delta,
-                None => wanted,
-            };
+            let placed = place_part(wanted, &deltas, bone);
             // Compared first, so a still prop is not a changed one.
             if *transform != placed {
                 *transform = placed;
@@ -509,7 +514,7 @@ fn place_world_prop_parts(
 fn pose_placed(
     baked: &BakedProp,
     clips: &Assets<Clip>,
-    clock: f32,
+    clock: f64,
     delta: f32,
     performance: &mut PropPerformance,
     pose: &mut PropPose,
@@ -517,7 +522,8 @@ fn pose_placed(
     *pose = PropPose::rest(&baked.rig);
     let clip = |name: &str| baked.clips.get(name).and_then(|handle| clips.get(handle));
     if let Some(idle) = clip(IDLE_CLIP) {
-        crate::prop::rig::apply_clip(idle, clock, &baked.rig, pose);
+        let time = if idle.looping && idle.length > 0.0 { clock % idle.length as f64 } else { clock };
+        crate::prop::rig::apply_clip(idle, time as f32, &baked.rig, pose);
     }
     let Some((name, seconds)) = performance.playing.as_mut() else { return };
     *seconds += delta;
@@ -1037,7 +1043,6 @@ mod tests {
         });
     }
 
-    /// A placed prop loops its `idle` on its bones, in the editor as in a round.
     #[test]
     fn a_placed_fan_turns_on_its_idle() {
         use crate::common::skeleton::clip::{Channel, Key, Track};

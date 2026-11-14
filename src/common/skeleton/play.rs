@@ -807,7 +807,7 @@ pub fn apply_masked(
 
             // Read by the pass it weighs; see `controller_weight`.
             Channel::Weight { .. } => {}
-            // The prop's, not the body's: see `prop::rig::apply_stack`.
+            // Posed by `prop::rig::apply_stack`.
             Channel::PropBone { .. } | Channel::PropBoneOffset { .. } => {}
 
             Channel::Root { keys } => {
@@ -875,13 +875,8 @@ pub fn apply_masked(
 /// above that claims the controller's region masks a weight beneath, as it masks any track.
 pub fn controller_weight(stack: &ClipStack, clips: &Assets<Clip>, controller: Controller) -> f32 {
     let mut weight = 1.0;
-    let ranked = Layer::ALL
-        .into_iter()
-        .flat_map(|layer| stack.0.iter().filter(move |playing| playing.layer == layer));
-    for playing in ranked {
-        let shown = (playing.weight * playing.strength).clamp(0.0, 1.0);
-        let Some(clip) = clips.get(&playing.clip).filter(|_| shown > 0.0) else { continue };
-        if stack.claimed_above(playing.layer).overlaps(Regions::of_controller(controller)) {
+    for (playing, clip, shown, masked) in shown_layers(stack, clips) {
+        if masked.overlaps(Regions::of_controller(controller)) {
             continue;
         }
         let time = clip.wrap(playing.time);
@@ -937,9 +932,25 @@ pub fn grip_offsets(stack: &ClipStack, clips: &Assets<Clip>, skeleton: &Skeleton
     offsets
 }
 
-/// Lowest layer first; within a layer, in stack order. A track in a region a
-/// higher layer claims is skipped. A layer shown below full weight or strength
-/// is applied to a copy and blended back.
+/// Each clip on `stack` that shows, lowest layer first and within a layer in stack order, with
+/// how far it shows (0 to 1) and the regions layers above it claim. Shared so every pass over a
+/// stack ranks and masks alike.
+pub fn shown_layers<'a>(
+    stack: &'a ClipStack,
+    clips: &'a Assets<Clip>,
+) -> impl Iterator<Item = (&'a Playing, &'a Clip, f32, Regions)> + 'a {
+    let mut ranked: Vec<&Playing> = stack.0.iter().collect();
+    // Stable, so a blend's two variants keep their order.
+    ranked.sort_by_key(|playing| playing.layer);
+    ranked.into_iter().filter_map(move |playing| {
+        let shown = (playing.weight * playing.strength).clamp(0.0, 1.0);
+        let clip = clips.get(&playing.clip).filter(|_| shown > 0.0)?;
+        Some((playing, clip, shown, stack.claimed_above(playing.layer)))
+    })
+}
+
+/// A track in a region a higher layer claims is skipped. A layer shown below full weight or
+/// strength is applied to a copy and blended back.
 pub fn apply_stack(
     stack: &ClipStack,
     clips: &Assets<Clip>,
@@ -948,20 +959,7 @@ pub fn apply_stack(
     frames: &Frames,
     mut weapon: Option<&mut Transform>,
 ) {
-    let mut ranked: Vec<&Playing> = stack.0.iter().collect();
-    // Stable, so a blend's two variants keep their order.
-    ranked.sort_by_key(|playing| playing.layer);
-
-    for playing in ranked {
-        let shown = playing.weight * playing.strength;
-        if shown <= 0.0 {
-            continue;
-        }
-        let Some(clip) = clips.get(&playing.clip) else {
-            continue;
-        };
-        let masked = stack.claimed_above(playing.layer);
-
+    for (playing, clip, shown, masked) in shown_layers(stack, clips) {
         if shown >= 1.0 {
             apply_masked(clip, playing.time, skeleton, pose, frames, weapon.as_deref_mut(), masked);
             continue;

@@ -1,10 +1,8 @@
-//! Bones on a prop: a magazine that drops, a cylinder that swings, a fan. See
-//! `documentation/rigs.md`, "Props get rigs".
+//! Bones on a prop. See `documentation/rigs.md`, "Props get rigs".
 //!
-//! A prop bone is a pivot, not a body's bone: it has no length and no limit, and it may move as
-//! well as turn, since a magazine slides out. So it is posed by [`PropPose`], one transform per
-//! bone, rather than a body's [`Pose`]. Meshes stay in prop space; a bone moves its parts by its
-//! *change from rest*, so nothing is re-centered when it is baked.
+//! A prop bone is a pivot with no length or limit, and it may slide as well as turn, so it is
+//! posed by [`PropPose`] rather than a body's [`Pose`]. Meshes stay in prop space and a bone moves
+//! its parts by its change from rest, so baking re-centers nothing.
 //!
 //! [`Pose`]: crate::common::skeleton::Pose
 
@@ -13,7 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::common::rotation::quat_from_euler;
 use crate::common::skeleton::clip::{Axis, Channel, Clip, Combine};
-use crate::common::skeleton::play::{angles_for, angles_onto, sample_key, track_time, ClipStack, Regions};
+use crate::common::skeleton::play::{angles_for, angles_onto, sample_key, shown_layers, track_time, ClipStack, Regions};
 use crate::get;
 use crate::prop::feature::{Evaluated, PropFeature, PropFeatureId};
 
@@ -26,8 +24,8 @@ pub struct PropBone {
     /// What it turns about, in the prop's own frame, in meters.
     #[serde(default, with = "crate::prop::nice_f32::array")]
     pub pivot: [f32; 3],
-    /// Features whose bodies ride on it: the body a feature made, or the body made by whatever
-    /// later ate it, so drilling a bore through a bound barrel keeps it bound.
+    /// Features whose bodies ride on it, including the body of whatever later ate one; see
+    /// [`bone_of_each_body`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub parts: Vec<PropFeatureId>,
 }
@@ -52,8 +50,7 @@ pub struct RigBone {
 }
 
 impl PropRig {
-    /// A bone whose parent is not listed before it rides on the prop itself; [`problems`] says
-    /// so.
+    /// A parent not listed before its child is dropped; [`problems`] reports it.
     pub fn of(bones: &[PropBone]) -> PropRig {
         let mut rig = PropRig::default();
         for bone in bones {
@@ -74,8 +71,7 @@ impl PropRig {
         self.bones.is_empty()
     }
 
-    /// Each bone's change from rest in the prop's frame, parents first: what its parts are
-    /// moved by.
+    /// Each bone's change from rest, in the prop's frame.
     pub fn deltas(&self, pose: &PropPose) -> Vec<Transform> {
         let mut deltas: Vec<Transform> = Vec::with_capacity(self.bones.len());
         for (index, bone) in self.bones.iter().enumerate() {
@@ -131,6 +127,20 @@ fn bone_of(id: PropFeatureId, features: &[PropFeature], bones: &[PropBone], dept
     feature.op.consumes().into_iter().find_map(|eaten| bone_of(eaten, features, bones, depth + 1))
 }
 
+/// `id` and every feature whose body it ate, nearest first.
+pub fn lineage(id: PropFeatureId, features: &[PropFeature]) -> Vec<PropFeatureId> {
+    let mut found = vec![id];
+    let mut next = 0;
+    while next < found.len() && found.len() <= MOST_ANCESTORS {
+        let at = found[next];
+        next += 1;
+        if let Some(feature) = features.iter().find(|feature| feature.id == at && feature.enabled) {
+            found.extend(feature.op.consumes().into_iter().filter(|eaten| !found.contains(eaten)).collect::<Vec<_>>());
+        }
+    }
+    found
+}
+
 /// Where each bone is, as a turn about its pivot and a move in its parent's frame. Rest is
 /// identity.
 #[derive(Component, Clone, Debug, Default, PartialEq)]
@@ -181,20 +191,14 @@ pub fn apply_clip(clip: &Clip, time: f32, rig: &PropRig, pose: &mut PropPose) {
     }
 }
 
-/// Every clip on `stack`, lowest layer first, each over what is beneath by how far it is shown.
-/// A layer above that claims the weapon masks the prop's bones beneath it, as it masks the
-/// weapon.
+/// Masked where a layer above claims the weapon, as the weapon is.
 pub fn apply_stack(stack: &ClipStack, clips: &Assets<Clip>, rig: &PropRig, pose: &mut PropPose) {
     *pose = PropPose::rest(rig);
     if rig.is_empty() {
         return;
     }
-    let mut ranked: Vec<_> = stack.0.iter().collect();
-    ranked.sort_by_key(|playing| playing.layer);
-    for playing in ranked {
-        let shown = (playing.weight * playing.strength).clamp(0.0, 1.0);
-        let Some(clip) = clips.get(&playing.clip).filter(|_| shown > 0.0) else { continue };
-        if stack.claimed_above(playing.layer).overlaps(Regions::WEAPON) {
+    for (playing, clip, shown, masked) in shown_layers(stack, clips) {
+        if masked.overlaps(Regions::WEAPON) {
             continue;
         }
         let before = pose.clone();
@@ -202,6 +206,25 @@ pub fn apply_stack(stack: &ClipStack, clips: &Assets<Clip>, rig: &PropRig, pose:
         if shown < 1.0 {
             pose.lerp(&before, shown);
         }
+    }
+}
+
+impl PropRig {
+    /// Empty for a prop with no bones.
+    pub fn deltas_for(&self, stack: &ClipStack, clips: &Assets<Clip>) -> Vec<Transform> {
+        if self.is_empty() {
+            return vec![];
+        }
+        let mut pose = PropPose::default();
+        apply_stack(stack, clips, self, &mut pose);
+        self.deltas(&pose)
+    }
+}
+
+pub fn place_part(prop: Transform, deltas: &[Transform], bone: Option<&OnPropBone>) -> Transform {
+    match bone.and_then(|bone| deltas.get(bone.0)) {
+        Some(delta) => prop * *delta,
+        None => prop,
     }
 }
 
@@ -229,7 +252,6 @@ mod tests {
         clip
     }
 
-    /// A turn is about the pivot, so a point on the pivot stays put and one beside it swings.
     #[test]
     fn a_bone_turns_its_parts_about_its_pivot() {
         let rig = hinge();
@@ -284,7 +306,6 @@ mod tests {
         )
     }
 
-    /// Drilling a bore through a bound barrel leaves the drilled barrel on the bone.
     #[test]
     fn a_body_keeps_the_bone_of_what_it_ate() {
         let mut doc = PropDoc::new("");
@@ -306,8 +327,7 @@ mod tests {
         assert_eq!(on(stock), Some(None));
     }
 
-    /// The pistol's slide is cut by the bore after it is bound, so it stays bound only through
-    /// what ate it; the grip rides on nothing.
+    /// The slide is bound before the bore cuts it, so it stays bound only through the cut.
     #[test]
     fn the_shipped_pistols_slide_kicks_back_when_it_fires() {
         let doc = crate::prop::document::parse(include_str!("../../assets/default/props/pistol.gpp")).unwrap();
@@ -321,10 +341,13 @@ mod tests {
         assert_eq!(on(named("Slide")), Some(Some(slide)));
         assert!(bones.contains(&None), "every body moves with a bone");
 
-        let mut pose = PropPose::rest(&rig);
-        apply_clip(&doc.animations.clips["fire"], 0.03, &rig, &mut pose);
-        // Forward is -Z, so back is +Z.
-        assert!(rig.deltas(&pose)[slide].transform_point(Vec3::ZERO).z > 0.02);
+        // In both views: `fire` in first person, `recoil` on the body.
+        for clip in ["fire", "recoil"] {
+            let mut pose = PropPose::rest(&rig);
+            apply_clip(&doc.animations.clips[clip], 0.03, &rig, &mut pose);
+            // Forward is -Z, so back is +Z.
+            assert!(rig.deltas(&pose)[slide].transform_point(Vec3::ZERO).z > 0.02, "{clip}");
+        }
     }
 
     #[test]

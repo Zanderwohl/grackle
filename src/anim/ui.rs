@@ -975,7 +975,6 @@ impl AnimTabs<'_> {
                             ui.close();
                         }
                     }
-                    // A prop with no bones has nothing to offer.
                     NewTrack::Choose(options) if options.is_empty() => {}
                     NewTrack::Choose(options) => {
                         ui.menu_button(get!(label), |ui| {
