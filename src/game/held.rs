@@ -25,6 +25,7 @@ use crate::game::player::{LocalPlayer, Player, ViewMode};
 use crate::game::skeleton::SkeletonRoot;
 use crate::prop::baked::{PropCache, SurfaceMaterials};
 use crate::game::collision::CollisionWorld;
+use crate::prop::rig::{OnPropBone, PropPose, PropRig};
 use crate::prop::hold::{carry_frame, grip_hands, weapon_transform, HoldSpec, ViewmodelSpec};
 
 /// Meters above a point to start looking for the floor, and below it to keep
@@ -62,6 +63,7 @@ pub struct HeldModel {
     muzzle: Option<Vec3>,
     /// Handles off the bake, so a save refilled under them is what plays.
     clips: BTreeMap<String, Handle<Clip>>,
+    rig: PropRig,
 }
 
 /// What a body's weapon, or the viewmodel's, is in the middle of doing. Named
@@ -186,6 +188,10 @@ impl HeldModel {
 
     pub fn muzzle(&self) -> Option<Vec3> {
         self.muzzle
+    }
+
+    pub fn rig(&self) -> &PropRig {
+        &self.rig
     }
 
     pub fn has_clip(&self, name: &str) -> bool {
@@ -316,14 +322,14 @@ fn dress_held_weapons(
                 if drawn.is_none_or(|drawn| drawn.weapon != held) {
                     replace_parts(
                         &mut commands, body, drawn, vec![], held, false, HoldSpec::default(),
-                        ViewmodelSpec::default(), None, BTreeMap::new(), cache.generation(),
+                        ViewmodelSpec::default(), None, BTreeMap::new(), PropRig::default(), cache.generation(),
                     );
                 }
             }
             Wanted::Nothing => {
                 replace_parts(
                     &mut commands, body, drawn, vec![], held, true, HoldSpec::default(),
-                    ViewmodelSpec::default(), None, BTreeMap::new(), cache.generation(),
+                    ViewmodelSpec::default(), None, BTreeMap::new(), PropRig::default(), cache.generation(),
                 )
             }
             Wanted::Model(model) => {
@@ -332,6 +338,7 @@ fn dress_held_weapons(
                 let mut viewmodel = ViewmodelSpec::default();
                 let mut muzzle = None;
                 let mut clips = BTreeMap::new();
+                let mut rig = PropRig::default();
                 if let Some(baked) = cache.ensure(
                     model, &packs, &mut meshes, &mut materials, &mut surfaces, &mut clip_assets,
                 ) {
@@ -340,32 +347,35 @@ fn dress_held_weapons(
                     viewmodel = baked.viewmodel;
                     muzzle = baked.muzzle.map(|muzzle| muzzle.point());
                     clips = baked.clips.clone();
+                    rig = baked.rig.clone();
                     // Before the parts: a carousel body is spawned without one.
                     commands.entity(body).insert_if_new(Visibility::default()).with_children(|body| {
-                        for (mesh, material) in parts {
-                            spawned.push(
-                                body.spawn((
+                        for part in parts {
+                            let mut spawning = body.spawn((
                                     HeldPart,
                                     // Spawned already hidden: `show_held_weapons`
                                     // only catches it a frame later, which
                                     // flashes the weapon across your view.
                                     held_visibility(ours, *view, condition.copied(), taunts.as_deref()),
-                                    Mesh3d(mesh),
-                                    MeshMaterial3d(material),
+                                    Mesh3d(part.mesh),
+                                    MeshMaterial3d(part.material),
                                     // Overwritten by `place_held_weapons`
                                     // before it is drawn.
                                     Transform::IDENTITY,
-                                ))
-                                .id(),
-                            );
+                                ));
+                            if let Some(bone) = part.bone {
+                                spawning.insert(OnPropBone(bone));
+                            }
+                            spawned.push(spawning.id());
                         }
                     });
                 }
                 let cached_at = cache.generation();
                 replace_parts(
                     &mut commands, body, drawn, spawned, held, true, hold, viewmodel, muzzle,
-                    clips, cached_at,
+                    clips, rig, cached_at,
                 );
+
             }
         }
     }
@@ -383,6 +393,7 @@ fn replace_parts(
     viewmodel: ViewmodelSpec,
     muzzle: Option<Vec3>,
     clips: BTreeMap<String, Handle<Clip>>,
+    rig: PropRig,
     cached_at: u64,
 ) {
     if let Some(drawn) = drawn {
@@ -393,7 +404,7 @@ fn replace_parts(
     commands
         .entity(body)
         .insert((
-            HeldModel { weapon, resolved, parts, hold, viewmodel, muzzle, clips, cached_at },
+            HeldModel { weapon, resolved, parts, hold, viewmodel, muzzle, clips, rig, cached_at },
             WeaponInHand::default(),
         ));
 }
@@ -697,14 +708,28 @@ fn show_held_weapons(
     }
 }
 
+/// The prop's bones are posed here from the body's stack rather than in the pose chain, since
+/// nothing but the drawing reads them.
 fn place_held_weapons(
-    bodies: Query<(&HeldModel, &WeaponInHand)>,
-    mut parts: Query<&mut Transform, With<HeldPart>>,
+    clips: Res<Assets<Clip>>,
+    bodies: Query<(&HeldModel, &WeaponInHand, &ClipStack)>,
+    mut parts: Query<(&mut Transform, Option<&OnPropBone>), With<HeldPart>>,
 ) {
-    for (held, weapon) in &bodies {
+    let mut pose = PropPose::default();
+    for (held, weapon, stack) in &bodies {
+        let deltas = match held.rig.is_empty() {
+            true => vec![],
+            false => {
+                crate::prop::rig::apply_stack(stack, &clips, &held.rig, &mut pose);
+                held.rig.deltas(&pose)
+            }
+        };
         for part in &held.parts {
-            let Ok(mut transform) = parts.get_mut(*part) else { continue };
-            *transform = weapon.0;
+            let Ok((mut transform, bone)) = parts.get_mut(*part) else { continue };
+            *transform = match bone.and_then(|bone| deltas.get(bone.0)) {
+                Some(delta) => weapon.0 * *delta,
+                None => weapon.0,
+            };
         }
     }
 }
@@ -829,6 +854,7 @@ mod tests {
                     viewmodel: ViewmodelSpec::default(),
                     muzzle: None,
                     clips: BTreeMap::new(),
+                    rig: PropRig::default(),
                     cached_at: 0,
                 },
                 WeaponInHand::default(),
@@ -891,6 +917,7 @@ mod tests {
                     viewmodel: ViewmodelSpec::default(),
                     muzzle: None,
                     clips,
+                    rig: PropRig::default(),
                     cached_at: 0,
                 },
                 Performance::default(),
@@ -954,6 +981,7 @@ mod tests {
                     viewmodel: ViewmodelSpec::default(),
                     muzzle: None,
                     clips,
+                    rig: PropRig::default(),
                     cached_at: 0,
                 },
                 Performance::default(),
@@ -1182,17 +1210,53 @@ mod tests {
             .with_rotation(Quat::from_rotation_x(0.4));
 
         let mut world = World::new();
+        world.insert_resource(Assets::<Clip>::default());
         let part = world.spawn((HeldPart, Transform::IDENTITY)).id();
         world.spawn((
             HeldModel {
                 weapon: None, resolved: true, parts: vec![part],
                 hold: HoldSpec::default(), viewmodel: ViewmodelSpec::default(), muzzle: None,
-                clips: BTreeMap::new(), cached_at: 0,
+                clips: BTreeMap::new(), rig: PropRig::default(), cached_at: 0,
             },
             WeaponInHand(decided),
         ));
 
         world.run_system_once(place_held_weapons).unwrap();
         assert_eq!(*world.get::<Transform>(part).unwrap(), decided);
+    }
+
+    /// A part on a bone is drawn where the weapon is, moved by what the stack keys on the bone.
+    #[test]
+    fn a_held_part_follows_its_bone() {
+        use crate::common::skeleton::clip::{Channel, Key, Track};
+        use crate::common::skeleton::interpolation::Interpolation;
+
+        let mut world = World::new();
+        let mut assets = Assets::<Clip>::default();
+        let mut clip = Clip { length: 1.0, ..default() };
+        clip.tracks.push(Track::of(Channel::PropBoneOffset {
+            bone: "slide".into(),
+            keys: vec![Key::all(0.0, [0.0, 0.0, 0.03], Interpolation::Linear)],
+        }));
+        let handle = assets.add(clip);
+        world.insert_resource(assets);
+
+        let slide = world.spawn((HeldPart, OnPropBone(0), Transform::IDENTITY)).id();
+        let frame = world.spawn((HeldPart, Transform::IDENTITY)).id();
+        let weapon = Transform::from_xyz(1.0, 0.0, 0.0);
+        world.spawn((
+            HeldModel {
+                parts: vec![slide, frame],
+                rig: PropRig::of(&[crate::prop::rig::PropBone::new("slide", Vec3::ZERO)]),
+                ..default()
+            },
+            WeaponInHand(weapon),
+            ClipStack(vec![crate::common::skeleton::play::Playing::new(Layer::Weapon, handle, 0.0)]),
+        ));
+        world.run_system_once(place_held_weapons).unwrap();
+
+        assert_eq!(*world.get::<Transform>(frame).unwrap(), weapon);
+        let moved = world.get::<Transform>(slide).unwrap().translation;
+        assert!(moved.abs_diff_eq(Vec3::new(1.0, 0.0, 0.03), 1e-6), "{moved}");
     }
 }

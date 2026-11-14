@@ -56,6 +56,7 @@ pub mod plane;
 pub mod profile;
 pub mod reference;
 pub mod region;
+pub mod rig;
 pub mod sketch;
 pub mod sketch_edit;
 pub mod solid;

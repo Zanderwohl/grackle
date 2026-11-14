@@ -965,8 +965,9 @@ impl AnimTabs<'_> {
         ui.separator();
         let mut made: Option<Channel> = None;
         let rig = self.rig();
+        let prop_bones = self.editor.doc().bones.clone();
         ui.menu_button(get!("anim.add_track"), |ui| {
-            for (label, entry) in new_tracks(&rig) {
+            for (label, entry) in new_tracks(&rig, &prop_bones) {
                 match entry {
                     NewTrack::One(channel) => {
                         if ui.button(get!(label)).clicked() {
@@ -974,6 +975,8 @@ impl AnimTabs<'_> {
                             ui.close();
                         }
                     }
+                    // A prop with no bones has nothing to offer.
+                    NewTrack::Choose(options) if options.is_empty() => {}
                     NewTrack::Choose(options) => {
                         ui.menu_button(get!(label), |ui| {
                             for (option, channel) in options {
@@ -1205,6 +1208,20 @@ impl AnimTabs<'_> {
                                 }
                             }
                         });
+                });
+            }
+            Channel::PropBone { bone, .. } | Channel::PropBoneOffset { bone, .. } => {
+                let names: Vec<String> = self.editor.doc().bones.iter().map(|b| b.name.clone()).collect();
+                ui.horizontal(|ui| {
+                    ui.label(get!("anim.label.bone"));
+                    egui::ComboBox::from_id_salt("anim_prop_bone").selected_text(bone.clone()).show_ui(ui, |ui| {
+                        for name in names {
+                            if ui.selectable_label(*bone == name, &name).clicked() && *bone != name {
+                                *bone = name;
+                                changed = true;
+                            }
+                        }
+                    });
                 });
             }
             Channel::Weight { controller, .. } => {
@@ -1527,6 +1544,13 @@ impl AnimTabs<'_> {
                 && rig.anatomy().limb(chain.key()).is_none()
             {
                 let message = get!("anim.problem.unknown_limb", "limb", chain.label());
+                problems.push(ClipProblem { track: Some(index), message });
+            }
+            // Against the prop open beside it, which is the one a weapon clip plays on.
+            if let Channel::PropBone { bone, .. } | Channel::PropBoneOffset { bone, .. } = &track.channel
+                && !self.editor.doc().bones.iter().any(|known| &known.name == bone)
+            {
+                let message = get!("anim.problem.unknown_prop_bone", "bone", bone);
                 problems.push(ClipProblem { track: Some(index), message });
             }
         }
@@ -1910,7 +1934,10 @@ enum NewTrack {
 }
 
 /// Each with its emptiest form. A new channel joins here beside its arm in `apply`.
-fn new_tracks(rig: &crate::common::skeleton::Skeleton) -> [(&'static str, NewTrack); 7] {
+fn new_tracks(
+    rig: &crate::common::skeleton::Skeleton,
+    prop_bones: &[crate::prop::rig::PropBone],
+) -> [(&'static str, NewTrack); 9] {
     let bones = rig
         .bones()
         .iter()
@@ -1938,6 +1965,14 @@ fn new_tracks(rig: &crate::common::skeleton::Skeleton) -> [(&'static str, NewTra
         .iter()
         .map(|bone| (bone.name.to_string(), Channel::LookAt { bone: bone.name.to_string(), keys: Vec::new() }))
         .collect();
+    let turns = prop_bones
+        .iter()
+        .map(|bone| (bone.name.clone(), Channel::PropBone { bone: bone.name.clone(), keys: Vec::new() }))
+        .collect();
+    let slides = prop_bones
+        .iter()
+        .map(|bone| (bone.name.clone(), Channel::PropBoneOffset { bone: bone.name.clone(), keys: Vec::new() }))
+        .collect();
     let weights = Controller::ALL
         .iter()
         .map(|controller| (get!(controller.name_key()), Channel::Weight { controller: *controller, keys: Vec::new() }))
@@ -1953,6 +1988,8 @@ fn new_tracks(rig: &crate::common::skeleton::Skeleton) -> [(&'static str, NewTra
             "anim.channel.weapon_rotation",
             NewTrack::One(Channel::WeaponRotation { keys: Vec::new() }),
         ),
+        ("anim.channel.prop_bone", NewTrack::Choose(turns)),
+        ("anim.channel.prop_bone_offset", NewTrack::Choose(slides)),
     ]
 }
 
@@ -2120,7 +2157,8 @@ mod tests {
     #[test]
     fn every_kind_of_track_can_be_added() {
         let mut kinds = std::collections::BTreeSet::new();
-        for (_, entry) in new_tracks(default_humanoid()) {
+        let bones = [crate::prop::rig::PropBone::new("lid", Vec3::ZERO)];
+        for (_, entry) in new_tracks(default_humanoid(), &bones) {
             let channels: Vec<Channel> = match entry {
                 NewTrack::One(channel) => vec![channel],
                 NewTrack::Choose(options) => {
@@ -2133,13 +2171,13 @@ mod tests {
                 kinds.insert(channel.kind_key());
             }
         }
-        assert_eq!(kinds.len(), 7, "a kind of track cannot be made: {kinds:?}");
+        assert_eq!(kinds.len(), 9, "a kind of track cannot be made: {kinds:?}");
     }
 
     #[test]
     fn the_bone_submenu_offers_every_bone() {
         let rig = default_humanoid();
-        let (_, NewTrack::Choose(options)) = &new_tracks(rig)[0] else {
+        let (_, NewTrack::Choose(options)) = &new_tracks(rig, &[])[0] else {
             panic!("bones are chosen from a submenu");
         };
         assert_eq!(options.len(), rig.bones().len());

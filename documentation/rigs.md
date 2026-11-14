@@ -159,8 +159,8 @@ Channel changes:
   weapon's magazine well, then to the belt, then to the crown, as one track.
   The frames are resolved at sample time, so the sequence fits every build and
   follows a moving weapon.
-- `Channel::Bone { prop_bone }` for prop rigs (below), replacing the reserved
-  `Feature` comment.
+- `Channel::PropBone` and `PropBoneOffset` for prop rigs (below), replacing
+  the reserved `Feature` comment.
 
 ### IK: two kinds, one solver family
 
@@ -210,9 +210,9 @@ to a bone. Then:
 - A held prop's clips may key its bones: a magazine drops, a cylinder swings,
   a barrel spins. A placed prop has an animator too: an idle loop (a fan), or
   a clip played on an event (a door, a breakable's hit).
-- A prop's bones are a `Skeleton`, and its pose is a `Pose`. It is the same
-  machinery, and a prop rig is a rig, so the editor's tracks, keys and preview
-  need nothing new.
+- A prop's pose is a `PropPose`, not a body `Pose`, since a prop bone moves
+  as well as turns. Its tracks are ordinary keyed tracks, so the editor's
+  strip, keys and preview need nothing new.
 - On the wire: still state, never poses. A held prop's clip is chosen by the
   same replicated facts (`Ammo`, `Equipped`, `Effect::Fired`) that choose the
   body's. A placed prop's looping clip is derived on every machine. An evented
@@ -402,8 +402,27 @@ None of these is animation, but a creature is not playable without them:
   decisions above.
 
 ### Stage 5: prop rigs
-- [ ] Bones on a prop (pivot feature, parent, bound parts), edited in Model.
-- [ ] Bake per bone; `BakedProp.parts` carries the bone.
-- [ ] `Channel::Bone` keyed in prop clips; held props play them.
-- [ ] Placed props get an animator: idle loop, evented clip.
-- [ ] The rocket launcher, or the pistol, ships a moving part.
+- [x] Bones on a prop (pivot feature, parent, bound parts), edited in Model.
+  A `[[bones]]` section in the `.gpp` rather than a feature in the list:
+  a bone makes no body and consumes none, so it has no place in the
+  evaluation order. Each binds features; a body takes the bone of its own
+  feature or of the first operand it ate that has one, so a bound barrel
+  stays bound after the bore is cut. Edited in the **Bones** tab beside the
+  Inspector; pivots are drawn as crosses.
+- [x] Bake per bone; `BakedProp.parts` carries the bone.
+  `BakedPart { mesh, material, bone }`. Meshes stay in prop space; a part
+  is moved by its bone's change from rest, so nothing is re-centered.
+- [x] `Channel::Bone` keyed in prop clips; held props play them.
+  Two channels, `PropBone` (a turn about the pivot) and `PropBoneOffset`
+  (a move, meters in the parent's frame), since a magazine slides. Posed
+  by `prop::rig::apply_stack` into a `PropPose`, one transform per bone,
+  not a body `Pose`: a prop bone has no length or limit, and it moves.
+  The body, the viewmodel and the editor's stage all pose from the stack
+  they already play, masked where a layer above claims the weapon.
+- [x] Placed props get an animator: idle loop, evented clip.
+  `idle` loops on each machine's clock; `hit` plays on every
+  `DamageDealt` naming the instance, which is relayed, so every machine
+  sees it. Drawn only.
+- [x] The rocket launcher, or the pistol, ships a moving part.
+  The pistol's slide kicks back on `fire` and its magazine drops and is
+  seated in both reloads; the crate jolts on `hit`.

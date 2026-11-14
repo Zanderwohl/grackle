@@ -638,10 +638,12 @@ unknown_bone = "Bone '{ bone }' is not on this rig."
 ground_angle = "Key at { at } grounds an angle, which has no floor under it."
 ground_sideways = "Key at { at } is grounded on a horizontal axis."
 ground_root = "Key at { at } grounds a root offset, which is already measured from where the body stands."
+ground_prop_bone = "Key at { at } grounds a prop bone, which moves with the prop and has no floor."
 outside = "Key at { at } is outside the clip."
 unclaimed = "Moves a part this clip's layer does not claim."
 no_foot = "Timed by a foot this rig does not have."
 unknown_limb = "Limb '{ limb }' is not on this rig."
+unknown_prop_bone = "Bone '{ bone }' is not on the prop."
 foot_timing_off_stride = "Timed by a foot on a clip that is not on the stride clock."
 empty_blend = "A blend with no variants."
 unmatched_variants = "The variants at { from } and { to } drive different joints."
@@ -668,6 +670,8 @@ percent = "%"
 
 [anim.track]
 look_at = "{ bone } looks at"
+prop_bone = "{ bone } on the prop"
+prop_bone_offset = "{ bone } on the prop, moved"
 
 [anim.controller]
 plant = "Feet planted"
@@ -731,6 +735,7 @@ recoil = "Recoil"
 fire = "Fire"
 reload = "Reload"
 body_reload = "Reload (third person)"
+hit = "Hit"
 flinch_back = "Flinch back"
 flinch_forward = "Flinch forward"
 flinch_left = "Flinch left"
@@ -744,6 +749,8 @@ weapon = "Weapon"
 weapon_rotation = "Weapon turn"
 look_at = "Look at"
 weight = "Weight"
+prop_bone = "Prop bone"
+prop_bone_offset = "Prop bone move"
 
 [anim.space]
 track = "The track's"
@@ -852,6 +859,7 @@ inspector = "Inspector"
 scene = "Scene"
 hold = "Hold"
 hat = "Hat"
+bones = "Bones"
 problems = "Problems"
 problems_count = "Problems ({ count })"
 
@@ -886,6 +894,20 @@ hat = "Hat"
 obstacle = "Obstacle"
 breakable = "Breakable"
 pickup = "Pickup"
+
+[prop.bones]
+parent = "Parent"
+no_parent = "The prop"
+pivot = "Pivot"
+parts = "Parts"
+add = "Add bone"
+remove = "Remove bone"
+default_name = "bone { number }"
+
+[prop.bones.problems]
+duplicate = "Two bones are named { bone }"
+parent = "{ bone } names { parent } as its parent, which is not a bone above it"
+bound_twice = "{ bone } binds { feature }, which a bone above it already binds"
 
 [prop.collider]
 box = "Box"

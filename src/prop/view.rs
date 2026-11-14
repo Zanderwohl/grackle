@@ -21,7 +21,7 @@ use bevy::prelude::*;
 
 use crate::common::app_mode::AppMode;
 use crate::editor::multicam::viewport_layers;
-use crate::prop::baked::{parts, SurfaceMaterials};
+use crate::prop::baked::{parts_of_bodies, SurfaceMaterials};
 use crate::prop::figure::{clear_the_figure, pose_the_figure, refresh_the_figure, ScaleFigure};
 use crate::prop::document::{Pick, PropEditor};
 use crate::prop::gizmo::HoveredPick;
@@ -144,16 +144,42 @@ impl Plugin for PropViewPlugin {
     }
 }
 
-/// Moves the prop where an animation holds it (identity while modeling), and
-/// hides it when the staged figure is holding nothing. Separate from the
-/// rebuild, which only runs on edits.
+/// Which of [`PropBuild::evaluated`]'s bodies a stage mesh was cut from, so its bone is asked
+/// each frame and binding a body needs no rebuild.
+#[derive(Component, Clone, Copy)]
+pub struct StageBody(usize);
+
+/// Moves the prop where an animation holds it (identity while modeling), poses
+/// its bones from the figure's clips, and hides it when the staged figure is
+/// holding nothing. Separate from the rebuild, which only runs on edits.
+#[allow(clippy::too_many_arguments)]
 pub fn carry_the_prop(
+    editor: Res<PropEditor>,
+    build: Res<PropBuild>,
     held: Res<crate::prop::figure::FigureWeapon>,
     figure: Option<Res<crate::prop::figure::FigureStage>>,
     beneath: Option<Res<crate::prop::figure::FigureBeneath>>,
+    performance: Option<Res<crate::prop::figure::FigurePerformance>>,
+    clips: Option<Res<Assets<crate::common::skeleton::clip::Clip>>>,
     mode: Option<Res<State<AppMode>>>,
     mut stage: Query<(&mut Transform, &mut Visibility), With<PropStage>>,
+    mut parts: Query<(&StageBody, &mut Transform), Without<PropStage>>,
 ) {
+    let doc = editor.doc();
+    let rig = crate::prop::rig::PropRig::of(&doc.bones);
+    let mut pose = crate::prop::rig::PropPose::rest(&rig);
+    if let (Some(performance), Some(clips)) = (performance.as_deref(), clips.as_deref()) {
+        crate::prop::rig::apply_stack(&performance.0, clips, &rig, &mut pose);
+    }
+    let deltas = rig.deltas(&pose);
+    let bones = crate::prop::rig::bone_of_each_body(editor.shown(), &doc.bones, &build.evaluated);
+    for (body, mut transform) in &mut parts {
+        let wanted = bones.get(body.0).copied().flatten().and_then(|bone| deltas.get(bone)).copied().unwrap_or_default();
+        if *transform != wanted {
+            *transform = wanted;
+        }
+    }
+
     let staged = crate::prop::figure::stage_in_force(figure.as_deref(), mode.as_deref());
     let hidden = beneath.is_some_and(|beneath| beneath.hides_weapon);
     let wanted = match staged.holding && !hidden {
@@ -297,9 +323,9 @@ fn rebuild_the_prop(
         Name::new("Prop"),
     ));
     root.with_children(|parent| {
-        for (surface, mesh) in parts(&build.evaluated) {
+        for (body, surface, mesh) in parts_of_bodies(&build.evaluated) {
             let material = surfaces.get(surface, &mut materials);
-            parent.spawn((Mesh3d(meshes.add(mesh)), MeshMaterial3d(material)));
+            parent.spawn((Mesh3d(meshes.add(mesh)), MeshMaterial3d(material), StageBody(body)));
         }
     });
 }
@@ -342,6 +368,16 @@ fn draw_the_bench(
         };
         gizmos.line(Vec3::ZERO, b, positive);
         gizmos.line(a, Vec3::ZERO, negative);
+    }
+    // Each bone's pivot as a cross, joined to its parent's.
+    let rig = crate::prop::rig::PropRig::of(&editor.doc().bones);
+    for bone in &rig.bones {
+        for axis in [Vec3::X, Vec3::Y, Vec3::Z] {
+            gizmos.line(bone.pivot - axis * marker, bone.pivot + axis * marker, BONE);
+        }
+        if let Some(parent) = bone.parent {
+            gizmos.line(rig.bones[parent].pivot, bone.pivot, BONE.with_alpha(0.5));
+        }
     }
     for pick in editor.picks() {
         match pick {
@@ -425,6 +461,7 @@ fn draw_the_bench(
 
 const PICKED: Color = Color::srgb(1.0, 0.8, 0.2);
 const HOVERED: Color = Color::srgb(0.5, 0.9, 1.0);
+const BONE: Color = Color::srgb(0.85, 0.45, 0.95);
 const PLANE: Color = Color::srgb(0.55, 0.55, 0.55);
 const SKETCH: Color = Color::srgb(0.92, 0.92, 0.98);
 

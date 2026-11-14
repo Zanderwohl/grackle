@@ -434,9 +434,19 @@ pub enum Channel {
         #[serde(default)]
         keys: Vec<Key>,
     },
-    // Reserved: `Feature { feature: PropFeatureId, .. }`, for a dropped magazine.
-    // Needs `prop::baked` to bake per-feature groups rather than one mesh per
-    // surface.
+    /// A bone of the held or placed prop, turned about its pivot: Euler angles from rest. See
+    /// [`crate::prop::rig`].
+    PropBone {
+        bone: String,
+        #[serde(default)]
+        keys: Vec<Key>,
+    },
+    /// A prop bone moved from rest, in meters in its parent's frame: a magazine sliding out.
+    PropBoneOffset {
+        bone: String,
+        #[serde(default)]
+        keys: Vec<Key>,
+    },
 }
 
 impl Channel {
@@ -449,6 +459,8 @@ impl Channel {
             Channel::WeaponRotation { .. } => "anim.channel.weapon_rotation",
             Channel::LookAt { .. } => "anim.channel.look_at",
             Channel::Weight { .. } => "anim.channel.weight",
+            Channel::PropBone { .. } => "anim.channel.prop_bone",
+            Channel::PropBoneOffset { .. } => "anim.channel.prop_bone_offset",
         }
     }
 
@@ -460,7 +472,9 @@ impl Channel {
             | Channel::Weapon { keys }
             | Channel::Root { keys }
             | Channel::LookAt { keys, .. }
-            | Channel::Weight { keys, .. } => keys.len(),
+            | Channel::Weight { keys, .. }
+            | Channel::PropBone { keys, .. }
+            | Channel::PropBoneOffset { keys, .. } => keys.len(),
         }
     }
 
@@ -472,7 +486,9 @@ impl Channel {
             | Channel::Weapon { keys }
             | Channel::Root { keys }
             | Channel::LookAt { keys, .. }
-            | Channel::Weight { keys, .. } => keys.iter().map(|key| key.at).collect(),
+            | Channel::Weight { keys, .. }
+            | Channel::PropBone { keys, .. }
+            | Channel::PropBoneOffset { keys, .. } => keys.iter().map(|key| key.at).collect(),
         }
     }
 
@@ -484,7 +500,9 @@ impl Channel {
             | Channel::Weapon { keys }
             | Channel::Root { keys }
             | Channel::LookAt { keys, .. }
-            | Channel::Weight { keys, .. } => keys,
+            | Channel::Weight { keys, .. }
+            | Channel::PropBone { keys, .. }
+            | Channel::PropBoneOffset { keys, .. } => keys,
         }
     }
 
@@ -496,14 +514,16 @@ impl Channel {
             | Channel::Weapon { keys }
             | Channel::Root { keys }
             | Channel::LookAt { keys, .. }
-            | Channel::Weight { keys, .. } => keys,
+            | Channel::Weight { keys, .. }
+            | Channel::PropBone { keys, .. }
+            | Channel::PropBoneOffset { keys, .. } => keys,
         }
     }
 
     pub fn is_rotation(&self) -> bool {
         matches!(
             self,
-            Channel::Rotation { .. } | Channel::WeaponRotation { .. }
+            Channel::Rotation { .. } | Channel::WeaponRotation { .. } | Channel::PropBone { .. }
         )
     }
 
@@ -549,7 +569,9 @@ impl Channel {
             | Channel::Weapon { keys }
             | Channel::Root { keys }
             | Channel::LookAt { keys, .. }
-            | Channel::Weight { keys, .. } => shuffle(
+            | Channel::Weight { keys, .. }
+            | Channel::PropBone { keys, .. }
+            | Channel::PropBoneOffset { keys, .. } => shuffle(
                 keys,
                 held,
                 by,
@@ -573,7 +595,9 @@ impl Channel {
             | Channel::Weapon { keys }
             | Channel::Root { keys }
             | Channel::LookAt { keys, .. }
-            | Channel::Weight { keys, .. } => {
+            | Channel::Weight { keys, .. }
+            | Channel::PropBone { keys, .. }
+            | Channel::PropBoneOffset { keys, .. } => {
                 for index in doomed.iter().rev() {
                     if *index < keys.len() {
                         keys.remove(*index);
@@ -593,7 +617,9 @@ impl Channel {
             | Channel::Weapon { keys }
             | Channel::Root { keys }
             | Channel::LookAt { keys, .. }
-            | Channel::Weight { keys, .. } => keys.sort_by(|a, b| a.at.total_cmp(&b.at)),
+            | Channel::Weight { keys, .. }
+            | Channel::PropBone { keys, .. }
+            | Channel::PropBoneOffset { keys, .. } => keys.sort_by(|a, b| a.at.total_cmp(&b.at)),
         }
     }
 }
@@ -617,18 +643,19 @@ pub struct Track {
 }
 
 impl Track {
-    pub fn rotation(bone: impl Into<String>) -> Track {
+    pub fn of(channel: Channel) -> Track {
         Track {
             combine: Combine::default(),
             space: Space::default(),
             unit: Unit::default(),
             enabled: true,
             timing: Default::default(),
-            channel: Channel::Rotation {
-                bone: bone.into(),
-                keys: Vec::new(),
-            },
+            channel,
         }
+    }
+
+    pub fn rotation(bone: impl Into<String>) -> Track {
+        Track::of(Channel::Rotation { bone: bone.into(), keys: Vec::new() })
     }
 }
 
@@ -732,7 +759,7 @@ impl Clip {
                 Channel::Rotation { bone, .. } if !known_bone(bone) => {
                     on_track(get!("anim.problem.unknown_bone", "bone", bone.clone()));
                 }
-                Channel::Rotation { keys, .. } | Channel::WeaponRotation { keys } => {
+                Channel::Rotation { keys, .. } | Channel::WeaponRotation { keys } | Channel::PropBone { keys, .. } => {
                     for key in keys {
                         // An angle has no floor under it.
                         if key.to.iter().any(|axis| axis.is_ground()) {
@@ -758,6 +785,13 @@ impl Clip {
                         // A root offset is already measured from where the floor put the body.
                         if key.to.iter().any(|axis| axis.is_ground()) {
                             on_track(get!("anim.problem.ground_root", "at", key.at.to_string()));
+                        }
+                    }
+                }
+                Channel::PropBoneOffset { keys, .. } => {
+                    for key in keys {
+                        if key.to.iter().any(|axis| axis.is_ground()) {
+                            on_track(get!("anim.problem.ground_prop_bone", "at", key.at.to_string()));
                         }
                     }
                 }

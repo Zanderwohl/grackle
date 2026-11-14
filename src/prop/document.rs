@@ -125,6 +125,9 @@ pub struct PropDoc {
     /// last feature cannot make the next one reuse its id.
     #[serde(default)]
     next_id: u32,
+    /// Parents first. See [`crate::prop::rig`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bones: Vec<crate::prop::rig::PropBone>,
     /// Fire, reload, deploy. Here rather than in `weapons.toml` because a clip
     /// is stated relative to the hold.
     ///
@@ -149,6 +152,7 @@ impl PropDoc {
             pickup: PickupSpec::default(),
             hat: HatSpec::default(),
             next_id: 0,
+            bones: vec![],
             animations: ClipSet::default(),
         }
     }

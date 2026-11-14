@@ -433,6 +433,28 @@ at = [
     -0.195,
 ]
 
+[[bones]]
+name = "slide"
+pivot = [
+    0.0,
+    0.211,
+    -0.093,
+]
+parts = [
+    2,
+    9,
+    10,
+]
+
+[[bones]]
+name = "magazine"
+pivot = [
+    0.0,
+    0.048,
+    -0.042,
+]
+parts = [11]
+
 [animations.clips.deploy]
 name_key = "anim.clips.deploy"
 length = 0.35
@@ -570,6 +592,43 @@ to = [
     0.0,
     "free",
     "free",
+]
+ease = "linear"
+
+[[animations.clips.fire.tracks]]
+combine = "replace"
+space = "body"
+unit = "meters"
+enabled = true
+
+[animations.clips.fire.tracks.channel]
+channel = "prop_bone_offset"
+bone = "slide"
+
+[[animations.clips.fire.tracks.channel.keys]]
+at = 0.0
+to = [
+    0.0,
+    0.0,
+    0.0,
+]
+ease = "linear"
+
+[[animations.clips.fire.tracks.channel.keys]]
+at = 0.03
+to = [
+    0.0,
+    0.0,
+    0.025,
+]
+ease = "cubic_out"
+
+[[animations.clips.fire.tracks.channel.keys]]
+at = 0.1
+to = [
+    0.0,
+    0.0,
+    0.0,
 ]
 ease = "linear"
 
@@ -840,6 +899,52 @@ to = [
 ]
 ease = "linear"
 
+[[animations.clips.reload.tracks]]
+combine = "replace"
+space = "body"
+unit = "meters"
+enabled = true
+
+[animations.clips.reload.tracks.channel]
+channel = "prop_bone_offset"
+bone = "magazine"
+
+[[animations.clips.reload.tracks.channel.keys]]
+at = 0.08
+to = [
+    0.0,
+    0.0,
+    0.0,
+]
+ease = "cubic_in"
+
+[[animations.clips.reload.tracks.channel.keys]]
+at = 0.22
+to = [
+    0.0,
+    -0.25,
+    0.0,
+]
+ease = "linear"
+
+[[animations.clips.reload.tracks.channel.keys]]
+at = 0.42
+to = [
+    0.0,
+    -0.25,
+    0.0,
+]
+ease = "cubic_out"
+
+[[animations.clips.reload.tracks.channel.keys]]
+at = 0.6
+to = [
+    0.0,
+    0.0,
+    0.0,
+]
+ease = "linear"
+
 [animations.clips.body_reload]
 name_key = "anim.clips.body_reload"
 length = 1.0
@@ -1021,6 +1126,52 @@ ease = "smoother_step"
 
 [[animations.clips.body_reload.tracks.channel.keys]]
 at = 0.9
+to = [
+    0.0,
+    0.0,
+    0.0,
+]
+ease = "linear"
+
+[[animations.clips.body_reload.tracks]]
+combine = "replace"
+space = "body"
+unit = "meters"
+enabled = true
+
+[animations.clips.body_reload.tracks.channel]
+channel = "prop_bone_offset"
+bone = "magazine"
+
+[[animations.clips.body_reload.tracks.channel.keys]]
+at = 0.08
+to = [
+    0.0,
+    0.0,
+    0.0,
+]
+ease = "cubic_in"
+
+[[animations.clips.body_reload.tracks.channel.keys]]
+at = 0.22
+to = [
+    0.0,
+    -0.25,
+    0.0,
+]
+ease = "linear"
+
+[[animations.clips.body_reload.tracks.channel.keys]]
+at = 0.42
+to = [
+    0.0,
+    -0.25,
+    0.0,
+]
+ease = "cubic_out"
+
+[[animations.clips.body_reload.tracks.channel.keys]]
+at = 0.6
 to = [
     0.0,
     0.0,

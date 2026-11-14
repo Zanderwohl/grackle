@@ -1090,6 +1090,21 @@ wire with the rest of the catalog, so each machine builds the model from its
 own pack — the same arrangement `Equipped` already has, one level down.
 Nothing draws it. That is the next piece, not a gap in this one.
 
+**A prop may have bones** ([`src/prop/rig.rs`](src/prop/rig.rs)): a
+`[[bones]]` section, each a pivot, a parent listed above it and the features
+whose bodies ride on it, edited in the **Bones** tab beside the Inspector. A
+body takes the bone of its own feature, else of the first operand it ate that
+has one, so cutting a bore through a bound barrel keeps it bound. Meshes stay
+in prop space and a part is moved by its bone's change from rest, so baking
+re-centers nothing. Clips key them with `PropBone` (a turn about the pivot) and
+`PropBoneOffset` (a move in the parent's frame), posed into a `PropPose` by
+`prop::rig::apply_stack` from whatever stack is already playing — the body's
+for a held part, the viewmodel's, the figure's on the editor's stage — and
+masked where a layer above claims the weapon. A placed prop loops its `idle`
+and plays `hit` on each `DamageDealt` naming it, which is relayed, so every
+machine draws it; hats and thumbnails stand in rest. The pistol's slide kicks
+on `fire` and its magazine drops in its reloads; the crate jolts on `hit`.
+
 ## What a prop can be
 
 A prop names an **archetype** — `held`, `hat`, `obstacle`, `breakable` or

@@ -28,6 +28,7 @@ use crate::common::weapon::{WeaponCatalog, WeaponId};
 use crate::game::body_mesh::{body_look, BodyMaterials, BodyMeshCache, BodyTint};
 use crate::common::skeleton::clip::Clip;
 use crate::common::skeleton::play::{apply_stack, grip_offsets, ClipStack, Frames};
+use crate::prop::rig::{OnPropBone, PropPose};
 use crate::game::held::{perform, HeldModel, HeldPart, Performance, SharedWeaponClips};
 use crate::game::player::{place_camera, LocalPlayer, PlayerCamera, ViewMode, Viewed, PLAY_CAMERA_ORDER};
 use crate::prop::hold::grip_hands;
@@ -196,7 +197,7 @@ pub fn dress_the_viewmodel(
     held: Query<&HeldModel, Viewed>,
     // Copied off the body's own parts rather than a second cache lookup that
     // could disagree.
-    drawn: Query<(&Mesh3d, &MeshMaterial3d<StandardMaterial>), With<HeldPart>>,
+    drawn: Query<(&Mesh3d, &MeshMaterial3d<StandardMaterial>, Option<&OnPropBone>), With<HeldPart>>,
     mut views: Query<(Entity, &mut Viewmodel)>,
     cameras: Query<Entity, With<ViewmodelCamera>>,
 ) {
@@ -228,20 +229,20 @@ pub fn dress_the_viewmodel(
         let mut parts = Vec::new();
         commands.entity(camera).with_children(|camera| {
             for part in held.parts() {
-                let Ok((mesh, material)) = drawn.get(*part) else { continue };
-                parts.push(
-                    camera
-                        .spawn((
-                            ViewmodelPart,
-                            mesh.clone(),
-                            material.clone(),
-                            RenderLayers::layer(VIEWMODEL_LAYER),
-                            // Written by `place_the_viewmodel`, which needs the
-                            // camera's shape.
-                            Transform::IDENTITY,
-                        ))
-                        .id(),
-                );
+                let Ok((mesh, material, bone)) = drawn.get(*part) else { continue };
+                let mut spawning = camera.spawn((
+                    ViewmodelPart,
+                    mesh.clone(),
+                    material.clone(),
+                    RenderLayers::layer(VIEWMODEL_LAYER),
+                    // Written by `place_the_viewmodel`, which needs the
+                    // camera's shape.
+                    Transform::IDENTITY,
+                ));
+                if let Some(bone) = bone {
+                    spawning.insert(*bone);
+                }
+                parts.push(spawning.id());
             }
         });
         viewmodel.parts = parts;
@@ -271,9 +272,10 @@ fn place_the_viewmodel(
     held: Query<(&HeldModel, &Skeleton), Viewed>,
     mut views: Query<(&mut Viewmodel, &ClipStack)>,
     cameras: Query<(&Camera, &Projection, &Children, &ChildOf), With<ViewmodelCamera>>,
-    mut parts: Query<&mut Transform, With<ViewmodelPart>>,
+    mut parts: Query<(&mut Transform, Option<&OnPropBone>), With<ViewmodelPart>>,
 ) {
     let Ok((held, skeleton)) = held.single() else { return };
+    let mut pose = PropPose::default();
     let spec = held.viewmodel();
 
     for (camera, projection, children, view) in &cameras {
@@ -292,11 +294,22 @@ fn place_the_viewmodel(
         if viewmodel.grips != grips {
             viewmodel.grips = grips;
         }
+        let deltas = match held.rig().is_empty() {
+            true => vec![],
+            false => {
+                crate::prop::rig::apply_stack(stack, &clips, held.rig(), &mut pose);
+                held.rig().deltas(&pose)
+            }
+        };
         for child in children.iter() {
-            let Ok(mut transform) = parts.get_mut(child) else { continue };
+            let Ok((mut transform, bone)) = parts.get_mut(child) else { continue };
+            let wanted = match bone.and_then(|bone| deltas.get(bone.0)) {
+                Some(delta) => placed * *delta,
+                None => placed,
+            };
             // Compared first: this runs every frame, and an unchanged
             // transform marked changed is a propagation for nothing.
-            transform.set_if_neq(placed);
+            transform.set_if_neq(wanted);
         }
     }
 }

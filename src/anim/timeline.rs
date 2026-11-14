@@ -836,6 +836,8 @@ pub fn track_name(track: &crate::common::skeleton::clip::Track) -> String {
         Channel::Effector { chain, .. } => chain.label(),
         Channel::LookAt { bone, .. } => crate::get!("anim.track.look_at", "bone", bone),
         Channel::Weight { controller, .. } => crate::get!(controller.name_key()),
+        Channel::PropBone { bone, .. } => crate::get!("anim.track.prop_bone", "bone", bone),
+        Channel::PropBoneOffset { bone, .. } => crate::get!("anim.track.prop_bone_offset", "bone", bone),
         other => crate::get!(other.kind_key()),
     }
 }

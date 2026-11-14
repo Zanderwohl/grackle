@@ -121,7 +121,7 @@ pub fn sample_key(keys: &[Key], time: f32, length: f32, looping: bool) -> Option
 /// unique, so a key that needs certainty should set all three.
 ///
 /// [`EULER_ORDER`]: crate::common::rotation::EULER_ORDER
-fn angles_for(to: [Axis; 3], beneath: Quat) -> Vec3 {
+pub(crate) fn angles_for(to: [Axis; 3], beneath: Quat) -> Vec3 {
     let already = crate::common::rotation::euler_from_quat(beneath);
     let mut wanted = already;
     for axis in 0..3 {
@@ -137,7 +137,7 @@ fn angles_for(to: [Axis; 3], beneath: Quat) -> Vec3 {
 
 /// Euler angles for a `Compose` key. `Free` is zero here: reading the angle
 /// beneath and multiplying it on would double it.
-fn angles_onto(to: [Axis; 3]) -> Vec3 {
+pub(crate) fn angles_onto(to: [Axis; 3]) -> Vec3 {
     let mut wanted = Vec3::ZERO;
     for axis in 0..3 {
         if let Axis::Value(at) = to[axis] {
@@ -401,6 +401,7 @@ impl Regions {
             Channel::Root { .. } => Regions::LEGS,
             Channel::LookAt { bone, .. } => Regions::of_bone(skeleton, bone),
             Channel::Weight { controller, .. } => Regions::of_controller(*controller),
+            Channel::PropBone { .. } | Channel::PropBoneOffset { .. } => Regions::WEAPON,
         }
     }
 
@@ -534,7 +535,7 @@ impl ClipStack {
 
     /// Everything fully covered by layers above `layer`. A layer still blending
     /// in masks nothing, so it fades in over what is beneath it.
-    fn claimed_above(&self, layer: Layer) -> Regions {
+    pub fn claimed_above(&self, layer: Layer) -> Regions {
         self.0
             .iter()
             .filter(|playing| playing.weight >= 1.0 && playing.layer > layer)
@@ -806,6 +807,8 @@ pub fn apply_masked(
 
             // Read by the pass it weighs; see `controller_weight`.
             Channel::Weight { .. } => {}
+            // The prop's, not the body's: see `prop::rig::apply_stack`.
+            Channel::PropBone { .. } | Channel::PropBoneOffset { .. } => {}
 
             Channel::Root { keys } => {
                 let Some(to) = sample_key(keys, time, length, looping) else {
