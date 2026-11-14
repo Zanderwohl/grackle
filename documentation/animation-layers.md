@@ -262,8 +262,8 @@ outside its layer's claim is a problem `Clip::problems` reports.
       higher layer's `Replace` track already overrides them; neither needed a
       check of its own.
 - [x] Blend in and out per layer from `layers.toml`, overridable per clip
-      (`blend_in`/`blend_out` on the clip, in the file only — no editor field
-      yet); one-shots fade out instead of being dropped. Owners send clips
+      (`blend_in`/`blend_out` on the clip, with fields in the animation
+      editor's Clip section); one-shots fade out instead of being dropped. Owners send clips
       out with `ClipStack::keep`, and `fade_the_layers` takes them down and
       off. The grip shares an arm with a layer fading over it.
 - [x] `Condition` component, replicated: humiliated. `pull_trigger` refuses;

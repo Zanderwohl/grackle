@@ -490,7 +490,12 @@ the first taunt in `assets/default/taunts.toml` (a wave, which ends by itself;
 suicide, 1000 damage credited to yourself, a debug key for the death cam; nobody
 crouches while taunting; each taunt states what it claims, whether it
 shows the weapon, how far you can move, and how far your body (never the
-camera) can turn. What each slot
+camera) can turn — all of it edited in the animation editor's **Taunts**
+section (`write_taunts` edits the file in place, so its comments survive).
+`length = "clip"` lasts as long as the clip (until `G` again if the clip is
+in no pack); it is resolved to a number where the table is loaded, so a client
+is sent the authority's number. Saving writes what changed and what the target
+pack already holds, never an unchanged taunt or clip another pack supplies. What each slot
 holds is a property of the class, which is read off disk; see "What a weapon is" below.
 
 ## Modeling a prop
@@ -974,6 +979,18 @@ sends a clip out with `ClipStack::keep` rather than removing it, and
 `fade_the_layers` is the only thing that takes one off. A region claimed by a
 layer above the weapon stands still beneath it (`stand_where_claimed`), so a
 taunt that claims the legs owns them whether or not it keys them.
+Humiliation's claims are in `layers.toml` too (`LayerClaims`); a taunt's are
+its own.
+
+**The animation editor edits every clip under a pack's `animations/`**: the
+states', the taunts', and those played by name (`humiliated`, `flinch_*`,
+`recoil`, `reload`), which it lists off the disk since the game is told each
+name by whatever plays it. A clip played by name is one handle per name in
+`NamedClips`, so an edit refills it under every system holding it. Each
+previews on the layer it plays on, over a chosen body state posed as the
+animator would pose it (`FigureBeneath`), and a taunt can be previewed
+**Moving**: at its speed, turning no faster than it allows after an aim swept
+side to side.
 
 `every_class_can_reach_every_shipped_props_grip` is what keeps a hold
 authorable: a build whose hand cannot get to the grip holds nothing while its

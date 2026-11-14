@@ -296,6 +296,17 @@ impl LayerBlends {
     }
 }
 
+/// What a layer claims: `layers.toml`'s where it states one (humiliation only), else
+/// [`Layer::claims`].
+#[derive(Resource, Clone, Debug, Default, PartialEq)]
+pub struct LayerClaims(pub std::collections::BTreeMap<Layer, Regions>);
+
+impl LayerClaims {
+    pub fn of(&self, layer: Layer) -> Regions {
+        self.0.get(&layer).copied().unwrap_or(layer.claims())
+    }
+}
+
 /// Parts of a body a layer can claim. `WEAPON` is the weapon's placement, not
 /// a bone.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -316,6 +327,10 @@ impl Regions {
 
     pub const fn union(self, other: Regions) -> Regions {
         Regions(self.0 | other.0)
+    }
+
+    pub const fn without(self, other: Regions) -> Regions {
+        Regions(self.0 & !other.0)
     }
 
     pub fn overlaps(self, other: Regions) -> bool {

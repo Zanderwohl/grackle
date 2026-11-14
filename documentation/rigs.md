@@ -1,0 +1,339 @@
+# Rigs: a generic animator
+
+The plan, and the checklist, for making the animator about *a* rig rather than
+*the* humanoid: data-named bones, rig-declared regions and limbs, IK beyond two
+bones, parametric controllers and scripted IK sequences in clips, prop rigs,
+and taunts editable from the animation editor. It is written for non-humanoid
+characters first, and to make editing taunts complete. Tick items as they land.
+
+## Where things stand
+
+**A prop can be animated, but only rigidly, and only while it is held.** A
+`.gpp` carries a `ClipSet` (`PropDoc.animations`). The game plays `deploy`,
+`fire`/`alt_fire` (viewmodel), `recoil`/`alt_recoil`, `reload` and
+`body_reload` from it. Those clips move the weapon *as a whole* (`Channel::Weapon`,
+`WeaponRotation`, as a deviation from the carry) and the arms (`Space::Grip`,
+effectors). Nothing on a prop moves by itself: `baked::parts` makes one mesh
+per body per surface and keeps no part identity, and `place_held_weapons`,
+`float_pickups` and hats write one transform to every part. A magazine, a hinge
+or a spinning barrel is impossible. `Channel::Feature` is a reserved comment.
+
+**The pipeline is already layered.** The `Update` chain in
+`src/game/skeleton.rs` runs: `advance_animators` (it overwrites the whole pose:
+state clip or pose function, then `duck_under` and `plant_feet`, then
+`stand_where_claimed`), `look_with_the_head`, `place_the_weapon`,
+`perform_weapon_clips`, `perform_conditions`, the flinches, `fade_the_layers`,
+`play_the_clips` (`apply_stack`), and `grip_the_weapon` last. `Layer` is
+Locomotion < Weapon < Humiliation < Taunt < Flinch. Each one claims `Regions`,
+a `u8` of legs, torso, head, arm.l, arm.r and weapon. Locomotion never goes on
+the `ClipStack` in a match; it is the animator's pose underneath.
+
+**IK is one analytic two-bone solver** (`ik::solve`, law of cosines plus a
+pole). There are no N-bone chains, no look-at and no aim constraint. "Look" is
+a fixed neck/head share of the pitch. The parametric passes are foot planting
+(gait), duck depth, look, the weapon's placement and the grip. Everything else
+is keyed: `Rotation`, `Root` and `Effector` tracks, with an effector's target in
+one `Space` for the whole track.
+
+**Humanoid is baked in everywhere**, and the root of it is
+`Bone.name: &'static str`, so a bone's name cannot come from a file. Above it:
+
+| Assumption | Where |
+| --- | --- |
+| The bone names, one builder, nine `Proportions` | `rig.rs` `bone`, `humanoid`, `Proportions` |
+| `Pose` keyed by `&'static str` | `rig.rs` |
+| Four limbs | `ChainRef`, `ik::{LEFT,RIGHT}_{ARM,LEG}`, `elbow_pole`, `default_pole` |
+| Six regions, bone→region by name | `play.rs` `Regions`, `of_bone`, `of_track`, `Layer::claims` |
+| Units read off particular bones | `Unit::{LegLengths,ArmLengths,HipHeights}`, `ik::leg_length` |
+| Frames hung off particular bones | `Space::{Carry,Shoulders}` (chest tail), `Space::Grip` (right hand = trigger), `Space::Eye` |
+| Two feet half a cycle apart | `gait::foot_offsets` → `[FootOffset; 2]`, `footfalls`, `Timing::{LeftFoot,RightFoot}`, `plant_feet` |
+| Joint limits and mesh profiles by name | `joints::limit_of`, `mesh::profile` |
+| Neck/head look | `game/skeleton.rs` `look` |
+| Head hitbox, crown, eye, chest carry, hands | `hitbox.rs`, `archetype.rs` `crown_frame`, `viewmodel.rs`, `hold.rs` |
+| A corpse and a mesh cache are a function of `Proportions` | `CorpseBuild`, `body_mesh.rs` `BuildKey` |
+| Pose functions per state | `state.rs`, `gait.rs` (`idle_pose`, `gait_pose`, …) |
+| One hull and one eye height for every class | `class.rs` |
+
+Bots, name tags and the PBD ragdoll solver itself are already rig-agnostic.
+
+**Taunts.** `taunts.toml` already states `movement` (free, stopped, slowed),
+`turning` (free, locked, at most N°/s), `weapon`, `claims` and `length`, and
+`step` enforces all of them. What is missing is the editor:
+
+- No UI touches `taunts.toml`.
+- The animation editor cannot even open `taunt_wave.gpa`. `read_the_packs`
+  loads only the 13 `AnimationState` clips, so taunt, humiliation, flinch and
+  the shared recoil/reload clips are unreachable.
+- A clip's `blend_in` and `blend_out` have no fields.
+- Previews run only on Locomotion or Weapon, never under a taunt's claims.
+- Humiliation's claims are code (`Layer::Humiliation.claims`).
+- A taunt's `length` and its clip's `length` are two numbers kept equal only
+  by a test.
+
+## The shape it is going to
+
+### A rig is a vocabulary, not a bone list
+
+A `Skeleton` keeps its bones, but each one is named by a `String`, addressed by
+a `BoneIndex`, and the rig **publishes** what the rest of the game asks for by
+name:
+
+- **Chains**: a name, a run of bones from root to tip, a role (`leg`, `arm`,
+  `neck`, `tail`, `spine`) and a default pole. Two-bone chains keep the
+  analytic solver; longer ones get the N-bone solver below.
+- **Regions**: a name, the bones it covers and a bit. A rig has at most 32. The
+  humanoid's six are just its own.
+- **Sockets**: a name, a bone and an offset frame. `eye`, `crown`, `carry` (now
+  the chest tail), `shoulders`, `grip.trigger`, `grip.support`, `head` (for the
+  head hitbox), `pelvis` (for the death cam). A `Space` that names a socket
+  replaces the closed `Space` variants that hang off particular bones.
+- **Measures**: a name and a length in meters for this build: `leg`, `arm`,
+  `hip`. `Unit::LegLengths` becomes `Unit::Measure("leg")`, and the existing
+  spellings stay as aliases so no shipped file changes.
+- **Feet and a gait pattern**: which chains plant, and each foot's phase offset
+  in the cycle (biped 0, ½; quadruped trot 0, ½, ½, 0). `[FootOffset; 2]`
+  becomes one per foot. `Timing::LeftFoot`/`RightFoot` becomes
+  `Timing::Foot(name)`.
+- **Look**: the bones that share the aim's pitch (and yaw, for a long neck),
+  with shares that sum to one and limits.
+- **Per bone**: joint limit and mesh profile, which today are name-keyed tables.
+
+The humanoid builder publishes exactly today's vocabulary, so the first stage
+changes no behavior. This is the rule `surfaces.md` already states for rooms:
+**a new shape is a new producer, not a rewrite of every consumer.** Every site
+in the table above stops naming bones and asks the rig.
+
+**`Pose` becomes per-index** (`Vec<Option<Quat>>`, or a bitset plus values) so
+that "absent means rest" still holds. A clip binds its names to indices once
+per (clip, rig), not per sample, which is the same work `HashMap<&str>` does
+today on every lookup. A name the rig lacks is a Problem in the editor and is
+skipped at runtime, never a panic. This is the "nothing refuses" rule the prop
+evaluator follows.
+
+### Where a rig comes from
+
+There are two producers:
+
+1. **`humanoid(Proportions)`**, kept as code. Its geometry has rules that are
+   not just scaling (the shoulders are floored by the chest's width, the ankle
+   is a fraction of height), and `seed.rs` and every shipped clip are tuned
+   against it. Its vocabulary moves into the `Skeleton` it returns.
+2. **A rig file**, `rigs/<name>.toml` in a pack. It holds bones in meters at a
+   reference build, each tagged with a measure group, plus the vocabulary
+   above. A class build is then a height, a scale per measure group and a
+   girth, so it is still "nine numbers, not a model".
+
+`classes.toml` gains `rig = "humanoid"` (the default) per class.
+`CorpseBuild` and `BuildKey` become *(rig name, build)*. Rig files sync like
+`ClassBuilds` (`pack_sync`, JSON bytes), so a server can ship a creature
+nobody else has.
+
+The rig editor itself (drawing bones in the viewport) is out of scope. A rig
+file is text, as a blueprint is, and the figure in the animation editor shows
+it. Make the editor once there are two rigs to compare.
+
+### Clips are bound to a rig
+
+A clip names a `rig` (absent means `humanoid`). Body state clips are looked up
+per rig, at `animations/<rig>/<state>.gpa`, with the humanoid's left where
+they are. The pose functions stay a humanoid fallback; any other rig ships
+clips, or stands in rest until it does. `AnimationState` and `BodyRequests`
+stay shared: a creature runs, strafes, crouches and falls with the same
+inputs. What a state *looks like* is the rig's.
+
+Channel changes:
+
+- `Effector { chain: String }`. `"right_arm"` and its siblings are already
+  snake_case strings on disk, so the files do not change.
+- `Space::Socket(name)` beside the old variants, which become aliases.
+- **`LookAt { chain, target }`**: aim a chain's tip axis at a target. Covers a
+  head turning to a point, a tail pointing, a turret.
+- **`Weight { controller }`**: a keyed 0–1 on a parametric controller (below),
+  so a clip can let go of foot planting during a leap, or of the grip during a
+  taunt.
+- **Per-key target space.** Today the `Space` belongs to the track. A key may
+  name its own, and a span between two keys in different spaces blends in
+  world space. This is what makes a **scripted IK sequence**: hand to the
+  weapon's magazine well, then to the belt, then to the crown, as one track.
+  The frames are resolved at sample time, so the sequence fits every build and
+  follows a moving weapon.
+- `Channel::Bone { prop_bone }` for prop rigs (below), replacing the reserved
+  `Feature` comment.
+
+### IK: two kinds, one solver family
+
+**Parametric** IK is a *controller*: a rig-declared constraint the game feeds
+each frame from state. Today's are foot planting, look, place-the-weapon and
+grip. They become instances of one `Controller` trait-free enum (closed set,
+for the reasons the prop feature list gives), declared on the rig with their
+parameters:
+
+| Controller | Parameters | Fed by |
+| --- | --- | --- |
+| `Plant` | feet, gait pattern, ground probe | `Gait`, the floor raycast |
+| `Look` | chain, shares, limits | `Player.pitch`/`yaw` |
+| `Hold` | carry socket, grip sockets | `HoldSpec`, the aim |
+| `Aim` | chain, axis | a target (turret, a non-humanoid's weapon mount) |
+
+**Scripted** IK is a keyed effector or `LookAt` track in a clip, with per-key
+spaces as above.
+
+Both go through the **same solvers**:
+
+- `solve` (analytic, two bones), kept, since it is exact and the hands depend
+  on it.
+- **FABRIK with joint limits** for chains of three or more bones (tails,
+  necks, insect legs, digitigrade legs, which are three-bone). FABRIK because
+  it converges in a few iterations, handles limits by projection the way the
+  ragdoll already relaxes toward them, and has no Jacobian to get wrong. A
+  fixed iteration count keeps it deterministic, which hitboxes need, since
+  they rebuild the pose on the tick.
+- The `reach_or_leave` rule carries over: an arm that cannot reach does not
+  stretch.
+
+**Layering IK** follows the rule `animation-layers.md` was built against: a
+controller drives only bones whose region it *won*. `grip_the_weapon` already
+does this for the arms. `Plant` and `Look` join it, so a taunt claiming the
+legs owns them outright and the feet stop being planted under it unless its
+clip keys `Weight { Plant }` back on.
+
+### Props get rigs
+
+A prop may have **bones**: a pivot frame on a modeling feature, parented to
+the prop's root or to another bone. A part (a body, after evaluation) is bound
+to a bone. Then:
+
+- `baked::parts` bakes **per bone, then per surface**, and `BakedProp.parts`
+  carries a bone index. This is the blocker the reserved channel names.
+- A held prop's clips may key its bones: a magazine drops, a cylinder swings,
+  a barrel spins. A placed prop has an animator too: an idle loop (a fan), or
+  a clip played on an event (a door, a breakable's hit).
+- A prop's bones are a `Skeleton`, and its pose is a `Pose`. It is the same
+  machinery, and a prop rig is a rig, so the editor's tracks, keys and preview
+  need nothing new.
+- On the wire: still state, never poses. A held prop's clip is chosen by the
+  same replicated facts (`Ammo`, `Equipped`, `Effect::Fired`) that choose the
+  body's. A placed prop's looping clip is derived on every machine. An evented
+  one rides the event.
+
+### Taunts are edited where clips are
+
+- The Library loads **every** clip under `animations/`, not only the states,
+  grouped: states, taunts, conditions, flinches, shared weapon clips, others.
+- A **Taunts** section lists `taunts.toml`'s entries. Picking one opens its
+  clip, and the Inspector gets a Taunt section: clip, claims (one checkbox per
+  region the rig publishes), movement, turning, weapon, and length, which may
+  be **"the clip's"**. That becomes the default, which removes the second
+  number. It also has new/rename/duplicate/delete. Saved with `toml_edit`, so
+  comments and order survive, as the weapon editor plans.
+- A taunt previews **on the Taunt layer with its claims**, over a chosen body
+  state, so what shows through the unclaimed regions is visible. A **Move**
+  toggle walks the figure at the taunt's speed factor and turns it at the
+  taunt's turning limit against a swept aim. That is the only honest preview
+  of `movement` and `turning`.
+- Humiliation's claims move to data, beside its blend in `layers.toml`
+  (`claims = [...]`), so every condition is described the same way.
+- `blend_in` and `blend_out` get fields on the clip.
+- Per rig: a taunt's `clip` may be a table by rig (`clip = { humanoid =
+  "taunt_wave", hound = "taunt_howl" }`). A class whose rig has no clip for a
+  taunt is not offered it.
+
+### Non-humanoid bodies, the rest of the way
+
+None of these is animation, but a creature is not playable without them:
+
+- **A hull per class.** Today every class shares one 2.0 m box and a 1.8 m
+  eye. The movement step, `fits`, spawns, the nav bake and bots all read
+  `class.rs`. Per-class hulls mean a nav graph per hull size. That is a real
+  cost, so a first creature should fit the shared hull.
+- **Holding.** A rig without `grip.trigger` and `grip.support` sockets holds a
+  weapon by a `mount` socket instead (a back turret, a jaw), with no grip
+  solve. Or it holds nothing, and its loadout says so.
+- **Hitboxes**: the head box from the `head` socket. It is already
+  `Option`, so a headless rig is fine.
+- **Viewmodel**: the rig names its viewmodel bones (`ARM_BONES` today) and
+  `eye` socket.
+- **Hats**: the `crown` socket. A rig without one wears none.
+
+## Decisions to make before stage 2
+
+1. **The first creature.** It should be different enough to break every
+   assumption, and small enough to fit the hull. I suggest a **digitigrade
+   biped** (three-bone legs, a tail, no arms, a jaw mount): it exercises FABRIK,
+   N-bone chains, a non-humanoid gait, a mount instead of a grip, and a tail
+   `LookAt`, while still walking the biped gait. A quadruped is the stronger
+   test of the gait pattern, but it is hard in a 0.7 m-wide hull.
+2. **Code or file for the humanoid.** The plan keeps it as code. Porting it to
+   a rig file is possible once the file format can say "at least the chest's
+   width", but it would re-tune every shipped clip.
+3. **Per-class hulls**: now, or not until a creature needs one.
+
+## Checklist
+
+### Stage 0: taunts and clips in the editor (no rig work; ships alone)
+- [x] Library loads every clip under `animations/`, grouped; saving a non-state
+      clip writes its own file. Edits reach the game through `NamedClips`.
+- [x] `blend_in`/`blend_out` fields on the clip Inspector.
+- [x] Taunts section: list, new, rename, duplicate, delete; Inspector fields
+      for clip, claims, movement, turning, weapon, length; `toml_edit` save;
+      undo with the body clips' snapshots.
+- [x] `length = "clip"`, the default for new taunts; the test that keeps the
+      two equal goes. Absent still means until `G` again, so no file changed
+      meaning.
+- [x] Taunt preview on `Layer::Taunt` with its claims over a chosen state;
+      a Move toggle that walks and turns the figure under its limits. Every
+      clip above locomotion previews this way (`FigureBeneath`), weapon clips
+      included, instead of as locomotion clips plus corrections.
+- [x] Humiliation's claims in `layers.toml` (`LayerClaims`); `Layer::claims`
+      is the fallback.
+- [ ] Choosing a taunt: G opens a small picker of the class's taunts (the
+      open question in `animation-layers.md`).
+
+### Stage 1: bone identity and the rig's vocabulary (no behavior change)
+- [ ] `Bone.name: String`, `BoneIndex`; `Pose` per index; clips bind names to
+      indices once per rig, cached.
+- [ ] Chains, regions, sockets, measures, feet + gait pattern, look,
+      per-bone limit and profile published by `humanoid()`.
+- [ ] `Regions` becomes a `u32` resolved per rig; `of_bone` reads the rig.
+- [ ] `ChainRef` → chain name; `Space::Socket`, `Unit::Measure`,
+      `Timing::Foot`, with the old spellings as aliases. Every shipped `.gpa`
+      and `.gpp` loads unchanged (`every_prop_the_default_pack_ships_loads_and_builds`
+      and a new one for clips).
+- [ ] Every site in the table above asks the rig. `bone::` constants survive
+      only in humanoid-specific code: the builder, `seed.rs`, the pose
+      functions and tests.
+- [ ] Gait and `plant_feet` over N feet.
+- [ ] `cargo check --all-targets`, `cargo test`; corpses still settle.
+
+### Stage 2: rig files
+- [ ] `rigs/<name>.toml` format and loader; Problems for bad files, as
+      `classes.toml` drops bad builds.
+- [ ] `classes.toml` `rig =`; build as height + measure scales + girth for
+      file rigs.
+- [ ] `CorpseBuild`, `BuildKey` keyed by (rig, build).
+- [ ] Rigs synced by `pack_sync`.
+- [ ] Clips name a `rig`; state clips per rig; the editor's bone, chain and
+      region menus come from the figure's rig.
+
+### Stage 3: IK
+- [ ] FABRIK with joint limits, fixed iterations; tested for reach, limits,
+      and determinism.
+- [ ] Controllers (`Plant`, `Look`, `Hold`, `Aim`) declared on the rig; each
+      drives only the regions it won.
+- [ ] `LookAt` and `Weight { controller }` channels.
+- [ ] Per-key target spaces, blended in world space between keys.
+- [ ] Editor: target-space per key, controller weight tracks, IK targets
+      drawn in the viewport.
+
+### Stage 4: the first creature
+- [ ] Rig file, mesh profiles, joint limits; state clips; a taunt.
+- [ ] Mount socket instead of grip; hitboxes, ragdoll, death cam, hats and
+      viewmodel from sockets.
+- [ ] A class plays as it in a round: spawns, moves, shoots, dies, ragdolls.
+
+### Stage 5: prop rigs
+- [ ] Bones on a prop (pivot feature, parent, bound parts), edited in Model.
+- [ ] Bake per bone; `BakedProp.parts` carries the bone.
+- [ ] `Channel::Bone` keyed in prop clips; held props play them.
+- [ ] Placed props get an animator: idle loop, evented clip.
+- [ ] The rocket launcher, or the pistol, ships a moving part.

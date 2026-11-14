@@ -1,4 +1,5 @@
-//! Reading how fast each animation layer fades, from a pack's `layers.toml`.
+//! Reading how fast each animation layer fades, and what humiliation claims,
+//! from a pack's `layers.toml`.
 //!
 //! A bad entry is dropped with a line saying why, and that layer snaps.
 
@@ -8,20 +9,45 @@ use std::path::{Path, PathBuf};
 use bevy::prelude::*;
 
 use crate::common::assets::{AssetError, Assets};
-use crate::common::skeleton::play::{Blend, Layer, LayerBlends};
+use serde::Deserialize;
+
+use crate::common::skeleton::play::{Blend, Layer, LayerBlends, LayerClaims, Regions};
 
 const LAYERS_FILE: &str = "layers.toml";
 
-/// Lowest priority first; a later pack replaces a layer's whole entry.
-pub fn load_blends(assets: &Assets, packs: &[PathBuf]) -> LayerBlends {
-    let mut blends = LayerBlends::default();
-    for pack in packs {
-        load_pack(assets, pack, &mut blends);
-    }
-    blends
+const CLAIMS_FROM_THE_FILE: [Layer; 1] = [Layer::Humiliation];
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LayerEntry {
+    #[serde(default)]
+    blend_in: f32,
+    #[serde(default)]
+    blend_out: f32,
+    #[serde(default)]
+    claims: Option<Vec<String>>,
 }
 
-fn load_pack(assets: &Assets, pack: &Path, blends: &mut LayerBlends) {
+impl LayerEntry {
+    fn blend(&self) -> Blend {
+        Blend { blend_in: self.blend_in, blend_out: self.blend_out }
+    }
+}
+
+/// Lowest priority first; a later pack replaces a layer's whole entry.
+pub fn load_layers(assets: &Assets, packs: &[PathBuf]) -> (LayerBlends, LayerClaims) {
+    let mut layers = (LayerBlends::default(), LayerClaims::default());
+    for pack in packs {
+        load_pack(assets, pack, &mut layers);
+    }
+    layers
+}
+
+pub fn load_blends(assets: &Assets, packs: &[PathBuf]) -> LayerBlends {
+    load_layers(assets, packs).0
+}
+
+fn load_pack(assets: &Assets, pack: &Path, layers: &mut (LayerBlends, LayerClaims)) {
     let named = format!("{}/{LAYERS_FILE}", pack.display());
     let text = match assets.read(pack, LAYERS_FILE) {
         Ok(bytes) => match String::from_utf8(bytes) {
@@ -31,30 +57,61 @@ fn load_pack(assets: &Assets, pack: &Path, blends: &mut LayerBlends) {
         Err(AssetError::NotFound(_)) => return,
         Err(e) => return error!("{e}"),
     };
-    merge(&named, &text, blends);
+    merge(&named, &text, layers);
 }
 
-fn merge(named: &str, text: &str, blends: &mut LayerBlends) {
-    let file: BTreeMap<String, Blend> = match toml::from_str(text) {
+fn merge(named: &str, text: &str, (blends, claims): &mut (LayerBlends, LayerClaims)) {
+    let file: BTreeMap<String, LayerEntry> = match toml::from_str(text) {
         Ok(file) => file,
         Err(e) => return error!("{named} will not parse: {e}"),
     };
-    for (key, blend) in file {
+    for (key, entry) in file {
         let Some(layer) = Layer::named(&key) else {
             warn!("{named}: there is no layer called `{key}`");
             continue;
         };
-        let seconds = [blend.blend_in, blend.blend_out];
-        if seconds.iter().any(|seconds| !seconds.is_finite() || *seconds < 0.0) {
-            warn!("{named}: `{key}` is dropped: a blend is a number of seconds, zero or more");
-            continue;
+        match check(layer, &entry) {
+            Ok(claimed) => {
+                blends.0.insert(layer, entry.blend());
+                match claimed {
+                    Some(regions) => claims.0.insert(layer, regions),
+                    None => claims.0.remove(&layer),
+                };
+            }
+            Err(why) => warn!("{named}: `{key}` is dropped: {why}"),
         }
-        blends.0.insert(layer, blend);
     }
 }
 
-pub fn load_blends_at_startup(assets: Res<Assets>, mut blends: ResMut<LayerBlends>) {
-    *blends = load_blends(&assets, &crate::common::assets::default_packs());
+fn check(layer: Layer, entry: &LayerEntry) -> Result<Option<Regions>, String> {
+    let seconds = [entry.blend_in, entry.blend_out];
+    if seconds.iter().any(|seconds| !seconds.is_finite() || *seconds < 0.0) {
+        return Err("a blend is a number of seconds, zero or more".into());
+    }
+    let Some(names) = &entry.claims else { return Ok(None) };
+    if !CLAIMS_FROM_THE_FILE.contains(&layer) {
+        return Err(format!("the {} layer's claims are not a file's to state", layer.key()));
+    }
+    names.iter().try_fold(Regions::NONE, |claimed, name| {
+        Regions::named(name)
+            .map(|region| claimed.union(region))
+            .ok_or_else(|| format!("there is no body part called `{name}`"))
+    })
+    .map(Some)
+}
+
+pub fn load_layers_at_startup(
+    assets: Res<Assets>,
+    mut blends: ResMut<LayerBlends>,
+    mut claims: ResMut<LayerClaims>,
+) {
+    (*blends, *claims) = load_layers(&assets, &crate::common::assets::default_packs());
+}
+
+impl LayerClaims {
+    pub fn shipped() -> LayerClaims {
+        load_layers(&Assets::default(), &crate::common::assets::default_packs()).1
+    }
 }
 
 impl LayerBlends {
@@ -69,9 +126,25 @@ mod tests {
     use super::*;
 
     fn parse(text: &str) -> LayerBlends {
-        let mut blends = LayerBlends::default();
-        merge("test.toml", text, &mut blends);
-        blends
+        parse_both(text).0
+    }
+
+    fn parse_both(text: &str) -> (LayerBlends, LayerClaims) {
+        let mut layers = Default::default();
+        merge("test.toml", text, &mut layers);
+        layers
+    }
+
+    #[test]
+    fn humiliation_claims_what_its_file_says_and_nothing_else_may() {
+        assert_eq!(
+            LayerClaims::shipped().of(Layer::Humiliation),
+            Layer::Humiliation.claims(),
+            "the shipped file and the built-in claims disagree",
+        );
+        let (_, claims) = parse_both("[humiliation]\nclaims = [\"arm.r\"]\n\n[weapon]\nclaims = [\"legs\"]\n");
+        assert_eq!(claims.of(Layer::Humiliation), Regions::ARM_R);
+        assert_eq!(claims.of(Layer::Weapon), Layer::Weapon.claims(), "the weapon's claims came from a file");
     }
 
     #[test]

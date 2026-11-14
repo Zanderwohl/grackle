@@ -150,11 +150,13 @@ impl Plugin for PropViewPlugin {
 pub fn carry_the_prop(
     held: Res<crate::prop::figure::FigureWeapon>,
     figure: Option<Res<crate::prop::figure::FigureStage>>,
+    beneath: Option<Res<crate::prop::figure::FigureBeneath>>,
     mode: Option<Res<State<AppMode>>>,
     mut stage: Query<(&mut Transform, &mut Visibility), With<PropStage>>,
 ) {
     let staged = crate::prop::figure::stage_in_force(figure.as_deref(), mode.as_deref());
-    let wanted = match staged.holding {
+    let hidden = beneath.is_some_and(|beneath| beneath.hides_weapon);
+    let wanted = match staged.holding && !hidden {
         true => Visibility::Inherited,
         false => Visibility::Hidden,
     };

@@ -75,10 +75,12 @@ impl Plugin for SkeletonPlugin {
             .add_systems(Update, toggle_bones)
             // Here rather than in `ConditionPlugin`: the clips are assets, and
             // the game's tests run without the asset plugins.
+            .init_resource::<crate::common::clip_file::NamedClips>()
             .add_systems(Startup, crate::game::condition::load_condition_clips)
             .add_systems(Update, crate::game::condition::load_taunt_clips)
             .init_resource::<crate::common::skeleton::play::LayerBlends>()
-            .add_systems(Startup, crate::common::layer_file::load_blends_at_startup)
+            .init_resource::<crate::common::skeleton::play::LayerClaims>()
+            .add_systems(Startup, crate::common::layer_file::load_layers_at_startup)
             .add_systems(Update, (
                 describe_player_bodies
                     .run_if(in_state(AppMode::Play))

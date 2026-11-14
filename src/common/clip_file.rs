@@ -88,6 +88,34 @@ pub fn load_named_clip(assets: &Assets, packs: &[PathBuf], name: &str) -> Option
     found
 }
 
+/// One handle per named clip, so an edit in the animation editor refills it under every system
+/// holding it. A miss is cached too.
+#[derive(Resource, Default)]
+pub struct NamedClips(std::collections::BTreeMap<String, Option<Handle<Clip>>>);
+
+impl NamedClips {
+    pub fn load(
+        &mut self,
+        assets: &Assets,
+        clips: &mut bevy::asset::Assets<Clip>,
+        name: &str,
+    ) -> Option<Handle<Clip>> {
+        self.0
+            .entry(name.to_string())
+            .or_insert_with(|| load_named_clip(assets, &default_packs(), name).map(|clip| clips.add(clip)))
+            .clone()
+    }
+
+    pub fn publish(&mut self, clips: &mut bevy::asset::Assets<Clip>, name: &str, clip: &Clip) {
+        match self.0.get(name) {
+            Some(Some(handle)) => crate::common::skeleton::play::refill(clips, handle, clip),
+            _ => {
+                self.0.insert(name.to_string(), Some(clips.add(clip.clone())));
+            }
+        }
+    }
+}
+
 pub fn load_body_clips_at_startup(mut commands: Commands, assets: Res<Assets>) {
     let library = load_body_clips(&assets, &default_packs());
     if library.is_empty() {
@@ -289,5 +317,24 @@ mod tests {
     fn a_pack_with_no_animations_says_nothing() {
         let library = load_body_clips(&Assets::default(), &[PathBuf::from("assets/nonexistent")]);
         assert!(library.is_empty());
+    }
+
+    /// A named clip that will not parse plays nothing and logs only a warning.
+    #[test]
+    fn every_clip_the_default_pack_ships_parses() {
+        let directory = Path::new("assets/default").join(CLIPS_DIR);
+        let mut read = 0;
+        for entry in std::fs::read_dir(&directory).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().is_none_or(|extension| extension != CLIP_EXTENSION) {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).unwrap();
+            if let Err(why) = StateAnimation::from_toml(&text) {
+                panic!("{} will not parse: {why}", path.display());
+            }
+            read += 1;
+        }
+        assert!(read > 13, "only {read} clips were read");
     }
 }

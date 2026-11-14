@@ -12,9 +12,9 @@ use lightyear::prelude::{LocalTimeline, Tick};
 
 use crate::common::app_mode::AppMode;
 use crate::common::assets::Assets as PackAssets;
-use crate::common::assets::default_packs;
+use crate::common::clip_file::NamedClips;
 use crate::common::skeleton::clip::Clip;
-use crate::common::skeleton::play::{ClipStack, Layer};
+use crate::common::skeleton::play::{ClipStack, Layer, LayerClaims};
 use crate::common::taunt::{TauntId, TauntTurning, TauntWeapon, Taunts};
 use crate::game::player::{
     CameraPull, DeathCam, Inputs, LocalPlayer, ViewMode, ViewPreference, Viewed, CAMERA_PULL_SECONDS,
@@ -202,7 +202,7 @@ pub fn decide_the_view(
     }
 }
 
-const HUMILIATED_CLIP: &str = "humiliated";
+pub const HUMILIATED_CLIP: &str = "humiliated";
 
 /// From this machine's packs. A missing clip plays nothing; the condition
 /// still applies.
@@ -217,30 +217,30 @@ pub fn load_condition_clips(
     mut commands: Commands,
     packs: Res<PackAssets>,
     mut clips: ResMut<Assets<Clip>>,
+    mut named: ResMut<NamedClips>,
 ) {
-    let humiliated = crate::common::clip_file::load_named_clip(&packs, &default_packs(), HUMILIATED_CLIP)
-        .map(|clip| clips.add(clip));
+    let humiliated = named.load(&packs, &mut clips, HUMILIATED_CLIP);
     commands.insert_resource(ConditionClips { humiliated, taunts: BTreeMap::new() });
 }
 
-/// The table can arrive from the server after startup. Clips are not sent:
-/// each machine reads its own pack.
+/// The table can arrive from the server after startup, and the animation editor can make a clip
+/// mid-session. Clips are not sent: each machine reads its own pack.
 pub fn load_taunt_clips(
     taunts: Option<Res<Taunts>>,
     packs: Res<PackAssets>,
     mut clips: ResMut<Assets<Clip>>,
+    mut named: ResMut<NamedClips>,
     mut loaded: ResMut<ConditionClips>,
 ) {
-    let Some(taunts) = taunts.filter(|taunts| taunts.is_changed()) else { return };
+    let Some(taunts) = taunts.filter(|taunts| taunts.is_changed() || named.is_changed()) else { return };
+    // Marked changed, this system would wake itself every frame.
+    let named = named.bypass_change_detection();
     for taunt in &taunts.0 {
-        if loaded.taunts.contains_key(&taunt.clip) {
-            continue;
-        }
-        let clip = crate::common::clip_file::load_named_clip(&packs, &default_packs(), &taunt.clip);
-        if clip.is_none() {
+        let clip = named.load(&packs, &mut clips, &taunt.clip);
+        if clip.is_none() && !loaded.taunts.contains_key(&taunt.clip) {
             warn!("The `{}` taunt's clip `{}` is not in any pack", taunt.key, taunt.clip);
         }
-        loaded.taunts.insert(taunt.clip.clone(), clip.map(|clip| clips.add(clip)));
+        loaded.taunts.insert(taunt.clip.clone(), clip);
     }
 }
 
@@ -250,6 +250,7 @@ pub(crate) fn perform_conditions(
     time: Res<Time>,
     clips: Option<Res<ConditionClips>>,
     taunts: Option<Res<Taunts>>,
+    layer_claims: Option<Res<LayerClaims>>,
     timeline: Option<Res<LocalTimeline>>,
     mut bodies: Query<(&Condition, &mut ClipStack)>,
 ) {
@@ -261,7 +262,12 @@ pub(crate) fn perform_conditions(
             .humiliated
             .then(|| clips?.humiliated.as_ref())
             .flatten()
-            .map(|clip| (clip, Layer::Humiliation.claims()));
+            .map(|clip| {
+                let claims = layer_claims.as_deref().map_or(Layer::Humiliation.claims(), |claims| {
+                    claims.of(Layer::Humiliation)
+                });
+                (clip, claims)
+            });
         let taunt = condition
             .taunt
             .and_then(|id| taunts.as_deref()?.get(id))
@@ -636,21 +642,5 @@ mod tests {
             along(hand).dot(along(forearm)) > 0.9,
             "{class:?}'s {hand} is bent off its forearm",
         );
-    }
-
-    /// The taunt's length and its clip's are two numbers for one thing.
-    #[test]
-    fn a_taunt_that_ends_lasts_as_long_as_its_clip() {
-        for taunt in &Taunts::shipped().0 {
-            let Some(length) = taunt.length else { continue };
-            let clip = crate::common::clip_file::load_named_clip(
-                &PackAssets::default(),
-                &[std::path::PathBuf::from("assets/default")],
-                &taunt.clip,
-            )
-            .unwrap();
-            assert!(!clip.looping, "`{}` ends, but its clip loops", taunt.key);
-            assert!((clip.length - length).abs() < 1e-4, "`{}` lasts {length} s and its clip {} s", taunt.key, clip.length);
-        }
     }
 }

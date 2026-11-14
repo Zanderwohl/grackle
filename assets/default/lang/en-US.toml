@@ -607,6 +607,14 @@ claims = "Claims"
 anchor = "Grid Frame"
 at = "At"
 snap = "Snap"
+blend_in = "Fade in"
+blend_out = "Fade out"
+moving = "Moving"
+taunt_clip = "Clip"
+movement = "Movement"
+turning = "Turning"
+taunt_weapon = "Weapon"
+taunt_length = "Lasts"
 
 [anim.panels]
 library = "Library"
@@ -615,6 +623,7 @@ problems = "Problems"
 
 [anim.section]
 clip = "Clip"
+taunt = "Taunt"
 track = "Track"
 key = "Key"
 
@@ -631,6 +640,25 @@ foot_timing_off_stride = "Timed by a foot on a clip that is not on the stride cl
 empty_blend = "A blend with no variants."
 unmatched_variants = "The variants at { from } and { to } drive different joints."
 
+[anim.taunt]
+no_clip = "In no pack"
+clip_loops = "Loops, and the taunt ends"
+free = "Free"
+stopped = "Stopped"
+slowed = "Slowed"
+locked = "Locked"
+at_most = "At most"
+shown = "Shown"
+hidden = "Hidden"
+clip_length = "Its clip"
+seconds = "Seconds"
+until_again = "Until pressed again"
+
+[anim.suffix]
+seconds = " s"
+degrees_per_second = "°/s"
+percent = "%"
+
 [anim.underlay]
 rest = "Rest"
 
@@ -646,7 +674,7 @@ weapon = "Weapon"
 weapon = "Weapon"
 body = "Bodies"
 unsaved = "unsaved"
-body_pack = "Body animations"
+body_pack = "Pack animations"
 new_clip = "New clip"
 built_in = "Built-in pose"
 animate = "Animate"
@@ -657,6 +685,9 @@ revert = "Revert to built-in"
 blend = "Blend by heading"
 variant = "Heading { heading }"
 remove_variant = "Remove"
+taunts = "Taunts"
+named = "Played by name"
+new_taunt = "New taunt"
 
 [anim.timing]
 clip = "Stride"

@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::common::assets::{AssetError, Assets};
 use crate::common::skeleton::play::Regions;
 
-const TAUNTS_FILE: &str = "taunts.toml";
+pub const TAUNTS_FILE: &str = "taunts.toml";
 
 /// A hash of the taunt's key, so an id does not depend on load order.
 #[derive(
@@ -94,8 +94,8 @@ pub struct Taunt {
     pub movement: TauntMovement,
     pub turning: TauntTurning,
     pub weapon: TauntWeapon,
-    /// Seconds until the authority ends it; `None` lasts until `G` again. Not
-    /// read off the clip: a clip is each machine's own.
+    /// Seconds until the authority ends it; `None` lasts until `G` again. `length = "clip"` is
+    /// resolved where the table is loaded, so a client gets the authority's number.
     pub length: Option<f32>,
 }
 
@@ -118,6 +118,79 @@ impl Taunts {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum TauntLength {
+    /// `length` left out.
+    UntilAgain,
+    /// `length = "clip"`.
+    Clip,
+    Seconds(f32),
+}
+
+/// A taunt as its file states it, before `length = "clip"` is resolved.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TauntSpec {
+    pub clip: String,
+    pub claims: Regions,
+    pub movement: TauntMovement,
+    pub turning: TauntTurning,
+    pub weapon: TauntWeapon,
+    pub length: TauntLength,
+}
+
+impl TauntSpec {
+    pub fn new(clip: String) -> TauntSpec {
+        TauntSpec {
+            clip,
+            claims: Regions::ALL,
+            movement: TauntMovement::Stopped,
+            turning: TauntTurning::Locked,
+            weapon: TauntWeapon::Hidden,
+            length: TauntLength::Clip,
+        }
+    }
+
+    pub fn check(&self) -> Result<(), String> {
+        if let TauntMovement::Slowed(factor) = self.movement
+            && !(factor.is_finite() && (0.0..=1.0).contains(&factor))
+        {
+            return Err(format!("a slowed taunt moves at 0 to 1 of normal speed, not {factor}"));
+        }
+        if let TauntTurning::AtMost(degrees) = self.turning
+            && !(degrees.is_finite() && degrees >= 0.0)
+        {
+            return Err(format!("a taunt turns at some degrees a second, not {degrees}"));
+        }
+        if let TauntLength::Seconds(length) = self.length
+            && !(length.is_finite() && length > 0.0)
+        {
+            return Err(format!("a taunt lasts some seconds, not {length}"));
+        }
+        Ok(())
+    }
+
+    /// A taunt whose clip is in no pack still applies; under `length = "clip"` it then lasts until
+    /// `G` again.
+    pub fn resolve(&self, key: &str, clip_length: impl FnOnce(&str) -> Option<f32>) -> Result<Taunt, String> {
+        self.check()?;
+        let length = match self.length {
+            TauntLength::UntilAgain => None,
+            TauntLength::Seconds(seconds) => Some(seconds),
+            TauntLength::Clip => clip_length(&self.clip).filter(|length| length.is_finite() && *length > 0.0),
+        };
+        Ok(Taunt {
+            id: TauntId::of(key),
+            key: key.to_string(),
+            clip: self.clip.clone(),
+            claims: self.claims,
+            movement: self.movement,
+            turning: self.turning,
+            weapon: self.weapon,
+            length,
+        })
+    }
+}
+
 /// As written on disk: claims by name, so the file reads as body parts.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -128,19 +201,74 @@ struct TauntEntry {
     turning: TauntTurning,
     weapon: TauntWeapon,
     #[serde(default)]
-    length: Option<f32>,
+    length: Option<LengthEntry>,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum LengthEntry {
+    Seconds(f32),
+    Word(String),
+}
+
+impl TauntEntry {
+    fn spec(self) -> Result<TauntSpec, String> {
+        let mut claims = Regions::NONE;
+        for name in &self.claims {
+            let region = Regions::named(name).ok_or_else(|| format!("there is no body part called `{name}`"))?;
+            claims = claims.union(region);
+        }
+        let length = match self.length {
+            None => TauntLength::UntilAgain,
+            Some(LengthEntry::Seconds(seconds)) => TauntLength::Seconds(seconds),
+            Some(LengthEntry::Word(word)) if word == "clip" => TauntLength::Clip,
+            Some(LengthEntry::Word(word)) => {
+                return Err(format!("a length is some seconds or \"clip\", not \"{word}\""));
+            }
+        };
+        let spec = TauntSpec {
+            clip: self.clip,
+            claims,
+            movement: self.movement,
+            turning: self.turning,
+            weapon: self.weapon,
+            length,
+        };
+        spec.check()?;
+        Ok(spec)
+    }
 }
 
 /// Lowest priority first.
 pub fn load_taunts(assets: &Assets, packs: &[PathBuf]) -> Taunts {
-    let mut taunts = Vec::new();
-    for pack in packs {
-        load_pack(assets, pack, &mut taunts);
-    }
+    let taunts = load_taunt_specs(assets, packs)
+        .into_iter()
+        .filter_map(|(key, spec)| {
+            let clip_length = |clip: &str| {
+                let found = crate::common::clip_file::load_named_clip(assets, packs, clip).map(|clip| clip.length);
+                if found.is_none() {
+                    warn!("{TAUNTS_FILE}: `{key}` lasts as long as `{clip}`, which is in no pack, so until G again");
+                }
+                found
+            };
+            spec.resolve(&key, clip_length)
+                .map_err(|why| warn!("{TAUNTS_FILE}: `{key}` is dropped: {why}"))
+                .ok()
+        })
+        .collect();
     Taunts(taunts)
 }
 
-fn load_pack(assets: &Assets, pack: &Path, taunts: &mut Vec<Taunt>) {
+/// Every pack's entries, merged in file order.
+pub fn load_taunt_specs(assets: &Assets, packs: &[PathBuf]) -> Vec<(String, TauntSpec)> {
+    let mut specs = Vec::new();
+    for pack in packs {
+        load_pack(assets, pack, &mut specs);
+    }
+    specs
+}
+
+fn load_pack(assets: &Assets, pack: &Path, specs: &mut Vec<(String, TauntSpec)>) {
     let named = format!("{}/{TAUNTS_FILE}", pack.display());
     let text = match assets.read(pack, TAUNTS_FILE) {
         Ok(bytes) => match String::from_utf8(bytes) {
@@ -150,11 +278,17 @@ fn load_pack(assets: &Assets, pack: &Path, taunts: &mut Vec<Taunt>) {
         Err(AssetError::NotFound(_)) => return,
         Err(e) => return error!("{e}"),
     };
-    merge(&named, &text, taunts);
+    merge(&named, &text, specs);
+}
+
+pub fn taunt_specs_in(text: &str) -> Vec<(String, TauntSpec)> {
+    let mut specs = Vec::new();
+    merge(TAUNTS_FILE, text, &mut specs);
+    specs
 }
 
 /// In file order; a later pack's entry replaces an earlier one where it stood.
-fn merge(named: &str, text: &str, taunts: &mut Vec<Taunt>) {
+fn merge(named: &str, text: &str, specs: &mut Vec<(String, TauntSpec)>) {
     let file: toml::Table = match toml::from_str(text) {
         Ok(file) => file,
         Err(e) => return error!("{named} will not parse: {e}"),
@@ -162,48 +296,92 @@ fn merge(named: &str, text: &str, taunts: &mut Vec<Taunt>) {
     for (key, value) in file {
         let checked = TauntEntry::deserialize(value)
             .map_err(|e| e.to_string())
-            .and_then(|entry| check(&key, entry));
+            .and_then(TauntEntry::spec);
         match checked {
-            Ok(taunt) => match taunts.iter_mut().find(|known| known.key == key) {
-                Some(known) => *known = taunt,
-                None => taunts.push(taunt),
+            Ok(spec) => match specs.iter_mut().find(|(known, _)| *known == key) {
+                Some((_, known)) => *known = spec,
+                None => specs.push((key, spec)),
             },
             Err(why) => warn!("{named}: `{key}` is dropped: {why}"),
         }
     }
 }
 
-fn check(key: &str, entry: TauntEntry) -> Result<Taunt, String> {
-    let mut claims = Regions::NONE;
-    for name in &entry.claims {
-        let region = Regions::named(name).ok_or_else(|| format!("there is no body part called `{name}`"))?;
-        claims = claims.union(region);
+/// Edited into `existing` where there is one, so its comments survive.
+pub fn write_taunts(existing: Option<&str>, specs: &[(String, TauntSpec)]) -> String {
+    use toml_edit::{value, Array, DocumentMut, InlineTable, Item, Table, Value};
+
+    let mut doc: DocumentMut = existing.and_then(|text| text.parse().ok()).unwrap_or_default();
+    let stale: Vec<String> = doc
+        .iter()
+        .map(|(key, _)| key.to_string())
+        .filter(|key| !specs.iter().any(|(kept, _)| kept == key))
+        .collect();
+    for key in stale {
+        doc.remove(&key);
     }
-    if let TauntMovement::Slowed(factor) = entry.movement
-        && !(factor.is_finite() && (0.0..=1.0).contains(&factor))
-    {
-        return Err(format!("a slowed taunt moves at 0 to 1 of normal speed, not {factor}"));
+
+    let number = |x: f32| Value::from(crate::prop::nice_f32::widen(x));
+    let one = |key: &str, x: f32| {
+        let mut table = InlineTable::new();
+        table.insert(key, number(x));
+        Value::InlineTable(table)
+    };
+    for (position, (key, spec)) in specs.iter().enumerate() {
+        if !doc.get(key).is_some_and(Item::is_table) {
+            doc.insert(key, Item::Table(Table::new()));
+        }
+        let Some(table) = doc.get_mut(key).and_then(Item::as_table_mut) else { continue };
+        table.set_position(position);
+
+        let movement = match spec.movement {
+            TauntMovement::Free => Value::from("free"),
+            TauntMovement::Stopped => Value::from("stopped"),
+            TauntMovement::Slowed(factor) => one("slowed", factor),
+        };
+        let turning = match spec.turning {
+            TauntTurning::Free => Value::from("free"),
+            TauntTurning::Locked => Value::from("locked"),
+            TauntTurning::AtMost(degrees) => one("at_most", degrees),
+        };
+        let weapon = match spec.weapon {
+            TauntWeapon::Hidden => "hidden",
+            TauntWeapon::Shown => "shown",
+        };
+        let fields = [
+            ("clip", Some(Value::from(spec.clip.as_str()))),
+            ("claims", Some(Value::Array(spec.claims.names().collect::<Array>()))),
+            ("movement", Some(movement)),
+            ("turning", Some(turning)),
+            ("weapon", Some(Value::from(weapon))),
+            (
+                "length",
+                match spec.length {
+                    TauntLength::UntilAgain => None,
+                    TauntLength::Clip => Some(Value::from("clip")),
+                    TauntLength::Seconds(seconds) => Some(number(seconds)),
+                },
+            ),
+        ];
+        for (field, wanted) in fields {
+            match wanted {
+                // Unchanged values are left alone so a trailing comment survives.
+                Some(wanted) => {
+                    let same = table
+                        .get(field)
+                        .and_then(Item::as_value)
+                        .is_some_and(|had| had.to_string().trim() == wanted.to_string().trim());
+                    if !same {
+                        table.insert(field, value(wanted));
+                    }
+                }
+                None => {
+                    table.remove(field);
+                }
+            }
+        }
     }
-    if let TauntTurning::AtMost(degrees) = entry.turning
-        && !(degrees.is_finite() && degrees >= 0.0)
-    {
-        return Err(format!("a taunt turns at some degrees a second, not {degrees}"));
-    }
-    if let Some(length) = entry.length
-        && !(length.is_finite() && length > 0.0)
-    {
-        return Err(format!("a taunt lasts some seconds, not {length}"));
-    }
-    Ok(Taunt {
-        id: TauntId::of(key),
-        key: key.to_string(),
-        clip: entry.clip,
-        claims,
-        movement: entry.movement,
-        turning: entry.turning,
-        weapon: entry.weapon,
-        length: entry.length,
-    })
+    doc.to_string()
 }
 
 /// In every process: a client's is replaced by the server's on connect.
@@ -216,10 +394,19 @@ pub fn load_taunts_at_startup(assets: Res<Assets>, mut taunts: ResMut<Taunts>) {
 mod tests {
     use super::*;
 
+    fn specs(text: &str) -> Vec<(String, TauntSpec)> {
+        let mut specs = Vec::new();
+        merge("test.toml", text, &mut specs);
+        specs
+    }
+
     fn parse(text: &str) -> Taunts {
-        let mut taunts = Vec::new();
-        merge("test.toml", text, &mut taunts);
-        Taunts(taunts)
+        Taunts(
+            specs(text)
+                .into_iter()
+                .filter_map(|(key, spec)| spec.resolve(&key, |_| Some(1.0)).ok())
+                .collect(),
+        )
     }
 
     #[test]
@@ -292,5 +479,58 @@ mod tests {
         );
         let keys: Vec<&str> = taunts.0.iter().map(|taunt| taunt.key.as_str()).collect();
         assert_eq!(keys, ["good"]);
+    }
+
+    /// Fails if `length = "clip"` does not resolve to the clip's length.
+    #[test]
+    fn a_taunt_may_last_as_long_as_its_clip() {
+        let wave = &Taunts::shipped().0[0];
+        let clip = crate::common::clip_file::load_named_clip(
+            &Assets::default(),
+            &crate::common::assets::default_packs(),
+            &wave.clip,
+        )
+        .unwrap();
+        assert_eq!(wave.length, Some(clip.length));
+
+        let packs = crate::common::assets::default_packs();
+        for (key, spec) in load_taunt_specs(&Assets::default(), &packs) {
+            if spec.length == TauntLength::UntilAgain {
+                continue;
+            }
+            let clip = crate::common::clip_file::load_named_clip(&Assets::default(), &packs, &spec.clip);
+            assert!(clip.is_some_and(|clip| !clip.looping), "`{key}` ends, but its clip loops or is missing");
+        }
+
+        let [(key, spec)] = &specs(
+            "[a]\nclip = \"gone\"\nclaims = []\nmovement = \"free\"\nturning = \"free\"\nweapon = \"shown\"\nlength = \"clip\"\n",
+        )[..] else {
+            panic!("the entry was not read");
+        };
+        assert_eq!(spec.length, TauntLength::Clip);
+        assert_eq!(spec.resolve(key, |_| None).unwrap().length, None, "a clip in no pack gave a length");
+        assert_eq!(spec.resolve(key, |_| Some(2.5)).unwrap().length, Some(2.5));
+    }
+
+    /// Fails if writing back an unedited file changes it, or an edit does not read back.
+    #[test]
+    fn a_save_keeps_the_file_as_it_was_written() {
+        let text = std::fs::read_to_string("assets/default/taunts.toml").unwrap();
+        let mut read = specs(&text);
+        assert_eq!(write_taunts(Some(&text), &read), text);
+
+        read[0].1.movement = TauntMovement::Slowed(0.5);
+        read[0].1.turning = TauntTurning::AtMost(90.0);
+        read.push(("conga".into(), TauntSpec { length: TauntLength::UntilAgain, ..TauntSpec::new("conga".into()) }));
+        let written = write_taunts(Some(&text), &read);
+        assert!(written.starts_with("# Each taunt"), "the header comment went:\n{written}");
+        assert!(written.contains("movement = { slowed = 0.5 }"), "{written}");
+        assert!(written.contains("turning = { at_most = 90.0 }"), "{written}");
+        assert_eq!(specs(&written), read, "what was written does not read back:\n{written}");
+
+        read.remove(0);
+        let written = write_taunts(Some(&text), &read);
+        assert_eq!(specs(&written), read, "{written}");
+        assert!(!written.contains("[wave]"), "{written}");
     }
 }

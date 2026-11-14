@@ -102,6 +102,8 @@ struct AnimFiles<'w> {
     body: Res<'w, BodyClipDialog>,
     assets: Res<'w, Assets>,
     builds: Res<'w, crate::common::class::ClassBuilds>,
+    layer_claims: Res<'w, crate::common::skeleton::play::LayerClaims>,
+    layer_blends: Res<'w, crate::common::skeleton::play::LayerBlends>,
     exit: MessageWriter<'w, AppExit>,
 }
 
@@ -111,6 +113,8 @@ struct AnimTabs<'a> {
     anim: &'a mut AnimEditor,
     figure: &'a mut ScaleFigure,
     builds: &'a crate::common::class::ClassBuilds,
+    layer_claims: &'a crate::common::skeleton::play::LayerClaims,
+    layer_blends: &'a crate::common::skeleton::play::LayerBlends,
     stage: &'a mut FigureStage,
     cursor: &'a mut TimelineCursor,
     selection: &'a TimelineSelection,
@@ -216,13 +220,121 @@ impl AnimTabs<'_> {
                         }
                     }
                 }
-                // A file under a name no state has.
-                for name in animations.keys() {
-                    if BodyClips::state_of(name).is_none() {
-                        self.library_row(ui, ClipSource::Body, name, &body_names);
-                    }
+            });
+
+        egui::CollapsingHeader::new(get!("anim.library.taunts"))
+            .id_salt("anim_library_taunts")
+            .default_open(true)
+            .show(ui, |ui| self.taunt_rows(ui));
+
+        egui::CollapsingHeader::new(get!("anim.library.named"))
+            .id_salt("anim_library_named")
+            .default_open(true)
+            .show(ui, |ui| {
+                let named: Vec<String> = self
+                    .body
+                    .animations()
+                    .keys()
+                    .filter(|name| BodyClips::state_of(name).is_none())
+                    .cloned()
+                    .collect();
+                for name in &named {
+                    self.library_row(ui, ClipSource::Body, name, &body_names);
+                }
+                if ui.small_button("+").on_hover_text(get!("anim.library.new_clip")).clicked() {
+                    let name = unused_name("clip", &body_names);
+                    self.make_clip(ClipSource::Body, &name, String::new());
                 }
             });
+    }
+
+    fn taunt_rows(&mut self, ui: &mut Ui) {
+        let taunts = self.body.taunts().to_vec();
+        let keys: Vec<String> = taunts.iter().map(|(key, _)| key.clone()).collect();
+        for (key, spec) in &taunts {
+            let picked = self.anim.taunt.as_deref() == Some(key.as_str());
+            let missing = self.body.get(&spec.clip).is_none();
+            let mut label = egui::RichText::new(key);
+            if missing {
+                label = label.color(PROBLEM_COLOR);
+            }
+            let row = ui.selectable_label(picked, label);
+            if row.clicked() {
+                self.pick_taunt(key);
+            }
+            row.context_menu(|ui| {
+                let id = Id::new(("anim_rename_taunt", key));
+                let mut typed = ui
+                    .data_mut(|data| data.get_temp::<String>(id))
+                    .unwrap_or_else(|| key.clone());
+                let field = ui.text_edit_singleline(&mut typed);
+                let typed_key = typed.trim().to_string();
+                let usable = !typed_key.is_empty() && typed_key != *key && !keys.contains(&typed_key);
+                ui.data_mut(|data| data.insert_temp(id, typed.clone()));
+                let entered = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                if ui
+                    .add_enabled(usable, egui::Button::new(get!("anim.library.rename")))
+                    .clicked()
+                    || (entered && usable)
+                {
+                    let from = key.clone();
+                    self.body.edit_taunts(|taunts| {
+                        if let Some((named, _)) = taunts.iter_mut().find(|(named, _)| *named == from) {
+                            *named = typed_key.clone();
+                        }
+                    });
+                    if self.anim.taunt.as_deref() == Some(key.as_str()) {
+                        self.anim.taunt = Some(typed_key.clone());
+                    }
+                    ui.data_mut(|data| data.remove::<String>(id));
+                    ui.close_kind(UiKind::Menu);
+                }
+                ui.separator();
+                if ui.button(get!("anim.library.duplicate")).clicked() {
+                    let copy = unused_name(&format!("{key}_"), &keys);
+                    let original = key.clone();
+                    self.body.edit_taunts(|taunts| {
+                        if let Some(at) = taunts.iter().position(|(named, _)| *named == original) {
+                            let spec = taunts[at].1.clone();
+                            taunts.insert(at + 1, (copy.clone(), spec));
+                        }
+                    });
+                    self.pick_taunt(&copy);
+                    ui.close_kind(UiKind::Menu);
+                }
+                if ui.button(get!("anim.library.delete")).clicked() {
+                    let doomed = key.clone();
+                    self.body.edit_taunts(|taunts| taunts.retain(|(named, _)| *named != doomed));
+                    if self.anim.taunt.as_deref() == Some(key.as_str()) {
+                        self.anim.taunt = None;
+                    }
+                    ui.close_kind(UiKind::Menu);
+                }
+            });
+        }
+        if ui.small_button("+").on_hover_text(get!("anim.library.new_taunt")).clicked() {
+            let key = unused_name("taunt", &keys);
+            let clip = format!("taunt_{key}");
+            self.body.edit_taunts(|taunts| {
+                taunts.push((key.clone(), crate::common::taunt::TauntSpec::new(clip.clone())));
+            });
+            if self.body.get(&clip).is_none() {
+                let name_key = String::new();
+                let made = Clip { name_key, length: 1.0, ..Clip::default() };
+                self.body.edit(|clips| clips.insert(clip.clone(), made.into()));
+            }
+            self.pick_taunt(&key);
+        }
+    }
+
+    fn pick_taunt(&mut self, key: &str) {
+        let clip = self.body.taunt(key).map(|spec| spec.clip.clone());
+        match clip.filter(|clip| self.body.get(clip).is_some()) {
+            Some(clip) => self.pick(ClipSource::Body, &clip),
+            // So Ctrl+Z walks the document the taunt is in.
+            None => self.anim.source = ClipSource::Body,
+        }
+        self.anim.taunt = Some(key.to_string());
     }
 
     fn library_row(&mut self, ui: &mut Ui, source: ClipSource, name: &str, siblings: &[String]) {
@@ -269,6 +381,16 @@ impl AnimTabs<'_> {
                 if ui.button(get!("anim.library.delete")).clicked() {
                     self.editor.begin_gesture();
                     self.editor.doc_mut().animations.clips.remove(name);
+                    ui.close_kind(UiKind::Menu);
+                }
+            } else if BodyClips::state_of(name).is_none() {
+                // No rename: whatever plays it names it. No revert: there is no built-in.
+                if ui.button(get!("anim.library.duplicate")).clicked() {
+                    let copy = unused_name(&format!("{name}_"), siblings);
+                    if let Some(clip) = self.body.get(name).cloned() {
+                        self.body.edit(|clips| clips.insert(copy.clone(), clip.into()));
+                        self.pick(ClipSource::Body, &copy);
+                    }
                     ui.close_kind(UiKind::Menu);
                 }
             } else {
@@ -398,6 +520,7 @@ impl AnimTabs<'_> {
     fn pick(&mut self, source: ClipSource, name: &str) {
         self.anim.source = source;
         self.anim.selected = Some(name.to_string());
+        self.anim.taunt = None;
         // Track and key indices mean nothing in another clip.
         self.anim.track = None;
         self.clear_keys = true;
@@ -405,6 +528,13 @@ impl AnimTabs<'_> {
 
     /// Shown as deep as the selection reaches: clip, then track, then keys.
     fn inspector(&mut self, ui: &mut Ui) {
+        if let Some(key) = self.anim.taunt.clone() {
+            egui::CollapsingHeader::new(format!("{} — {key}", get!("anim.section.taunt")))
+                .id_salt("anim_section_taunt")
+                .default_open(true)
+                .show(ui, |ui| self.taunt_section(ui, &key));
+        }
+
         let Some(clip) = self.clip() else {
             ui.label(get!("anim.no_clips"));
             return;
@@ -434,6 +564,165 @@ impl AnimTabs<'_> {
             .id_salt("anim_section_key")
             .default_open(true)
             .show(ui, |ui| self.key(ui));
+    }
+
+    fn taunt_section(&mut self, ui: &mut Ui, key: &str) {
+        use crate::common::taunt::{TauntLength, TauntMovement, TauntTurning, TauntWeapon};
+        let Some(spec) = self.body.taunt(key).cloned() else { return };
+        let mut edited = spec.clone();
+
+        egui::Grid::new("anim_taunt").num_columns(2).show(ui, |ui| {
+            ui.label(get!("anim.label.taunt_clip"));
+            ui.horizontal(|ui| {
+                let clips: Vec<String> = self
+                    .body
+                    .animations()
+                    .keys()
+                    .filter(|name| BodyClips::state_of(name).is_none())
+                    .cloned()
+                    .collect();
+                egui::ComboBox::from_id_salt("anim_taunt_clip")
+                    .selected_text(edited.clip.clone())
+                    .show_ui(ui, |ui| {
+                        for name in &clips {
+                            ui.selectable_value(&mut edited.clip, name.clone(), name);
+                        }
+                    });
+                let looping = self.body.get(&spec.clip).is_some_and(|clip| clip.looping);
+                if looping && spec.length != TauntLength::UntilAgain {
+                    ui.colored_label(PROBLEM_COLOR, get!("anim.taunt.clip_loops"));
+                }
+                if self.body.get(&spec.clip).is_none() {
+                    ui.colored_label(PROBLEM_COLOR, get!("anim.taunt.no_clip"));
+                    if ui.small_button("+").on_hover_text(get!("anim.library.animate")).clicked() {
+                        let name = spec.clip.clone();
+                        let made = Clip { length: 1.0, ..Clip::default() };
+                        self.body.edit(|clips| clips.insert(name, made.into()));
+                        self.pick_taunt(key);
+                    }
+                }
+            });
+            ui.end_row();
+
+            ui.label(get!("anim.label.claims"));
+            ui.horizontal_wrapped(|ui| {
+                for (region, name) in crate::common::skeleton::play::Regions::NAMED {
+                    let mut claimed = edited.claims.overlaps(region);
+                    let label = get!(&format!("anim.region.{}", name.replace('.', "_")));
+                    if ui.checkbox(&mut claimed, label).changed() {
+                        edited.claims = match claimed {
+                            true => edited.claims.union(region),
+                            false => edited.claims.without(region),
+                        };
+                    }
+                }
+            });
+            ui.end_row();
+
+            ui.label(get!("anim.label.movement"));
+            ui.horizontal(|ui| {
+                let mut kind = match edited.movement {
+                    TauntMovement::Free => 0,
+                    TauntMovement::Stopped => 1,
+                    TauntMovement::Slowed(_) => 2,
+                };
+                let before = kind;
+                ui.selectable_value(&mut kind, 0, get!("anim.taunt.free"));
+                ui.selectable_value(&mut kind, 1, get!("anim.taunt.stopped"));
+                ui.selectable_value(&mut kind, 2, get!("anim.taunt.slowed"));
+                if kind != before {
+                    edited.movement = match kind {
+                        0 => TauntMovement::Free,
+                        1 => TauntMovement::Stopped,
+                        _ => TauntMovement::Slowed(0.5),
+                    };
+                }
+                if let TauntMovement::Slowed(factor) = &mut edited.movement {
+                    let mut percent = *factor * 100.0;
+                    if ui
+                        .add(egui::DragValue::new(&mut percent).speed(1.0).range(0.0..=100.0).suffix(get!("anim.suffix.percent")))
+                        .changed()
+                    {
+                        *factor = percent / 100.0;
+                    }
+                }
+            });
+            ui.end_row();
+
+            ui.label(get!("anim.label.turning"));
+            ui.horizontal(|ui| {
+                let mut kind = match edited.turning {
+                    TauntTurning::Free => 0,
+                    TauntTurning::Locked => 1,
+                    TauntTurning::AtMost(_) => 2,
+                };
+                let before = kind;
+                ui.selectable_value(&mut kind, 0, get!("anim.taunt.free"));
+                ui.selectable_value(&mut kind, 1, get!("anim.taunt.locked"));
+                ui.selectable_value(&mut kind, 2, get!("anim.taunt.at_most"));
+                if kind != before {
+                    edited.turning = match kind {
+                        0 => TauntTurning::Free,
+                        1 => TauntTurning::Locked,
+                        _ => TauntTurning::AtMost(90.0),
+                    };
+                }
+                if let TauntTurning::AtMost(degrees) = &mut edited.turning {
+                    ui.add(egui::DragValue::new(degrees).speed(1.0).range(0.0..=720.0).suffix(get!("anim.suffix.degrees_per_second")));
+                }
+            });
+            ui.end_row();
+
+            ui.label(get!("anim.label.taunt_weapon"));
+            ui.horizontal(|ui| {
+                ui.selectable_value(&mut edited.weapon, TauntWeapon::Shown, get!("anim.taunt.shown"));
+                ui.selectable_value(&mut edited.weapon, TauntWeapon::Hidden, get!("anim.taunt.hidden"));
+            });
+            ui.end_row();
+
+            ui.label(get!("anim.label.taunt_length"));
+            ui.horizontal(|ui| {
+                let mut kind = match edited.length {
+                    TauntLength::Clip => 0,
+                    TauntLength::Seconds(_) => 1,
+                    TauntLength::UntilAgain => 2,
+                };
+                let before = kind;
+                ui.selectable_value(&mut kind, 0, get!("anim.taunt.clip_length"));
+                ui.selectable_value(&mut kind, 1, get!("anim.taunt.seconds"));
+                ui.selectable_value(&mut kind, 2, get!("anim.taunt.until_again"));
+                let clip_length = self.body.get(&edited.clip).map(|clip| clip.length);
+                if kind != before {
+                    edited.length = match kind {
+                        0 => TauntLength::Clip,
+                        1 => TauntLength::Seconds(clip_length.unwrap_or(1.0)),
+                        _ => TauntLength::UntilAgain,
+                    };
+                }
+                match &mut edited.length {
+                    TauntLength::Seconds(seconds) => {
+                        ui.add(egui::DragValue::new(seconds).speed(0.01).range(0.01..=600.0).max_decimals(3).suffix(get!("anim.suffix.seconds")));
+                    }
+                    TauntLength::Clip => {
+                        if let Some(length) = clip_length {
+                            ui.weak(format!("{length:.3}{}", get!("anim.suffix.seconds")));
+                        }
+                    }
+                    TauntLength::UntilAgain => {}
+                }
+            });
+            ui.end_row();
+        });
+
+        if edited != spec {
+            self.body.begin_gesture();
+            if let Some(stored) = self.body.taunt_mut(key) {
+                *stored = edited.clone();
+            }
+            if edited.clip != spec.clip {
+                self.pick_taunt(key);
+            }
+        }
     }
 
     fn clip_section(&mut self, ui: &mut Ui, clip: &Clip) {
@@ -471,17 +760,50 @@ impl AnimTabs<'_> {
             }
         }
 
-        if self.layer() != Layer::Locomotion {
+        let (layer, claims) = self.played_as();
+        if layer != Layer::Locomotion {
             ui.horizontal_wrapped(|ui| {
                 ui.label(get!("anim.label.claims"));
-                let names: Vec<String> = self
-                    .layer()
-                    .claims()
+                let names: Vec<String> = claims
                     .names()
                     .map(|name| get!(&format!("anim.region.{}", name.replace('.', "_"))))
                     .collect();
                 ui.label(names.join(", "));
             });
+
+            // Unticked uses the layer's blend from `layers.toml`.
+            let layer_blend = self.layer_blends.of(layer, None);
+            let mut changed: Option<(Option<f32>, Option<f32>)> = None;
+            egui::Grid::new("anim_clip_blends").num_columns(2).show(ui, |ui| {
+                for (label, own, default, is_in) in [
+                    ("anim.label.blend_in", clip.blend_in, layer_blend.blend_in, true),
+                    ("anim.label.blend_out", clip.blend_out, layer_blend.blend_out, false),
+                ] {
+                    ui.label(get!(label));
+                    ui.horizontal(|ui| {
+                        let mut stated = own.is_some();
+                        if ui.checkbox(&mut stated, "").changed() {
+                            let value = stated.then_some(own.unwrap_or(default));
+                            changed = Some(if is_in { (value, clip.blend_out) } else { (clip.blend_in, value) });
+                        }
+                        let mut seconds = own.unwrap_or(default);
+                        let field = ui.add_enabled(
+                            stated,
+                            egui::DragValue::new(&mut seconds).speed(0.01).range(0.0..=5.0).max_decimals(3).suffix(get!("anim.suffix.seconds")),
+                        );
+                        if field.changed() {
+                            changed = Some(if is_in { (Some(seconds), clip.blend_out) } else { (clip.blend_in, Some(seconds)) });
+                        }
+                    });
+                    ui.end_row();
+                }
+            });
+            if let Some((blend_in, blend_out)) = changed {
+                self.edit(|clip| {
+                    clip.blend_in = blend_in;
+                    clip.blend_out = blend_out;
+                });
+            }
         }
 
         // Saved as data, since the file is rewritten on every save and a comment would not survive.
@@ -1051,7 +1373,11 @@ impl AnimTabs<'_> {
         if self.figure.0.is_none() {
             return;
         }
-        if self.anim.source == ClipSource::Prop {
+        let (layer, _) = self.played_as();
+        if layer == Layer::Taunt {
+            ui.checkbox(&mut self.anim.moving, get!("anim.label.moving"));
+        }
+        if layer != Layer::Locomotion {
             ui.label(get!("anim.label.underlay"));
             egui::ComboBox::from_id_salt("anim_underlay")
                 .selected_text(match self.anim.underlay {
@@ -1082,19 +1408,14 @@ impl AnimTabs<'_> {
         }
     }
 
-    /// The layer the selected clip plays on in a match. A weapon clip is the
-    /// only kind with a claim worth stating: a body clip claims everything.
-    fn layer(&self) -> Layer {
-        match self.anim.source {
-            ClipSource::Prop => Layer::Weapon,
-            ClipSource::Body => Layer::Locomotion,
-        }
+    fn played_as(&self) -> (Layer, crate::common::skeleton::play::Regions) {
+        crate::anim::played_as(self.anim, self.body, self.layer_claims)
     }
 
     /// The clip's own problems, and any track outside its layer's claim.
     fn problems_of(&self, clip: &Clip, rig: &crate::common::skeleton::Skeleton) -> Vec<ClipProblem> {
         let mut problems = clip.problems(|bone| rig.index_of(bone).is_some());
-        for track in self.layer().claims().uncovered_tracks(clip) {
+        for track in self.played_as().1.uncovered_tracks(clip) {
             problems.push(ClipProblem { track: Some(track), message: get!("anim.problem.unclaimed") });
         }
         problems
@@ -1158,6 +1479,8 @@ fn panels(
         anim: &mut anim,
         figure: &mut figure,
         builds: &files.builds,
+        layer_claims: &files.layer_claims,
+        layer_blends: &files.layer_blends,
         stage: &mut stage,
         cursor: &mut cursor,
         selection: &selection,

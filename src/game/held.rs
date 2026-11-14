@@ -151,20 +151,17 @@ pub struct SharedWeaponClips {
     pub reload: Option<Handle<Clip>>,
 }
 
-const RECOIL_CLIP: &str = "recoil";
-const RELOAD_CLIP: &str = "reload";
+pub const RECOIL_CLIP: &str = "recoil";
+pub const RELOAD_CLIP: &str = "reload";
 
 fn load_shared_weapon_clips(
     mut commands: Commands,
     packs: Res<PackAssets>,
     mut clips: ResMut<Assets<Clip>>,
+    mut named: ResMut<crate::common::clip_file::NamedClips>,
 ) {
-    let mut load = |name| {
-        crate::common::clip_file::load_named_clip(&packs, &crate::common::assets::default_packs(), name)
-            .map(|clip| clips.add(clip))
-    };
-    let recoil = load(RECOIL_CLIP);
-    let reload = load(RELOAD_CLIP);
+    let recoil = named.load(&packs, &mut clips, RECOIL_CLIP);
+    let reload = named.load(&packs, &mut clips, RELOAD_CLIP);
     commands.insert_resource(SharedWeaponClips { recoil, reload });
 }
 
@@ -217,6 +214,7 @@ impl Plugin for HeldWeaponPlugin {
             .init_resource::<PropCache>()
             .init_resource::<SurfaceMaterials>()
             .init_resource::<SharedWeaponClips>()
+            .init_resource::<crate::common::clip_file::NamedClips>()
             .add_systems(Startup, load_shared_weapon_clips)
             .add_systems(Update, (dress_held_weapons, show_held_weapons).chain())
             .add_systems(Update, bake_what_we_carry.run_if(in_state(AppMode::Play)))

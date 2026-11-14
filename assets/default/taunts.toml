@@ -3,13 +3,14 @@
 # legs, torso, head, arm.l, arm.r, weapon. `movement` is "free", "stopped",
 # or { slowed = 0.5 }. `turning` is how far the body follows the aim: "free",
 # "locked", or { at_most = 90 } degrees a second; the camera always turns.
-# `weapon` is "hidden" or "shown". `length` is seconds
-# until it ends by itself; leave it out and it lasts until G is pressed again.
+# `weapon` is "hidden" or "shown". `length` is seconds until it ends by
+# itself, or "clip" for as long as its clip; leave it out and it lasts until G
+# is pressed again. The animation editor writes this file and keeps comments.
 
 [wave]
 clip = "taunt_wave"
-claims = ["legs", "arm.l", "arm.r", "torso", "head", "weapon"]
+claims = ["legs", "torso", "head", "arm.l", "arm.r", "weapon"]
 movement = "stopped"
 turning = "locked"
 weapon = "hidden"
-length = 1.2
+length = "clip"
