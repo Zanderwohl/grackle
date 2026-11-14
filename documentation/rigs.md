@@ -389,14 +389,18 @@ None of these is animation, but a creature is not playable without them:
       its pole (`Chain::away`). A three-bone chain bent toward then away is
       solved exactly (`ik::digitigrade`): the metatarsus keeps its rest angle
       to the thigh, so the two are one rigid bone from the hip and the leg is
-      the two-bone problem. FABRIK with the stops clamped inside its passes
-      was tried first and settled in bad shapes (the whole leg swung back
-      with the foot short). Other chains stay on FABRIK, which now seeds each
-      joint its own way and rolls every bone from one hinge axis, square to
-      the bend plane, rather than from `bone × pole`. A joint that rests bent
-      states its own hinge `stops` in degrees, since a named kind is measured
-      from a straight rest and would not let it straighten; the ragdoll reads
-      them too.
+      the two-bone problem, its ankle kept as near and as far from the hip
+      as the knee's and hock's stops allow (`DigitigradeLeg`), which is also
+      its `chain_length`. A rig file refuses any other `bends_away`, and a
+      digitigrade leg whose bones are not parent to child or do not rest in
+      one plane. FABRIK with the stops clamped inside its passes was tried
+      first and settled in bad shapes (the whole leg swung back with the foot
+      short). Other chains stay on FABRIK, which rolls every bone from one
+      hinge axis, square to the bend plane and kept on the side of the first
+      bone's rest hinge, rather than from `bone × pole`. A joint that rests
+      bent states its own hinge `stops` in degrees, since a named kind is
+      measured from a straight rest and would not let it straighten; the
+      ragdoll reads them too.
 - [x] State clips under `animations/strider/` (an idle that sways the tail)
       and the wave's strider clip, `strider/taunt_wag`, named in the
       taunt's `rigs`. A body is offered only taunts it has a clip for

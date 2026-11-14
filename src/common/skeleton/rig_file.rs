@@ -262,8 +262,13 @@ pub fn build_rig(file: &RigFile, build: &Build) -> Result<Skeleton, String> {
             let mut away = 0u32;
             for name in &limb.bends_away {
                 match order.iter().position(|bone| *bone == name) {
-                    Some(at) if at > 0 && at < 32 => away |= 1 << at,
-                    _ => return Err(format!("limb {}: {name} has no joint inside it to bend", limb.name)),
+                    Some(2) if order.len() == 3 => away |= 1 << 2,
+                    _ => {
+                        return Err(format!(
+                            "limb {}: only a three-bone leg's last joint bends away, not {name}'s",
+                            limb.name
+                        ))
+                    }
                 }
             }
             let pole = match (limb.pole, limb.straightens) {
@@ -271,15 +276,19 @@ pub fn build_rig(file: &RigFile, build: &Build) -> Result<Skeleton, String> {
                 (None, true) => Vec3::NEG_Z,
                 (None, false) => super::ik::elbow_pole(limb.side),
             };
+            let chain = Chain {
+                upper: intern(&limb.upper),
+                middle: intern_list(&limb.between),
+                lower: intern(&limb.lower),
+                tip: limb.tip.as_deref().map(intern),
+                away,
+            };
+            if chain.is_digitigrade() {
+                super::ik::DigitigradeLeg::of(&bones, &chain).map_err(|problem| format!("limb {}: {problem}", limb.name))?;
+            }
             Ok(Limb {
                 name: intern(&limb.name),
-                chain: Chain {
-                    upper: intern(&limb.upper),
-                    middle: intern_list(&limb.between),
-                    lower: intern(&limb.lower),
-                    tip: limb.tip.as_deref().map(intern),
-                    away,
-                },
+                chain,
                 side: limb.side,
                 pole,
                 region: regions[upper],
@@ -297,10 +306,7 @@ pub fn build_rig(file: &RigFile, build: &Build) -> Result<Skeleton, String> {
     for (slot, name) in hands.iter_mut().zip(&file.hands) {
         *slot = Some(limb(name)?);
     }
-    let reach = |limb: usize| {
-        let chain = &limbs[limb].chain;
-        chain.bones().filter_map(|name| bones.iter().find(|bone| bone.name == name)).map(|bone| bone.length).sum::<f32>()
-    };
+    let reach = |limb: usize| super::ik::reach_of(&bones, &limbs[limb].chain);
     let leg = reach(limb(&file.measures.leg)?);
     let arm = match &file.measures.arm {
         Some(name) => reach(limb(name)?),
@@ -335,7 +341,7 @@ pub fn build_rig(file: &RigFile, build: &Build) -> Result<Skeleton, String> {
 mod tests {
     use super::*;
     use crate::common::assets::{default_packs, Assets};
-    use crate::common::skeleton::ik::{finish_pose, plant_feet, Reach};
+    use crate::common::skeleton::ik::{finish_pose, plant_feet, solve, Reach};
     use crate::common::skeleton::rig::Pose;
     use crate::common::skeleton::state::{AnimationState, PoseInputs};
 
@@ -485,7 +491,6 @@ to = [0.0, -0.6, 0.1]
     /// same every time, and points straight at what it cannot reach.
     #[test]
     fn a_longer_limb_reaches_within_its_joints() {
-        use crate::common::skeleton::ik::solve;
         let rig = sized(1.6, &[]);
         let tail = *rig.anatomy().limb("tail").expect("the strider's tail is a limb");
         assert_eq!(tail.chain.middle, ["tail.2"]);
@@ -574,7 +579,7 @@ to = [0.0, -0.6, 0.1]
         assert_eq!(
             shin.limit,
             crate::common::skeleton::joints::JointLimit::Hinge(crate::common::skeleton::joints::Hinge {
-                min: (-60.0f32).to_radians(),
+                min: (-80.0f32).to_radians(),
                 max: 55.0f32.to_radians()
             })
         );
@@ -588,6 +593,79 @@ to = [0.0, -0.6, 0.1]
         let shin = file.bones.iter().position(|bone| bone.name == "shin.l").unwrap();
         file.bones[shin].stops = Some([10.0, 20.0]);
         assert!(build_rig(&file, &Build { rig: Some("strider".into()), ..default() }).is_err());
+    }
+
+    /// Fails if a rig file is let name a bend no solver answers for, or a digitigrade leg with no
+    /// one plane to bend in.
+    #[test]
+    fn a_rig_file_refuses_a_leg_it_cannot_solve() {
+        let build = Build { rig: Some("strider".into()), ..default() };
+        let mut reversed = strider();
+        reversed.limbs[0].bends_away = vec!["shin.l".into()];
+        assert!(build_rig(&reversed, &build).is_err(), "a reversed knee loaded");
+
+        let mut splayed = strider();
+        let meta = splayed.bones.iter().position(|bone| bone.name == "metatarsus.l").unwrap();
+        splayed.bones[meta].tail[0] -= 0.1;
+        let foot = splayed.bones.iter().position(|bone| bone.name == "foot.l").unwrap();
+        splayed.bones[foot].head[0] -= 0.1;
+        assert!(build_rig(&splayed, &build).is_err(), "a splayed digitigrade leg loaded");
+    }
+
+    /// Breaks if the digitigrade solve bends a knee or hock past the stops the ragdoll enforces,
+    /// or the leg's length is not how far it can really reach.
+    #[test]
+    fn a_digitigrade_leg_stays_inside_its_stops_and_reaches_its_length() {
+        let rig = sized(1.6, &[]);
+        let root = Transform::IDENTITY;
+        let leg = *rig.anatomy().limb("left_leg").unwrap();
+        let hip = rig.posed_bone(&Pose::rest(), &root, rig.index_of("thigh.l").unwrap()).head;
+        assert!((rig.anatomy().leg - crate::common::skeleton::ik::chain_length(&rig, &leg.chain)).abs() < 1e-6);
+
+        for step in 0..=40 {
+            let turn = Quat::from_rotation_x(step as f32 / 40.0 * 2.4 - 1.2);
+            for distance in [0.1, 0.3, 0.5, 0.7, rig.anatomy().leg * 0.999, 1.5] {
+                let target = hip + turn * Vec3::NEG_Y * distance;
+                let mut pose = Pose::rest();
+                let reach = solve(&rig, &mut pose, &root, &leg.chain, target, leg.pole);
+                for name in ["shin.l", "metatarsus.l"] {
+                    let index = rig.index_of(name).unwrap();
+                    let bone = &rig.bones()[index];
+                    let parent = rig.posed_bone(&pose, &root, bone.parent.unwrap()).rotation;
+                    let along = (parent * bone.rest).inverse() * rig.posed_bone(&pose, &root, index).rotation * Vec3::Y;
+                    assert!(bone.limit.nearest(along).distance(along) < 1e-3, "{name} is past its stops reaching {distance} m");
+                }
+                if distance < 1.0 && distance > 0.4 {
+                    assert_eq!(reach, Reach::Reached, "{distance} m is within the leg's {} m", rig.anatomy().leg);
+                    let ankle = rig.posed_bone(&pose, &root, rig.index_of("metatarsus.l").unwrap()).tail;
+                    assert!(ankle.distance(target) < 1e-3, "the ankle is {} m off", ankle.distance(target));
+                }
+            }
+        }
+    }
+
+    /// Breaks if the tail's roll comes from `(target - base) × pole` alone, which reverses as the
+    /// target passes over its base and turns every bone half a turn in one step.
+    #[test]
+    fn a_tail_swept_over_its_base_does_not_roll_over() {
+        let rig = sized(1.6, &[]);
+        let tail = *rig.anatomy().limb("tail").unwrap();
+        let root = Transform::IDENTITY;
+        let base = rig.posed_bone(&Pose::rest(), &root, rig.index_of("tail.1").unwrap()).head;
+        let mut previous: Option<Pose> = None;
+        for step in 0..=60 {
+            let along = step as f32 / 60.0 * 0.6 - 0.3;
+            let target = base + Vec3::new(0.0, 0.45, along);
+            let mut pose = Pose::rest();
+            solve(&rig, &mut pose, &root, &tail.chain, target, Vec3::Y);
+            if let Some(before) = &previous {
+                for name in tail.chain.bones() {
+                    let turned = before.joint(name).angle_between(pose.joint(name));
+                    assert!(turned < 0.5, "{name} turns {turned:.2} rad as the target passes {along} m over the base");
+                }
+            }
+            previous = Some(pose);
+        }
     }
 
     /// Feet let go by a clip's plant weight are where the walk put them, not on the floor.
