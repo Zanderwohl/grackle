@@ -36,15 +36,13 @@ pub struct Chain {
     pub middle: &'static [&'static str],
     pub lower: &'static str,
     pub tip: Option<&'static str>,
-    /// Bit `i` set: the joint at the head of the chain's bone `i` (root first, so from 1) bends
-    /// away from the pole. Only a digitigrade hock is solved that way (bit 2 of three bones); a
-    /// rig file refuses any other.
+    /// Bit `i`: the joint at the head of bone `i` (root first) bends away from the pole. Only a
+    /// digitigrade hock, bit 2 of three bones, is solved that way.
     pub away: u32,
 }
 
 impl Chain {
-    /// Three bones, the knee bending toward the pole and the hock away: solved exactly by
-    /// [`digitigrade`] rather than by [`fabrik`].
+    /// Three bones, the knee toward the pole and the hock away.
     pub fn is_digitigrade(&self) -> bool {
         self.middle.len() == 1 && self.away == 1 << 2
     }
@@ -144,9 +142,8 @@ pub fn solve(
     bent.reach
 }
 
-/// A two-bone bend from `joint` toward `target`: the first bone's direction, bent toward
-/// `pole`, the second's, and the plane's axis. `near` and `far` are the closest and furthest the
-/// end may come to `joint`; past either the bend stops there.
+/// Two bones from `joint` toward `target`, bent toward `pole`. `near` and `far` bound the end's
+/// distance from `joint`.
 struct Bent {
     axis: Vec3,
     upper: Vec3,
@@ -198,7 +195,7 @@ fn held_tip(skeleton: &Skeleton, pose: &Pose, root: &Transform, chain: &Chain) -
     Some((tip, index, skeleton.posed_bone(pose, root, index).rotation))
 }
 
-/// Puts the tip back at the world rotation [`held_tip`] read, under its parent's new `rotation`.
+/// Restores what [`held_tip`] read, under the tip's parent's new `rotation`.
 fn keep_tip(skeleton: &Skeleton, pose: &mut Pose, tip: Option<(&'static str, usize, Quat)>, rotation: Quat) {
     if let Some((tip, index, was)) = tip {
         pose.set(tip, (rotation * skeleton.bones()[index].rest).inverse() * was);
@@ -286,13 +283,12 @@ pub fn elbow_pole(side: f32) -> Vec3 {
     Vec3::new(0.35 * side, -0.85, 0.55).normalize()
 }
 
-/// How far the chain's end can get from its root, excluding the tip: fully extended, or a
-/// digitigrade leg at its straightest.
+/// Fully extended, or a digitigrade leg at its straightest; excludes the tip.
 pub fn chain_length(skeleton: &Skeleton, chain: &Chain) -> f32 {
     reach_of(skeleton.bones(), chain)
 }
 
-/// [`chain_length`] over a rig's bones, for a rig still being built.
+/// [`chain_length`] for a rig still being built.
 pub fn reach_of(bones: &[Bone], chain: &Chain) -> f32 {
     if let Some(leg) = chain.is_digitigrade().then(|| DigitigradeLeg::of(bones, chain).ok()).flatten() {
         return leg.far;
@@ -503,31 +499,28 @@ fn clip_pose(
     pose
 }
 
-/// What [`digitigrade`] needs from a thigh, shin and metatarsus at rest, all in the plane the
-/// leg bends in.
-///
-/// The metatarsus keeps its rest angle to the thigh, as a bird's or a dog's roughly does, so the
-/// two add up to one rigid bone from the hip, `upper + lower·e^(i·hock)`, and the leg is the
-/// two-bone problem.
+/// A thigh, shin and metatarsus at rest, in the plane the leg bends in. The metatarsus keeps its
+/// rest angle to the thigh, so the two act as one rigid bone, `upper + lower·e^(i·hock)`, and the
+/// leg solves as two bones.
 #[derive(Clone, Copy, Debug)]
 pub struct DigitigradeLeg {
     thigh: usize,
     shin: usize,
     meta: usize,
-    /// The thigh-plus-metatarsus bone, meters.
+    /// Thigh plus metatarsus, meters.
     first: f32,
     middle: f32,
-    /// The thigh's turn from that bone, and the metatarsus's from the thigh, about the hinge.
+    /// Turns about the hinge: the thigh's from `first`, the metatarsus's from the thigh.
     offset: f32,
     hock: f32,
-    /// How close and how far the ankle may come to the hip within the knee's and hock's stops.
+    /// The ankle's distance from the hip, meters, within the knee's and hock's stops.
     pub near: f32,
     pub far: f32,
 }
 
 impl DigitigradeLeg {
-    /// Each bone the child of the one before, and the knee and hock pure turns about the
-    /// thigh's `+X`: a splayed or twisted leg has no one plane to solve in.
+    /// Errs unless each bone is the child of the one before and the knee and hock rest as turns
+    /// about the thigh's `+X`, so the leg has one bend plane.
     pub fn of(bones: &[Bone], chain: &Chain) -> Result<Self, String> {
         let find = |name: &str| bones.iter().position(|bone| bone.name == name).ok_or_else(|| format!("no bone called {name}"));
         let thigh = find(chain.upper)?;
@@ -548,16 +541,15 @@ impl DigitigradeLeg {
         let (along, across) = (upper + lower * hock.cos(), lower * hock.sin());
         let (first, offset) = (along.hypot(across), across.atan2(along));
 
-        // The hock turns by as much as the knee does, the other way, so both joints' stops are
-        // a range of knee turns from rest.
+        // The hock turns as far as the knee, the other way, so both stops limit the knee.
         let stops = |joint: usize| match bones[joint].limit {
             JointLimit::Hinge(hinge) => (hinge.min, hinge.max),
             _ => (-PI, PI),
         };
         let ((knee_min, knee_max), (hock_min, hock_max)) = (stops(shin), stops(meta));
         let (least, most) = (knee_min.max(-hock_max), knee_max.min(-hock_min));
-        // The shin's angle off the combined bone, unsigned: it is on the rest's side whichever
-        // way the leg is turned, and the ankle is further off the hip the smaller it is.
+        // Unsigned: the shin stays on its rest side, and a smaller angle puts the ankle further
+        // from the hip.
         let side = (knee - offset).signum();
         let (a, b) = ((knee + least - offset) * side, (knee + most - offset) * side);
         let (open, folded) = (a.min(b).clamp(0.0, PI), a.max(b).clamp(0.0, PI));
@@ -566,9 +558,8 @@ impl DigitigradeLeg {
     }
 }
 
-/// A thigh, shin and metatarsus onto `target`, the knee toward `pole` and the hock away from it,
-/// exact and the same every tick. See [`DigitigradeLeg`]. Out of reach is that leg at its
-/// straightest, not the real one straightened.
+/// Exact, so every machine poses it the same. Out of reach straightens the [`DigitigradeLeg`],
+/// not the real chain.
 fn digitigrade(skeleton: &Skeleton, pose: &mut Pose, root: &Transform, chain: &Chain, target: Vec3, pole: Vec3) -> Reach {
     let bones = skeleton.bones();
     let Ok(leg) = DigitigradeLeg::of(bones, chain) else { return Reach::Impossible };
@@ -626,10 +617,9 @@ fn fabrik(skeleton: &Skeleton, pose: &mut Pose, root: &Transform, chain: &Chain,
     if (target - base).length() < 1e-5 {
         return Reach::Impossible;
     }
-    // One roll reference for the whole chain, square to the plane it bends in: per bone, `bone ×
-    // pole` vanishes for a bone running along the pole and flips its frame. Kept on the side of
-    // the first bone's rest hinge, since `(target - base) × pole` itself reverses as the target
-    // crosses the pole and would turn every bone half a turn at once.
+    // One roll reference, square to the bend plane: per bone, `bone × pole` vanishes along the
+    // pole. Kept on the side of the first bone's rest hinge, since `(target - base) × pole`
+    // reverses as the target crosses the pole.
     let rest_hinge = parent_rotation(skeleton, pose, root, indices[0]) * bones[indices[0]].rest * Vec3::X;
     let hinge = match (target - base).cross(pole).try_normalize() {
         Some(hinge) if hinge.dot(rest_hinge) < 0.0 => -hinge,

@@ -66,8 +66,8 @@ pub struct BoneEntry {
     /// A joint kind from `joints::limit_named`; absent is narrow.
     #[serde(default)]
     pub limit: Option<String>,
-    /// A hinge's own stops in degrees, instead of a `limit`: for a joint that rests bent, which
-    /// a named kind, measured from a straight rest, would not let straighten.
+    /// A hinge's stops in degrees from rest, instead of a `limit`, for a joint that rests bent:
+    /// named kinds are measured from straight.
     #[serde(default)]
     pub stops: Option<[f32; 2]>,
     /// A shape from `mesh::profile_named`.
@@ -92,8 +92,8 @@ pub struct LimbEntry {
     /// In the body's frame. Absent is forward for a limb that straightens, else an elbow's.
     #[serde(default)]
     pub pole: Option<[f32; 3]>,
-    /// Bones of `between` or `lower` whose head joint bends away from the pole: a digitigrade
-    /// leg's hock, under a knee that bends toward it.
+    /// Bones whose head joint bends away from the pole; only a three-bone leg's `lower`, the
+    /// hock, is accepted.
     #[serde(default)]
     pub bends_away: Vec<String>,
     #[serde(default)]
@@ -525,8 +525,7 @@ to = [0.0, -0.6, 0.1]
         assert!(tip.is_finite() && (tip - base).normalize().dot(Vec3::Z) > 0.99, "a short tail does not point at its target");
     }
 
-    /// Breaks if a three-bone leg bends both joints one way, so the hock points forward with the
-    /// knee, or a bone's roll flips as it passes along the pole mid-stride.
+    /// Breaks if the hock bends forward with the knee, or a roll flips mid-stride.
     #[test]
     fn a_digitigrade_leg_keeps_its_knee_forward_and_its_hock_back() {
         let rig = sized(1.6, &[("leg", 1.1)]);
@@ -549,8 +548,7 @@ to = [0.0, -0.6, 0.1]
                     let hip = at(&pose, &format!("thigh.{side}")).head;
                     let ankle = at(&pose, &format!("metatarsus.{side}")).tail;
                     let line = (ankle - hip).normalize();
-                    // How far ahead of the hip-to-ankle line a joint is. A leg at full stretch
-                    // still bends each joint its way, by 16 mm at this build.
+                    // Ahead of the hip-to-ankle line; 16 mm at full stretch on this build.
                     let ahead = |point: Vec3| {
                         let off = point - hip;
                         (off - line * off.dot(line)).dot(forward)
@@ -571,7 +569,7 @@ to = [0.0, -0.6, 0.1]
         }
     }
 
-    /// Fails if a hinge's own stops are not read, or a bend away names a joint the limb lacks.
+    /// Fails if `stops` or `bends_away` is misread.
     #[test]
     fn a_rig_file_states_stops_and_which_joints_bend_away() {
         let rig = sized(1.6, &[]);
@@ -595,8 +593,7 @@ to = [0.0, -0.6, 0.1]
         assert!(build_rig(&file, &Build { rig: Some("strider".into()), ..default() }).is_err());
     }
 
-    /// Fails if a rig file is let name a bend no solver answers for, or a digitigrade leg with no
-    /// one plane to bend in.
+    /// Fails if a reversed knee or a splayed digitigrade leg loads.
     #[test]
     fn a_rig_file_refuses_a_leg_it_cannot_solve() {
         let build = Build { rig: Some("strider".into()), ..default() };
@@ -612,8 +609,8 @@ to = [0.0, -0.6, 0.1]
         assert!(build_rig(&splayed, &build).is_err(), "a splayed digitigrade leg loaded");
     }
 
-    /// Breaks if the digitigrade solve bends a knee or hock past the stops the ragdoll enforces,
-    /// or the leg's length is not how far it can really reach.
+    /// Breaks if the solve passes the stops the ragdoll enforces, or the leg cannot reach its own
+    /// length.
     #[test]
     fn a_digitigrade_leg_stays_inside_its_stops_and_reaches_its_length() {
         let rig = sized(1.6, &[]);
@@ -644,8 +641,7 @@ to = [0.0, -0.6, 0.1]
         }
     }
 
-    /// Breaks if the tail's roll comes from `(target - base) × pole` alone, which reverses as the
-    /// target passes over its base and turns every bone half a turn in one step.
+    /// Breaks if the tail rolls half a turn as its target passes over its base.
     #[test]
     fn a_tail_swept_over_its_base_does_not_roll_over() {
         let rig = sized(1.6, &[]);

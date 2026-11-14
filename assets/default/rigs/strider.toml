@@ -7,9 +7,9 @@
 # own that a taunt can claim; `limit` a joint kind
 # (fixed, spine, neck, head, clavicle, shoulder, elbow, wrist, hip, knee,
 # ankle, unlisted); `profile` a shape (pelvis, chest, neck, head, clavicle,
-# upper_arm, forearm, hand, thigh, shin, foot, default). `stops` are a hinge's
-# own, in degrees from rest, positive swinging the tail forward, for a joint
-# that rests bent.
+# upper_arm, forearm, hand, thigh, shin, foot, default). `stops` replace
+# `limit` with a hinge's range, degrees from rest, positive swinging the tail
+# forward.
 
 height = 1.6
 carry = "spine"
@@ -104,7 +104,7 @@ region = "legs"
 limit = "hip"
 profile = "thigh"
 
-# Rests bent 59 degrees, so its stops are its own: a knee's are measured from straight.
+# Rests bent 59 degrees; a named knee is measured from straight.
 [[bones]]
 name = "shin.l"
 parent = "thigh.l"
@@ -116,7 +116,7 @@ region = "legs"
 stops = [-80.0, 55.0]
 profile = "shin"
 
-# The hock, bent 67 degrees the other way: positive bends it further.
+# The hock rests bent 67 degrees the other way; positive bends it further.
 [[bones]]
 name = "metatarsus.l"
 parent = "shin.l"
@@ -150,7 +150,7 @@ region = "legs"
 limit = "hip"
 profile = "thigh"
 
-# Rests bent 59 degrees, so its stops are its own: a knee's are measured from straight.
+# Rests bent 59 degrees; a named knee is measured from straight.
 [[bones]]
 name = "shin.r"
 parent = "thigh.r"
@@ -162,7 +162,7 @@ region = "legs"
 stops = [-80.0, 55.0]
 profile = "shin"
 
-# The hock, bent 67 degrees the other way: positive bends it further.
+# The hock rests bent 67 degrees the other way; positive bends it further.
 [[bones]]
 name = "metatarsus.r"
 parent = "shin.r"
