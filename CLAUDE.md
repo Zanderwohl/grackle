@@ -1510,7 +1510,7 @@ body parts, every prop surface, projectiles — adds the sun and scales its
 ambient by it. A plugin that makes one calls `air_lit::ensure`, since those
 plugins also stand alone in tests. **Not a `DirectionalLight`**: Bevy applies one to every mesh a camera
 draws whatever the mesh's render layers, so it lit every wall unshadowed and
-washed the lightmaps out. Anything else that moves ignores the tag.
+washed the lightmaps out.
 
 **Every bake reports the same way**
 ([`src/tool/bake_job.rs`](src/tool/bake_job.rs)): a `BakeStatus` per
