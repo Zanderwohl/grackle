@@ -31,7 +31,7 @@ use crate::common::skeleton::clip::Clip;
 use crate::common::skeleton::play::{apply_stack, grip_offsets, ClipStack, Frames};
 use crate::prop::rig::{place_part, OnPropBone};
 use crate::game::held::{perform, HeldModel, HeldPart, Performance, SharedWeaponClips};
-use crate::game::player::{place_camera, LocalPlayer, PlayerCamera, ViewMode, Viewed, PLAY_CAMERA_ORDER};
+use crate::game::player::{place_camera, PlayerCamera, ViewMode, Viewed, PLAY_CAMERA_ORDER};
 use crate::prop::hold::grip_hands;
 
 pub const VIEWMODEL_LAYER: usize = crate::common::render_layers::VIEWMODEL;
@@ -111,7 +111,7 @@ fn bits(transform: &Transform) -> [u32; 7] {
     [t.x, t.y, t.z, r.x, r.y, r.z, r.w].map(f32::to_bits)
 }
 
-/// Where this machine's shots appear to leave, in world space: the held
+/// Where the viewed body's shots appear to leave, in world space: the held
 /// model's muzzle where the viewmodel draws it. `None` in third person, or
 /// holding something with no muzzle. Display only; every shot really leaves
 /// the eye.
@@ -339,7 +339,7 @@ pub fn muzzle_in_view(weapon: &Transform, muzzle: Vec3, viewmodel_fov: f32, play
 /// this runs before `Update`; a frame's lag is inside a muzzle flash.
 pub fn find_the_apparent_muzzle(
     view: Res<ViewMode>,
-    held: Query<&HeldModel, With<LocalPlayer>>,
+    held: Query<&HeldModel, Viewed>,
     viewmodels: Query<(&Camera, &Projection), With<ViewmodelCamera>>,
     plays: Query<(&Transform, &Projection, Option<&Viewmodel>), With<PlayerCamera>>,
     mut apparent: ResMut<ApparentMuzzle>,
@@ -521,6 +521,7 @@ fn show_it_only_in_first_person(
 
 #[cfg(test)]
 mod tests {
+    use crate::game::player::LocalPlayer;
     use crate::common::skeleton::rig::bone;
     use bevy::ecs::system::RunSystemOnce;
 

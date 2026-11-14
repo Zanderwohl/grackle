@@ -1,5 +1,6 @@
-//! A debug laser out of the player's eye, a ball where it lands, and hitscan
-//! firing.
+//! Hitscan firing, and two debug views shown with the hitboxes: a laser out of
+//! each player's eye and a line and ball down each shot's path. What a player
+//! sees of a shot is its streak, in [`crate::game::streak`].
 //!
 //! The laser runs at frame rate from the interpolated body; the shot runs on
 //! the tick from the fixed step's position, so it is reproducible across
@@ -19,7 +20,7 @@ use crate::common::hitscan::{trace, Hit, HitZone};
 use crate::game::collision::CollisionWorld;
 use crate::game::damage::DamageSystems;
 use crate::game::hitbox::update_hitboxes;
-use crate::game::player::{step_player, Duck, LocalPlayer, PhysicsBody, Player};
+use crate::game::player::{step_player, Duck, PhysicsBody, Player, Viewed};
 use crate::game::viewmodel::ApparentMuzzle;
 use crate::game::ragdoll::{Push, RagdollShove};
 use crate::common::weapon::{HitscanSpec, WeaponAction};
@@ -46,17 +47,17 @@ impl Plugin for HitscanPlugin {
                     .after(step_player)
                     .in_set(DamageSystems::Deal),
             )
+            .add_message::<ShotPath>()
             // Ungated: a client fires nothing but has to draw every shot.
             .add_systems(Update, (mark_tracers, fade_tracers))
             .add_systems(
                 PostUpdate,
                 (
-                    // With the boxes it is aimed at, and off with them: it
-                    // traces every player's aim against every body, every
-                    // frame, which is a lot to pay for a line nobody asked for.
-                    draw_debug_laser.run_if(|show: Res<crate::game::hitbox::ShowHitboxes>| show.0),
+                    // The laser traces every aim against every body each frame.
+                    draw_debug_laser,
                     draw_tracers,
                 )
+                    .run_if(|show: Res<crate::game::hitbox::ShowHitboxes>| show.0)
                     .after(TransformSystems::Propagate)
                     .run_if(crate::common::app_mode::simulating)
                     .run_if(resource_exists::<GizmoConfigStore>),
@@ -197,8 +198,16 @@ pub fn fire_hitscan(
     }
 }
 
-/// An entity rather than a gizmo call in `fire_hitscan`, because firing is on
-/// the tick and a gizmo written there would be drawn for zero or one frames.
+/// A shot's path as this machine draws it, with our own starting at the barrel.
+#[derive(Message, Debug, Clone, Copy, PartialEq)]
+pub struct ShotPath {
+    pub from: Vec3,
+    pub to: Vec3,
+}
+
+/// The debug line, spawned only while the hitboxes are shown. An entity rather
+/// than a gizmo call in `fire_hitscan`, because firing is on the tick and a
+/// gizmo written there would be drawn for zero or one frames.
 #[derive(Component)]
 pub struct Tracer {
     from: Vec3,
@@ -207,15 +216,18 @@ pub struct Tracer {
     remaining: f32,
 }
 
-/// Our own shot starts at the barrel in first person rather than at the eye,
-/// where it is a dot on the crosshair. For its whole life, unlike a
+/// The viewed body's shot starts at the barrel in first person rather than at
+/// the eye, where it is a dot on the crosshair. For its whole life, unlike a
 /// projectile's: it is gone before an ease would show.
-fn mark_tracers(
+pub(crate) fn mark_tracers(
     mut commands: Commands,
     mut effects: MessageReader<Effect>,
+    mut paths: MessageWriter<ShotPath>,
     muzzle: Option<Res<ApparentMuzzle>>,
-    us: Query<&PlayerId, With<LocalPlayer>>,
+    show: Option<Res<crate::game::hitbox::ShowHitboxes>>,
+    us: Query<&PlayerId, (Viewed, With<Player>)>,
 ) {
+    let show = show.is_some_and(|show| show.0);
     let barrel = muzzle.and_then(|muzzle| muzzle.0);
     let us = us.single().ok().copied();
     for effect in effects.read() {
@@ -224,10 +236,13 @@ fn mark_tracers(
             Some(barrel) if by.is_some() && by == us => barrel,
             _ => from,
         };
-        commands.spawn((
-            Tracer { from, to, hit, remaining: TRACER_LIFETIME },
-            Name::new("Tracer"),
-        ));
+        paths.write(ShotPath { from, to });
+        if show {
+            commands.spawn((
+                Tracer { from, to, hit, remaining: TRACER_LIFETIME },
+                Name::new("Tracer"),
+            ));
+        }
     }
 }
 
@@ -400,25 +415,42 @@ mod tests {
         assert!(matches!(effects[0], Effect::Tracer { .. }));
     }
 
-    /// Breaks if our tracer starts at the eye (a dot on the crosshair in first
-    /// person) or if somebody else's is moved to our barrel.
+    /// Breaks if our shot's path starts at the eye (a dot on the crosshair in
+    /// first person) or if somebody else's is moved to our barrel.
     #[test]
-    fn our_tracer_leaves_the_barrel_and_nobody_elses_does() {
+    fn our_shot_leaves_the_barrel_and_nobody_elses_does() {
         let barrel = Vec3::new(0.3, -0.2, -0.6);
         let mut world = World::new();
         world.init_resource::<Messages<Effect>>();
+        world.init_resource::<Messages<ShotPath>>();
         world.insert_resource(crate::game::viewmodel::ApparentMuzzle(Some(barrel)));
-        world.spawn((LocalPlayer, PlayerId(1)));
+        world.spawn((crate::game::player::LocalPlayer, Player::default(), PlayerId(1)));
         for by in [Some(PlayerId(1)), Some(PlayerId(2)), None] {
             world.write_message(Effect::Tracer { from: Vec3::ZERO, to: Vec3::NEG_Z, hit: false, by });
         }
 
         world.run_system_once(mark_tracers).unwrap();
 
-        let mut starts: Vec<Vec3> =
-            world.query::<&Tracer>().iter(&world).map(|tracer| tracer.from).collect();
+        let messages = world.resource::<Messages<ShotPath>>();
+        let mut starts: Vec<Vec3> = messages.get_cursor().read(messages).map(|path| path.from).collect();
         starts.sort_by(|a, b| a.x.total_cmp(&b.x));
         assert_eq!(starts, vec![Vec3::ZERO, Vec3::ZERO, barrel]);
+    }
+
+    /// Breaks if the debug line is spawned with the hitboxes hidden, or not with them shown.
+    #[test]
+    fn the_debug_line_is_only_spawned_with_the_hitboxes() {
+        for shown in [false, true] {
+            let mut world = World::new();
+            world.init_resource::<Messages<Effect>>();
+            world.init_resource::<Messages<ShotPath>>();
+            world.insert_resource(crate::game::hitbox::ShowHitboxes(shown));
+            world.write_message(Effect::Tracer { from: Vec3::ZERO, to: Vec3::NEG_Z, hit: false, by: None });
+
+            world.run_system_once(mark_tracers).unwrap();
+
+            assert_eq!(world.query::<&Tracer>().iter(&world).count(), usize::from(shown));
+        }
     }
 
     #[test]

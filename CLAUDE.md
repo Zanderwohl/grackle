@@ -565,7 +565,7 @@ Four more keys while playing: **`.`** brings the team picker back (see "Teams"),
 condition can override; `ViewMode` is what is drawn, and the camera swings
 between the two over `CAMERA_PULL_SECONDS` rather than cutting — your own body and
 its hitboxes are hidden from inside your own head, nobody else's are),
-**`F4`** toggles the hitbox gizmos and the debug laser aimed at them, and
+**`F4`** toggles the hitbox gizmos, the debug laser aimed at them and each shot's line, and
 **`F6`** toggles the bone gizmos and the pickups' trigger volumes
 (green, dim while one restocks), **`F7`** shows the nav overlay picked in
 the Bakes panel, and **`F8`** draws each bot's route over the floor, its view
@@ -1448,9 +1448,11 @@ the lasting decals on it and drops the transient ones.
   numbers each link's owner (`SprayOwner`, the host is 0) and relays every picture. `T` places a
   replicated `SprayAt` on the authority; on a server it is `SprayedBy` its link, so a
   disconnect despawns it. There is no way to pick another picture yet.
-- **Their pipelines are compiled at startup** (`warm_up_decals`), drawn once through a camera set
-  up as the play camera is; a material or camera setting added later must join it, or the first
-  mark of a session is a hitch.
+- **Their pipelines are compiled at startup** (`warm_up_decals`), drawn for a few frames by the
+  shared warm-up cameras in [`src/game/warm_up.rs`](src/game/warm_up.rs): one per kind of view
+  that draws the world (play, orthographic editor viewport, forward camera). A material added
+  later must join it, and a view setting added to one of those cameras must be added there, or
+  the first draw is a hitch.
 - The pictures are SVGs in `assets/default/decals/svg/`, rasterized by
   `cargo run --bin decal_images`; a decal image gets its mip chain on load (`with_mips`).
 
@@ -2065,8 +2067,8 @@ machine from what it is told.
   ours would, the health, armor and ammo readouts and the HUD's color are its,
   its row is lit on both scoreboards (which go up with the round, not with a
   body), damage direction is its hits, and the viewmodel, its arms, kicks and
-  reloads are its; the apparent muzzle and the weapon selector stay ours,
-  since they answer this machine's input. Their
+  reloads are its, and so is the apparent muzzle its shots are drawn from;
+  the weapon selector stays ours, since it answers this machine's input. Their
   name is on a name-tag panel at the bottom middle of the safe zone, with the
   goal under it for a bot (`name_whoever_is_watched`). With `F8` on, a
   watched bot's every want and its pull is a table top right of the window
@@ -2892,6 +2894,15 @@ Two things about tracers specifically:
   firing.** Firing happens on the tick and drawing at frame rate, so a gizmo
   written inside `fire_hitscan` is drawn for one frame if the rates happen to
   line up and not at all if they do not.
+- **What a player sees is a streak, not the tracer's gizmo**
+  ([`src/game/streak.rs`](src/game/streak.rs)): a white mesh 3 m long flown
+  from the shot point to where it stopped at 150 m/s, one per pellet, so a
+  shotgun blast is nine, widened with distance from the view so a far one
+  stays at least a pixel or so wide. `mark_tracers` writes each path as a
+  `ShotPath` message, the viewed body's starting at its barrel, and spawns
+  the `Tracer` that draws the line and ball only while the hitboxes are shown
+  (`F4`). `StreakPlugin` is added in `main.rs`, since it builds a mesh and a
+  material, and joins the shared warm-up as the decals do.
 
 ### Projectiles are replicated, not re-simulated
 
