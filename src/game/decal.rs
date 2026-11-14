@@ -26,6 +26,7 @@ use crate::common::lightmap::Atlas;
 use crate::common::player_settings::{DebrisDecals, PlayerSettings};
 use crate::common::skeleton::Skeleton;
 use crate::editor::decal::MapDecalSpec;
+use crate::game::ragdoll::{GibImpact, GIB_SPLAT_SPEED};
 use crate::tool::bakes::BakedRoomGeometry;
 use crate::tool::sun_bake::{keep_lightmap, SunBake};
 
@@ -145,6 +146,10 @@ const DRIP: usize = 3;
 /// Meters across, at no damage and at [`BLOOD_FULL_DAMAGE`].
 const BLOOD_SIZE: (f32, f32) = (0.35, 1.1);
 const BLOOD_FULL_DAMAGE: f32 = 100.0;
+/// A gib striking this fast, in meters per second, leaves the largest splat.
+const GIB_FULL_SPLAT_SPEED: f32 = 10.0;
+/// How far, in meters, from where a gib struck a surface is looked for.
+const GIB_SPLAT_REACH: f32 = 0.1;
 /// A scorch's size is this much of its blast's radius, within the range.
 const SCORCH_SCALE: f32 = 0.9;
 const SCORCH_SIZE: (f32, f32) = (0.6, 3.0);
@@ -450,12 +455,42 @@ fn turned(normal: Vec3, up: Vec3, seed: u32) -> Vec3 {
     Quat::from_axis_angle(normal, (seed % 360) as f32 * std::f32::consts::TAU / 360.0) * up
 }
 
+/// Meters across, from the smallest splat at a `share` of 0 to the largest at 1 or more.
+fn blood_size(share: f32) -> f32 {
+    BLOOD_SIZE.0 + (BLOOD_SIZE.1 - BLOOD_SIZE.0) * share.clamp(0.0, 1.0)
+}
+
+fn thrown(at: Vec3, normal: Vec3, size: f32, direction: Vec3, seed: u32) -> Projection {
+    let mut projection = Projection::on(at, normal, size, 0.3, direction);
+    // The splash is drawn thrown toward +u, so +u goes the way the blood went; the drip runs down
+    // `v`, so on a wall it keeps world up.
+    let drip = seed as usize % TransientKind::Blood.pictures().len() == DRIP;
+    if !(drip && normal.y.abs() < 0.5)
+        && let Some(along) = direction.reject_from(normal).try_normalize()
+    {
+        projection.up = normal.cross(along);
+    }
+    projection
+}
+
+/// Larger the harder the gib struck. `None` when no face is there.
+fn gib_splat<'a>(faces: impl IntoIterator<Item = &'a world_surface::Face>, impact: &GibImpact) -> Option<(Projection, u32)> {
+    let from = impact.at + impact.normal * GIB_SPLAT_REACH;
+    let (at, normal) = decal::hit(faces, from, -impact.normal, GIB_SPLAT_REACH * 2.0)?;
+    let speed = impact.velocity.length();
+    let share = (speed - GIB_SPLAT_SPEED) / (GIB_FULL_SPLAT_SPEED - GIB_SPLAT_SPEED);
+    let size = blood_size(share);
+    let seed = seed_of(at);
+    Some((thrown(at, normal, size, impact.velocity.normalize_or(-normal), seed), seed))
+}
+
 /// From what every machine already receives, so nothing new is sent and each machine keeps its own.
 #[allow(clippy::too_many_arguments)]
 fn mark_the_world(
     mut commands: Commands,
     mut effects: MessageReader<Effect>,
     mut dealt: MessageReader<DamageDealt>,
+    mut gibs: MessageReader<GibImpact>,
     bodies: Query<(), With<Skeleton>>,
     mut reaped: RemovedComponents<Skeleton>,
     mut lately_reaped: Local<Vec<(Entity, f32)>>,
@@ -529,18 +564,16 @@ fn mark_the_world(
         // A blast's line runs out from its center. A projectile's direct hit has none.
         let Some(direction) = hit.from.and_then(|from| (hit.point - from).try_normalize()) else { continue };
         let Some((at, normal)) = surface_hit(&bakes, hit.point, direction, BLOOD_REACH) else { continue };
-        let size = BLOOD_SIZE.0 + (BLOOD_SIZE.1 - BLOOD_SIZE.0) * (hit.amount as f32 / BLOOD_FULL_DAMAGE).min(1.0);
+        let size = blood_size(hit.amount as f32 / BLOOD_FULL_DAMAGE);
         let seed = seed_of(at);
-        let mut projection = Projection::on(at, normal, size, 0.3, direction);
-        // The splash is drawn thrown toward +u, so +u goes the way the hit went; the drip runs down
-        // `v`, so on a wall it keeps world up.
-        let drip = seed as usize % TransientKind::Blood.pictures().len() == DRIP;
-        if !(drip && normal.y.abs() < 0.5)
-            && let Some(along) = direction.reject_from(normal).try_normalize()
-        {
-            projection.up = normal.cross(along);
+        marks.push((TransientKind::Blood, thrown(at, normal, size, direction, seed), seed));
+    }
+
+    for impact in gibs.read() {
+        let reach = (impact.at - Vec3::splat(GIB_SPLAT_REACH), impact.at + Vec3::splat(GIB_SPLAT_REACH));
+        if let Some(mark) = gib_splat(faces_near(&bakes, reach), impact) {
+            marks.push((TransientKind::Blood, mark.0, mark.1));
         }
-        marks.push((TransientKind::Blood, projection, seed));
     }
 
     for (kind, projection, seed) in marks {
@@ -684,6 +717,8 @@ impl Plugin for DecalPlugin {
         app.init_resource::<DecalArt>()
             .init_resource::<TransientDecals>()
             .init_resource::<MapDecalArt>()
+            // Also registered by `RagdollPlugin`; here so decals work without it.
+            .add_message::<GibImpact>()
             .add_systems(Startup, (load_decal_art, warm_up_decals).chain())
             .add_systems(Update, end_the_warm_up)
             // Ungated: the map's decals and sprays stand in the editor too, and the map can
@@ -702,6 +737,31 @@ impl Plugin for DecalPlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn a_room() -> Vec<world_surface::Face> {
+        world_surface::of_rooms(&[crate::tool::room::Room::new(Vec3::ZERO, Vec3::new(4.0, 3.0, 4.0))])
+    }
+
+    /// Fails if a gib striking a floor leaves no blood there, or a harder strike a smaller splat.
+    #[test]
+    fn a_gib_leaves_blood_where_it_strikes_and_more_the_harder() {
+        let faces = a_room();
+        let strike = |speed: f32| GibImpact { at: Vec3::new(2.0, 0.0, 2.0), normal: Vec3::Y, velocity: Vec3::new(1.0, -speed, 0.0) };
+
+        let (soft, _) = gib_splat(&faces, &strike(3.0)).expect("no blood on the floor");
+        let (hard, _) = gib_splat(&faces, &strike(12.0)).expect("no blood on the floor");
+        assert!(soft.center.distance(Vec3::new(2.0, 0.0, 2.0)) < 0.01, "blood at {}", soft.center);
+        assert!(soft.normal.abs_diff_eq(Vec3::Y, 1.0e-5));
+        assert!(hard.size.x > soft.size.x, "{} is not larger than {}", hard.size.x, soft.size.x);
+    }
+
+    /// Fails if a gib struck somewhere with no baked face leaves blood floating in the air.
+    #[test]
+    fn a_gib_leaves_no_blood_where_there_is_no_surface() {
+        let faces = a_room();
+        let impact = GibImpact { at: Vec3::new(2.0, 1.5, 2.0), normal: Vec3::Y, velocity: Vec3::NEG_Y * 5.0 };
+        assert!(gib_splat(&faces, &impact).is_none());
+    }
 
     #[test]
     fn every_mip_halves_down_to_one_texel() {

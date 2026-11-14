@@ -19,7 +19,7 @@ use crate::common::team::Allegiances;
 use crate::game::death::{announce_deaths, announce_the_dead, reap_the_dead, record_damage, suicide};
 use crate::common::damage::{DamageSource, PlayerId};
 use crate::game::player::{LocalPlayer, PlayerCamera};
-use crate::game::ragdoll::{Push, RagdollShove};
+use crate::game::ragdoll::{BlownApart, Push, RagdollShove};
 
 /// How long a damage number lasts, in seconds.
 pub const DAMAGE_NUMBER_LIFETIME: f32 = 2.0;
@@ -107,7 +107,12 @@ impl Plugin for DamagePlugin {
 /// is nearby. A request at a teammate is dropped with no [`DamageDealt`], so
 /// no zero is drawn over a friend. The record is the whole hit, armor's share
 /// included: a number is what you did, not where it landed.
+///
+/// A body a projectile's direct hit kills is marked [`BlownApart`]; a splash
+/// kill is not.
+#[allow(clippy::too_many_arguments)]
 pub fn apply_damage(
+    mut commands: Commands,
     mut requests: MessageReader<Damage>,
     mut kills: MessageReader<Kill>,
     mut health: Query<(&mut Damageable, Option<&mut Armor>)>,
@@ -147,10 +152,13 @@ pub fn apply_damage(
             from: request.from,
             cause: request.cause,
         });
+        let killed = was_alive && !target.is_alive();
+        if killed && request.cause.how == How::Direct {
+            commands.entity(request.target).try_insert(BlownApart { at: request.point });
+        }
         // Lands on the corpse `raise_ragdolls` stands up later this tick.
         if let Some(shove) = request.kill_shove
-            && was_alive
-            && !target.is_alive()
+            && killed
         {
             shoves.write(RagdollShove {
                 at: request.point,

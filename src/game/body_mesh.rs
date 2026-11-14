@@ -22,6 +22,7 @@ use crate::common::skeleton::{Pose, Skeleton};
 use crate::common::player_color::PlayerColor;
 use crate::common::team::Team;
 use crate::game::player::{LocalPlayer, Player, ViewMode, Watched};
+use crate::game::ragdoll::Ragdoll;
 use crate::game::skeleton::SkeletonRoot;
 
 /// A body that has had its parts built, holding them so they can be rebuilt.
@@ -192,11 +193,12 @@ fn build_body_meshes(
             Option<&BodyTint>,
             Option<&Burning>,
             Option<&BodyMesh>,
+            Option<&Ragdoll>,
         ),
         Or<(Changed<Skeleton>, Changed<Team>, Changed<PlayerColor>, Changed<BodyTint>)>,
     >,
 ) {
-    for (body, skeleton, team, player, tint, burning, existing) in &bodies {
+    for (body, skeleton, team, player, tint, burning, existing, corpse) in &bodies {
         if let Some(existing) = existing {
             for part in &existing.parts {
                 commands.entity(*part).despawn();
@@ -216,6 +218,11 @@ fn build_body_meshes(
                         FirstPersonHidden,
                         Mesh3d(handle.clone()),
                         MeshMaterial3d(material.clone()),
+                        // A part per bone keeps parts in bone order; a piece hides the ones it lacks.
+                        match corpse.is_none_or(|corpse| corpse.keeps(index)) {
+                            true => Visibility::Inherited,
+                            false => Visibility::Hidden,
+                        },
                         // Overwritten by `pose_body_meshes` before it is drawn.
                         Transform::from_translation(
                             skeleton.bones()[index].head,
@@ -451,6 +458,30 @@ mod tests {
 
         let mesh = app.world().get::<BodyMesh>(body).expect("nothing was built");
         assert_eq!(mesh.parts.len(), bones);
+    }
+
+    /// Fails if a piece of a body draws bones it does not have.
+    #[test]
+    fn a_piece_of_a_body_draws_only_its_own_bones() {
+        use crate::common::skeleton::rig::bone;
+        use crate::game::ragdoll::Ragdoll;
+
+        let mut app = app();
+        let skeleton = humanoid(crate::common::class::ClassBuilds::shipped().of(Class::Heavy));
+        let foot = skeleton.posed_bones(&Pose::rest(), &Transform::IDENTITY)[skeleton.index_of(bone::FOOT_L).unwrap()].head;
+        let pieces = Ragdoll::blown_apart(&skeleton, &Pose::rest(), &Transform::IDENTITY, Vec3::ZERO, foot);
+        let piece = pieces.into_iter().max_by_key(Ragdoll::bones_kept).unwrap();
+        let kept: Vec<bool> = (0..skeleton.bones().len()).map(|index| piece.keeps(index)).collect();
+        assert!(kept.contains(&false), "the blast took nothing");
+        let body = app.world_mut().spawn((piece, skeleton, Pose::rest(), Transform::IDENTITY)).id();
+
+        app.update();
+
+        let parts = app.world().get::<BodyMesh>(body).expect("nothing was built").parts.clone();
+        for (index, part) in parts.iter().enumerate() {
+            let hidden = app.world().get::<Visibility>(*part) == Some(&Visibility::Hidden);
+            assert_eq!(hidden, !kept[index], "bone {index} drawn wrongly");
+        }
     }
 
     /// Bodies of one build share meshes; two builds do not.
