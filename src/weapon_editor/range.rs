@@ -30,7 +30,8 @@ use crate::game::bot::aim_at;
 use crate::game::bot_fight::aim_point;
 use crate::game::collision::CollisionWorld;
 use crate::game::player::{
-    spawn_player, Inputs, PhysicsBody, Player, PlayerCamera, PlayerInput, Spawn, Watched, PLAY_CAMERA_ORDER,
+    spawn_player, Inputs, PhysicsBody, Player, PlayerCamera, PlayerInput, Spawn, UneasedAim, ViewMode, ViewPreference,
+    Watched, PLAY_CAMERA_ORDER,
 };
 use crate::game::projectile::Projectile;
 use crate::game::ragdoll::Ragdoll;
@@ -226,6 +227,10 @@ pub struct RangeShow {
     pub log: Vec<String>,
     /// The middle of the window, in egui points, where the two views go.
     pub view: Option<bevy_egui::egui::Rect>,
+    /// Stand the current beat up again, after an edit changed it.
+    rerun: bool,
+    /// Another weapon to draw from, and one to fire a rocket at the shooter with.
+    helpers: (Option<WeaponId>, Option<WeaponId>),
     tally: Tally,
 }
 
@@ -243,6 +248,8 @@ impl Default for RangeShow {
             step: 0,
             log: Vec::new(),
             view: None,
+            rerun: false,
+            helpers: (None, None),
             tally: Tally::default(),
         }
     }
@@ -263,6 +270,10 @@ struct HiddenByRange(Vec<(Entity, Visibility)>);
 #[derive(Resource, Default)]
 struct MapCollision(Option<CollisionWorld>);
 
+/// The view the player chose, put back on exit: the range's left half is always first person.
+#[derive(Resource, Default)]
+struct ChosenView(Option<ViewPreference>);
+
 fn enter_range(
     mut commands: Commands,
     mut hidden: ResMut<HiddenByRange>,
@@ -271,10 +282,19 @@ fn enter_range(
     mut show: ResMut<RangeShow>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    mut roots: Query<(Entity, &mut Visibility), (Without<ChildOf>, Without<Node>, Without<Camera>)>,
+    mut view: ResMut<ViewPreference>,
+    mut chosen: ResMut<ChosenView>,
+    mut roots: Query<(Entity, &mut Visibility, Option<&RenderLayers>), (Without<ChildOf>, Without<Node>, Without<Camera>)>,
 ) {
+    chosen.0 = Some(*view);
+    *view = ViewPreference(ViewMode::FirstPerson);
     // Hidden as they stand now, and put back as they were: something hidden on purpose stays so.
-    for (entity, mut visibility) in &mut roots {
+    // Only what the world's cameras draw, so a thumbnail being taken is left alone.
+    let world_layer = RenderLayers::layer(render_layers::WORLD);
+    for (entity, mut visibility, layers) in &mut roots {
+        if layers.is_some_and(|layers| !layers.intersects(&world_layer)) {
+            continue;
+        }
         if *visibility != Visibility::Hidden {
             hidden.0.push((entity, *visibility));
             *visibility = Visibility::Hidden;
@@ -327,6 +347,8 @@ fn leave_range(
     mut map: ResMut<MapCollision>,
     mut world: ResMut<CollisionWorld>,
     mut time: ResMut<Time<Virtual>>,
+    mut view: ResMut<ViewPreference>,
+    mut chosen: ResMut<ChosenView>,
     mut visibilities: Query<&mut Visibility>,
     leftovers: Query<Entity, Or<(With<RangeStage>, With<RangePuppet>, With<Projectile>, With<Ragdoll>)>>,
 ) {
@@ -343,6 +365,9 @@ fn leave_range(
     }
     time.set_relative_speed(1.0);
     time.unpause();
+    if let Some(was) = chosen.0.take() {
+        *view = was;
+    }
 }
 
 fn eye_of(center: Vec3) -> Vec3 {
@@ -381,36 +406,56 @@ fn direct(
         }
         return;
     };
-    let (other, rocket) = helpers(&catalog, weapon.id);
-    let beats = loop_for(weapon, other);
-    if show.weapon != Some(weapon.id) || show.beats != beats {
+    // Only when the catalog or the weapon changed: the loop is a function of the two.
+    if show.weapon != Some(weapon.id) {
         show.weapon = Some(weapon.id);
-        show.off = vec![false; beats.len()];
-        show.beats = beats;
+        show.helpers = helpers(&catalog, weapon.id);
+        show.beats = loop_for(weapon, show.helpers.0);
+        show.off = vec![false; show.beats.len()];
         show.restart = true;
+    } else if catalog.is_changed() {
+        show.helpers = helpers(&catalog, weapon.id);
+        let beats = loop_for(weapon, show.helpers.0);
+        if beats != show.beats {
+            // An edit: keep the place and what is switched off, and play the beat again.
+            if beats.len() != show.beats.len() {
+                show.off = vec![false; beats.len()];
+                show.current = show.current.min(beats.len().saturating_sub(1));
+            }
+            show.beats = beats;
+            show.rerun = true;
+        }
     }
+    let (other, rocket) = show.helpers;
     if show.beats.is_empty() {
         return;
     }
 
     let step = std::mem::take(&mut show.step);
     let finished = show.elapsed >= show.beats[show.current].length;
-    if show.restart || step != 0 || finished {
-        if !show.restart && finished {
+    if show.restart || show.rerun || step != 0 || finished {
+        if !show.restart && !show.rerun && finished {
             let line = summary(&show);
             show.log.push(line);
             if show.log.len() > LOG_LINES {
                 show.log.remove(0);
             }
         }
-        let start = if show.restart { show.beats.len() - 1 } else { show.current };
-        let forward = step >= 0;
-        show.current = next_on(&show.off, start, forward).unwrap_or(0);
+        let next = match (show.rerun && step == 0 && !show.off[show.current], show.restart) {
+            (true, _) => Some(show.current),
+            (false, true) => next_on(&show.off, show.beats.len() - 1, true),
+            (false, false) => next_on(&show.off, show.current, step >= 0),
+        };
         show.restart = false;
+        show.rerun = false;
         show.elapsed = 0.0;
         show.tally = Tally::default();
         clear(&mut commands, &puppets, &projectiles, &corpses);
-        stand_up(&mut commands, &catalog, show.beats[show.current].kind, weapon.id, other, rocket);
+        // Every beat switched off stands nothing up.
+        if let Some(next) = next {
+            show.current = next;
+            stand_up(&mut commands, &catalog, show.beats[next].kind, weapon.id, other, rocket);
+        }
         return;
     }
     show.elapsed += time.delta_secs();
@@ -577,7 +622,7 @@ fn stand_up(
         (_, None) => vec![weapon],
     };
     let shooter = puppet(commands, Role::Shooter, 0.0, carried);
-    commands.entity(shooter).insert(Watched);
+    commands.entity(shooter).insert((Watched, UneasedAim));
     match kind {
         BeatKind::Shoot { distance, .. } | BeatKind::Burn { distance, .. } | BeatKind::Push { distance, .. } => {
             puppet(commands, Role::Enemy, distance, vec![]);
@@ -634,8 +679,11 @@ fn tally(
 ) {
     let shooter = puppets.iter().find(|(puppet, _)| puppet.0 == Role::Shooter).map(|(_, body)| eye_of(body.current));
     let elapsed = show.elapsed - LEAD_IN;
+    // The shooter is always the first puppet stood up.
+    let ours = DamageSource::Player(PlayerId(FIRST_PUPPET_ID + 1));
     for hit in dealt.read() {
-        if puppets.get(hit.target).is_ok_and(|(puppet, _)| puppet.0 == Role::Shooter) && !hit.cause.reflected {
+        let on_the_shooter = puppets.get(hit.target).is_ok_and(|(puppet, _)| puppet.0 == Role::Shooter);
+        if hit.source != ours || on_the_shooter {
             continue;
         }
         let distance = shooter.map_or(0.0, |eye| eye.distance(hit.point));
@@ -664,7 +712,10 @@ fn place_the_views(
     let to_viewport = |min: bevy_egui::egui::Pos2, max: bevy_egui::egui::Pos2| {
         let position = UVec2::new((min.x * scale).max(0.0) as u32, (min.y * scale).max(0.0) as u32);
         let size = UVec2::new(((max.x - min.x) * scale).max(1.0) as u32, ((max.y - min.y) * scale).max(1.0) as u32);
-        Some(Viewport { physical_position: position, physical_size: size, ..default() })
+        let mut viewport = Viewport { physical_position: position, physical_size: size, ..default() };
+        // The rect is last frame's, and the window may have shrunk since.
+        viewport.clamp_to_size(window.physical_size());
+        Some(viewport)
     };
     let half = rect.center().x;
     let left = to_viewport(rect.min, bevy_egui::egui::pos2(half, rect.max.y));
@@ -706,10 +757,12 @@ impl Plugin for RangePlugin {
         app.init_resource::<RangeShow>()
             .init_resource::<HiddenByRange>()
             .init_resource::<MapCollision>()
+            .init_resource::<ChosenView>()
             .add_systems(OnEnter(AppMode::Weapon), (enter_range, crate::game::player::spawn_the_view))
             .add_systems(OnExit(AppMode::Weapon), (leave_range, crate::game::player::despawn_the_view))
-            .add_systems(FixedPreUpdate, direct.run_if(in_state(AppMode::Weapon)))
-            .add_systems(Update, (tally, place_the_views, keep_time).run_if(in_state(AppMode::Weapon)));
+            // Hits are read before the director moves on, so each lands in the beat it was dealt in.
+            .add_systems(FixedPreUpdate, (tally, direct).chain().run_if(in_state(AppMode::Weapon)))
+            .add_systems(Update, (place_the_views, keep_time).run_if(in_state(AppMode::Weapon)));
     }
 }
 
@@ -820,6 +873,24 @@ mod tests {
         }
         assert!(most >= 2, "the shooter and its target never stood up");
         assert!(shots > 0, "the shooter never fired");
+
+        // An edit that changes the loop plays the same beat again, rather than starting over.
+        app.world_mut().resource_mut::<RangeShow>().step = 1;
+        for _ in 0..8 {
+            app.update();
+        }
+        let before = app.world().resource::<RangeShow>().current;
+        assert!(before > 0, "the step did not move on, so this tests nothing");
+        let id = WeaponId::of("rocket_launcher");
+        let mut catalog = app.world_mut().resource_mut::<WeaponCatalog>();
+        let mut edited = catalog.get(id).expect("shipped").clone();
+        edited.deploy += 0.5;
+        catalog.insert(edited);
+        app.update();
+        app.update();
+        let show = app.world().resource::<RangeShow>();
+        assert_eq!(show.current, before, "the edit sent the loop back to the start");
+        assert!(show.elapsed < 0.1, "the beat was not played again");
         let mut standings = app.world_mut().query::<&Standing>();
         assert_eq!(standings.iter(app.world()).count(), 0, "a puppet was given a standing");
         assert!(app.world().get_resource::<crate::game::respawn::OurIdentity>().is_none(), "somebody was seated");
