@@ -408,6 +408,8 @@ fn direct(
         show.helpers = helpers(&catalog, weapon.id);
         show.beats = loop_for(weapon, show.helpers.0);
         show.off = vec![false; show.beats.len()];
+        // The old weapon's place means nothing in this loop, which may be shorter.
+        show.current = 0;
         show.restart = true;
     } else if catalog.is_changed() {
         show.helpers = helpers(&catalog, weapon.id);
@@ -886,6 +888,18 @@ mod tests {
         let show = app.world().resource::<RangeShow>();
         assert_eq!(show.current, before, "the edit sent the loop back to the start");
         assert!(show.elapsed < 0.1, "the beat was not played again");
+
+        // Choosing a weapon with a shorter loop, from a beat past its end.
+        for _ in 0..3 {
+            app.world_mut().resource_mut::<RangeShow>().step = 1;
+            app.update();
+        }
+        let mut editor = app.world_mut().resource_mut::<WeaponEditor>();
+        editor.selected = editor.weapons.iter().position(|weapon| weapon.key == "medi_wrench");
+        app.update();
+        app.update();
+        let show = app.world().resource::<RangeShow>();
+        assert!(show.current < show.beats.len());
         let mut standings = app.world_mut().query::<&Standing>();
         assert_eq!(standings.iter(app.world()).count(), 0, "a puppet was given a standing");
         assert!(app.world().get_resource::<crate::game::respawn::OurIdentity>().is_none(), "somebody was seated");
