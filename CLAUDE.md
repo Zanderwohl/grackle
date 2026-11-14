@@ -1394,6 +1394,16 @@ later means sharing a ring rather than rewriting a shape. Winding is
 counter-clockwise seen from outside, everywhere; get it backwards and a part is
 not missing, it is inside out.
 
+**Nothing outside the rig's builder names a bone.** A `Skeleton` publishes its
+`Anatomy` ([`src/common/skeleton/anatomy.rs`](src/common/skeleton/anatomy.rs)):
+its limbs by the names clips use, the feet it plants and at what phase, the two
+hands, the bone a weapon hangs from, the head, the look shares, the viewmodel's
+bones, a region per bone, and leg, arm and hip in meters. Clips, the grip, hats,
+hitboxes, the viewmodel, the look pass, foot planting and the ragdoll all ask
+it, so a rig of another shape is a new builder; see
+[documentation/rigs.md](documentation/rigs.md). A pose stays keyed by bone name,
+so one pose fits every build.
+
 A bone's shape is a `Profile`: a handful of rings down its length, each a
 multiplier on the bone's own thickness. So nothing here is a second opinion
 about how big a body is — `girth` and `belly` already differ per class, and a

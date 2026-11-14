@@ -11,7 +11,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::common::class::Class;
 use crate::common::rotation::quat_from_euler;
-use crate::common::skeleton::rig::bone;
 use crate::common::skeleton::{Pose, Skeleton};
 use crate::get;
 
@@ -368,7 +367,7 @@ impl HatSpec {
 /// facing carried along by however far the head has turned from rest. In
 /// whatever frame `root` is given in.
 pub fn crown_frame(skeleton: &Skeleton, pose: &Pose, root: &Transform) -> Option<Transform> {
-    let head = skeleton.index_of(bone::HEAD)?;
+    let head = skeleton.anatomy().head?;
     let posed = skeleton.posed_bone(pose, root, head);
     let rest = skeleton.posed_bone(&Pose::rest(), root, head);
     let turned = posed.rotation * rest.rotation.inverse();
@@ -387,6 +386,7 @@ pub fn hat_transform(
 
 #[cfg(test)]
 mod tests {
+    use crate::common::skeleton::rig::bone;
     use super::*;
     use crate::common::skeleton::default_humanoid;
 

@@ -164,6 +164,9 @@ pub struct Bone {
     pub length: f32,
     /// Full width on the bone's local X and Z.
     pub thickness: Vec2,
+    /// What the ragdoll lets it do, in its own rest frame.
+    pub limit: super::joints::JointLimit,
+    pub profile: super::mesh::Profile,
 }
 
 /// A rig: bones in dependency order, plus the numbers they were built from.
@@ -171,6 +174,7 @@ pub struct Bone {
 pub struct Skeleton {
     bones: Vec<Bone>,
     proportions: Proportions,
+    anatomy: super::anatomy::Anatomy,
 }
 
 impl Skeleton {
@@ -186,6 +190,10 @@ impl Skeleton {
 
     pub fn proportions(&self) -> Proportions {
         self.proportions
+    }
+
+    pub fn anatomy(&self) -> &super::anatomy::Anatomy {
+        &self.anatomy
     }
 
     /// Forward kinematics into world space. `root` places the feet, the same
@@ -252,7 +260,7 @@ impl Skeleton {
         // The offset is in hip-heights, so a crouch authored on one body is
         // the same crouch on a taller one. Applied in the root's own frame so
         // it turns with the body.
-        root.translation += root.rotation * (pose.root_offset * self.proportions.hip_meters());
+        root.translation += root.rotation * (pose.root_offset * self.anatomy.hip);
         root
     }
 
@@ -486,7 +494,76 @@ pub fn humanoid(proportions: Proportions) -> Skeleton {
         builder.bone(names.foot, Some(names.shin), ankle, toe, Vec2::new(0.09, 0.06) * girth * h);
     }
 
-    Skeleton { bones: builder.bones, proportions }
+    let anatomy = humanoid_anatomy(&builder.bones, proportions);
+    Skeleton { bones: builder.bones, proportions, anatomy }
+}
+
+/// How much of the aim's pitch the neck takes; the head takes the rest. A head alone at eighty
+/// degrees reads as a broken neck.
+const NECK_SHARE: f32 = 0.4;
+
+fn humanoid_anatomy(bones: &[Bone], proportions: Proportions) -> super::anatomy::Anatomy {
+    use super::anatomy::{Anatomy, Foot, Limb};
+    use super::ik;
+    use super::play::Regions;
+
+    let index = |name: &str| bones.iter().position(|bone| bone.name == name);
+    let arm = |name, chain, side: f32, region| Limb {
+        name,
+        chain,
+        side,
+        pole: ik::elbow_pole(side),
+        region,
+        straightens: false,
+    };
+    // Knees bend forwards, even in a sidestep.
+    let leg = |name, chain, side| Limb { name, chain, side, pole: Vec3::NEG_Z, region: Regions::LEGS, straightens: true };
+    let limbs = vec![
+        arm("right_arm", ik::RIGHT_ARM, 1.0, Regions::ARM_R),
+        arm("left_arm", ik::LEFT_ARM, -1.0, Regions::ARM_L),
+        leg("right_leg", ik::RIGHT_LEG, 1.0),
+        leg("left_leg", ik::LEFT_LEG, -1.0),
+    ];
+    let leg_meters = [ik::LEFT_LEG.upper, ik::LEFT_LEG.lower]
+        .iter()
+        .filter_map(|name| index(name))
+        .map(|bone| bones[bone].length)
+        .sum();
+
+    Anatomy {
+        feet: vec![Foot { limb: 3, phase: 0.0 }, Foot { limb: 2, phase: 0.5 }],
+        hands: [Some(0), Some(1)],
+        limbs,
+        carry: index(bone::CHEST),
+        head: index(bone::HEAD),
+        look: [(bone::NECK, NECK_SHARE), (bone::HEAD, 1.0 - NECK_SHARE)]
+            .into_iter()
+            .filter_map(|(name, share)| Some((index(name)?, share)))
+            .collect(),
+        // Forearms and hands only: an upper arm runs back to a shoulder beside the camera and at a
+        // 5 mm near plane reads as a slab in the screen corner.
+        viewmodel: [(bone::FOREARM_R, 0), (bone::HAND_R, 0), (bone::FOREARM_L, 1), (bone::HAND_L, 1)]
+            .into_iter()
+            .filter_map(|(name, hand)| Some((index(name)?, hand)))
+            .collect(),
+        regions: bones.iter().map(|bone| humanoid_region(bone.name)).collect(),
+        leg: leg_meters,
+        arm: proportions.arm_meters(),
+        hip: proportions.hip_meters(),
+    }
+}
+
+fn humanoid_region(name: &str) -> super::play::Regions {
+    use super::play::Regions;
+    match name {
+        bone::PELVIS => Regions::LEGS,
+        bone::CHEST => Regions::TORSO,
+        bone::NECK | bone::HEAD => Regions::HEAD,
+        bone::CLAVICLE_L | bone::UPPER_ARM_L | bone::FOREARM_L | bone::HAND_L => Regions::ARM_L,
+        bone::CLAVICLE_R | bone::UPPER_ARM_R | bone::FOREARM_R | bone::HAND_R => Regions::ARM_R,
+        bone::THIGH_L | bone::SHIN_L | bone::FOOT_L | bone::THIGH_R | bone::SHIN_R | bone::FOOT_R => Regions::LEGS,
+        _ => Regions::NONE,
+    }
 }
 
 /// A limb's bone names per side. Names are `&'static str`, so they cannot be
@@ -553,7 +630,16 @@ impl Builder {
             None => (head, rest_global),
         };
 
-        self.bones.push(Bone { name, parent, head: local_head, rest: local_rest, length, thickness });
+        self.bones.push(Bone {
+            name,
+            parent,
+            head: local_head,
+            rest: local_rest,
+            length,
+            thickness,
+            limit: super::joints::limit_of(name),
+            profile: super::mesh::profile(name),
+        });
         self.rest.push((rest_global, head));
     }
 }
@@ -592,6 +678,30 @@ mod tests {
     }
 
     /// A floating or sunken rig disagrees with the spawn clearance check.
+    /// Fails if the humanoid publishes a limb, foot, hand or region that names no bone: whatever
+    /// asks for it would then do nothing, with no error.
+    #[test]
+    fn every_build_publishes_an_anatomy_that_names_its_own_bones() {
+        use crate::common::class::Class;
+        use strum::IntoEnumIterator;
+        for class in Class::iter() {
+            let skeleton = humanoid(crate::common::class::ClassBuilds::shipped().of(class));
+            let anatomy = skeleton.anatomy();
+            assert_eq!(anatomy.regions.len(), skeleton.bones().len(), "{class:?}: a region per bone");
+            for limb in &anatomy.limbs {
+                for name in [limb.chain.upper, limb.chain.lower].into_iter().chain(limb.chain.tip) {
+                    assert!(skeleton.index_of(name).is_some(), "{class:?}: {} names {name}", limb.name);
+                }
+            }
+            assert!(anatomy.feet.iter().all(|foot| foot.limb < anatomy.limbs.len()), "{class:?}: a foot names no limb");
+            assert!(anatomy.hand(0).is_some() && anatomy.hand(1).is_some(), "{class:?}: a hand is missing");
+            assert!(anatomy.carry.is_some() && anatomy.head.is_some(), "{class:?}: no carry or head");
+            let shares: f32 = anatomy.look.iter().map(|(_, share)| share).sum();
+            assert!((shares - 1.0).abs() < 1e-6, "{class:?}: the look shares come to {shares}");
+            assert!((anatomy.leg - super::super::ik::chain_length(&skeleton, &super::super::ik::LEFT_LEG)).abs() < 1e-6);
+        }
+    }
+
     #[test]
     fn a_rest_pose_stands_on_the_ground_at_its_stated_height() {
         for proportions in [Proportions::DEFAULT, Proportions::STOCKY, Proportions::LANKY] {

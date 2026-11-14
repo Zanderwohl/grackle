@@ -15,8 +15,7 @@ use serde::{Deserialize, Serialize};
 use crate::common::class::Class;
 
 use crate::common::rotation::quat_from_euler;
-use crate::common::skeleton::ik::{self, reach_or_leave, Reach, LEFT_ARM, RIGHT_ARM};
-use crate::common::skeleton::rig::bone;
+use crate::common::skeleton::ik::{self, reach_or_leave, Reach};
 use crate::common::skeleton::{Pose, Skeleton};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -263,10 +262,9 @@ pub fn weapon_transform(
     hold: &HoldSpec,
     aim: Quat,
 ) -> Option<Transform> {
-    let chest = skeleton.index_of(bone::CHEST)?;
-    // The chest's tail is the point between the shoulders.
-    let pivot = skeleton.posed_bone(pose, root, chest).tail;
-    let arm = skeleton.proportions().arm_meters();
+    let carry = skeleton.anatomy().carry?;
+    let pivot = skeleton.posed_bone(pose, root, carry).tail;
+    let arm = skeleton.anatomy().arm;
 
     Some(
         Transform::from_translation(pivot + aim * hold.carry(arm))
@@ -283,8 +281,8 @@ pub fn carry_frame(
     root: &Transform,
     aim: Quat,
 ) -> Option<Transform> {
-    let chest = skeleton.index_of(bone::CHEST)?;
-    let pivot = skeleton.posed_bone(pose, root, chest).tail;
+    let carry = skeleton.anatomy().carry?;
+    let pivot = skeleton.posed_bone(pose, root, carry).tail;
     Some(Transform::from_translation(pivot).with_rotation(aim))
 }
 
@@ -314,17 +312,15 @@ pub fn grip_hands(
     offsets: [Vec3; 2],
 ) -> [Reach; 2] {
     let mut reached = [Reach::Impossible; 2];
-    let hands = [
-        (RIGHT_ARM, bone::HAND_R, 1.0, Some(hold.grip_frame())),
-        (LEFT_ARM, bone::HAND_L, -1.0, hold.support_frame()),
-    ];
+    let frames = [Some(hold.grip_frame()), hold.support_frame()];
 
-    for (index, (chain, hand, side, frame)) in hands.into_iter().enumerate() {
+    for (index, frame) in frames.into_iter().enumerate() {
+        let Some(limb) = skeleton.anatomy().hand(index).copied() else { continue };
         let Some(mut frame) = frame.filter(|_| which[index]) else { continue };
         frame.translation += offsets[index];
         let placed = weapon.mul_transform(frame);
-        reached[index] = reach_or_leave(skeleton, pose, root, &chain, placed.translation, root.rotation * ik::elbow_pole(side));
-        if reached[index] == Reach::Reached {
+        reached[index] = reach_or_leave(skeleton, pose, root, &limb.chain, placed.translation, root.rotation * limb.pole);
+        if let (Reach::Reached, Some(hand)) = (reached[index], limb.chain.tip) {
             // After the solve: a world rotation depends on where the arm ended up.
             ik::set_world_rotation(skeleton, pose, root, hand, placed.rotation);
         }
@@ -337,6 +333,8 @@ pub fn grip_hands(
 
 #[cfg(test)]
 mod tests {
+    use crate::common::skeleton::rig::bone;
+    use crate::common::skeleton::ik::{LEFT_ARM, RIGHT_ARM};
     use super::*;
     use strum::IntoEnumIterator;
     use crate::common::class::Class;
@@ -418,7 +416,7 @@ mod tests {
                 let root = Transform::IDENTITY;
 
                 let chest = skeleton.index_of(bone::CHEST).expect("bone is in the rig");
-                let arm = skeleton.proportions().arm_meters();
+                let arm = skeleton.anatomy().arm;
                 let pivot = skeleton.posed_bones(&pose, &root)[chest].tail;
                 let placed = Transform::from_translation(pivot + hold.carry(arm));
 

@@ -16,6 +16,7 @@
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use crate::common::skeleton::anatomy::{Anatomy, PerFoot};
 use crate::common::skeleton::rig::{bone, Pose};
 use crate::common::skeleton::state::{AnimationState, PoseInputs};
 
@@ -280,6 +281,18 @@ pub fn foot_offsets(phase: f32, travel: Vec2, shape: GaitShape) -> [FootOffset; 
     ]
 }
 
+/// Every foot the rig plants, each at its own phase of the stride and on its own side.
+pub fn feet_offsets(phase: f32, travel: Vec2, shape: GaitShape, anatomy: &Anatomy) -> PerFoot<FootOffset> {
+    anatomy
+        .feet
+        .iter()
+        .map(|foot| {
+            let side = anatomy.limbs.get(foot.limb).map_or(0.0, |limb| limb.side);
+            foot_offset(phase + foot.phase, travel, shape, side)
+        })
+        .collect()
+}
+
 /// One foot, `side` being which side of the body it is on: -1 left, +1 right.
 fn foot_offset(phase: f32, travel: Vec2, shape: GaitShape, side: f32) -> FootOffset {
     let stance = shape.stance;
@@ -453,10 +466,11 @@ pub fn footfall(phase: f32, stance: f32) -> f32 {
     }
 }
 
-/// Both feet's [`footfall`]s for a body at `stride` in a gait of this stance,
-/// left first.
-pub fn footfalls(stride: f32, stance: f32) -> [f32; 2] {
-    [footfall(stride, stance), footfall(stride + 0.5, stance)]
+/// The [`footfall`]s of the rig's first two feet, the ones `Timing::LeftFoot` and `RightFoot` name,
+/// for a body at `stride` in a gait of this stance.
+pub fn footfalls(stride: f32, stance: f32, anatomy: &Anatomy) -> [f32; 2] {
+    let phase = |foot: usize| anatomy.feet.get(foot).map_or(foot as f32 * 0.5, |foot| foot.phase);
+    [footfall(stride + phase(0), stance), footfall(stride + phase(1), stance)]
 }
 
 /// Which way a state's feet travel, in the body's own frame. Only for bodies
@@ -613,10 +627,10 @@ mod tests {
                                 &skeleton,
                                 &mut pose,
                                 &root,
-                                state.foot_offsets(&inputs),
+                                &state.foot_offsets(&inputs, skeleton.anatomy()),
                             );
                             assert_eq!(
-                                reached,
+                                reached[..],
                                 [Reach::Reached; 2],
                                 "in {state:?} going {travel} at stride {:.2} and speed {speed} \
                                  on {proportions:?} the legs cannot make the step",

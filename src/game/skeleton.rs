@@ -24,7 +24,6 @@ use crate::common::class::{Class, ClassBuilds};
 use crate::common::skeleton::ik::ducked_pose;
 use crate::common::skeleton::play::{ClipStack, Layer, Regions};
 use crate::common::skeleton::state::{AnimationState, ClipLibrary};
-use crate::common::skeleton::rig::bone;
 use crate::common::skeleton::{
     draw_skeleton, animator_pose, humanoid, leg_length, AnimationClock, AnimationPhase, BodyRequests,
     direction_of, DisplaySpeed, ForcedAnimation, Gait, Pose, PoseInputs, Skeleton,
@@ -326,13 +325,6 @@ fn dress_new_players(
     }
 }
 
-/// How much of a body's pitch each joint takes.
-///
-/// Split because a head alone at eighty degrees reads as a broken neck. The
-/// shares sum to one.
-const NECK_SHARE: f32 = 0.4;
-const HEAD_SHARE: f32 = 1.0 - NECK_SHARE;
-
 /// How far the head will follow the look direction, up and down.
 ///
 /// The head stops at these; the aim does not. Further down than up.
@@ -352,21 +344,25 @@ fn head_pitch(look: f32) -> f32 {
 /// up, hence the negation. Composes onto the pose `advance_animators` left.
 /// Runs on every `Player`, since `pitch` is replicated; yaw is
 /// [`face_bodies`](crate::game::player::face_bodies)'s.
-fn look_with_the_head(mut bodies: Query<(&Player, &mut Pose)>) {
-    for (player, mut pose) in &mut bodies {
-        if player.pitch == 0.0 && pose.joint(bone::NECK) == Quat::IDENTITY {
+fn look_with_the_head(mut bodies: Query<(&Player, &Skeleton, &mut Pose)>) {
+    for (player, skeleton, mut pose) in &mut bodies {
+        let unturned = skeleton.anatomy().look.iter().all(|(bone, _)| {
+            pose.joint(skeleton.bones()[*bone].name) == Quat::IDENTITY
+        });
+        if player.pitch == 0.0 && unturned {
             // Skipping keeps a still body from dirtying its pose every frame.
             continue;
         }
-        look(&mut pose, player.pitch);
+        look(skeleton, &mut pose, player.pitch);
     }
 }
 
 /// Bend the neck and head toward `pitch`, onto whatever the pose has them
 /// doing. Shared with the hitboxes, which must put the head where it is drawn.
-pub(crate) fn look(pose: &mut Pose, pitch: f32) {
+pub(crate) fn look(skeleton: &Skeleton, pose: &mut Pose, pitch: f32) {
     let pitch = head_pitch(pitch);
-    for (joint, share) in [(bone::NECK, NECK_SHARE), (bone::HEAD, HEAD_SHARE)] {
+    for &(bone, share) in &skeleton.anatomy().look {
+        let joint = skeleton.bones()[bone].name;
         let animated = pose.joint(joint);
         pose.set(joint, animated * Quat::from_rotation_x(-pitch * share));
     }
@@ -520,8 +516,8 @@ pub(crate) fn stand_where_claimed(
         return;
     }
     let still = still();
-    for bone in skeleton.bones() {
-        let region = Regions::of_bone(bone.name);
+    for (bone_index, bone) in skeleton.bones().iter().enumerate() {
+        let region = skeleton.anatomy().region_of(bone_index);
         let Some(index) = regions.iter().position(|claimed| *claimed == region) else { continue };
         if cover[index] > 0.0 {
             pose.set(bone.name, pose.joint(bone.name).slerp(still.joint(bone.name), cover[index]));
@@ -556,6 +552,7 @@ pub fn draw_skeletons(
 
 #[cfg(test)]
 mod tests {
+    use crate::common::skeleton::rig::{bone, default_humanoid};
     use lightyear::prelude::input::native::ActionState;
 
     use crate::game::player::PlayerInput;
@@ -813,7 +810,7 @@ mod tests {
         let mut app = App::new();
         let body = app
             .world_mut()
-            .spawn((Player { pitch, ..default() }, Pose::rest()))
+            .spawn((Player { pitch, ..default() }, default_humanoid().clone(), Pose::rest()))
             .id();
         app.world_mut().run_system_once(look_with_the_head).unwrap();
         face_of(app.world().get::<Pose>(body).unwrap())
@@ -881,7 +878,7 @@ mod tests {
         let pitch = 0.7;
         let body = app
             .world_mut()
-            .spawn((Player { pitch, ..default() }, Pose::rest()))
+            .spawn((Player { pitch, ..default() }, default_humanoid().clone(), Pose::rest()))
             .id();
         app.world_mut().run_system_once(look_with_the_head).unwrap();
 

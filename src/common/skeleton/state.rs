@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use strum_macros::EnumIter;
 
 use crate::common::skeleton::gait::{
-    arms_at_sides, crouch_posture, direction_of, foot_offsets as gait_foot_offsets, gait_pose,
+    arms_at_sides, crouch_posture, direction_of, feet_offsets, gait_pose,
     FootOffset, GaitStyle,
 };
 use crate::common::skeleton::rig::{bone, Pose};
@@ -373,11 +373,11 @@ impl AnimationState {
         super::gait::heading_between(direction_of(*self), self.travel(inputs))
     }
 
-    pub fn foot_offsets(&self, inputs: &PoseInputs) -> [FootOffset; 2] {
-        if self.uses_gait() {
-            gait_foot_offsets(inputs.stride, self.travel(inputs), self.gait_style(inputs).shape)
-        } else {
-            [FootOffset::default(); 2]
+    /// One per foot the rig plants, in [`Anatomy::feet`](super::anatomy::Anatomy::feet) order.
+    pub fn foot_offsets(&self, inputs: &PoseInputs, anatomy: &super::anatomy::Anatomy) -> super::anatomy::PerFoot<FootOffset> {
+        match self.uses_gait() {
+            true => feet_offsets(inputs.stride, self.travel(inputs), self.gait_style(inputs).shape, anatomy),
+            false => anatomy.feet.iter().map(|_| FootOffset::default()).collect(),
         }
     }
 }

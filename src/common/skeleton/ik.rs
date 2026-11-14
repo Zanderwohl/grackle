@@ -11,6 +11,7 @@
 use bevy::prelude::*;
 
 use crate::common::class::CROUCH_HEIGHT;
+use crate::common::skeleton::anatomy::PerFoot;
 use crate::common::skeleton::gait::FootOffset;
 use crate::common::skeleton::interpolation::Interpolation;
 use crate::common::skeleton::rig::{bone, Pose, Skeleton};
@@ -56,7 +57,7 @@ pub const RIGHT_ARM: Chain = Chain {
 };
 
 /// What happened when a chain was asked to reach somewhere.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Reach {
     /// The tip is on the target.
     Reached,
@@ -64,6 +65,7 @@ pub enum Reach {
     Short,
     /// The chain is not in this skeleton, or the target is on its root joint.
     /// Nothing was written.
+    #[default]
     Impossible,
 }
 
@@ -148,36 +150,40 @@ pub fn solve(
     }
 }
 
-/// Hold each foot at its rest position plus `offsets`, so whatever the
-/// animation does above the hips, the knees take the difference.
+/// Hold each of the rig's feet at its rest position plus its offset, so whatever the animation does
+/// above the hips, the knees take the difference. `offsets` is in [`Anatomy::feet`] order.
+///
+/// [`Anatomy::feet`]: super::anatomy::Anatomy::feet
 pub fn plant_feet(
     skeleton: &Skeleton,
     pose: &mut Pose,
     root: &Transform,
-    offsets: [FootOffset; 2],
-) -> [Reach; 2] {
-    let mut reached = [Reach::Impossible; 2];
+    offsets: &[FootOffset],
+) -> PerFoot<Reach> {
     let standing = Pose::rest();
-    // Knees bend forwards, even in a sidestep.
     let forward = root.rotation * Vec3::NEG_Z;
     let across = root.rotation * Vec3::X;
-
-    for (index, (chain, offset)) in [LEFT_LEG, RIGHT_LEG].iter().zip(offsets).enumerate() {
-        let Some(resting) = skeleton
-            .index_of(chain.lower)
-            .map(|lower| skeleton.posed_bone(&standing, root, lower).tail)
-        else {
-            continue;
-        };
-
-        // Offsets are in leg-lengths.
-        let leg = chain_length(skeleton, chain);
-        let target = resting
-            + (forward * offset.ahead + across * offset.across + Vec3::Y * offset.lift) * leg;
-        reached[index] = solve(skeleton, pose, root, chain, target, forward);
-    }
-
-    reached
+    let anatomy = skeleton.anatomy();
+    anatomy
+        .feet
+        .iter()
+        .zip(offsets)
+        .map(|(foot, offset)| {
+            let Some(limb) = anatomy.limbs.get(foot.limb) else { return Reach::Impossible };
+            let chain = &limb.chain;
+            let Some(resting) = skeleton
+                .index_of(chain.lower)
+                .map(|lower| skeleton.posed_bone(&standing, root, lower).tail)
+            else {
+                return Reach::Impossible;
+            };
+            // Offsets are in leg-lengths.
+            let leg = chain_length(skeleton, chain);
+            let target = resting
+                + (forward * offset.ahead + across * offset.across + Vec3::Y * offset.lift) * leg;
+            solve(skeleton, pose, root, chain, target, root.rotation * limb.pole)
+        })
+        .collect()
 }
 
 /// [`solve`], but a limb that does not reach is left as it was. [`solve`]
@@ -239,7 +245,7 @@ pub fn chain_length(skeleton: &Skeleton, chain: &Chain) -> f32 {
 
 /// The unit a gait's strides are measured in.
 pub fn leg_length(skeleton: &Skeleton) -> f32 {
-    chain_length(skeleton, &LEFT_LEG)
+    skeleton.anatomy().leg
 }
 
 /// Sit a body exactly under `ceiling` (meters above its feet), never above
@@ -261,7 +267,7 @@ pub fn duck_under(skeleton: &Skeleton, pose: &mut Pose, root: &Transform, ceilin
     }
 
     // Clamped at rest, so a small body is not stretched up to the ceiling.
-    let hips = pose.root_offset.y - slack / skeleton.proportions().hip_meters();
+    let hips = pose.root_offset.y - slack / skeleton.anatomy().hip;
     pose.root_offset.y = hips.min(0.0);
 }
 
@@ -307,23 +313,24 @@ pub fn ducked_pose(
     // A squat, then a hunch: the hips go down with the duck and the body above them leans in
     // late, so the head drops rather than swinging forward on its way down.
     let lean = crouch * crouch;
-    for name in skeleton.bones().iter().map(|bone| bone.name) {
-        if !matches!(Regions::of_bone(name), Regions::LEGS | Regions::NONE) {
+    for (index, name) in skeleton.bones().iter().map(|bone| bone.name).enumerate() {
+        if !matches!(skeleton.anatomy().region_of(index), Regions::LEGS | Regions::NONE) {
             pose.set(name, standing.joint(name).slerp(crouched.joint(name), lean));
         }
     }
     // Blended knees do not follow blended hips down, and the feet sink through the floor.
     if upright.plants_feet() && ducked.plants_feet() {
-        let feet = |state: AnimationState| state.foot_offsets(inputs);
-        let offsets = std::array::from_fn(|side| {
-            let (from, to) = (feet(upright)[side], feet(ducked)[side]);
-            FootOffset {
+        let feet = |state: AnimationState| state.foot_offsets(inputs, skeleton.anatomy());
+        let offsets: PerFoot<FootOffset> = feet(upright)
+            .iter()
+            .zip(feet(ducked).iter())
+            .map(|(from, to)| FootOffset {
                 ahead: from.ahead.lerp(to.ahead, crouch),
                 across: from.across.lerp(to.across, crouch),
                 lift: from.lift.lerp(to.lift, crouch),
-            }
-        });
-        plant_feet(skeleton, &mut pose, root, offsets);
+            })
+            .collect();
+        plant_feet(skeleton, &mut pose, root, &offsets);
     }
     pose
 }
@@ -361,7 +368,7 @@ pub fn correct_for_state(
         duck_under(skeleton, pose, root, CROUCH_HEIGHT);
     }
     if state.plants_feet() {
-        plant_feet(skeleton, pose, root, state.foot_offsets(inputs));
+        plant_feet(skeleton, pose, root, &state.foot_offsets(inputs, skeleton.anatomy()));
     }
 }
 
@@ -381,7 +388,7 @@ pub fn animation_pose(
     };
     let footfalls = state
         .stance(inputs)
-        .map(|stance| super::gait::footfalls(inputs.stride, stance));
+        .map(|stance| super::gait::footfalls(inputs.stride, stance, skeleton.anatomy()));
     let pose = clip_pose(first, inputs, footfalls, skeleton, root);
     match second {
         Some((other, t)) => Pose::lerp(&pose, &clip_pose(other, inputs, footfalls, skeleton, root), t),
@@ -598,7 +605,7 @@ mod tests {
             for drop in [0.0, 0.01, 0.05, 0.12] {
                 let mut pose = Pose::rest();
                 pose.root_offset = Vec3::NEG_Y * drop;
-                plant_feet(&skeleton, &mut pose, &root, [FootOffset::default(); 2]);
+                plant_feet(&skeleton, &mut pose, &root, &[FootOffset::default(); 2]);
 
                 for (name, was) in [bone::FOOT_L, bone::FOOT_R].iter().zip(&standing) {
                     let now = tip_of(&skeleton, &pose, &root, name);

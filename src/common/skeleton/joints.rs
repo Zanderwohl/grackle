@@ -127,7 +127,7 @@ const ANKLE: JointLimit = JointLimit::Cone { radians: 0.6 };
 /// Narrow, so a bone missing from [`limit_of`] is not a limb that bends anywhere.
 const UNLISTED: JointLimit = JointLimit::Cone { radians: 0.3 };
 
-/// What a named bone's joint will do.
+/// What each humanoid joint will do, which its builder copies onto each bone.
 pub fn limit_of(bone_name: &str) -> JointLimit {
     match bone_name {
         bone::PELVIS => JointLimit::Fixed,

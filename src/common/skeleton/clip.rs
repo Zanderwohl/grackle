@@ -27,7 +27,6 @@ use bevy::reflect::TypePath;
 use serde::de::{self, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use super::ik::{self, Chain};
 use super::interpolation::Interpolation;
 
 fn one() -> f32 {
@@ -154,20 +153,13 @@ impl ChainRef {
         ChainRef::LeftLeg,
     ];
 
-    pub fn chain(self) -> Chain {
+    /// The [`Limb`](super::anatomy::Limb) it names, as the file writes it.
+    pub fn key(self) -> &'static str {
         match self {
-            ChainRef::LeftArm => ik::LEFT_ARM,
-            ChainRef::RightArm => ik::RIGHT_ARM,
-            ChainRef::LeftLeg => ik::LEFT_LEG,
-            ChainRef::RightLeg => ik::RIGHT_LEG,
-        }
-    }
-
-    /// -1 on the left, 1 on the right; what a pole is mirrored by.
-    pub fn side(self) -> f32 {
-        match self {
-            ChainRef::LeftArm | ChainRef::LeftLeg => -1.0,
-            ChainRef::RightArm | ChainRef::RightLeg => 1.0,
+            ChainRef::LeftArm => "left_arm",
+            ChainRef::RightArm => "right_arm",
+            ChainRef::LeftLeg => "left_leg",
+            ChainRef::RightLeg => "right_leg",
         }
     }
 
@@ -178,10 +170,6 @@ impl ChainRef {
             ChainRef::RightLeg => "anim.chain.right_leg",
             ChainRef::LeftLeg => "anim.chain.left_leg",
         }
-    }
-
-    pub fn is_leg(self) -> bool {
-        matches!(self, ChainRef::LeftLeg | ChainRef::RightLeg)
     }
 }
 
@@ -330,7 +318,7 @@ pub enum Channel {
         #[serde(default)]
         keys: Vec<Key>,
     },
-    /// A two-bone chain solved onto a target through [`ik::solve`].
+    /// A two-bone chain solved onto a target through [`super::ik::solve`].
     Effector {
         chain: ChainRef,
         /// Which way the elbow or knee points. Defaults per chain when absent.

@@ -633,7 +633,8 @@ pub(crate) fn grip_the_weapon(
         if !held.resolved || held.weapon.is_none() {
             continue;
         }
-        let arms = [Regions::ARM_R, Regions::ARM_L];
+        let anatomy = skeleton.anatomy();
+        let arms = [0, 1].map(|hand| anatomy.hand(hand).map_or(Regions::NONE, |limb| limb.region));
         let cover = arms.map(|arm| stack.map_or(0.0, |stack| stack.cover(arm, Layer::Weapon)));
         if cover.iter().all(|cover| *cover >= 1.0) {
             continue;
@@ -648,8 +649,8 @@ pub(crate) fn grip_the_weapon(
             if cover <= 0.0 || cover >= 1.0 {
                 continue;
             }
-            for bone in skeleton.bones() {
-                if Regions::of_bone(bone.name) == arm {
+            for (index, bone) in skeleton.bones().iter().enumerate() {
+                if anatomy.region_of(index) == arm {
                     let gripped = pose.joint(bone.name);
                     pose.set(bone.name, gripped.slerp(clipped.joint(bone.name), cover));
                 }

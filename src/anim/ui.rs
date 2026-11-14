@@ -1150,10 +1150,10 @@ impl AnimTabs<'_> {
                     let mut set = pole.is_some();
                     if ui.checkbox(&mut set, get!("anim.label.pole")).changed() {
                         // Seeded with the default, so switching the override on changes nothing until edited.
-                        let seed = match chain.is_leg() {
-                            true => Vec3::NEG_Z,
-                            false => crate::common::skeleton::ik::elbow_pole(chain.side()),
-                        };
+                        let seed = crate::common::skeleton::default_humanoid()
+                            .anatomy()
+                            .limb(chain.key())
+                            .map_or(Vec3::NEG_Z, |limb| limb.pole);
                         *pole = set.then_some(seed.to_array());
                         changed = true;
                     }
@@ -1415,7 +1415,7 @@ impl AnimTabs<'_> {
     /// The clip's own problems, and any track outside its layer's claim.
     fn problems_of(&self, clip: &Clip, rig: &crate::common::skeleton::Skeleton) -> Vec<ClipProblem> {
         let mut problems = clip.problems(|bone| rig.index_of(bone).is_some());
-        for track in self.played_as().1.uncovered_tracks(clip) {
+        for track in self.played_as().1.uncovered_tracks(clip, rig) {
             problems.push(ClipProblem { track: Some(track), message: get!("anim.problem.unclaimed") });
         }
         problems

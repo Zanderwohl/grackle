@@ -119,7 +119,7 @@ pub fn update_hitboxes(
             });
         }
         let pitch = player.map_or(0.0, |player| player.pitch);
-        look(&mut pose, pitch);
+        look(skeleton, &mut pose, pitch);
         if let (Some(stack), Some(layer_clips)) = (stack, layer_clips.as_deref()) {
             let floor = root.translation.y;
             let ground = move |_: Vec3| floor;

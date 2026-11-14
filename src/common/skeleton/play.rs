@@ -12,7 +12,7 @@
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use super::clip::{Axis, ChainRef, Channel, Clip, Combine, Key, Space, Unit};
+use super::clip::{Axis, Channel, Clip, Combine, Key, Space, Unit};
 use super::ik::{self, Chain, Reach};
 use super::interpolation::Interpolation;
 use super::rig::{Pose, Skeleton};
@@ -162,12 +162,12 @@ pub fn key_the_channel(channel: &mut Channel, at: f32, length: f32, looping: boo
 
 /// How many meters one of `unit` is on this body.
 pub fn meters_per(unit: Unit, skeleton: &Skeleton) -> f32 {
-    let proportions = skeleton.proportions();
+    let anatomy = skeleton.anatomy();
     match unit {
         Unit::Meters => 1.0,
-        Unit::LegLengths => ik::leg_length(skeleton),
-        Unit::ArmLengths => proportions.arm_meters(),
-        Unit::HipHeights => proportions.hip_meters(),
+        Unit::LegLengths => anatomy.leg,
+        Unit::ArmLengths => anatomy.arm,
+        Unit::HipHeights => anatomy.hip,
     }
 }
 
@@ -358,12 +358,12 @@ impl Regions {
 
     /// Tracks of `clip` moving something outside this set. They still play,
     /// but a layer above that claims what they move will cover them.
-    pub fn uncovered_tracks(self, clip: &Clip) -> Vec<usize> {
+    pub fn uncovered_tracks(self, clip: &Clip, skeleton: &Skeleton) -> Vec<usize> {
         clip.tracks
             .iter()
             .enumerate()
             .filter(|(_, track)| {
-                let moved = Regions::of_track(&track.channel);
+                let moved = Regions::of_track(&track.channel, skeleton);
                 moved != Regions::NONE && !self.overlaps(moved)
             })
             .map(|(index, _)| index)
@@ -371,30 +371,17 @@ impl Regions {
     }
 
     /// `NONE` for a name the rig does not have, so it is never masked.
-    pub fn of_bone(name: &str) -> Regions {
-        use super::rig::bone;
-        match name {
-            bone::PELVIS => Regions::LEGS,
-            bone::CHEST => Regions::TORSO,
-            bone::NECK | bone::HEAD => Regions::HEAD,
-            bone::CLAVICLE_L | bone::UPPER_ARM_L | bone::FOREARM_L | bone::HAND_L => Regions::ARM_L,
-            bone::CLAVICLE_R | bone::UPPER_ARM_R | bone::FOREARM_R | bone::HAND_R => Regions::ARM_R,
-            bone::THIGH_L | bone::SHIN_L | bone::FOOT_L | bone::THIGH_R | bone::SHIN_R | bone::FOOT_R => {
-                Regions::LEGS
-            }
-            _ => Regions::NONE,
-        }
+    pub fn of_bone(skeleton: &Skeleton, name: &str) -> Regions {
+        skeleton.index_of(name).map_or(Regions::NONE, |bone| skeleton.anatomy().region_of(bone))
     }
 
     /// What a track moves.
-    pub fn of_track(channel: &Channel) -> Regions {
+    pub fn of_track(channel: &Channel, skeleton: &Skeleton) -> Regions {
         match channel {
-            Channel::Rotation { bone, .. } => Regions::of_bone(bone),
-            Channel::Effector { chain, .. } => match chain {
-                ChainRef::LeftArm => Regions::ARM_L,
-                ChainRef::RightArm => Regions::ARM_R,
-                ChainRef::LeftLeg | ChainRef::RightLeg => Regions::LEGS,
-            },
+            Channel::Rotation { bone, .. } => Regions::of_bone(skeleton, bone),
+            Channel::Effector { chain, .. } => {
+                skeleton.anatomy().limb(chain.key()).map_or(Regions::NONE, |limb| limb.region)
+            }
             Channel::Weapon { .. } | Channel::WeaponRotation { .. } => Regions::WEAPON,
             Channel::Root { .. } => Regions::LEGS,
         }
@@ -659,7 +646,7 @@ pub fn apply_masked(
     let mut reaches = Vec::new();
 
     for track in &clip.tracks {
-        if !track.enabled || masked.overlaps(Regions::of_track(&track.channel)) {
+        if !track.enabled || masked.overlaps(Regions::of_track(&track.channel, skeleton)) {
             continue;
         }
         let time = track_time(track.timing, time, frames.footfalls);
@@ -698,7 +685,10 @@ pub fn apply_masked(
                 let Some(frame) = frames.of(track.space) else {
                     continue;
                 };
-                let solved = chain.chain();
+                let Some(limb) = skeleton.anatomy().limb(chain.key()).copied() else {
+                    continue;
+                };
+                let solved = limb.chain;
                 let Some(tip) = chain_tip(skeleton, pose, &frames.body, &solved) else {
                     continue;
                 };
@@ -712,12 +702,9 @@ pub fn apply_masked(
                     frames.ground,
                 );
                 // Authored and default poles alike are in the body's frame.
-                let pole = frames.body.rotation
-                    * pole.map(Vec3::from_array).unwrap_or_else(|| default_pole(*chain));
+                let pole = frames.body.rotation * pole.map(Vec3::from_array).unwrap_or(limb.pole);
 
-                // A short leg straightens and points; a short arm is left as
-                // the animation had it. See `ik::reach_or_leave`.
-                reaches.push(if chain.is_leg() {
+                reaches.push(if limb.straightens {
                     ik::solve(skeleton, pose, &frames.body, &solved, target, pole)
                 } else {
                     ik::reach_or_leave(skeleton, pose, &frames.body, &solved, target, pole)
@@ -789,17 +776,6 @@ pub fn apply_masked(
     reaches
 }
 
-/// Which way a knee or an elbow points when a track does not say, in the
-/// body's frame.
-fn default_pole(chain: ChainRef) -> Vec3 {
-    if chain.is_leg() {
-        // Knees bend forwards, even in a sidestep.
-        Vec3::NEG_Z
-    } else {
-        ik::elbow_pole(chain.side())
-    }
-}
-
 /// Where the stack has moved each hand's grip, trigger hand first: meters
 /// from the grip, in the weapon's axes. A clip that keys no hand leaves it
 /// where the clips beneath put it, so a kick over a reload does not snap it
@@ -821,12 +797,12 @@ pub fn grip_offsets(stack: &ClipStack, clips: &Assets<Clip>, skeleton: &Skeleton
         let time = clip.wrap(playing.time);
         for track in clip.tracks.iter().filter(|track| track.enabled && track.space == Space::Grip) {
             let Channel::Effector { chain, keys, .. } = &track.channel else { continue };
-            let hand = match chain {
-                ChainRef::RightArm => 0,
-                ChainRef::LeftArm => 1,
-                ChainRef::LeftLeg | ChainRef::RightLeg => continue,
+            let anatomy = skeleton.anatomy();
+            let Some(hand) = (0..2).find(|hand| anatomy.hand(*hand).is_some_and(|limb| limb.name == chain.key()))
+            else {
+                continue;
             };
-            if masked.overlaps(Regions::of_track(&track.channel)) {
+            if masked.overlaps(Regions::of_track(&track.channel, skeleton)) {
                 continue;
             }
             let time = track_time(track.timing, time, None);
@@ -888,7 +864,7 @@ pub fn apply_stack(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::common::skeleton::clip::{Clock, Track};
+    use crate::common::skeleton::clip::{ChainRef, Clock, Track};
     use crate::common::skeleton::rig::{bone, default_humanoid};
 
     fn keys(times: &[f32]) -> Vec<Key> {
@@ -1561,7 +1537,7 @@ mod tests {
         clip.tracks.push(Track::rotation(bone::FOREARM_R));
         clip.tracks.push(Track::rotation("not a bone"));
         let claims = Layer::Weapon.claims();
-        assert_eq!(claims.uncovered_tracks(&clip), vec![0, 1], "the chest and the thigh are not the weapon's");
+        assert_eq!(claims.uncovered_tracks(&clip, default_humanoid()), vec![0, 1], "the chest and the thigh are not the weapon's");
         assert_eq!(claims.names().collect::<Vec<_>>(), ["arm.l", "arm.r", "weapon"]);
         for (region, name) in Regions::NAMED {
             assert_eq!(Regions::named(name), Some(region));

@@ -21,7 +21,6 @@ use bevy::prelude::*;
 use crate::common::app_mode::AppMode;
 use crate::common::flame::Burning;
 use crate::common::skeleton::ik::Reach;
-use crate::common::skeleton::rig::bone;
 use crate::common::skeleton::{Pose, Skeleton};
 use crate::common::player_color::PlayerColor;
 use crate::common::team::Team;
@@ -59,15 +58,6 @@ pub struct ViewmodelArm {
     /// Index into [`grip_hands`]'s answer: 0 trigger hand, 1 support.
     hand: usize,
 }
-
-/// Forearms and hands only: an upper arm runs back to a shoulder beside the
-/// camera and at a 5 mm near plane reads as a slab in the screen corner.
-const ARM_BONES: [(&str, usize); 4] = [
-    (bone::FOREARM_R, 0),
-    (bone::HAND_R, 0),
-    (bone::FOREARM_L, 1),
-    (bone::HAND_L, 1),
-];
 
 /// Fraction of the way up the head bone the eye sits. Taken off the rig rather
 /// than the movement hull, whose 1.8 m is the same for every class.
@@ -407,8 +397,7 @@ fn dress_the_viewmodel_arms(
 
         let mut arms = Vec::new();
         commands.entity(camera).with_children(|camera| {
-            for (name, hand) in ARM_BONES {
-                let Some(bone) = skeleton.index_of(name) else { continue };
+            for &(bone, hand) in &skeleton.anatomy().viewmodel {
                 let Some(handle) = handles.get(bone) else { continue };
                 arms.push(
                     camera
@@ -504,7 +493,8 @@ fn place_the_viewmodel_arms(
 fn eye_space(skeleton: &Skeleton) -> Transform {
     let bones = skeleton.posed_bones(&Pose::rest(), &Transform::IDENTITY);
     let eye = skeleton
-        .index_of(bone::HEAD)
+        .anatomy()
+        .head
         .map(|head| bones[head].head.lerp(bones[head].tail, EYE_UP_THE_HEAD))
         .unwrap_or_default();
     Transform::from_translation(-eye)
@@ -527,6 +517,7 @@ fn show_it_only_in_first_person(
 
 #[cfg(test)]
 mod tests {
+    use crate::common::skeleton::rig::bone;
     use bevy::ecs::system::RunSystemOnce;
 
     use strum::IntoEnumIterator;
@@ -610,7 +601,7 @@ mod tests {
             "a support hand with nothing to hold reported holding it",
         );
         assert_eq!(
-            ARM_BONES.iter().filter(|(_, hand)| *hand == 1).count(),
+            skeleton.anatomy().viewmodel.iter().filter(|(_, hand)| *hand == 1).count(),
             2,
             "the support hand's bones are no longer the ones this hides",
         );
@@ -788,10 +779,7 @@ mod tests {
     /// leaves, without the meshes it needs a renderer for.
     fn a_viewmodel_with_arms(world: &mut World) -> (Entity, Entity, Vec<Entity>) {
         let skeleton = humanoid(crate::common::class::ClassBuilds::shipped().of(Class::Soldier));
-        let arms: Vec<(usize, usize)> = ARM_BONES
-            .iter()
-            .map(|(name, hand)| (skeleton.index_of(name).expect("a rig has arms"), *hand))
-            .collect();
+        let arms = skeleton.anatomy().viewmodel.clone();
         let body = world.spawn((LocalPlayer, skeleton, HeldModel::default())).id();
 
         let mut camera = Camera::default();

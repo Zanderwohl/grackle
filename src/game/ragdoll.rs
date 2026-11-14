@@ -46,7 +46,6 @@ use crate::common::net::has_authority;
 use crate::common::skeleton::rig::{humanoid, Proportions, Scratch, BONES_ON_THE_STACK};
 use crate::common::damage::{falloff, PlayerId};
 use crate::common::movement_rules::MovementRules;
-use crate::common::skeleton::joints::limit_of;
 use crate::common::skeleton::{Bone, Pose, Skeleton};
 use crate::common::player_color::PlayerColor;
 use crate::common::team::Team;
@@ -454,7 +453,7 @@ impl Ragdoll {
         // Limits are in the bone's own rest frame, which is why one table
         // covers both sides of the body.
         let rest = frames[parent] * bone.rest;
-        let direction = rest * limit_of(bone.name).nearest(rest.inverse() * along);
+        let direction = rest * bone.limit.nearest(rest.inverse() * along);
         (rest, Quat::from_rotation_arc(rest * Vec3::Y, direction) * rest, direction)
     }
 

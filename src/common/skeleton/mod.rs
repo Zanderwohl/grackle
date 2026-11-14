@@ -1,5 +1,6 @@
 //! Code-defined skeletons: the rig, what it is asked to do, and how it is drawn.
 //!
+//! - [`anatomy`] — what a rig says about itself: limbs, feet, where the head is.
 //! - [`rig`] — bones and [`Pose`]s. Proportions live in the skeleton, motion in
 //!   the pose as rotations, so one animation fits every build.
 //! - [`state`] — [`BodyRequests`], which anything can write, and the state
@@ -19,6 +20,7 @@
 //! - [`draw`] — one prism per bone, as gizmos.
 //! - [`mesh`] — the solid a body is drawn as.
 
+pub mod anatomy;
 pub mod clip;
 pub mod draw;
 pub mod gait;

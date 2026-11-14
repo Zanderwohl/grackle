@@ -111,8 +111,7 @@ const FOOT: Profile = Profile {
     ],
 };
 
-/// The shape of each bone in the humanoid rig. Kept off [`Bone`], which says
-/// how a body moves rather than how it is drawn.
+/// The shape of each bone in the humanoid rig, which its builder copies onto each [`Bone`].
 pub fn profile(name: &str) -> Profile {
     match name {
         bone::PELVIS => PELVIS,
@@ -131,7 +130,7 @@ pub fn profile(name: &str) -> Profile {
 }
 
 pub fn bone_mesh(bone: &Bone) -> Mesh {
-    let shape = profile(bone.name);
+    let shape = bone.profile;
     let rings: Vec<Vec<Vec3>> = shape
         .rings
         .iter()

@@ -103,12 +103,14 @@ changes no behavior. This is the rule `surfaces.md` already states for rooms:
 **a new shape is a new producer, not a rewrite of every consumer.** Every site
 in the table above stops naming bones and asks the rig.
 
-**`Pose` becomes per-index** (`Vec<Option<Quat>>`, or a bitset plus values) so
-that "absent means rest" still holds. A clip binds its names to indices once
-per (clip, rig), not per sample, which is the same work `HashMap<&str>` does
-today on every lookup. A name the rig lacks is a Problem in the editor and is
-skipped at runtime, never a panic. This is the "nothing refuses" rule the prop
-evaluator follows.
+**`Pose` stays keyed by name.** A pose is built without a skeleton — by the
+humanoid's pose functions and by clips — so that one pose fits every build;
+keying it by index would tie it to one rig. What a data-defined rig needs is
+only that a bone's name can come from a file, and a file's names can be
+interned to `&'static str` where the rig is read (Stage 2). Per-index storage
+is a speed-up to take if profiling asks for it, not a step toward other
+anatomy. A name the rig lacks is a Problem in the editor and is skipped at
+runtime, never a panic, as the prop evaluator does.
 
 ### Where a rig comes from
 
@@ -289,23 +291,32 @@ None of these is animation, but a creature is not playable without them:
 - [ ] Choosing a taunt: G opens a small picker of the class's taunts (the
       open question in `animation-layers.md`).
 
-### Stage 1: bone identity and the rig's vocabulary (no behavior change)
-- [ ] `Bone.name: String`, `BoneIndex`; `Pose` per index; clips bind names to
-      indices once per rig, cached.
-- [ ] Chains, regions, sockets, measures, feet + gait pattern, look,
-      per-bone limit and profile published by `humanoid()`.
-- [ ] `Regions` becomes a `u32` resolved per rig; `of_bone` reads the rig.
-- [ ] `ChainRef` → chain name; `Space::Socket`, `Unit::Measure`,
-      `Timing::Foot`, with the old spellings as aliases. Every shipped `.gpa`
-      and `.gpp` loads unchanged (`every_prop_the_default_pack_ships_loads_and_builds`
-      and a new one for clips).
-- [ ] Every site in the table above asks the rig. `bone::` constants survive
-      only in humanoid-specific code: the builder, `seed.rs`, the pose
-      functions and tests.
-- [ ] Gait and `plant_feet` over N feet.
-- [ ] `cargo check --all-targets`, `cargo test`; corpses still settle.
+### Stage 1: the rig's vocabulary (no behavior change)
+- [x] `Skeleton::anatomy()` ([`anatomy.rs`](../src/common/skeleton/anatomy.rs)):
+      limbs (name, chain, side, pole, region, whether it straightens), feet
+      (limb, phase), the two hands, the carry bone, the head, the look shares,
+      the viewmodel's bones, a region per bone, and leg, arm and hip in meters,
+      all published by `humanoid()`. A `Bone` carries its joint limit and mesh
+      profile.
+- [x] Every site in the table above asks the rig: clip effectors and their
+      poles and regions, `meters_per`, layer masking, the grip, the carry
+      frame, the crown, the head hitbox, the viewmodel's arms and eye, the
+      look pass, the ragdoll's limits, the mesh profiles, duck depth. `bone::`
+      constants survive only in the humanoid builder, its limit and profile
+      tables, its pose functions, `seed.rs` and tests.
+- [x] Gait and `plant_feet` over the rig's feet (`PerFoot`, at most
+      `MOST_FEET`), each at its own phase and side. `Timing::LeftFoot` and
+      `RightFoot` name the rig's first two feet.
+- [x] `cargo check --all-targets`, `cargo test`; corpses still settle.
+- Moved to Stage 2, since only a rig file can need them: `Pose` keyed by
+  interned names from a file, `ChainRef` as a free chain name, and
+  `Space::Socket`, `Unit::Measure` and `Timing::Foot` beside the old
+  spellings. `Regions` stays six bits until a rig names other regions.
 
 ### Stage 2: rig files
+- [ ] Interned bone names; `ChainRef` → a chain name; `Space::Socket`,
+      `Unit::Measure`, `Timing::Foot` and per-rig regions, the old spellings
+      kept. Every shipped `.gpa` and `.gpp` loads unchanged.
 - [ ] `rigs/<name>.toml` format and loader; Problems for bad files, as
       `classes.toml` drops bad builds.
 - [ ] `classes.toml` `rig =`; build as height + measure scales + girth for
