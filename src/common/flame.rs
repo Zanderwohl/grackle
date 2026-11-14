@@ -8,30 +8,42 @@ use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::common::damage::DamageSource;
-use crate::common::weapon::{distance_scale, DistanceScale};
+use crate::common::weapon::{distance_scale, DistanceScale, Unit};
 
 /// Rate of fire is on [`crate::common::weapon::Mounted`], not here.
 #[derive(Clone, Copy, Debug, PartialEq, Reflect, Serialize, Deserialize)]
+#[reflect(Default)]
 pub struct FlameSpec {
     #[serde(rename = "range")]
+    #[reflect(@Unit::Meters)]
     pub range_m: f32,
     /// Half-angle, radians.
+    #[reflect(@Unit::Radians)]
     pub spread: f32,
     /// A sampling rate, not a multiplier: a body hit by several rays takes one
     /// puff.
     pub rays: u32,
     pub damage: u32,
     #[serde(rename = "afterburn_duration")]
+    #[reflect(@Unit::Seconds)]
     pub afterburn_duration_s: f32,
     pub afterburn_damage: u32,
     /// Between afterburn ticks.
     #[serde(rename = "afterburn_interval")]
+    #[reflect(@Unit::Seconds)]
     pub afterburn_interval_s: f32,
     /// On a puff's damage, by meters from the eye to the hit. Not on the afterburn it leaves.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ramp_up: Option<DistanceScale>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub falloff: Option<DistanceScale>,
+}
+
+/// What the weapon editor starts a new one from.
+impl Default for FlameSpec {
+    fn default() -> Self {
+        Self::FLAMETHROWER
+    }
 }
 
 impl FlameSpec {

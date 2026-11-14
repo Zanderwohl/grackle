@@ -192,6 +192,9 @@ pub trait FeatureTrait: Send + Sync {
     /// [`Mirror`]: crate::editor::mirror::Mirror
     fn mirror(&mut self, _mirroring: &Mirroring) -> bool { false }
 
+    /// The weapon this feature names by key, so renaming or deleting one can say what it breaks.
+    fn weapon_named(&self) -> Option<&str> { None }
+
     /// The volumes of air this feature stands up, as its entities carry them.
     /// Asked by picking, which works from features rather than entities.
     fn rooms(&self) -> Vec<crate::tool::room::Room> { Vec::new() }

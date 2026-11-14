@@ -1093,9 +1093,10 @@ at the origin and the figure stands under it, inverted through the same
 ## Editing a weapon
 
 `AppMode::Weapon` ([`src/weapon_editor/`](src/weapon_editor/)) edits every
-pack's `weapons.toml` as one document. The plan and what is left is
-[documentation/weapon-editor.md](documentation/weapon-editor.md); today it is a
-list and a handful of fields, with the reflected form and the range to come.
+pack's `weapons.toml` as one document: a Weapons browser on the left, the
+selected weapon on the right, and the range, still to come, between them. The
+plan and what is left is
+[documentation/weapon-editor.md](documentation/weapon-editor.md).
 
 - **The draft is the catalog while the mode is open.** Entering stashes the
   published `WeaponCatalog` (`PublishedCatalog`) and puts `catalog_of` the
@@ -1115,6 +1116,21 @@ list and a handful of fields, with the reflected form and the range to come.
   back to the pack it came from, and only packs that changed are written.
 - **The catalog has no file to Save As**, so File offers Save and Quit, and
   `Ctrl+Shift+S` is a save.
+- **The form is reflection** ([`form.rs`](src/weapon_editor/form.rs)): a
+  weapon's `Magazine` and each `Mounted` are walked as structs, enums and
+  options, labeled from `weapon_editor.fields.*` and `variants.*` by name, so a
+  field added to a spec shows up with no UI code — and fails
+  `every_weapon_field_has_a_label` until it has a label. **Every float in a
+  spec carries `#[reflect(@Unit::...)]`** (`every_number_states_its_unit`),
+  which sets its suffix and step; radians are shown in degrees. A variant
+  switched to is built from its fields' `Default`s in the type registry, so
+  every spec has a `Default` and `#[reflect(Default)]`, and what a switch or a
+  cleared option put down is kept per weapon in `FormMemory` for the session.
+- **A rename can carry into the loadouts.** It is staged in the draft (so undo
+  takes it back) and written to every pack's `loadouts.toml` only after the
+  weapons save. Rename and delete list what names the key: loadouts and the
+  open map's pickups (`FeatureTrait::weapon_named`); blueprints on disk are not
+  read.
 
 ## Editing a material
 

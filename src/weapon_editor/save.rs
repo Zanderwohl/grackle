@@ -96,6 +96,64 @@ fn holds(text: &str, expected: &[(String, WeaponEntry)]) -> bool {
     on_disk.len() == expected.len() && expected.iter().all(|weapon| on_disk.contains(weapon))
 }
 
+/// `loadouts.toml` with every weapon named in a `permitted` list or a `default` renamed, in
+/// order, keeping the file's comments and layout. `None` when nothing in it names one.
+pub fn rename_in_loadouts(original: &str, renames: &[(String, String)]) -> Result<Option<String>, String> {
+    let mut doc: DocumentMut = original.parse().map_err(|e: toml_edit::TomlError| e.to_string())?;
+    let mut touched = false;
+    if let Some(loadouts) = doc.get_mut("loadouts").and_then(Item::as_table_like_mut) {
+        for (_, class) in loadouts.iter_mut() {
+            let Some(class) = class.as_table_like_mut() else { continue };
+            for (_, slot) in class.iter_mut() {
+                let Some(slot) = slot.as_table_like_mut() else { continue };
+                if let Some(permitted) = slot.get_mut("permitted").and_then(Item::as_array_mut) {
+                    for name in permitted.iter_mut() {
+                        touched |= rename_value(name, renames);
+                    }
+                }
+                if let Some(default) = slot.get_mut("default").and_then(Item::as_value_mut) {
+                    touched |= rename_value(default, renames);
+                }
+            }
+        }
+    }
+    Ok(touched.then(|| doc.to_string()))
+}
+
+fn rename_value(value: &mut Value, renames: &[(String, String)]) -> bool {
+    let Some(mut name) = value.as_str().map(str::to_owned) else { return false };
+    let before = name.clone();
+    for (from, to) in renames {
+        if &name == from {
+            name = to.clone();
+        }
+    }
+    if name == before {
+        return false;
+    }
+    let decor = value.decor().clone();
+    *value = Value::from(name);
+    *value.decor_mut() = decor;
+    true
+}
+
+/// Rewrites a pack's `loadouts.toml` for `renames`, if anything in it names one.
+pub fn rename_in_pack(pack: &Path, renames: &[(String, String)]) -> Result<bool, String> {
+    let path = pack.join(crate::common::weapon_file::LOADOUTS_FILE);
+    let original = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(format!("{}: {e}", path.display())),
+    };
+    let Some(text) = rename_in_loadouts(&original, renames).map_err(|e| format!("{}: {e}", path.display()))? else {
+        return Ok(false);
+    };
+    let partial = path.with_extension("toml.partial");
+    std::fs::write(&partial, text).map_err(|e| format!("{}: {e}", partial.display()))?;
+    std::fs::rename(&partial, &path).map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok(true)
+}
+
 fn to_table(entry: &WeaponEntry) -> Result<toml::Table, String> {
     match toml::Value::try_from(entry).map_err(|e| e.to_string())? {
         toml::Value::Table(table) => Ok(table),
@@ -266,6 +324,18 @@ mod tests {
         edited[0].1.deploy += 1.0;
         assert!(!holds(&text, &edited), "a weapon edited on disk went unnoticed");
         assert!(holds("", &[]));
+    }
+
+    #[test]
+    fn a_rename_reaches_every_slot_and_nothing_else() {
+        let text = std::fs::read_to_string("assets/default/loadouts.toml").expect("the default pack ships loadouts");
+        let renames = [("pistol".to_owned(), "sidearm".to_owned())];
+        let written = rename_in_loadouts(&text, &renames).expect("rewrites").expect("the pistol is named");
+        assert!(!written.contains("\"pistol\""), "a pistol was left behind");
+        assert_eq!(text.lines().count(), written.lines().count());
+        let unrenamed = written.replace("\"sidearm\"", "\"pistol\"");
+        assert_eq!(unrenamed, text, "something besides the name changed");
+        assert!(rename_in_loadouts(&text, &[("nothing".into(), "x".into())]).expect("reads").is_none());
     }
 
     #[test]

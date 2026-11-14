@@ -11,25 +11,32 @@
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::common::weapon::{distance_scale, DistanceScale};
+use crate::common::weapon::{distance_scale, DistanceScale, Unit};
 
 /// Everything that distinguishes one thrown weapon from another.
 #[derive(Clone, Copy, Debug, PartialEq, Reflect, Serialize, Deserialize)]
+#[reflect(Default)]
 pub struct ProjectileSpec {
     /// Meters per second.
+    #[reflect(@Unit::MetersPerSecond)]
     pub initial_speed: f32,
     /// Fraction of gravity felt: `0.0` flies flat, `1.0` arcs.
+    #[reflect(@Unit::Times)]
     pub gravity_factor: f32,
     /// Fraction of speed shed per second.
+    #[reflect(@Unit::PerSecond)]
     pub air_resistance: f32,
     /// Radians per second. Cosmetic; nothing tests against a projectile's rotation.
+    #[reflect(@Unit::RadiansPerSecond)]
     pub spin_rate: f32,
     /// Walls it may bounce off before the next one is its last. `0` makes the
     /// first contact the last.
     pub max_bounces: u32,
     /// Fraction of speed that survives a bounce.
+    #[reflect(@Unit::Fraction)]
     pub restitution: f32,
     /// Seconds of game time.
+    #[reflect(@Unit::Seconds)]
     pub max_lifetime: f32,
     /// Whether running out of bounces detonates it rather than stopping it.
     pub explodes_at_last_bounce: bool,
@@ -37,11 +44,13 @@ pub struct ProjectileSpec {
     pub explodes_at_lifetime_end: bool,
     /// Meters. Splash falls to `splash_at_edge` here and stops; shove falls to zero
     /// ([`crate::common::damage::falloff`]).
+    #[reflect(@Unit::Meters)]
     pub explosion_radius: f32,
     /// At the center of the blast, and what the body it hit squarely takes.
     pub damage: u32,
     /// The share of `damage` a body at the edge of the radius takes, 0 to 1.
     #[serde(default)]
+    #[reflect(@Unit::Fraction)]
     pub splash_at_edge: f32,
     /// More damage to others close to the shooter, measured from the shooter to the blast.
     /// Never skipped when empty: a projectile crosses the wire with postcard, which cannot read
@@ -53,9 +62,35 @@ pub struct ProjectileSpec {
     pub falloff: Option<DistanceScale>,
     /// Speed given to a corpse at the center, in meters per second; a speed, not
     /// an impulse (see [`crate::game::ragdoll::RagdollShove`]).
+    #[reflect(@Unit::MetersPerSecond)]
     pub knockback: f32,
     /// Meters. How big it is drawn and how far off a wall it stops.
+    #[reflect(@Unit::Meters)]
     pub radius: f32,
+}
+
+/// What the weapon editor starts a new one from.
+impl Default for ProjectileSpec {
+    fn default() -> Self {
+        Self {
+            initial_speed: 20.0,
+            gravity_factor: 0.0,
+            air_resistance: 0.0,
+            spin_rate: 0.0,
+            max_bounces: 0,
+            restitution: 0.0,
+            max_lifetime: 8.0,
+            explodes_at_last_bounce: true,
+            explodes_at_lifetime_end: false,
+            explosion_radius: 2.8,
+            damage: 90,
+            splash_at_edge: 0.5,
+            ramp_up: None,
+            falloff: None,
+            knockback: 9.0,
+            radius: 0.12,
+        }
+    }
 }
 
 /// Test fixtures; the game reads its projectiles from `weapons.toml`.

@@ -139,6 +139,42 @@ pub fn parse_weapons(text: &str) -> Result<Vec<(String, WeaponEntry)>, String> {
 #[derive(Debug, Clone, Default)]
 pub struct LoadoutFiles(Vec<(PathBuf, LoadoutFile)>);
 
+impl LoadoutFiles {
+    /// Each class slot that may carry or starts with `key`.
+    pub fn naming(&self, key: &str) -> Vec<(PathBuf, String, Slot)> {
+        let mut found = Vec::new();
+        for (pack, file) in &self.0 {
+            for (class, entry) in &file.loadouts {
+                for (slot, choices) in &entry.slots {
+                    if choices.permitted.iter().any(|name| name == key) || choices.default.as_deref() == Some(key) {
+                        found.push((pack.clone(), class.clone(), *slot));
+                    }
+                }
+            }
+        }
+        found
+    }
+
+    /// As these files would read with each `(from, to)` weapon renamed, in order.
+    pub fn renamed(&self, renames: &[(String, String)]) -> LoadoutFiles {
+        let mut files = self.clone();
+        for (_, file) in &mut files.0 {
+            for entry in file.loadouts.values_mut() {
+                for choices in entry.slots.values_mut() {
+                    for (from, to) in renames {
+                        for name in choices.permitted.iter_mut().chain(choices.default.iter_mut()) {
+                            if name == from {
+                                *name = to.clone();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        files
+    }
+}
+
 pub fn read_loadouts(assets: &Assets, packs: &[PathBuf]) -> LoadoutFiles {
     let mut files = Vec::new();
     for pack in packs {

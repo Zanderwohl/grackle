@@ -261,15 +261,15 @@ local, so the switch is one transition.
 - [x] Plain egui panels for now: the list on the left, a handful of fields on the right; the `DockState` and the form are stage 2
 
 ### Stage 2: browser and form
-- [ ] Own `DockState` for the three areas
-- [ ] Weapons tab: grouped by bucket, thumbnails, pack; new, duplicate (with the any-pack key refusal), override in pack, rename, delete
-- [ ] Rename and delete list dependants (loadouts in every pack, the open map's pickups); rename rewrites loadouts on request
-- [ ] Generic reflected form: structs, enums as combos, `Option` checkboxes, kind switches that keep the old values for the session
-- [ ] Custom reflect attributes for units and ranges on every spec field; degrees for radians
-- [ ] `every_weapon_field_has_a_label`, and the lang keys for each field
-- [ ] Damage-over-distance graph, pellet pattern preview
-- [ ] Problems from `validate`
-- [ ] Model picker and the clip/muzzle summary, with the open-in-prop-editor and open-in-animation-editor buttons
+- [x] Own `DockState`s: Weapons on the left, Weapon on the right; the middle waits for the range
+- [x] Weapons tab: grouped by bucket, thumbnails (`PropPreviews`), pack; new, duplicate (with the any-pack key refusal), override in pack, rename, delete
+- [x] Rename and delete list dependants (loadouts in every pack, the open map's pickups through `FeatureTrait::weapon_named`); a rename staged with "in loadouts too" rides in the undo snapshot and rewrites each pack's `loadouts.toml` (`toml_edit`) once the weapons are saved
+- [x] Generic reflected form (`weapon_editor::form`): structs, enums as combos, `Option` checkboxes, kind switches that keep the old values for the session (`FormMemory`, per weapon)
+- [x] `Unit` attributes on every spec float; degrees for radians; `Default` on every spec so a variant never held starts from something
+- [x] `every_weapon_field_has_a_label`, `every_number_states_its_unit`, `every_variant_can_be_switched_to`
+- [x] Damage-over-distance graph, pellet pattern preview (`weapon_editor::preview`)
+- [x] Problems from `problems`, at the top of the Weapon tab and in orange in the list
+- [x] Model picker (the prop picker, offered in this mode too) and the clip/muzzle summary, with the open-in-prop-editor and open-in-animation-editor buttons, held back while the prop editor has another prop unsaved
 
 ### Stage 3: the range
 - [ ] `AppMode::simulates()`; widen exactly the systems listed above, and their `OnExit` cleanups

@@ -78,6 +78,10 @@ fn tf2() -> PickupStyle {
 
 #[typetag::serde(name = "weapon_pickup")]
 impl FeatureTrait for WeaponPickup {
+    fn weapon_named(&self) -> Option<&str> {
+        Some(&self.weapon)
+    }
+
     fn get_point(&self, _key: &str) -> Result<Vec3, PointResolutionError> {
         Ok(self.resolved_location)
     }
