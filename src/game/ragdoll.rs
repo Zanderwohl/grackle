@@ -47,6 +47,11 @@
 //! over the whole rig that keeps only its own bones, so the solver, the wire
 //! and the mesh cache need nothing new; the blast's own shove throws each
 //! piece. A splash kill leaves a whole corpse.
+//!
+//! A piece striking a surface faster than [`GIB_SPLAT_SPEED`] writes a
+//! [`GibImpact`], which [`crate::game::decal`] turns into blood. Every machine
+//! steps its own copy of each piece, so each finds its own impacts and nothing
+//! is sent.
 
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -112,6 +117,10 @@ const SLEEP_DRIFT: f32 = 0.02;
 /// shove wakes it.
 const SLEEP_AFTER: f32 = 0.5;
 
+/// Meters per second into a surface above which a piece of a body leaves
+/// blood where it strikes.
+pub const GIB_SPLAT_SPEED: f32 = 2.0;
+
 /// Bounds on a bone's collision sphere radius, in meters, derived from its
 /// thickness. Floored because a point with no size tunnels; capped because a
 /// torso-sized sphere wedges in doorways.
@@ -143,6 +152,18 @@ pub struct RagdollShove {
     pub push: Push,
     /// Falls off linearly to nothing at the edge.
     pub radius: f32,
+}
+
+/// A piece of a body striking a surface faster than [`GIB_SPLAT_SPEED`].
+/// Written on every machine by [`report_gib_impacts`], never sent.
+#[derive(Message, Clone, Copy, Debug, PartialEq)]
+pub struct GibImpact {
+    /// On the surface, world space.
+    pub at: Vec3,
+    /// The surface's, out of it.
+    pub normal: Vec3,
+    /// The piece's point's, in meters per second, as it struck.
+    pub velocity: Vec3,
 }
 
 /// What a corpse was built from: the [`Build`] taken off the dying body's own [`Skeleton`], since
@@ -189,6 +210,10 @@ pub struct Ragdoll {
     /// The bone every kept bone hangs from: 0 for a whole body, and for a
     /// piece the one bone whose parent it lacks. `root_seed` is this bone's.
     root: usize,
+    /// The fastest strike on a surface in the last [`Ragdoll::step`], for a
+    /// piece only. Each machine finds its own.
+    #[serde(skip)]
+    struck: Option<GibImpact>,
 }
 
 /// The fatal hit was a projectile's direct hit at `at`, so the body is torn
@@ -317,6 +342,7 @@ impl Ragdoll {
             asleep: false,
             kept: vec![true; posed.len()],
             root: 0,
+            struck: None,
         }
     }
 
@@ -328,6 +354,7 @@ impl Ragdoll {
     /// `fall` is the vertical acceleration, negative down.
     pub fn step(&mut self, skeleton: &Skeleton, world: &CollisionWorld, fall: f32, dt: f32) {
         self.age += dt;
+        self.struck = None;
         if self.asleep {
             return;
         }
@@ -340,17 +367,33 @@ impl Ragdoll {
 
         let fall = Vec3::Y * fall * dt * dt;
         let kept = &self.kept;
+        let piece = self.root != 0 || kept.contains(&false);
+        let mut struck: Option<(f32, GibImpact)> = None;
         for (index, (point, contact)) in self.points.iter_mut().zip(touching.iter_mut()).enumerate() {
             if !kept[index / 2] {
                 continue;
             }
             let carried = (point.at - point.previous) * (1.0 - DRAG);
+            let moving = carried + fall;
             // Swept: a point thrown by an explosion can cover more than a wall's
             // thickness in a tick.
-            let (moved, touched) = world.slide(point.at, point.half, carried + fall);
+            let (moved, touched) = world.slide(point.at, point.half, moving);
+            // Measured on the swept move, before the rig and the walls are
+            // solved: the solve stops a point, and a stopped point struck
+            // nothing.
+            if piece && dt > 0.0 {
+                for normal in touched.iter() {
+                    let speed = -moving.dot(normal) / dt;
+                    if speed > GIB_SPLAT_SPEED && struck.is_none_or(|(fastest, _)| speed > fastest) {
+                        let at = moved - normal * point.half.x;
+                        struck = Some((speed, GibImpact { at, normal, velocity: moving / dt }));
+                    }
+                }
+            }
             *contact = touched;
             point.at = moved;
         }
+        self.struck = struck.map(|(_, impact)| impact);
 
         // The walls are solved with the rig, not before or after. Rig last,
         // and a foot is pushed back through the floor a little further each
@@ -462,6 +505,12 @@ impl Ragdoll {
 
     pub fn is_asleep(&self) -> bool {
         self.asleep
+    }
+
+    /// The fastest strike on a surface in the last step, if this is a piece of
+    /// a body and it struck faster than [`GIB_SPLAT_SPEED`].
+    pub fn struck(&self) -> Option<GibImpact> {
+        self.struck
     }
 
     /// Where the body is and what shape it is in, as something the rest of the
@@ -701,6 +750,7 @@ impl Plugin for RagdollPlugin {
     fn build(&self, app: &mut App) {
         app
             .add_message::<RagdollShove>()
+            .add_message::<GibImpact>()
             // `add_message` is idempotent; registered here too so corpses can
             // be assembled without the damage layer, as tests do.
             //
@@ -717,7 +767,7 @@ impl Plugin for RagdollPlugin {
                     .run_if(has_authority),
                 shove_ragdolls.after(DamageSystems::Deal),
                 // Not on replayed ticks: a corpse is not predicted.
-                step_ragdolls.run_if(not(lightyear::prelude::is_in_rollback)),
+                (step_ragdolls, report_gib_impacts).chain().run_if(not(lightyear::prelude::is_in_rollback)),
                 retire_ragdolls.run_if(has_authority),
             ).chain().run_if(crate::common::app_mode::simulating))
             // Ungated: a corpse arrives from the wire whenever, with no rig
@@ -912,6 +962,21 @@ pub fn step_ragdolls(
 
         *transform = corpse.pose_into(skeleton, &mut pose);
     });
+}
+
+/// Say where each piece of a body struck a surface in the step just taken.
+/// Apart from [`step_ragdolls`], which steps in parallel and so cannot write
+/// messages.
+pub fn report_gib_impacts(corpses: Query<&Ragdoll>, mut impacts: MessageWriter<GibImpact>) {
+    for corpse in &corpses {
+        // A corpse past its lifetime is not stepped, so what it last struck is stale.
+        if corpse.age() >= RAGDOLL_LIFETIME {
+            continue;
+        }
+        if let Some(impact) = corpse.struck() {
+            impacts.write(impact);
+        }
+    }
 }
 
 /// Take away every corpse that has lain there long enough.
@@ -1893,6 +1958,60 @@ mod tests {
         for how in [crate::common::damage::How::Splash, crate::common::damage::How::Hitscan] {
             assert_eq!(corpses_left_by(how), (1, 1), "{how:?}");
         }
+    }
+
+    /// Every strike `corpse` reports over `steps` ticks.
+    fn strikes(corpse: &mut Ragdoll, skeleton: &Skeleton, world: &CollisionWorld, steps: usize) -> Vec<GibImpact> {
+        (0..steps)
+            .filter_map(|_| {
+                corpse.step(skeleton, world, FALL, DT);
+                corpse.struck()
+            })
+            .collect()
+    }
+
+    /// A piece of a body: the left leg, torn off by a blast at the hips.
+    fn a_leg(skeleton: &Skeleton, root: &Transform) -> Ragdoll {
+        let at = root.transform_point(middle_of(skeleton, bone::PELVIS));
+        Ragdoll::blown_apart(skeleton, &Pose::rest(), root, Vec3::ZERO, at)
+            .into_iter()
+            .find(|piece| piece.keeps(skeleton.index_of(bone::FOOT_L).unwrap()))
+            .expect("no left leg")
+    }
+
+    /// Fails if a piece thrown down onto the floor reports no strike there, or one slower than
+    /// it was thrown.
+    #[test]
+    fn a_piece_thrown_at_the_floor_strikes_it() {
+        let skeleton = rig();
+        let world = a_room();
+        let mut leg = a_leg(&skeleton, &Transform::from_xyz(0.0, 2.0, 0.0));
+        let (knee, _) = leg.bone_points(skeleton.index_of(bone::SHIN_L).unwrap());
+        leg.shove(knee, Push::Along(Vec3::NEG_Y * 8.0), 2.0, DT);
+
+        let struck = strikes(&mut leg, &skeleton, &world, 64);
+        let first = struck.first().expect("struck nothing");
+        assert!(first.normal.abs_diff_eq(Vec3::Y, 1.0e-3), "struck a surface facing {}", first.normal);
+        assert!(first.at.y.abs() < 0.01, "struck at {}", first.at);
+        assert!(-first.velocity.y > GIB_SPLAT_SPEED, "struck at {} m/s", -first.velocity.y);
+    }
+
+    /// Fails if a piece set down on the floor, or one lying there, reports a strike, or if a whole
+    /// corpse thrown at the floor reports one.
+    #[test]
+    fn only_a_piece_striking_hard_reports_it() {
+        let skeleton = rig();
+        let world = a_room();
+        // Lying flat a few centimeters up: stood upright, a leg topples and its hip end strikes
+        // at about 4 m/s.
+        let lying = Transform::from_xyz(0.0, 0.15, 0.0).with_rotation(Quat::from_rotation_x(std::f32::consts::FRAC_PI_2));
+        let mut set_down = a_leg(&skeleton, &lying);
+        assert_eq!(strikes(&mut set_down, &skeleton, &world, 64 * 4), vec![]);
+
+        let mut whole = Ragdoll::from_body(&skeleton, &Pose::rest(), &Transform::from_xyz(0.0, 2.0, 0.0), Vec3::ZERO);
+        let (pelvis, _) = whole.bone_points(0);
+        whole.shove(pelvis, Push::Along(Vec3::NEG_Y * 8.0), 3.0, DT);
+        assert_eq!(strikes(&mut whole, &skeleton, &world, 64), vec![]);
     }
 
     /// Fails if a piece crosses the wire as a whole body, or posed elsewhere

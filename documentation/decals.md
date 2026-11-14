@@ -83,6 +83,9 @@ wire, and each machine may keep a different number:
   along the shot's line (for a blast, out from its center) onto the first
   surface within 5 m, and nothing if there is none. A killing hit also leaves
   blood on the floor under where it landed, whatever killed.
+  A piece of a body blown apart striking a surface faster than 2 m/s
+  (`GibImpact`, from the ragdoll solver every machine runs) leaves blood
+  there, larger the harder it struck, up to 10 m/s.
 
 Each kind keeps a ring of the newest, as many as this machine's player
 settings allow (`PlayerSettings::debris`, 0 to 512 each; 200 bullet holes, 64

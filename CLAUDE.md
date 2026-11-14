@@ -1856,7 +1856,10 @@ one bone whose parent it lacks, so the wire, the build and the mesh cache are
 unchanged; `build_body_meshes` hides the parts it lacks. The blast's own
 `RagdollShove` throws every piece, as it would have the whole corpse. Only the
 largest piece carries `CorpseOf`, so the death cam follows one. A splash kill
-leaves a whole corpse.
+leaves a whole corpse. A piece striking a surface faster than `GIB_SPLAT_SPEED`
+(2 m/s, measured on the swept move before the solve stops it) writes a
+`GibImpact`, and `mark_the_world` puts blood there; each machine finds its own
+from its own copy of the piece, so nothing is sent.
 
 **A corpse is replicated, not raised locally** — see "Corpses are props" below.
 The authority makes one and everybody else is sent the seed.
