@@ -214,16 +214,22 @@ mod tests {
 
         // Through `animation_pose`, so foot timing and blends are read as a
         // match reads them.
-        let rig = humanoid(crate::common::class::ClassBuilds::shipped().of(Class::Mercenary));
         let root = Transform::IDENTITY;
 
         for entry in seed::SEEDS {
             let state = entry.state;
+            let rig = match entry.rig {
+                crate::common::skeleton::rig::HUMANOID => {
+                    humanoid(crate::common::class::ClassBuilds::shipped().of(Class::Mercenary))
+                }
+                _ => seed::rig_of(entry),
+            };
             let animation = seed::bake(*entry);
             let clip = animation.clips()[0].clone();
             let gait = state.uses_gait();
 
-            let speeds: &[f32] = if gait { &[0.0, 2.8, 3.6, 4.5, 7.5] } else { &[0.0] };
+            // A clip has one speed.
+            let speeds: &[f32] = if gait { &[seed::SEED_SPEED] } else { &[0.0] };
             let headings: Vec<(f32, f32)> = match entry.headings {
                 [] => vec![(0.0, TOLERANCE)],
                 authored => {
@@ -249,7 +255,7 @@ mod tests {
                             ..seed::inputs_at(clip.clock, at, clip.length)
                         };
 
-                        let was = state.pose(&inputs);
+                        let was = seed::sample(entry, &rig, &inputs);
                         let now = crate::common::skeleton::ik::animation_pose(
                             &animation, state, &inputs, &rig, &root,
                         );

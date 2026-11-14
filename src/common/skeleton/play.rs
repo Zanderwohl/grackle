@@ -26,6 +26,10 @@ use crate::common::rotation::quat_from_euler;
 /// not snap back to the hold. A loop blends last to first across the seam,
 /// over `(length - last.at) + first.at`. The outgoing key's curve governs each
 /// segment, the seam's included.
+///
+/// A [`Interpolation::Spline`] segment is handed to `spline` with the keys either side, round
+/// the seam on a loop: `[before, from, to, after]`, the gaps between them, and how far along.
+#[allow(clippy::too_many_arguments)]
 pub fn sample_at<K, T: Copy>(
     keys: &[K],
     time: f32,
@@ -35,16 +39,39 @@ pub fn sample_at<K, T: Copy>(
     value: impl Fn(&K) -> T,
     ease: impl Fn(&K) -> Interpolation,
     blend: impl Fn(T, T, Interpolation, f32) -> T,
+    spline: impl Fn([T; 4], [f32; 3], f32) -> T,
 ) -> Option<T> {
     let first = keys.first()?;
     let last = keys.last()?;
+    let count = keys.len();
 
-    if keys.len() == 1 {
+    if count == 1 {
         return Some(value(first));
     }
 
     // The wrap-around segment's length; only meaningful while looping.
     let seam = (length - at(last)) + at(first);
+
+    // Segment `from` to `from + 1`, the seam's when `from` is the last key.
+    let segment = |from: usize, along: f32| -> T {
+        let to = (from + 1) % count;
+        let (start, end) = (&keys[from], &keys[to]);
+        if ease(start) != Interpolation::Spline {
+            return blend(value(start), value(end), ease(start), along);
+        }
+        let span = if to == 0 { seam } else { at(end) - at(start) };
+        let (before, before_gap) = match from {
+            0 if !looping => (value(start), 0.0),
+            0 => (value(last), seam),
+            _ => (value(&keys[from - 1]), at(start) - at(&keys[from - 1])),
+        };
+        let (after, after_gap) = match to + 1 {
+            index if index < count => (value(&keys[index]), at(&keys[index]) - at(end)),
+            _ if !looping => (value(end), 0.0),
+            _ => (value(first), seam),
+        };
+        spline([before, value(start), value(end), after], [before_gap, span, after_gap], along)
+    };
 
     if time <= at(first) {
         if !looping {
@@ -55,7 +82,7 @@ pub fn sample_at<K, T: Copy>(
             return Some(value(first));
         }
         let along = (time + length - at(last)) / seam;
-        return Some(blend(value(last), value(first), ease(last), along));
+        return Some(segment(count - 1, along));
     }
 
     if time >= at(last) {
@@ -63,11 +90,11 @@ pub fn sample_at<K, T: Copy>(
             return Some(value(last));
         }
         let along = (time - at(last)) / seam;
-        return Some(blend(value(last), value(first), ease(last), along));
+        return Some(segment(count - 1, along));
     }
 
     // Linear scan: a track has tens of keys.
-    for pair in keys.windows(2) {
+    for (index, pair) in keys.windows(2).enumerate() {
         let (from, to) = (&pair[0], &pair[1]);
         if time < at(from) || time > at(to) {
             continue;
@@ -75,7 +102,7 @@ pub fn sample_at<K, T: Copy>(
         let span = at(to) - at(from);
         // Two keys at one time is a legal snap; do not divide by zero.
         let along = if span > 0.0 { (time - at(from)) / span } else { 0.0 };
-        return Some(blend(value(from), value(to), ease(from), along));
+        return Some(segment(index, along));
     }
 
     Some(value(last))
@@ -109,6 +136,37 @@ pub fn sample_key(keys: &[Key], time: f32, length: f32, looping: bool) -> Option
                             a
                         }
                     }
+                };
+            }
+            blended
+        },
+        |[before, from, to, after], [before_gap, span, after_gap], along| {
+            let number = |axis: Axis| match axis {
+                Axis::Value(value) | Axis::Ground { clearance: value } => Some(value),
+                Axis::Free => None,
+            };
+            let same = |a: Axis, b: Axis| std::mem::discriminant(&a) == std::mem::discriminant(&b);
+            let mut blended = [Axis::Free; 3];
+            for axis in 0..3 {
+                let (a, b) = (from[axis], to[axis]);
+                let (Some(start), Some(end), true) = (number(a), number(b), same(a, b)) else {
+                    // A change of kind has no halfway; switch on arrival.
+                    blended[axis] = if along >= 1.0 { b } else { a };
+                    continue;
+                };
+                // A neighbor of another kind is no guide to the slope; the end stands in for it.
+                let (previous, before_gap) = match same(before[axis], a) {
+                    true => (number(before[axis]).unwrap_or(start), before_gap),
+                    false => (start, 0.0),
+                };
+                let (next, after_gap) = match same(after[axis], a) {
+                    true => (number(after[axis]).unwrap_or(end), after_gap),
+                    false => (end, 0.0),
+                };
+                let value = super::interpolation::through([previous, start, end, next], [before_gap, span, after_gap], along);
+                blended[axis] = match a {
+                    Axis::Ground { .. } => Axis::Ground { clearance: value },
+                    _ => Axis::Value(value),
                 };
             }
             blended
@@ -148,14 +206,15 @@ pub(crate) fn angles_onto(to: [Axis; 3]) -> Vec3 {
 }
 
 /// Insert a key at `at` holding the value the track already has there, so
-/// keying never moves the pose; an empty track gets three free axes. Returns
-/// the new key's index.
+/// keying never moves the pose at `at` (a spline either side bends a little to keep its speed
+/// through the new key); an empty track gets three free axes, eased by spline. Returns the new
+/// key's index.
 pub fn key_the_channel(channel: &mut Channel, at: f32, length: f32, looping: bool) -> usize {
     let at = at.clamp(0.0, length);
     let keys = channel.keys_mut();
 
     let to = sample_key(keys, at, length, looping).unwrap_or([Axis::Free; 3]);
-    let ease = keys.last().map(|key| key.ease).unwrap_or_default();
+    let ease = keys.last().map_or(Interpolation::Spline, |key| key.ease);
     keys.push(Key { at, to, ease, space: None });
     keys.sort_by(|a, b| a.at.total_cmp(&b.at));
     keys.iter().position(|key| key.at == at).unwrap_or(0)
@@ -694,6 +753,17 @@ fn sample_point(
             // A space with no frame now (an empty hand) has no halfway; switch on arrival.
             (from, to) => if ease.ease(along) >= 1.0 { to } else { from },
         }
+    }, |[before, from, to, after], gaps, along| {
+        let (Some(start), Some(end)) = (from, to) else {
+            return if along >= 1.0 { to } else { from };
+        };
+        let (previous, before_gap) = before.map_or((start, 0.0), |point| (point, gaps[0]));
+        let (next, after_gap) = after.map_or((end, 0.0), |point| (point, gaps[2]));
+        let gaps = [before_gap, gaps[1], after_gap];
+        let axis = |pick: fn(Vec3) -> f32| {
+            super::interpolation::through([pick(previous), pick(start), pick(end), pick(next)], gaps, along)
+        };
+        Some(Vec3::new(axis(|v| v.x), axis(|v| v.y), axis(|v| v.z)))
     })
     .flatten()
 }
@@ -1778,5 +1848,56 @@ mod tests {
         let arm = rig.posed_bone(&pose, &root, rig.index_of(bone::UPPER_ARM_R).unwrap());
         let along = (arm.tail - arm.head).normalize();
         assert!(along.dot((target - shoulder).normalize()) > 0.999, "the arm points along {along}");
+    }
+
+    fn spline_keys(keys: &[(f32, f32)]) -> Vec<Key> {
+        keys.iter().map(|(at, value)| Key::all(*at, [*value, 0.0, 0.0], Interpolation::Spline)).collect()
+    }
+
+    fn sampled(keys: &[Key], time: f32, looping: bool) -> f32 {
+        match sample_key(keys, time, 1.0, looping) {
+            Some([Axis::Value(value), ..]) => value,
+            other => panic!("sampled {other:?}"),
+        }
+    }
+
+    /// A spline lands on every key, and crosses each at one speed, however unevenly the keys
+    /// are spaced and round a loop's seam too. Any other curve either stops or turns a corner.
+    #[test]
+    fn a_spline_runs_through_its_keys_without_a_change_of_speed() {
+        let keys = spline_keys(&[(0.1, 0.0), (0.25, 1.0), (0.7, -0.5), (0.8, 0.2)]);
+        // Short, since the curve bends hard between close keys and a step mixes the bend in.
+        let d = 1e-4;
+        for looping in [true, false] {
+            for key in &keys {
+                let Axis::Value(value) = key.to[0] else { unreachable!() };
+                assert!((sampled(&keys, key.at, looping) - value).abs() < 1e-5, "missed the key at {}", key.at);
+            }
+            // The inner keys, and on a loop the first and last, which border the seam.
+            let crossed: Vec<f32> = match looping {
+                true => keys.iter().map(|key| key.at).collect(),
+                false => keys[1..keys.len() - 1].iter().map(|key| key.at).collect(),
+            };
+            for at in crossed {
+                let before = (sampled(&keys, at, looping) - sampled(&keys, at - d, looping)) / d;
+                let after = (sampled(&keys, at + d, looping) - sampled(&keys, at, looping)) / d;
+                assert!(
+                    (before - after).abs() < 0.05 * before.abs().max(after.abs()).max(1.0),
+                    "looping {looping}: at {at} the speed goes from {before} to {after}"
+                );
+            }
+        }
+        // A one-shot still holds its ends.
+        assert_eq!(sampled(&keys, 0.0, false), 0.0);
+        assert_eq!(sampled(&keys, 1.0, false), 0.2);
+    }
+
+    /// A spline key next to a key of another kind takes no slope from it.
+    #[test]
+    fn a_spline_beside_a_ground_key_stays_a_value() {
+        let mut keys = spline_keys(&[(0.0, 0.0), (0.5, 1.0), (1.0, 2.0)]);
+        keys[2].to[0] = Axis::Ground { clearance: 0.1 };
+        let mid = sampled(&keys, 0.25, false);
+        assert!(mid > 0.0 && mid < 1.0, "{mid}");
     }
 }

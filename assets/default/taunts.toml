@@ -13,7 +13,7 @@
 [wave]
 clip = "taunt_wave"
 rigs = { strider = "strider/taunt_wag" }
-claims = ["legs", "torso", "head", "arm.l", "arm.r", "weapon"]
+claims = ["legs", "torso", "head", "tail", "arm.l", "arm.r", "weapon"]
 movement = "stopped"
 turning = "locked"
 weapon = "hidden"

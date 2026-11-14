@@ -61,6 +61,9 @@ pub struct Anatomy {
     pub leg: f32,
     pub arm: f32,
     pub hip: f32,
+    /// Where a crouched body's crown sits, as a share of the crouched box's height. Under one, a
+    /// rig crouches lower than the box needs: a strider stalking with its head down.
+    pub crouched_crown: f32,
 }
 
 impl Anatomy {

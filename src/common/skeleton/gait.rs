@@ -43,24 +43,99 @@ const RUN_STANCE: f32 = 0.32;
 const WALK_SPEED: f32 = 2.8;
 
 /// At or above this it is running; between the two the shape is interpolated.
-const RUN_SPEED: f32 = 4.5;
+pub const RUN_SPEED: f32 = 4.5;
 
 /// Time constant, in seconds, for measured speed to change the gait. One
 /// tick's speed is noisy at walls and stair edges.
 const SPEED_SMOOTHING: f32 = 0.15;
 
-/// How high a foot lifts at the top of its swing, in leg-lengths.
-const FOOT_LIFT: f32 = 0.18;
+/// How high a foot lifts at the top of its swing, in leg-lengths, walking and running. A
+/// runner's heel comes up high behind.
+const WALK_LIFT: f32 = 0.16;
+const RUN_LIFT: f32 = 0.3;
+
+/// Where in its swing a foot is highest: early, as the heel comes up behind before the leg
+/// reaches forward. The exponent puts the peak there (0.5 at `u^LIFT_SKEW = ½`).
+const LIFT_SKEW: f32 = 0.67;
+
+/// How fast a swinging foot may be still traveling backwards as it leaves the ground and as it
+/// lands, as a share of its sweep. Matching the planted foot's speed exactly gives a running
+/// foot a quarter of a stride's overshoot, out of reach; capped, it overshoots under 2%.
+const LIFT_OFF_SLOPE: f32 = 1.5;
+const LANDING_SLOPE: f32 = 0.6;
+
+/// How far the toes point up as the heel lands, and down as they push off, in radians, walking
+/// and running.
+const WALK_HEEL_STRIKE: f32 = 0.25;
+const RUN_HEEL_STRIKE: f32 = 0.1;
+const WALK_TOE_OFF: f32 = 0.45;
+const RUN_TOE_OFF: f32 = 0.55;
+
+/// Shares of the stance: the foot is flat after the first, and its heel starts to rise at the
+/// second, walking and running.
+const FOOT_FLAT: f32 = 0.15;
+const WALK_HEEL_RISE: f32 = 0.55;
+const RUN_HEEL_RISE: f32 = 0.4;
+
+/// Share of the swing by which the toes are up again for the landing.
+const TOES_UP_BY: f32 = 0.7;
 
 /// How far the hips drop while moving, in hip-heights. A straight leg reaches
 /// only the spot under its hip, so a stride needs bent knees.
 const GAIT_CROUCH: f32 = 0.13;
 
-/// How much further the hips dip at the middle of each step, in hip-heights.
-const GAIT_BOB: f32 = 0.03;
+/// How far the hips rise and fall over a step, peak to peak, in hip-heights. A walk vaults
+/// over a straight leg and is highest over it; a run is lowest there, its knee taking the
+/// landing, and highest in the air.
+const WALK_BOB: f32 = 0.045;
+const RUN_BOB: f32 = 0.065;
+
+/// Where in a step the hips are lowest, as a share of the step: walking, just after the heel
+/// lands, as the weight comes onto it. Running it is the middle of the stance.
+const WALK_LOWEST: f32 = 0.1;
+
+/// How far the pelvis turns to carry the forward leg's hip forward, in radians.
+const WALK_PELVIS_TURN: f32 = 0.09;
+const RUN_PELVIS_TURN: f32 = 0.12;
+
+/// How far the hip over the swinging leg drops, in radians.
+const WALK_PELVIS_DROP: f32 = 0.07;
+const RUN_PELVIS_DROP: f32 = 0.05;
+
+/// How far the hips sway over the foot that bears them, in hip-heights.
+const WALK_SWAY: f32 = 0.03;
+const RUN_SWAY: f32 = 0.012;
+
+/// How far the shoulders turn against the hips, as a share of the hips' turn, walking and
+/// running: the arms' swing winds the chest the other way.
+const WALK_COUNTER_TURN: f32 = 0.6;
+const RUN_COUNTER_TURN: f32 = 1.0;
+
+/// Share of the hips' drop the chest takes back, so the shoulders stay nearly level.
+const CHEST_LEVELING: f32 = 0.7;
+
+/// How far the chest folds further forward as each landing is taken, in radians.
+const WALK_LEAN_PULSE: f32 = 0.025;
+const RUN_LEAN_PULSE: f32 = 0.05;
 
 /// How far the arms swing fore and aft, in radians.
-const ARM_SWING: f32 = 0.6;
+const WALK_ARM_SWING: f32 = 0.4;
+const ARM_SWING: f32 = 0.7;
+
+/// Arms swing further forward than back: a share of the swing added forwards.
+const ARM_FORWARD: f32 = 0.2;
+
+/// How far behind the opposite leg an arm swings, and the elbow behind the arm, in shares of a
+/// stride. The lag is the arm hanging from the shoulder rather than being driven.
+const ARM_LAG: f32 = 0.04;
+const ELBOW_LAG: f32 = 0.08;
+
+/// How far the elbow bends further as the arm comes forward, in radians.
+const WALK_ELBOW_FLEX: f32 = 0.3;
+const RUN_ELBOW_FLEX: f32 = 0.35;
+
+/// How far the elbows are held bent while walking, in radians.
+const WALK_ELBOW_BEND: f32 = 0.35;
 
 /// Small: the arms are in front of a folded body, not swinging past it.
 const CROUCH_ARM_SWING: f32 = 0.2;
@@ -79,8 +154,12 @@ const ARM_TUCK: f32 = 0.6;
 /// How far the elbows are held bent while running, in radians.
 pub const ELBOW_BEND: f32 = 1.1;
 
-/// How far the chest leans into the run, in radians.
-const RUN_LEAN: f32 = 0.12;
+/// How far the chest leans into a walk and a run, in radians.
+const WALK_LEAN: f32 = 0.04;
+const RUN_LEAN: f32 = 0.16;
+
+/// How far the elbows are held bent while running, in radians.
+const RUN_ELBOW_BEND: f32 = 1.35;
 
 /// How much of a sidestep's cycle a foot spends down.
 const SIDESTEP_STANCE: f32 = 0.45;
@@ -177,6 +256,16 @@ impl GaitShape {
     pub fn has_flight(&self) -> bool {
         self.stance < 0.5
     }
+
+    /// How much of a run this is rather than a walk, 0 to 1, read off the stance.
+    pub fn run_share(&self) -> f32 {
+        ((WALK_STANCE - self.stance) / (WALK_STANCE - RUN_STANCE)).clamp(0.0, 1.0)
+    }
+}
+
+fn smooth(t: f32) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
 }
 
 /// How much of the cycle a crouched foot spends down. Well over half: a
@@ -278,6 +367,9 @@ pub struct FootOffset {
     pub across: f32,
     /// Off the floor.
     pub lift: f32,
+    /// How far the toes point up, radians: up as the heel lands, down as they push off. A
+    /// negative pitch turns the foot about its toes, so the ankle rises.
+    pub pitch: f32,
 }
 
 /// The left and right foot offsets at a point in the cycle, half a cycle
@@ -307,15 +399,29 @@ fn foot_offset(phase: f32, travel: Vec2, shape: GaitShape, side: f32) -> FootOff
     let travel = travel.normalize_or_zero();
     let phase = phase.rem_euclid(1.0);
 
+    let run = shape.run_share();
+    let (heel_strike, toe_off) = (WALK_HEEL_STRIKE.lerp(RUN_HEEL_STRIKE, run), WALK_TOE_OFF.lerp(RUN_TOE_OFF, run));
+
     // Distance from the middle of this foot's travel: front to back while
     // planted, back round while not. The planted rate is the no-slide property.
-    let (sweep, lift) = if phase < stance {
-        (1.0 - 2.0 * (phase / stance), 0.0)
+    // `closing` is the sweep across the body: straight, since the cubic's drift back at
+    // lift-off would bring a sidestep's trailing foot through the leading one.
+    let (sweep, closing, lift, pitch) = if phase < stance {
+        let planted = phase / stance;
+        let rise = WALK_HEEL_RISE.lerp(RUN_HEEL_RISE, run);
+        let pitch = if planted < FOOT_FLAT {
+            heel_strike * (1.0 - smooth(planted / FOOT_FLAT))
+        } else {
+            -toe_off * smooth((planted - rise) / (1.0 - rise))
+        };
+        (1.0 - 2.0 * planted, 1.0 - 2.0 * planted, 0.0, pitch)
     } else {
         let traveled = (phase - stance) / (1.0 - stance);
         (
+            swing_sweep(traveled, stance),
             2.0 * traveled - 1.0,
-            FOOT_LIFT * (std::f32::consts::PI * traveled).sin(),
+            WALK_LIFT.lerp(RUN_LIFT, run) * (std::f32::consts::PI * traveled.powf(LIFT_SKEW)).sin(),
+            (-toe_off).lerp(heel_strike, smooth(traveled / TOES_UP_BY)),
         )
     };
 
@@ -325,9 +431,22 @@ fn foot_offset(phase: f32, travel: Vec2, shape: GaitShape, side: f32) -> FootOff
         ahead: travel.y * half_stride * sweep,
         // Each foot is pushed outwards by the sideways share of its reach, so a
         // sidestep's legs do not swing through each other.
-        across: travel.x * half_stride * sweep + side * half_stride * travel.x.abs(),
+        across: travel.x * half_stride * closing + side * half_stride * travel.x.abs(),
         lift,
+        pitch,
     }
+}
+
+/// Where a swinging foot is, -1 behind to 1 ahead, `traveled` of the way through its swing.
+///
+/// A cubic that leaves and lands still moving backwards, at the planted foot's speed or the
+/// caps, so the foot does not jerk to a stop in the world as it lifts or lands.
+fn swing_sweep(traveled: f32, stance: f32) -> f32 {
+    let planted = 2.0 * (1.0 - stance) / stance;
+    let (leaving, landing) = (-planted.min(LIFT_OFF_SLOPE), -planted.min(LANDING_SLOPE));
+    let u = traveled;
+    let (u2, u3) = (u * u, u * u * u);
+    -(2.0 * u3 - 3.0 * u2 + 1.0) + (u3 - 2.0 * u2 + u) * leaving + (-2.0 * u3 + 3.0 * u2) + (u3 - u2) * landing
 }
 
 /// A gait's posture, as opposed to where its feet go. Bundled because the
@@ -341,16 +460,27 @@ pub struct GaitStyle {
     pub lean: f32,
     /// How far the arms swing, in radians.
     pub swing: f32,
+    /// How far the elbows are held bent, in radians.
+    pub elbow: f32,
+    /// Share of a walk's or run's turn, drop and sway of the hips the body takes: less folded.
+    pub heft: f32,
+    /// Bent forward whichever way it goes, rather than leaning into the travel.
+    pub folded: bool,
 }
 
 impl GaitStyle {
     /// Walking or running upright, at whatever speed the body is going.
     pub fn upright(speed: f32) -> GaitStyle {
+        let shape = GaitShape::for_speed(speed);
+        let run = shape.run_share();
         GaitStyle {
-            shape: GaitShape::for_speed(speed),
+            shape,
             sink: GAIT_CROUCH,
-            lean: RUN_LEAN,
-            swing: ARM_SWING,
+            lean: WALK_LEAN.lerp(RUN_LEAN, run),
+            swing: WALK_ARM_SWING.lerp(ARM_SWING, run),
+            elbow: WALK_ELBOW_BEND.lerp(RUN_ELBOW_BEND, run),
+            heft: 1.0,
+            folded: false,
         }
     }
 
@@ -360,6 +490,9 @@ impl GaitStyle {
         sink: CROUCH_DEPTH,
         lean: CROUCH_LEAN,
         swing: CROUCH_ARM_SWING,
+        elbow: ELBOW_BEND,
+        heft: 0.5,
+        folded: true,
     };
 
     /// Stepping sideways, upright.
@@ -369,6 +502,9 @@ impl GaitStyle {
         // No fold; `gait_pose` tips the body toward where it is going.
         lean: 0.0,
         swing: SIDESTEP_ARM_SWING,
+        elbow: ELBOW_BEND,
+        heft: 0.5,
+        folded: false,
     };
 
     /// Stepping sideways, ducked.
@@ -377,6 +513,9 @@ impl GaitStyle {
         sink: CROUCH_DEPTH,
         lean: CROUCH_LEAN,
         swing: CROUCHED_SIDESTEP_ARM_SWING,
+        elbow: ELBOW_BEND,
+        heft: 0.3,
+        folded: true,
     };
 }
 
@@ -411,38 +550,77 @@ pub fn crouch_posture() -> Pose {
     pose
 }
 
-/// Everything above the knees: the sink, the dip on each step, the arms.
+/// Everything above the knees: the hips' rise and fall, turn, drop and sway; the chest turning
+/// against them; the arms swinging from the shoulders.
 ///
 /// No legs: those follow from [`foot_offsets`] and the solver, and knee
 /// angles stated here too would disagree between builds.
+///
+/// Stride phase 0 is the left heel landing, ½ the right. Each motion is a sine at the step's or
+/// the stride's period, placed against those landings.
 pub fn gait_pose(inputs: &PoseInputs, travel: Vec2, style: GaitStyle) -> Pose {
-    let GaitStyle { shape, sink, lean, swing: arm_swing } = style;
+    use std::f32::consts::TAU;
+    let GaitStyle { shape, sink, lean, swing: arm_swing, elbow, heft, folded } = style;
     let phase = inputs.stride.rem_euclid(1.0);
-    let cycle = std::f32::consts::TAU * phase;
+    let cycle = TAU * phase;
+    let run = shape.run_share();
+    // Backing up, the foot ahead at a landing is the one behind.
+    let ahead = if travel.y < -1e-3 { -1.0 } else { 1.0 };
+    // A step is half a stride, from one landing to the next.
+    let step = (2.0 * phase).rem_euclid(1.0);
+    // Running, a step's stance is `2 × stance` of it, lowest in its middle.
+    let lowest = WALK_LOWEST.lerp(shape.stance, run);
+    // The left foot bears the weight around a quarter turn of its stance.
+    let bearing = TAU * (phase - shape.stance * 0.5);
 
     let mut pose = Pose::rest();
-    // Two dips per cycle, one under each step, on top of the constant sink.
-    pose.root_offset = Vec3::NEG_Y * (sink + GAIT_BOB * (1.0 - (2.0 * cycle).cos()) * 0.5);
+    // Measured from the landing, which stays where it was so a reaching leg still reaches.
+    let bob = WALK_BOB.lerp(RUN_BOB, run) * 0.5;
+    let rise = bob * ((TAU * lowest).cos() - (TAU * (step - lowest)).cos());
+    let sway = -WALK_SWAY.lerp(RUN_SWAY, run) * heft * bearing.cos();
+    pose.root_offset = Vec3::new(sway, -sink + rise, 0.0);
+
+    // The forward leg's hip goes forward, and the swinging leg's hip drops.
+    let turn = -WALK_PELVIS_TURN.lerp(RUN_PELVIS_TURN, run) * heft * ahead * cycle.cos();
+    let drop = WALK_PELVIS_DROP.lerp(RUN_PELVIS_DROP, run) * heft * bearing.cos();
+    pose.set(bone::PELVIS, Quat::from_rotation_y(turn) * Quat::from_rotation_z(drop));
 
     // Lean forwards over the stride and tip toward a sideways step. A
-    // crouched body is folded either way, so only an upright lean reverses
-    // when walking backwards.
-    let folded = lean > RUN_LEAN;
-    let leaning = lean * if folded { 1.0 } else { travel.y };
+    // folded body is folded either way, so only an upright lean reverses
+    // when walking backwards. The landing is taken in the chest too.
+    let pulse = WALK_LEAN_PULSE.lerp(RUN_LEAN_PULSE, run) * heft * (TAU * (step - lowest)).cos();
+    let leaning = lean * if folded { 1.0 } else { travel.y } + pulse;
+    let chest_turn = -turn * (1.0 + WALK_COUNTER_TURN.lerp(RUN_COUNTER_TURN, run));
+    let chest_drop = -drop * CHEST_LEVELING;
     pose.set(
         bone::CHEST,
-        Quat::from_rotation_z(travel.x * SIDESTEP_LEAN) * Quat::from_rotation_x(leaning),
+        Quat::from_rotation_y(chest_turn)
+            * Quat::from_rotation_z(travel.x * SIDESTEP_LEAN + chest_drop)
+            * Quat::from_rotation_x(leaning),
     );
-    pose.set(bone::NECK, Quat::from_rotation_x(-leaning * GAIT_NECK_LIFT));
+    // The neck takes back what the hips and chest turned, so the head rides steady.
+    pose.set(
+        bone::NECK,
+        Quat::from_rotation_y(-(turn + chest_turn))
+            * Quat::from_rotation_z(-(drop + chest_drop))
+            * Quat::from_rotation_x(-leaning * GAIT_NECK_LIFT),
+    );
 
-    // Arms swing opposite the leg on the same side.
-    let [left, right] = foot_offsets(phase, travel, shape);
-    let swing_of = |offset: FootOffset| {
-        // Opposite the leg's travel along each axis, so a diagonal mixes both.
-        let along = offset.ahead * travel.y.signum() + offset.across * travel.x.signum();
-        -along / shape.half_stride_for(travel) * arm_swing
+    // Each arm swings against the leg on its side, a little after it, and bends as it comes
+    // forward.
+    let flex = WALK_ELBOW_FLEX.lerp(RUN_ELBOW_FLEX, run) * (arm_swing / ARM_SWING).min(1.0);
+    let arm = |side: f32| {
+        let opposite = side * 0.25 + 0.25;
+        let forward = -(TAU * (phase - opposite - ARM_LAG)).cos() * ahead;
+        let swing = arm_swing * (forward + ARM_FORWARD);
+        let bend = elbow + flex * 0.5 * (1.0 - (TAU * (phase - opposite - ELBOW_LAG)).cos());
+        (swing, bend)
     };
-    arms_at_sides(&mut pose, [swing_of(left), swing_of(right)], ELBOW_BEND);
+    let (left, left_elbow) = arm(-1.0);
+    let (right, right_elbow) = arm(1.0);
+    arms_at_sides(&mut pose, [left, right], elbow);
+    pose.set(bone::FOREARM_L, Quat::from_rotation_x(left_elbow));
+    pose.set(bone::FOREARM_R, Quat::from_rotation_x(right_elbow));
 
     pose
 }
@@ -560,7 +738,7 @@ mod tests {
                 let travel = Vec2::Y;
                 let mut phase = 0.0;
                 let mut traveled = 0.0;
-                let mut was: Option<Vec3> = None;
+                let mut was: Option<crate::common::skeleton::ik::Contact> = None;
 
                 for _ in 0..24 {
                     // A fortieth of the cycle at a time, forwards along -Z.
@@ -572,19 +750,14 @@ mod tests {
                     let inputs = PoseInputs { seconds: 0.0, stride: phase, speed, travel: Vec2::Y, ..Default::default() };
                     let pose =
                         finish_pose(&skeleton, AnimationState::RunForward, &inputs, &root, None);
-                    let ankle = skeleton
-                        .posed_bones(&pose, &root)
-                        .into_iter()
-                        .find(|posed| posed.name == bone::SHIN_L)
-                        .unwrap()
-                        .tail;
+                    let ankle = crate::common::skeleton::ik::left_foot_contact(&skeleton, &pose, &root);
 
                     let planted = foot_offsets(phase, Vec2::Y, shape)[0].lift == 0.0;
                     if let (true, Some(was)) = (planted, was) {
                         assert!(
-                            (ankle - was).length() < 1e-3,
+                            ankle.slid_from(was) < 1e-3,
                             "the planted foot slid {:.5} m at {speed} on {proportions:?}",
-                            (ankle - was).length()
+                            ankle.slid_from(was)
                         );
                     }
                     was = planted.then_some(ankle);
@@ -864,7 +1037,7 @@ mod tests {
             let travel = Vec2::new(toward, 0.0);
             let mut phase = 0.0;
             let mut traveled = 0.0;
-            let mut was: Option<Vec3> = None;
+            let mut was: Option<crate::common::skeleton::ik::Contact> = None;
 
             for _ in 0..24 {
                 let step = shape.stride_per_cycle(travel) * leg / 40.0;
@@ -881,19 +1054,14 @@ mod tests {
                     ..Default::default()
                 };
                 let pose = finish_pose(&skeleton, state, &inputs, &root, None);
-                let ankle = skeleton
-                    .posed_bones(&pose, &root)
-                    .into_iter()
-                    .find(|posed| posed.name == bone::SHIN_L)
-                    .unwrap()
-                    .tail;
+                let ankle = crate::common::skeleton::ik::left_foot_contact(&skeleton, &pose, &root);
 
                 let planted = foot_offsets(phase, Vec2::new(toward, 0.0), shape)[0].lift == 0.0;
                 if let (true, Some(was)) = (planted, was) {
                     assert!(
-                        (ankle - was).length() < 1e-3,
+                        ankle.slid_from(was) < 1e-3,
                         "in {state:?} the planted foot slid {:.5} m",
-                        (ankle - was).length()
+                        ankle.slid_from(was)
                     );
                 }
                 was = planted.then_some(ankle);
@@ -924,9 +1092,9 @@ mod tests {
     fn a_sidestep_leans_towards_where_it_is_going() {
         let skeleton = humanoid(Proportions::DEFAULT);
         let root = Transform::IDENTITY;
-        let inputs = PoseInputs { seconds: 0.0, stride: 0.2, speed: 2.0, ..default() };
-
-        let crown = |state: AnimationState| {
+        // Mirrored half a stride along, where the other foot is down.
+        let crown = |state: AnimationState, stride: f32| {
+            let inputs = PoseInputs { seconds: 0.0, stride, speed: 2.0, ..default() };
             skeleton
                 .posed_bones(&state.pose(&inputs), &root)
                 .into_iter()
@@ -936,8 +1104,8 @@ mod tests {
                 .x
         };
 
-        let right = crown(AnimationState::StrafeRight);
-        let left = crown(AnimationState::StrafeLeft);
+        let right = crown(AnimationState::StrafeRight, 0.2);
+        let left = crown(AnimationState::StrafeLeft, 0.7);
         assert!(right > 0.0, "stepping right leans to {right}");
         assert!(left < 0.0, "stepping left leans to {left}");
         assert!((right + left).abs() < 1e-5, "the two leans do not mirror");
@@ -988,7 +1156,7 @@ mod tests {
 
         let mut phase = 0.0;
         let mut traveled = 0.0;
-        let mut was: Option<Vec3> = None;
+        let mut was: Option<crate::common::skeleton::ik::Contact> = None;
 
         for _ in 0..24 {
             let step = shape.stride_per_cycle(travel) * leg / 40.0;
@@ -1004,19 +1172,14 @@ mod tests {
                 ..Default::default()
             };
             let pose = finish_pose(&skeleton, AnimationState::RunForward, &inputs, &root, None);
-            let ankle = skeleton
-                .posed_bones(&pose, &root)
-                .into_iter()
-                .find(|posed| posed.name == bone::SHIN_L)
-                .unwrap()
-                .tail;
+            let ankle = crate::common::skeleton::ik::left_foot_contact(&skeleton, &pose, &root);
 
             let planted = foot_offsets(phase, travel, shape)[0].lift == 0.0;
             if let (true, Some(was)) = (planted, was) {
                 assert!(
-                    (ankle - was).length() < 1e-3,
+                    ankle.slid_from(was) < 1e-3,
                     "the planted foot slid {:.5} m on the diagonal",
-                    (ankle - was).length()
+                    ankle.slid_from(was)
                 );
             }
             was = planted.then_some(ankle);
@@ -1128,5 +1291,76 @@ mod tests {
         let lopsided = across_the_cycle(bone::HAND_L) + across_the_cycle(bone::HAND_R);
         assert!(lopsided.abs() < 1e-4, "the arms are lopsided by {lopsided} over a cycle");
     }
-}
 
+    fn posed_at(pose: &Pose, name: &str) -> crate::common::skeleton::rig::PosedBone {
+        let skeleton = humanoid(Proportions::DEFAULT);
+        skeleton.posed_bone(pose, &Transform::IDENTITY, skeleton.index_of(name).unwrap())
+    }
+
+    /// At the left heel's landing the left hip is carried forward, and over the left foot's
+    /// stance the right hip drops and the hips sway left. A sign slip in any reads as a limp.
+    #[test]
+    fn the_hips_turn_drop_and_sway_with_the_steps() {
+        for speed in [WALKING, RUNNING] {
+            let style = GaitStyle::upright(speed);
+            let at = |stride: f32| gait_pose(&PoseInputs { stride, speed, ..default() }, Vec2::Y, style);
+            let landing = at(0.0);
+            let (left, right) = (posed_at(&landing, bone::THIGH_L).head, posed_at(&landing, bone::THIGH_R).head);
+            assert!(left.z < right.z - 0.01, "at {speed}, landing on the left: hips at {left} and {right}");
+
+            let bearing = at(style.shape.stance * 0.5);
+            let (left, right) = (posed_at(&bearing, bone::THIGH_L).head, posed_at(&bearing, bone::THIGH_R).head);
+            assert!(right.y < left.y - 0.005, "at {speed}, on the left foot: hips at {left} and {right}");
+            assert!(bearing.root_offset.x < 0.0, "at {speed} the hips sway right over the left foot");
+        }
+    }
+
+    /// The hips and chest turn and tip under it, and the head rides steady.
+    #[test]
+    fn the_head_rides_steady_through_a_stride() {
+        for speed in [WALKING, RUNNING] {
+            let style = GaitStyle::upright(speed);
+            let mut chest_turned = 0.0f32;
+            for step in 0..32 {
+                let pose = gait_pose(&PoseInputs { stride: step as f32 / 32.0, speed, ..default() }, Vec2::Y, style);
+                let rest = |name: &str| posed_at(&Pose::rest(), name).rotation;
+                let turned = |name: &str| posed_at(&pose, name).rotation * rest(name).inverse();
+                let ahead = turned(bone::HEAD) * Vec3::NEG_Z;
+                let across = turned(bone::HEAD) * Vec3::X;
+                assert!(ahead.x.abs() < 0.02 && across.y.abs() < 0.02, "at {speed} the head wobbles: {ahead}, {across}");
+                chest_turned = chest_turned.max((turned(bone::CHEST) * Vec3::NEG_Z).x.abs());
+            }
+            assert!(chest_turned > 0.05, "at {speed} the chest never turns against the hips");
+        }
+    }
+
+    /// A walk vaults over the leg and is highest over it; a run lands into it and is lowest there.
+    #[test]
+    fn a_walk_rises_over_the_leg_and_a_run_sinks_into_it() {
+        for (speed, highest) in [(WALKING, true), (RUNNING, false)] {
+            let style = GaitStyle::upright(speed);
+            let hips = |stride: f32| gait_pose(&PoseInputs { stride, speed, ..default() }, Vec2::Y, style).root_offset.y;
+            let midstance = hips(style.shape.stance * 0.5);
+            let elsewhere: Vec<f32> = (0..16).map(|step| hips(step as f32 / 16.0)).collect();
+            let (low, high) = elsewhere.iter().fold((f32::MAX, f32::MIN), |(low, high), y| (low.min(*y), high.max(*y)));
+            let near = if highest { high - midstance } else { midstance - low };
+            assert!(near < (high - low) * 0.2, "at {speed} the hips are at {midstance} over the leg, between {low} and {high}");
+        }
+    }
+
+    /// The heel lands first and the toes push off last, and the foot leaves the floor still
+    /// moving with it rather than jerking to a stop.
+    #[test]
+    fn a_foot_rolls_from_heel_to_toe_and_leaves_smoothly() {
+        let shape = GaitShape::for_speed(WALKING);
+        let left = |phase: f32| foot_offsets(phase, Vec2::Y, shape)[0];
+        assert!(left(0.0).pitch > 0.1, "the toes are not up as the heel lands");
+        assert!(left(shape.stance - 1e-4).pitch < -0.3, "the toes do not push off");
+        assert_eq!(left(shape.stance * 0.4).pitch, 0.0, "the foot is not flat mid-stance");
+
+        let d = 1e-3;
+        let planted = (left(shape.stance - d).ahead - left(shape.stance - 2.0 * d).ahead) / d;
+        let lifted = (left(shape.stance + 2.0 * d).ahead - left(shape.stance + d).ahead) / d;
+        assert!((planted - lifted).abs() < planted.abs() * 0.1, "the foot leaves at {lifted}, planted at {planted}");
+    }
+}

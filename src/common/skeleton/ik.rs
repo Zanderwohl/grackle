@@ -231,9 +231,24 @@ pub fn plant_feet(
             };
             // Offsets are in leg-lengths.
             let leg = chain_length(skeleton, chain);
-            let target = resting
+            let mut target = resting
                 + (forward * offset.ahead + across * offset.across + Vec3::Y * offset.lift) * leg;
-            solve(skeleton, pose, root, chain, target, root.rotation * limb.pole)
+            // The foot flat as it rests, turned by its pitch: about the ankle as the toes come
+            // up, about the toes as the heel does, so the ankle rises with it.
+            let roll = Quat::from_axis_angle(across, offset.pitch);
+            let foot = chain
+                .tip
+                .and_then(|tip| skeleton.index_of(tip))
+                .map(|tip| skeleton.posed_bone(&standing, root, tip));
+            if let Some(foot) = foot.filter(|_| offset.pitch < 0.0) {
+                let toes = foot.tail - foot.head;
+                target += toes - roll * toes;
+            }
+            let reach = solve(skeleton, pose, root, chain, target, root.rotation * limb.pole);
+            if let (Some(tip), Some(foot)) = (chain.tip, foot) {
+                set_world_rotation(skeleton, pose, root, tip, roll * foot.rotation);
+            }
+            reach
         })
         .collect()
 }
@@ -275,7 +290,9 @@ pub fn set_world_rotation(
     let Some(index) = skeleton.index_of(name) else { return };
     let posed = skeleton.posed_bone(pose, root, index).rotation;
     let base = posed * pose.joint(name).inverse();
-    pose.set(name, base.inverse() * wanted);
+    // Renormalized: the product drifts off unit length by parts in a million, which an angle
+    // read off it by `acos` of a dot product magnifies to a fifth of a degree.
+    pose.set(name, (base.inverse() * wanted).normalize());
 }
 
 /// Which way an elbow points: back, a little out and down. `side` is +1 on the
@@ -324,6 +341,40 @@ pub fn duck_under(skeleton: &Skeleton, pose: &mut Pose, root: &Transform, ceilin
     // Clamped at rest, so a small body is not stretched up to the ceiling.
     let hips = pose.root_offset.y - slack / skeleton.anatomy().hip;
     pose.root_offset.y = hips.min(0.0);
+}
+
+/// How far above the bottom of its box a tucked leg is kept, meters: the mesh is thicker than
+/// the bone.
+const TUCK_CLEARANCE: f32 = 0.06;
+
+/// Lift each foot of a body ducked in the air until its whole leg is above the root, the
+/// bottom of a box that kept its head and gave up its lower half. Straight up, so a leg keeps
+/// the shape it was swinging in; the knee folds forward by the limb's pole.
+pub fn tuck_into_the_box(skeleton: &Skeleton, pose: &mut Pose, root: &Transform) {
+    let anatomy = skeleton.anatomy();
+    let floor = root.translation.y + TUCK_CLEARANCE;
+    for foot in &anatomy.feet {
+        let Some(limb) = anatomy.limbs.get(foot.limb) else { continue };
+        let chain = &limb.chain;
+        let lowest = |pose: &Pose| {
+            chain
+                .bones()
+                .chain(chain.tip)
+                .filter_map(|name| skeleton.index_of(name))
+                .map(|index| {
+                    let posed = skeleton.posed_bone(pose, root, index);
+                    posed.head.y.min(posed.tail.y)
+                })
+                .fold(f32::MAX, f32::min)
+        };
+        let below = floor - lowest(pose);
+        let Some(ankle) = skeleton.index_of(chain.lower).map(|lower| skeleton.posed_bone(pose, root, lower).tail) else {
+            continue;
+        };
+        if below > 0.0 {
+            solve(skeleton, pose, root, chain, ankle + Vec3::Y * below, root.rotation * limb.pole);
+        }
+    }
 }
 
 /// The pose during a state transition. Blends the finished poses, since a
@@ -469,6 +520,7 @@ fn facing_pose(
                 ahead: from.ahead.lerp(to.ahead, crouch),
                 across: from.across.lerp(to.across, crouch),
                 lift: from.lift.lerp(to.lift, crouch),
+                pitch: from.pitch.lerp(to.pitch, crouch),
             })
             .collect();
         plant_by(skeleton, &mut pose, root, &offsets, inputs.feet_free);
@@ -515,7 +567,12 @@ pub fn correct_for_state(
 ) {
     // Duck first; planting puts the knees back under the lowered hips.
     if state.ducks() {
-        duck_under(skeleton, pose, root, CROUCH_HEIGHT);
+        // In the air the box keeps its head and the legs need all of it to tuck into.
+        let crown = if state.plants_feet() { skeleton.anatomy().crouched_crown } else { 1.0 };
+        duck_under(skeleton, pose, root, CROUCH_HEIGHT * crown);
+        if !state.plants_feet() {
+            tuck_into_the_box(skeleton, pose, root);
+        }
     }
     if state.plants_feet() {
         plant_by(skeleton, pose, root, &state.foot_offsets(inputs, skeleton.anatomy()), inputs.feet_free);
@@ -718,12 +775,18 @@ fn fabrik(skeleton: &Skeleton, pose: &mut Pose, root: &Transform, chain: &Chain,
     for round in 0..FABRIK_ROUNDS {
         let mut points = joints(pose);
         if round == 0 {
-            // Bowed toward the pole, so the chain settles bending that way rather than whichever
-            // way it started.
-            let span = lengths.iter().sum::<f32>() * 0.05;
+            // Started as an arc from the base to the target bowed toward the pole, so the chain
+            // settles bending that way. Nudged from where it rests instead, a chain hanging the
+            // other way kept its bend and folded against its limits short of a target in reach.
+            let across = target - base;
+            let bow = (pole - across * pole.dot(across) / across.length_squared()).normalize_or_zero();
+            let total = lengths.iter().sum::<f32>();
+            let rise = (total * total - across.length_squared()).max(0.0).sqrt() * 0.5;
+            let mut along = 0.0;
             let count = points.len();
-            for point in points.iter_mut().take(count - 1).skip(1) {
-                *point += pole * span;
+            for (at, point) in points.iter_mut().enumerate().take(count - 1).skip(1) {
+                along += lengths[at - 1] / total;
+                *point = base + across * along + bow * rise * (std::f32::consts::PI * along).sin();
             }
         }
         for _ in 0..FABRIK_PASSES {
@@ -784,6 +847,37 @@ fn aim(along: Vec3, hinge: Vec3) -> Quat {
     };
 
     Quat::from_mat3(&Mat3::from_cols(x, y, x.cross(y)))
+}
+
+/// Where the left foot bears on the floor: the ankle, or the toes once the heel has risen. Of
+/// another kind than `was`, it did not slide.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Contact {
+    on_toes: bool,
+    at: Vec3,
+}
+
+#[cfg(test)]
+impl Contact {
+    pub(crate) fn slid_from(&self, was: Contact) -> f32 {
+        if self.on_toes != was.on_toes {
+            return 0.0;
+        }
+        self.at.distance(was.at)
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn left_foot_contact(skeleton: &Skeleton, pose: &Pose, root: &Transform) -> Contact {
+    let posed = |pose: &Pose, name: &str| skeleton.posed_bone(pose, root, skeleton.index_of(name).unwrap());
+    let foot = posed(pose, bone::FOOT_L);
+    let rest = posed(&Pose::rest(), bone::FOOT_L);
+    let toes_down = (foot.tail - foot.head).normalize().y < (rest.tail - rest.head).normalize().y - 1e-4;
+    match toes_down {
+        true => Contact { on_toes: true, at: foot.tail },
+        false => Contact { on_toes: false, at: foot.head },
+    }
 }
 
 #[cfg(test)]
@@ -1060,19 +1154,27 @@ mod tests {
             (AnimationState::RunBackward, back_left, FRAC_PI_4 * LEG_TURN),
             (AnimationState::RunForward, Vec2::Y, 0.0),
         ] {
-            for step in 0..8 {
-                let inputs = PoseInputs { stride: step as f32 / 8.0, speed: 6.0, travel, ..default() };
+            // The hips and chest swing about their turn as the body steps, so they are measured
+            // over a stride; the head rides steady through it.
+            const STEPS: usize = 16;
+            let mut mean = [0.0; 2];
+            for step in 0..STEPS {
+                let inputs = PoseInputs { stride: step as f32 / STEPS as f32, speed: 6.0, travel, ..default() };
                 assert!((leg_turn(&skeleton, state, &inputs) - legs).abs() < 1e-5, "{state:?}");
                 let pose = ducked_pose(&skeleton, state, &inputs, &root, None, None);
-                for (name, wanted) in [(bone::PELVIS, legs), (bone::CHEST, legs * 0.5), (bone::HEAD, 0.0)] {
-                    let turned = turn_of(&skeleton, &pose, &root, name);
-                    assert!(
-                        (turned - wanted).abs() < tolerance,
-                        "{state:?}: {name} turned {:.1}°, not {:.1}°",
-                        turned.to_degrees(),
-                        wanted.to_degrees()
-                    );
+                for (index, name) in [bone::PELVIS, bone::CHEST].into_iter().enumerate() {
+                    mean[index] += turn_of(&skeleton, &pose, &root, name) / STEPS as f32;
                 }
+                let head = turn_of(&skeleton, &pose, &root, bone::HEAD);
+                assert!(head.abs() < tolerance, "{state:?}: the head turned {:.1}° off the aim", head.to_degrees());
+            }
+            for (name, turned, wanted) in [(bone::PELVIS, mean[0], legs), (bone::CHEST, mean[1], legs * 0.5)] {
+                assert!(
+                    (turned - wanted).abs() < tolerance,
+                    "{state:?}: {name} turned {:.1}°, not {:.1}°",
+                    turned.to_degrees(),
+                    wanted.to_degrees()
+                );
             }
         }
     }
@@ -1082,7 +1184,6 @@ mod tests {
     #[test]
     fn a_planted_foot_holds_through_a_turned_stride() {
         use super::super::gait::{feet_offsets, Gait};
-        use super::super::rig::bone;
         let builds = crate::common::class::ClassBuilds::shipped();
         for class in builds.humanoids() {
             let skeleton = builds.rig_for(class);
@@ -1097,7 +1198,7 @@ mod tests {
                 let speed = if state.ducks() { 2.0 } else { 6.0 };
                 let mut gait = Gait::default();
                 let mut at = Vec2::ZERO;
-                let mut was: Option<Vec3> = None;
+                let mut was: Option<crate::common::skeleton::ik::Contact> = None;
                 for tick in 0..200 {
                     let moved = travel * speed * leg * dt;
                     at += moved;
@@ -1113,24 +1214,45 @@ mod tests {
                     let inputs = PoseInputs { stride: gait.phase(), speed: gait.speed(), travel: gait.travel(), ..default() };
                     let root = Transform::from_xyz(at.x, 0.0, -at.y);
                     let pose = ducked_pose(&skeleton, state, &inputs, &root, None, None);
-                    let ankle = skeleton
-                        .posed_bones(&pose, &root)
-                        .into_iter()
-                        .find(|posed| posed.name == bone::SHIN_L)
-                        .unwrap()
-                        .tail;
+                    let ankle = crate::common::skeleton::ik::left_foot_contact(&skeleton, &pose, &root);
                     let (stepped, legs_travel) = stepping(&skeleton, state, &inputs);
                     let shape = stepped.stride_shape(&inputs);
                     let planted = feet_offsets(gait.phase(), legs_travel, shape, skeleton.anatomy())[0].lift == 0.0;
                     if let (true, Some(was)) = (planted, was) {
                         assert!(
-                            (ankle - was).length() < 2e-3,
+                            ankle.slid_from(was) < 2e-3,
                             "{state:?} on {class:?}: the planted foot slid {:.4} m",
-                            (ankle - was).length()
+                            ankle.slid_from(was)
                         );
                     }
                     was = planted.then_some(ankle);
                 }
+            }
+        }
+    }
+
+    /// Ducked in the air the box keeps its head and loses its lower half, so the pedaling legs
+    /// must stay above its bottom as well as under its top, on every class, through the pedal.
+    #[test]
+    fn a_body_ducked_in_the_air_fits_its_short_box() {
+        use crate::common::class::{Class, ClassBuilds};
+        use crate::common::skeleton::state::AIRBORNE_PERIOD;
+        use strum::IntoEnumIterator;
+        let builds = ClassBuilds::shipped();
+        let root = Transform::IDENTITY;
+        for class in Class::iter() {
+            let skeleton = builds.rig_for(class);
+            for step in 0..16 {
+                let seconds = AIRBORNE_PERIOD * step as f32 / 16.0;
+                let inputs = PoseInputs { seconds, ..default() };
+                let pose = finish_pose(&skeleton, AnimationState::CrouchAirborne, &inputs, &root, None);
+                let (mut low, mut high) = (f32::MAX, f32::MIN);
+                skeleton.each_posed_bone(&pose, &root, |posed| {
+                    low = low.min(posed.head.y.min(posed.tail.y));
+                    high = high.max(posed.head.y.max(posed.tail.y));
+                });
+                assert!(low >= TUCK_CLEARANCE - 1e-3, "{class:?} at {seconds:.2} s hangs to {low:.3} m, below its box");
+                assert!(high <= CROUCH_HEIGHT + 1e-3, "{class:?} at {seconds:.2} s reaches {high:.3} m, above its box");
             }
         }
     }

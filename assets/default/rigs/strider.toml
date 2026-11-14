@@ -20,6 +20,9 @@ mount = { bone = "spine", offset = [0.0, 0.14, -0.1] }
 [measures]
 leg = "left_leg"
 hip = "pelvis"
+# Crouched, the crown sits this share of the way up the crouched box: lower than it needs, so
+# the strider stalks with its head down rather than standing tall inside it.
+crouched_crown = 0.82
 
 [[bones]]
 name = "pelvis"
@@ -206,14 +209,17 @@ side = 1.0
 straightens = true
 bends_away = ["metatarsus.r"]
 
-# Three bones, so solved by FABRIK within each joint's limit; it bends up.
+# Three bones, so solved by FABRIK within each joint's limit. It sags between base and tip:
+# bowed up, a lifted tail would need its base to rise further than the joint allows. A target
+# the tail cannot reach, it reaches toward rather than dropping to rest.
 [[limbs]]
 name = "tail"
 upper = "tail.1"
 between = ["tail.2"]
 lower = "tail.3"
 side = 0.0
-pole = [0.0, 1.0, 0.0]
+pole = [0.0, -1.0, 0.0]
+straightens = true
 
 [[feet]]
 limb = "left_leg"

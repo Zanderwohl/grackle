@@ -311,12 +311,12 @@ impl AnimationState {
         match self {
             AnimationState::Idle => idle_pose(inputs.seconds),
             AnimationState::Crouch => crouch_posture(),
-            AnimationState::Airborne => airborne_pose(),
+            AnimationState::Airborne => airborne_pose(inputs.seconds),
             AnimationState::CrouchAirborne => {
                 // Nothing is planted, so the tuck stands; `duck_under` then
                 // folds it under the short hull.
                 let mut pose = crouch_posture();
-                airborne_legs(&mut pose);
+                airborne_legs(&mut pose, inputs.seconds, CROUCH_AIRBORNE_PEDAL);
                 pose
             }
             state if state.uses_gait() => {
@@ -581,32 +581,55 @@ const IDLE_ELBOW_BEND: f32 = 0.3;
 const AIRBORNE_ARM_SWING: [f32; 2] = [0.5, 0.9];
 const AIRBORNE_ELBOW_BEND: f32 = 1.3;
 
-/// Hip raise and knee bend in the air, in radians. One leg leads knee-up and
-/// the other trails heel-tucked; legs together read as standing to attention.
-/// The knee bends further than the hip lifts, which tucks the heels up.
-const AIRBORNE_LEADING: (f32, f32) = (0.55, -1.25);
-const AIRBORNE_TRAILING: (f32, f32) = (0.10, -1.05);
+/// Seconds per turn of the legs' slow pedal in the air.
+pub const AIRBORNE_PERIOD: f32 = 1.6;
+
+/// A leg in the air, as a hip raise and a knee bend in radians: each the middle of its swing
+/// and how far either side. The knee bends further than the hip lifts, which tucks the heels.
+#[derive(Clone, Copy)]
+struct Pedal {
+    hip: (f32, f32),
+    knee: (f32, f32),
+}
+
+/// Legs together read as standing to attention, so they pedal half a turn apart.
+const AIRBORNE_PEDAL: Pedal = Pedal { hip: (0.33, 0.25), knee: (-1.15, 0.22) };
+
+/// Ducked, the thighs come up and the heels in, for the short box; `tuck_into_the_box` takes
+/// up whatever a build still hangs below it.
+const CROUCH_AIRBORNE_PEDAL: Pedal = Pedal { hip: (1.15, 0.15), knee: (-1.9, 0.15) };
+
+/// How far behind the hip the knee straightens, in radians of the pedal: the foot reaches
+/// forward as the thigh tops out and draws back as it falls, a loop rather than a line.
+const KNEE_LAG: f32 = 0.6;
+
+/// How far the arms counter the legs, in radians either side.
+const AIRBORNE_ARM_PEDAL: f32 = 0.12;
 
 /// Shared by the airborne and crouch-airborne poses.
-fn airborne_legs(pose: &mut Pose) {
-    for ((thigh, shin), (hip, knee)) in [
-        ((bone::THIGH_L, bone::SHIN_L), AIRBORNE_LEADING),
-        ((bone::THIGH_R, bone::SHIN_R), AIRBORNE_TRAILING),
-    ] {
-        pose.set(thigh, Quat::from_rotation_x(hip));
-        pose.set(shin, Quat::from_rotation_x(knee));
+fn airborne_legs(pose: &mut Pose, seconds: f32, pedal: Pedal) {
+    let turn = std::f32::consts::TAU * seconds / AIRBORNE_PERIOD;
+    for (thigh, shin, behind) in [(bone::THIGH_L, bone::SHIN_L, 0.0), (bone::THIGH_R, bone::SHIN_R, std::f32::consts::PI)] {
+        let at = turn + behind;
+        pose.set(thigh, Quat::from_rotation_x(pedal.hip.0 + pedal.hip.1 * at.sin()));
+        pose.set(shin, Quat::from_rotation_x(pedal.knee.0 + pedal.knee.1 * (at - KNEE_LAG).sin()));
     }
 }
 
-/// Off the ground. The legs are written here rather than solved, because
+/// Off the ground, pedaling slowly. The legs are written here rather than solved, because
 /// nothing is planted ([`AnimationState::plants_feet`]).
-fn airborne_pose() -> Pose {
+fn airborne_pose(seconds: f32) -> Pose {
     let mut pose = Pose::rest();
-    airborne_legs(&mut pose);
-
-    arms_at_sides(&mut pose, AIRBORNE_ARM_SWING, AIRBORNE_ELBOW_BEND);
-
+    airborne_legs(&mut pose, seconds, AIRBORNE_PEDAL);
+    airborne_arms(&mut pose, seconds);
     pose
+}
+
+/// Each arm swings against the leg on its side.
+fn airborne_arms(pose: &mut Pose, seconds: f32) {
+    let counter = AIRBORNE_ARM_PEDAL * (std::f32::consts::TAU * seconds / AIRBORNE_PERIOD).sin();
+    let [left, right] = AIRBORNE_ARM_SWING;
+    arms_at_sides(pose, [left - counter, right + counter], AIRBORNE_ELBOW_BEND);
 }
 
 /// Standing still: a slow settle into the knees and back up.
@@ -720,29 +743,35 @@ mod tests {
         }
     }
 
-    /// Legs together in the air read as standing to attention.
+    /// Legs together in the air read as standing to attention, and legs held still as a statue:
+    /// the feet stay up, pass each other only briefly, and each draws a loop.
     #[test]
-    fn the_airborne_pose_lifts_both_feet_and_splits_them() {
+    fn the_airborne_legs_pedal_apart() {
         let skeleton = humanoid(Proportions::DEFAULT);
         let root = Transform::IDENTITY;
         let ankle = |pose: &Pose, name: &str| {
-            skeleton
-                .posed_bones(pose, &root)
-                .into_iter()
-                .find(|posed| posed.name == name)
-                .unwrap()
-                .tail
+            skeleton.posed_bone(pose, &root, skeleton.index_of(name).unwrap()).tail
         };
 
-        let flying = AnimationState::Airborne.pose(&PoseInputs::default());
-        for name in [bone::SHIN_L, bone::SHIN_R] {
-            let lift = ankle(&flying, name).y - ankle(&Pose::rest(), name).y;
-            assert!(lift > 0.08, "{name} is only {lift:.2} m off where it stands");
+        const STEPS: usize = 32;
+        let mut apart = 0;
+        let mut path = Vec::new();
+        for step in 0..STEPS {
+            let seconds = AIRBORNE_PERIOD * step as f32 / STEPS as f32;
+            let flying = AnimationState::Airborne.pose(&PoseInputs { seconds, ..default() });
+            for name in [bone::SHIN_L, bone::SHIN_R] {
+                let lift = ankle(&flying, name).y - ankle(&Pose::rest(), name).y;
+                assert!(lift > 0.08, "at {seconds:.2} s {name} is only {lift:.2} m off where it stands");
+            }
+            let split = ankle(&flying, bone::SHIN_L).z - ankle(&flying, bone::SHIN_R).z;
+            apart += usize::from(split.abs() > 0.1);
+            path.push(ankle(&flying, bone::SHIN_L).yz());
         }
+        assert!(apart * 2 > STEPS, "the feet are apart for only {apart} of {STEPS} steps");
 
-        // One in front of the other, by enough to see.
-        let split = ankle(&flying, bone::SHIN_L).z - ankle(&flying, bone::SHIN_R).z;
-        assert!(split.abs() > 0.1, "the feet are {split:.2} m apart front to back");
+        // The shoelace area of the foot's path, square meters.
+        let area = path.iter().zip(path.iter().cycle().skip(1)).map(|(a, b)| a.perp_dot(*b)).sum::<f32>().abs() * 0.5;
+        assert!(area > 0.005, "the foot sweeps {area} m², a line rather than a loop");
     }
 
     /// A one-sided idle leans, visibly so beside other bodies.

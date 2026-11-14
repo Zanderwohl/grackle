@@ -634,6 +634,7 @@ fn humanoid_anatomy(bones: &[Bone], proportions: Proportions) -> super::anatomy:
         leg: leg_meters,
         arm: proportions.arm_meters(),
         hip: proportions.hip_meters(),
+        crouched_crown: 1.0,
         limbs,
     }
 }

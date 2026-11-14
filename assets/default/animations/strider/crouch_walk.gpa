@@ -1,0 +1,930 @@
+name_key = "animation.states.crouch_walk"
+length = 1.0
+clock = "stride"
+looping = true
+note = "Sampled from `strider_seed::gait` at a run, one stride per clip. Only the body and tail: the legs are the gait's own, planted from the stride. The hips rise, turn, drop and sway as the humanoid's do, the spine turns against them, the neck holds the head steady, and the tail swings against the legs, whipping down its length."
+
+[[tracks]]
+combine = "replace"
+space = "body"
+unit = "meters"
+enabled = true
+
+[tracks.channel]
+channel = "rotation"
+bone = "pelvis"
+
+[[tracks.channel.keys]]
+at = 0.0
+to = [
+    0.038012054,
+    -0.034321964,
+    0.023880145,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.083333336
+to = [
+    0.038512688,
+    -0.019156344,
+    0.028105555,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.13541667
+to = [
+    0.034275126,
+    -0.0068467967,
+    0.0268826,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.25
+to = [
+    0.022565672,
+    0.021080375,
+    0.014528265,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.36666667
+to = [
+    0.024476212,
+    0.03892804,
+    -0.0052685784,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.5
+to = [
+    0.038012054,
+    0.03432196,
+    -0.023880145,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.5833333
+to = [
+    0.038512688,
+    0.019156346,
+    -0.028105555,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.6354167
+to = [
+    0.034275122,
+    0.006846787,
+    -0.0268826,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.75
+to = [
+    0.022565672,
+    -0.021080375,
+    -0.014528267,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.8666667
+to = [
+    0.024476212,
+    -0.03892804,
+    0.0052685803,
+]
+ease = "spline"
+
+[[tracks]]
+combine = "replace"
+space = "body"
+unit = "meters"
+enabled = true
+
+[tracks.channel]
+channel = "rotation"
+bone = "spine"
+
+[[tracks.channel.keys]]
+at = 0.0
+to = [
+    0.42320046,
+    0.05639379,
+    0.063695185,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.08958333
+to = [
+    0.42381445,
+    0.037852313,
+    0.05282021,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.15729167
+to = [
+    0.42856568,
+    0.015760493,
+    0.033416346,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.25
+to = [
+    0.43483558,
+    -0.018547088,
+    -0.0022063802,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.34791666
+to = [
+    0.4337681,
+    -0.04812357,
+    -0.038804337,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.41354167
+to = [
+    0.42894492,
+    -0.058200754,
+    -0.055816825,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.5
+to = [
+    0.42320046,
+    -0.05639379,
+    -0.06369519,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.58958334
+to = [
+    0.42381445,
+    -0.0378523,
+    -0.052820187,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.65729165
+to = [
+    0.42856568,
+    -0.015760494,
+    -0.033416346,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.75
+to = [
+    0.43483558,
+    0.01854709,
+    0.0022063798,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.84791666
+to = [
+    0.4337681,
+    0.048123572,
+    0.03880434,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.9135417
+to = [
+    0.42894492,
+    0.058200747,
+    0.05581682,
+]
+ease = "spline"
+
+[[tracks]]
+combine = "replace"
+space = "body"
+unit = "meters"
+enabled = true
+
+[tracks.channel]
+channel = "rotation"
+bone = "neck"
+
+[[tracks.channel.keys]]
+at = 0.0
+to = [
+    1.1213608,
+    0.0023232189,
+    0.026505267,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.123958334
+to = [
+    1.124568,
+    -0.0031027661,
+    0.009671638,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.25
+to = [
+    1.1456455,
+    -0.007257396,
+    -0.013595908,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.36458334
+to = [
+    1.143786,
+    -0.0077552064,
+    -0.028416537,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.5
+to = [
+    1.1213608,
+    -0.002323221,
+    -0.026505267,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.62395835
+to = [
+    1.124568,
+    0.0031027715,
+    -0.0096716285,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.75
+to = [
+    1.1456455,
+    0.007257396,
+    0.013595907,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.8645833
+to = [
+    1.143786,
+    0.00775521,
+    0.028416535,
+]
+ease = "spline"
+
+[[tracks]]
+combine = "replace"
+space = "body"
+unit = "meters"
+enabled = true
+
+[tracks.channel]
+channel = "rotation"
+bone = "head"
+
+[[tracks.channel.keys]]
+at = 0.0
+to = [
+    -0.7335305,
+    0.0,
+    0.0,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.25
+to = [
+    -0.7335305,
+    0.0,
+    0.0,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.5
+to = [
+    -0.7335305,
+    0.0,
+    0.0,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.75
+to = [
+    -0.7335305,
+    0.0,
+    0.0,
+]
+ease = "spline"
+
+[[tracks]]
+combine = "replace"
+space = "body"
+unit = "meters"
+enabled = true
+
+[tracks.channel]
+channel = "rotation"
+bone = "tail.1"
+
+[[tracks.channel.keys]]
+at = 0.0
+to = [
+    -0.19910976,
+    -0.014695299,
+    0.04259103,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.060416665
+to = [
+    -0.20337377,
+    -0.017324487,
+    0.04961805,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.121875
+to = [
+    -0.19445062,
+    -0.016825367,
+    0.04938959,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.18854167
+to = [
+    -0.17566997,
+    -0.013194894,
+    0.040897503,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.25
+to = [
+    -0.16047406,
+    -0.008264805,
+    0.026839813,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.296875
+to = [
+    -0.15599163,
+    -0.004066913,
+    0.013397564,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.365625
+to = [
+    -0.16369887,
+    0.002498429,
+    -0.008034313,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.5
+to = [
+    -0.19910976,
+    0.014695302,
+    -0.04259104,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.56041664
+to = [
+    -0.20337377,
+    0.017324489,
+    -0.049618058,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.621875
+to = [
+    -0.19445062,
+    0.016825367,
+    -0.049389582,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.68854165
+to = [
+    -0.17566997,
+    0.01319489,
+    -0.040897492,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.75
+to = [
+    -0.16047406,
+    0.008264805,
+    -0.02683981,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.796875
+to = [
+    -0.15599163,
+    0.0040669125,
+    -0.013397566,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.865625
+to = [
+    -0.16369887,
+    -0.0024984318,
+    0.0080343215,
+]
+ease = "spline"
+
+[[tracks]]
+combine = "replace"
+space = "body"
+unit = "meters"
+enabled = true
+
+[tracks.channel]
+channel = "rotation"
+bone = "tail.2"
+
+[[tracks.channel.keys]]
+at = 0.0
+to = [
+    -0.013260383,
+    -0.006646732,
+    0.040693097,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.052083332
+to = [
+    -0.02320036,
+    -0.009802114,
+    0.056547035,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.12083333
+to = [
+    -0.021382632,
+    -0.011683655,
+    0.06808081,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.19270833
+to = [
+    -0.003503571,
+    -0.010261327,
+    0.066747405,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.25
+to = [
+    0.013609894,
+    -0.0076464578,
+    0.056009248,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.309375
+to = [
+    0.024252612,
+    -0.004695181,
+    0.03733298,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.371875
+to = [
+    0.021627279,
+    -0.0015622866,
+    0.012172471,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.5
+to = [
+    -0.013260383,
+    0.0066467337,
+    -0.040693104,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.5520833
+to = [
+    -0.02320036,
+    0.009802118,
+    -0.05654704,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.62083334
+to = [
+    -0.021382632,
+    0.011683655,
+    -0.06808081,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.6927083
+to = [
+    -0.003503571,
+    0.010261327,
+    -0.066747405,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.75
+to = [
+    0.013609894,
+    0.0076464578,
+    -0.056009248,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.809375
+to = [
+    0.024252612,
+    0.0046951827,
+    -0.037332978,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.871875
+to = [
+    0.021627279,
+    0.0015622858,
+    -0.012172462,
+]
+ease = "spline"
+
+[[tracks]]
+combine = "replace"
+space = "body"
+unit = "meters"
+enabled = true
+
+[tracks.channel]
+channel = "rotation"
+bone = "tail.3"
+
+[[tracks.channel.keys]]
+at = 0.0
+to = [
+    0.04348831,
+    -0.0038167858,
+    0.024409002,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.048958335
+to = [
+    0.025038712,
+    -0.009105796,
+    0.05201456,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.123958334
+to = [
+    0.016188512,
+    -0.015490255,
+    0.08408132,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.20208333
+to = [
+    0.03671796,
+    -0.016041234,
+    0.09799683,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.25
+to = [
+    0.05720465,
+    -0.01359761,
+    0.095127836,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.303125
+to = [
+    0.07684716,
+    -0.010077512,
+    0.08198453,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.37604168
+to = [
+    0.084432036,
+    -0.005699433,
+    0.049537983,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.46145833
+to = [
+    0.06020397,
+    0.00012553463,
+    -0.00090008334,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.5
+to = [
+    0.04348831,
+    0.0038167906,
+    -0.024409033,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.54895836
+to = [
+    0.025038712,
+    0.009105794,
+    -0.05201455,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.62395835
+to = [
+    0.016188512,
+    0.015490259,
+    -0.08408134,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.70208335
+to = [
+    0.03671796,
+    0.016041238,
+    -0.09799683,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.75
+to = [
+    0.05720465,
+    0.013597608,
+    -0.09512783,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.803125
+to = [
+    0.07684716,
+    0.010077512,
+    -0.08198454,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.87604165
+to = [
+    0.084432036,
+    0.0056994376,
+    -0.049538013,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.9614583
+to = [
+    0.06020397,
+    -0.00012553687,
+    0.000900099,
+]
+ease = "spline"
+
+[[tracks]]
+combine = "replace"
+space = "body"
+unit = "hip_heights"
+enabled = true
+
+[tracks.channel]
+channel = "root"
+
+[[tracks.channel.keys]]
+at = 0.0
+to = [
+    0.008037403,
+    -0.04,
+    0.0,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.063541666
+to = [
+    0.0024821695,
+    -0.04220674,
+    0.0,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.119791664
+to = [
+    -0.0027914282,
+    -0.037880275,
+    0.0,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.15104167
+to = [
+    -0.005613029,
+    -0.033594057,
+    0.0,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.25
+to = [
+    -0.012664919,
+    -0.019774573,
+    0.0,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.31458333
+to = [
+    -0.014809131,
+    -0.0175966,
+    0.0,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.37083334
+to = [
+    -0.014719389,
+    -0.022020781,
+    0.0,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.403125
+to = [
+    -0.013835545,
+    -0.02649428,
+    0.0,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.5
+to = [
+    -0.008037401,
+    -0.04,
+    0.0,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.56354165
+to = [
+    -0.00248217,
+    -0.04220674,
+    0.0,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.6197917
+to = [
+    0.002791433,
+    -0.03788027,
+    0.0,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.6510417
+to = [
+    0.005613032,
+    -0.033594053,
+    0.0,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.75
+to = [
+    0.01266492,
+    -0.019774573,
+    0.0,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.81458336
+to = [
+    0.014809131,
+    -0.0175966,
+    0.0,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.87083334
+to = [
+    0.014719388,
+    -0.022020781,
+    0.0,
+]
+ease = "spline"
+
+[[tracks.channel.keys]]
+at = 0.903125
+to = [
+    0.013835543,
+    -0.02649428,
+    0.0,
+]
+ease = "spline"
