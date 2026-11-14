@@ -145,8 +145,15 @@ impl Default for Brightness {
     }
 }
 
-/// The least [`Brightness::ambient`] the panel offers.
+/// The least [`Brightness::ambient`]: a body's ambient is drawn as a multiple of it.
 pub const LEAST_AMBIENT: f32 = 1.0;
+
+impl Brightness {
+    /// Within what can be drawn, whatever a file said.
+    pub fn clamped(self) -> Self {
+        Self { ambient: self.ambient.max(LEAST_AMBIENT), sun: self.sun.max(0.0), sky: self.sky.max(0.0) }
+    }
+}
 
 /// Ungated, as [`publish_palette`](crate::common::palette::publish_palette) is.
 pub fn publish_sky(
@@ -158,7 +165,7 @@ pub fn publish_sky(
     if metadata.is_changed() {
         sky.set_if_neq(metadata.sky);
         sun.set_if_neq(metadata.sun);
-        brightness.set_if_neq(metadata.brightness);
+        brightness.set_if_neq(metadata.brightness.clamped());
     }
 }
 
@@ -191,6 +198,13 @@ mod tests {
                 assert!(close, "{sky:?} at {elevation} is {drawn:?}, authored {authored:?}");
             }
         }
+    }
+
+    /// A file can say anything; what is published can be drawn.
+    #[test]
+    fn a_brightness_from_a_file_is_kept_drawable() {
+        let clamped = Brightness { ambient: 0.0, sun: -5.0, sky: 300.0 }.clamped();
+        assert_eq!(clamped, Brightness { ambient: LEAST_AMBIENT, sun: 0.0, sky: 300.0 });
     }
 
     #[test]

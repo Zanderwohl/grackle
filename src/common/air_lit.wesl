@@ -51,8 +51,10 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     if (pbr_input.material.flags & STANDARD_MATERIAL_FLAGS_UNLIT_BIT) == 0u {
         out.color = apply_pbr_lighting(pbr_input);
         if (tag >> 31u) == 1u {
-            // Lambertian, as Bevy's own diffuse is: albedo over π times illuminance.
-            let diffuse = pbr_input.material.base_color.rgb * (1.0 - pbr_input.material.metallic);
+            // Lambertian, as Bevy's own diffuse is: albedo over π times illuminance. Not scaled down
+            // by metallic, which with no specular term would leave metal unlit in the sun; metal
+            // takes the sun in its own color, as a rough metal would.
+            let diffuse = pbr_input.material.base_color.rgb;
             let n_dot_l = max(dot(pbr_input.N, sun.toward.xyz), 0.0);
             out.color += vec4<f32>(diffuse / PI * sun.toward.w * n_dot_l * view.exposure, 0.0);
         }

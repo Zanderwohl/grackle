@@ -10,7 +10,6 @@ use std::collections::HashMap;
 use bevy::prelude::*;
 
 use crate::common::sunlight::{Daylight, LitSurface};
-use crate::common::world_surface::Face;
 
 /// Meters between samples. Coarse on purpose: ambient light is smooth, and a body is a meter wide.
 pub const AIR_STEP: f32 = 2.0;
@@ -23,10 +22,9 @@ pub struct AirLight {
 
 impl AirLight {
     /// Every lattice point inside some room's bounds and inside the map, gathered.
-    pub fn bake(rooms: &[&[Face]], surface: &LitSurface, light: &Daylight) -> AirLight {
+    pub fn bake(rooms: &[(Vec3, Vec3)], surface: &LitSurface, light: &Daylight) -> AirLight {
         let mut samples = HashMap::new();
-        for faces in rooms {
-            let Some((min, max)) = bounds(faces) else { continue };
+        for &(min, max) in rooms {
             let (lo, hi) = (lattice(min).ceil().as_ivec3(), lattice(max).floor().as_ivec3());
             for x in lo.x..=hi.x {
                 for y in lo.y..=hi.y {
@@ -90,11 +88,6 @@ fn world(cell: IVec3) -> Vec3 {
     (cell.as_vec3() + 0.5) * AIR_STEP
 }
 
-fn bounds(faces: &[Face]) -> Option<(Vec3, Vec3)> {
-    let mut vertices = faces.iter().flat_map(|face| face.vertices.iter().copied());
-    let first = vertices.next()?;
-    Some(vertices.fold((first, first), |(lo, hi), v| (lo.min(v), hi.max(v))))
-}
 
 /// How a thing that moves is lit where it stands, as a `MeshTag`: `ambient` (a multiple of the
 /// global ambient) as three 8-bit mantissas and a 7-bit exponent biased by 64, and whether it is in
@@ -119,7 +112,6 @@ mod tests {
     use crate::common::lightmap::{daylight, BASE_AMBIENT};
     use crate::common::sky::Brightness;
     use crate::common::sky::{SkyTime, SunPosition};
-    use crate::common::world_surface::room_share;
     use crate::tool::room::{Room, RoomSlot};
 
     /// What `air_lit.wesl` reads back.
@@ -146,9 +138,8 @@ mod tests {
     fn bake(rooms: &[Room], open: &[usize]) -> AirLight {
         let is_sky = |room: usize, slot: RoomSlot| open.contains(&room) && slot == RoomSlot::Ceiling;
         let surface = LitSurface::build(rooms, is_sky);
-        let shares: Vec<Vec<Face>> = (0..rooms.len()).map(|index| room_share(rooms, index)).collect();
-        let shares: Vec<&[Face]> = shares.iter().map(Vec::as_slice).collect();
-        AirLight::bake(&shares, &surface, &daylight(SunPosition { altitude: 60.0, azimuth: 90.0 }.toward(), SkyTime::Day, Brightness::default()))
+        let bounds: Vec<(Vec3, Vec3)> = rooms.iter().map(Room::bounds).collect();
+        AirLight::bake(&bounds, &surface, &daylight(SunPosition { altitude: 60.0, azimuth: 90.0 }.toward(), SkyTime::Day, Brightness::default()))
     }
 
     #[test]

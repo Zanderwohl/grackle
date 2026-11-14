@@ -165,9 +165,11 @@ east (`+X`); altitude is degrees above the horizon.
 surface and body starts from, the sun on a surface square on to it, and what a
 sky color of 1 is worth, all in `GlobalAmbientLight::brightness` units. They
 default to 100, 1500 and 600, the numbers every map used before. They are part
-of what is baked, so changing one bakes again, and the global ambient follows
-the map's, which is what lightmapped walls ignore and things that move scale
-their own ambient against. The ambient is kept above zero for that reason.
+of what is baked, so changing one bakes again. While the map is shown the
+global ambient is the map's, which lightmapped walls ignore and things that
+move scale their own ambient against; the prop, animation and weapon editors
+light their own scenes and keep the default. The settings are clamped where
+they are published, the ambient to at least 1, whatever a file says.
 
 ### Things that move
 

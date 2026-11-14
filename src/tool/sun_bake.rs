@@ -144,6 +144,11 @@ pub struct OpenSky {
 }
 
 impl OpenSky {
+    #[cfg(test)]
+    pub(crate) fn of(surface: LitSurface) -> Self {
+        Self { surface: Some(surface), built_from: None }
+    }
+
     pub fn sees_sun(&self, point: Vec3, toward: Vec3) -> bool {
         self.surface.as_ref().is_some_and(|surface| surface.sees_sun(point, toward))
     }
@@ -298,7 +303,14 @@ impl Snapshot {
             .filter_map(|(entity, room, faces_hash, is_sky)| {
                 let (_, baked) = bakes.get(*entity).ok()?;
                 let sky = sky_per_face(&baked.faces, *is_sky);
-                Some(JobRoom { room: *room, label: labels.label(*room), faces: baked.faces.clone(), sky, faces_hash: *faces_hash })
+                Some(JobRoom {
+                    room: *room,
+                    label: labels.label(*room),
+                    faces: baked.faces.clone(),
+                    air: baked.air,
+                    sky,
+                    faces_hash: *faces_hash,
+                })
             })
             .collect();
         Job { rooms, light: self.light, surface: None, baked: Vec::new(), air: None, busy: Duration::ZERO }
@@ -309,6 +321,7 @@ struct JobRoom {
     room: Entity,
     label: String,
     faces: Vec<Face>,
+    air: Option<(Vec3, Vec3)>,
     sky: Vec<bool>,
     faces_hash: u64,
 }
@@ -366,8 +379,8 @@ impl Job {
             return;
         };
         let Some(room) = self.rooms.get(self.baked.len()) else {
-            let faces: Vec<&[Face]> = self.rooms.iter().map(|room| room.faces.as_slice()).collect();
-            self.air = Some(AirLight::bake(&faces, surface, &self.light));
+            let bounds: Vec<(Vec3, Vec3)> = self.rooms.iter().filter_map(|room| room.air).collect();
+            self.air = Some(AirLight::bake(&bounds, surface, &self.light));
             return;
         };
         let atlas = Atlas::of(&room.faces);
@@ -455,9 +468,17 @@ fn auto_bake_sunlight(
     if let Some(baked) = state.bake.poll() {
         state.landed(baked, &mut images);
     }
-    // Half-rebuilt rooms leave holes for light to come through. With nothing to bake, a snapshot
-    // only tells stale from up to date, so it is taken only on a change.
-    if !rooms.is_settled() || !(state.bake.would_bake() || inputs_changed) {
+    // Half-rebuilt rooms leave holes for light to come through, so the bake waits for them; the sun
+    // on things that move is drawn live and follows the rooms as they are rebuilt.
+    if !rooms.is_settled() {
+        if inputs_changed {
+            open_sky.refresh(&Snapshot::take(&bakes, &paint, &palette, &sun, *sky, *brightness), &bakes);
+        }
+        return;
+    }
+    // With nothing to bake, a snapshot only tells stale from up to date, so it is taken only on a
+    // change.
+    if !(state.bake.would_bake() || inputs_changed) {
         return;
     }
     let snapshot = Snapshot::take(&bakes, &paint, &palette, &sun, *sky, *brightness);
