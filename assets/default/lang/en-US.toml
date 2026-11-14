@@ -705,7 +705,7 @@ blend = "Blend by heading"
 variant = "Heading { heading }"
 remove_variant = "Remove"
 taunts = "Taunts"
-named = "Played by name"
+named = "Hard-coded by name"
 new_taunt = "New taunt"
 rig = "{ rig }"
 
