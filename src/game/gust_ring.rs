@@ -15,21 +15,23 @@ use bevy_hanabi::prelude::*;
 use crate::common::app_mode::AppMode;
 use crate::common::class::Stance;
 use crate::common::weapon::{AirblastSpec, Equipped, WeaponAction, WeaponCatalog};
-use crate::game::flame_jet::{noise, nozzle, sheet_image, value_noise};
+use crate::game::flame_jet::{effect_origin, noise, sheet_image, value_noise};
 use crate::game::held::{HeldModel, WeaponInHand};
-use crate::game::hitscan::{aim, eye};
+use crate::game::hitscan::aim;
 use crate::game::player::{LocalPlayer, Player, ViewMode, Watched};
 use crate::game::recoil::{start_recoil, ShotSeen};
 use crate::game::viewmodel::ApparentMuzzle;
 use crate::game::warm_up::{self, WarmUp};
 
-/// Puffs in one ring.
 const PUFFS: u32 = 72;
+
+/// Rings an emitter holds at once: a gust may come before the last one's puffs fade.
+const RINGS_AT_ONCE: u32 = 2;
 
 /// Meters per second down the aim as a ring leaves the nozzle.
 const SPEED: f32 = 22.0;
 
-/// Per puff, a multiplier on its speed, so the ring is ragged rather than a perfect hoop.
+/// Per puff, a multiplier on its speed, so the ring is ragged.
 const SPEED_SHARE: (f32, f32) = (0.85, 1.12);
 
 /// Meters: the circle the puffs start on, round the nozzle.
@@ -62,8 +64,9 @@ const COLOR: Vec3 = Vec3::new(0.92, 0.94, 0.98);
 const OPACITY: f32 = 0.7;
 const FADE_IN: f32 = 0.04;
 
-/// Seconds after a burst before its emitter goes: its last puff has faded by then.
-const LAST_PUFF_GONE: f32 = LIFETIME.1 + 0.1;
+/// Seconds after a gust before its emitter goes: its last puff has faded by then, and a body
+/// gusting more often than this keeps one emitter.
+const LAST_PUFF_GONE: f32 = LIFETIME.1 + 1.0;
 
 const PUFF_GRID: UVec2 = UVec2::new(4, 2);
 const PUFF_TEXELS: u32 = 64;
@@ -74,10 +77,11 @@ struct RingLook {
     sheet: Handle<Image>,
 }
 
-/// One ring's emitter, `age` seconds old.
+/// `body`'s emitter, reset for each gust; `idle` is seconds since the last.
 #[derive(Component)]
 struct GustRing {
-    age: f32,
+    body: Entity,
+    idle: f32,
 }
 
 /// Per second, exponential: what brings a puff at [`SPEED`] to rest at `range`.
@@ -85,7 +89,6 @@ fn brake(range: f32) -> f32 {
     SPEED / range.max(0.1)
 }
 
-/// Two directions across `toward`, at right angles to it and to each other.
 fn across(toward: Dir3) -> (Vec3, Vec3) {
     let right = toward.any_orthonormal_vector();
     (right, toward.cross(right))
@@ -149,7 +152,7 @@ fn ring_effect() -> EffectAsset {
     let mut module = writer.finish();
     module.add_texture_slot("puffs", SlotDimension::D2);
 
-    EffectAsset::new(PUFFS, SpawnerSettings::once((PUFFS as f32).into()), module)
+    EffectAsset::new(PUFFS * RINGS_AT_ONCE, SpawnerSettings::once((PUFFS as f32).into()), module)
         .with_name("gust_ring")
         .with_alpha_mode(bevy_hanabi::AlphaMode::Blend)
         .init(init_around)
@@ -168,8 +171,7 @@ fn ring_effect() -> EffectAsset {
         .render(ParticleTextureModifier { texture_slot: 0, sample_mapping: ImageSampleMapping::Modulate })
 }
 
-/// [`PUFF_GRID`] puffs of `texels` square, as linear RGBA, rows top to bottom: lumpy clouds of a
-/// few overlapping blobs, lighter toward the top left, with a crisp, frayed edge.
+/// [`PUFF_GRID`] puffs of `texels` square, as linear RGBA, rows top to bottom.
 pub fn puff_sheet(texels: u32) -> Vec<u8> {
     let (width, height) = (PUFF_GRID.x * texels, PUFF_GRID.y * texels);
     let mut rgba = vec![0u8; (width * height * 4) as usize];
@@ -216,7 +218,6 @@ fn make_the_look(mut commands: Commands, mut effects: ResMut<Assets<EffectAsset>
     });
 }
 
-/// Properties for a ring from a gust of `spec` along `toward`, by a body moving at `carry`.
 fn ring_properties(spec: &AirblastSpec, toward: Dir3, carry: Vec3) -> EffectProperties {
     let (right, up) = across(toward);
     let mut properties = EffectProperties::default();
@@ -238,29 +239,44 @@ fn blow_rings(
     apparent: Option<Res<ApparentMuzzle>>,
     mut seen: MessageReader<ShotSeen>,
     bodies: Query<(&Transform, &Player, &Stance, &Equipped, Option<(&HeldModel, &WeaponInHand)>, Has<LocalPlayer>, Has<Watched>)>,
+    mut rings: Query<(&mut GustRing, &mut Transform, &mut EffectProperties, Option<&mut EffectSpawner>), Without<Player>>,
 ) {
     for shot in seen.read() {
         let Ok((body, player, stance, equipped, held, ours, watched)) = bodies.get(shot.body) else { continue };
         let Some(weapon) = catalog.held_by(equipped) else { continue };
         let WeaponAction::Airblast(spec) = shot.button.of(weapon).action else { continue };
-        let first_person = (ours || watched) && view.as_deref().is_some_and(|view| !view.shows_own_body());
-        let eye = eye(body.translation, *stance, player.duck, player.eye);
-        let from = nozzle(body, eye, held, first_person, apparent.as_deref().and_then(|apparent| apparent.0));
-        commands.spawn((
-            GustRing { age: 0.0 },
-            ParticleEffect::new(look.effect.clone()),
-            EffectMaterial { images: vec![look.sheet.clone()] },
-            ring_properties(&spec, aim(player), player.velocity),
-            Transform::from_translation(from),
-            Name::new("Gust ring"),
-        ));
+        let from = effect_origin(body, player, *stance, held, ours || watched, view.as_deref(), apparent.as_deref());
+        let properties = ring_properties(&spec, aim(player), player.velocity);
+        // The simulation is in world space, so moving the emitter leaves the last ring's puffs
+        // where they are.
+        match rings.iter_mut().find(|(ring, ..)| ring.body == shot.body) {
+            Some((mut ring, mut transform, mut current, spawner)) => {
+                ring.idle = 0.0;
+                transform.translation = from;
+                *current = properties;
+                // Added by Hanabi in `PostUpdate`; until then the emitter has not fired its first.
+                if let Some(mut spawner) = spawner {
+                    spawner.reset();
+                }
+            }
+            None => {
+                commands.spawn((
+                    GustRing { body: shot.body, idle: 0.0 },
+                    ParticleEffect::new(look.effect.clone()),
+                    EffectMaterial { images: vec![look.sheet.clone()] },
+                    properties,
+                    Transform::from_translation(from),
+                    Name::new("Gust ring"),
+                ));
+            }
+        }
     }
 }
 
 fn end_the_rings(mut commands: Commands, time: Res<Time>, mut rings: Query<(Entity, &mut GustRing)>) {
     for (entity, mut ring) in &mut rings {
-        ring.age += time.delta_secs();
-        if ring.age >= LAST_PUFF_GONE {
+        ring.idle += time.delta_secs();
+        if ring.idle >= LAST_PUFF_GONE {
             commands.entity(entity).despawn();
         }
     }
@@ -296,7 +312,7 @@ impl Plugin for GustRingPlugin {
             app.add_plugins(HanabiPlugin);
         }
         app.add_systems(Startup, (make_the_look, warm_up_the_ring).chain())
-            .add_systems(Update, (blow_rings.after(start_recoil), end_the_rings).run_if(crate::common::app_mode::simulating))
+            .add_systems(Update, (end_the_rings, blow_rings.after(start_recoil)).chain().run_if(crate::common::app_mode::simulating))
             .add_systems(OnExit(AppMode::Play), clear_the_rings)
             .add_systems(OnExit(AppMode::Weapon), clear_the_rings);
     }
@@ -348,7 +364,6 @@ mod tests {
             assert!(middle[3] > 120, "puff {puff} is faint in its middle: {middle:?}");
             let edge = (0..n).flat_map(|i| [i, (n - 1) * n + i, i * n, i * n + n - 1]);
             assert!(edge.into_iter().all(|i| texels[i][3] == 0), "puff {puff} reaches its edge");
-            // Inside, alpha varies with the smoke's body; the edge itself is a few texels.
             let covered = texels.iter().filter(|t| t[3] > 0).count();
             let rim = (0..n * n)
                 .filter(|&i| texels[i][3] > 0)

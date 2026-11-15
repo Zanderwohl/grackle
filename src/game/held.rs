@@ -303,13 +303,15 @@ fn dress_held_weapons(
             &Equipped,
             Option<&Class>,
             Has<LocalPlayer>,
+            Has<crate::game::player::Watched>,
             Option<&HeldModel>,
             Option<&Condition>,
         ),
         With<Skeleton>,
     >,
 ) {
-    for (body, equipped, class, ours, drawn, condition) in &bodies {
+    for (body, equipped, class, ours, watched, drawn, condition) in &bodies {
+        let ours = ours || watched;
         let held = equipped.held();
         if let Some(drawn) = drawn
             && drawn.weapon == held
@@ -688,8 +690,7 @@ pub(crate) fn grip_the_weapon(
 }
 
 /// The only writer of a held part's visibility and layers; `hide_own_body` leaves held parts to
-/// this. A weapon taken away is hidden; one held by the body the view is inside is only kept off
-/// the play camera.
+/// this.
 fn held_visibility(
     ours: bool,
     view: ViewMode,

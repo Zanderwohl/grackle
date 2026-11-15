@@ -31,10 +31,8 @@ pub const GIZMOS: usize = 4;
 /// needed. See [`crate::game::forward_camera`].
 pub const WARM_UP: usize = 5;
 
-/// A body's parts, hat and held weapon while the view is inside its head. The play camera does
-/// not draw it, so the body is out of the eye's way, but the weapon editor's stage camera does,
-/// so it still shows the shooter it is looking out of. Not `Visibility::Hidden`, which hides a
-/// thing from every camera.
+/// A body's parts, hat and held weapon while the view is inside its head. The play camera skips
+/// it and the weapon editor's stage camera draws it; `Visibility::Hidden` would hide it from both.
 pub const INSIDE_HEAD: usize = 6;
 
 /// The editor's 2D shape painter and the egui camera.

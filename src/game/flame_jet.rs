@@ -471,6 +471,22 @@ pub(crate) fn nozzle(
         .unwrap_or(eye)
 }
 
+/// Where an effect fired by a body leaves: [`nozzle`], first person when the body is ours or
+/// watched (`viewed`) and the view is inside it.
+pub(crate) fn effect_origin(
+    body: &Transform,
+    player: &Player,
+    stance: Stance,
+    held: Option<(&HeldModel, &WeaponInHand)>,
+    viewed: bool,
+    view: Option<&ViewMode>,
+    apparent: Option<&ApparentMuzzle>,
+) -> Vec3 {
+    let first_person = viewed && view.is_some_and(|view| !view.shows_own_body());
+    let eye = eye(body.translation, stance, player.duck, player.eye);
+    nozzle(body, eye, held, first_person, apparent.and_then(|apparent| apparent.0))
+}
+
 #[allow(clippy::type_complexity)]
 fn aim_the_jets(
     mut commands: Commands,
@@ -514,9 +530,7 @@ fn aim_the_jets(
             continue;
         }
 
-        let first_person = (ours || watched) && view.as_deref().is_some_and(|view| !view.shows_own_body());
-        let eye = eye(body.translation, *stance, player.duck, player.eye);
-        let from = nozzle(body, eye, held, first_person, apparent.as_deref().and_then(|apparent| apparent.0));
+        let from = effect_origin(body, player, *stance, held, ours || watched, view.as_deref(), apparent.as_deref());
         let direction = aim(player);
         // From where the flames start, which can be around a corner from the eye.
         let reach = world.ray_distance(&Ray3d::new(from, direction), spec.range_m).unwrap_or(spec.range_m);

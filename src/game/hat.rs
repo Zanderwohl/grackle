@@ -59,9 +59,10 @@ fn dress_hats(
     mut materials: ResMut<Assets<LitMaterial>>,
     mut clips: ResMut<Assets<Clip>>,
     view: Res<ViewMode>,
-    bodies: Query<(Entity, &Class, Has<LocalPlayer>, Option<&WornHat>), With<Skeleton>>,
+    bodies: Query<(Entity, &Class, Has<LocalPlayer>, Has<crate::game::player::Watched>, Option<&WornHat>), With<Skeleton>>,
 ) {
-    for (body, class, ours, worn) in &bodies {
+    for (body, class, ours, watched, worn) in &bodies {
+        let ours = ours || watched;
         let named = catalog.loadout(*class).and_then(|loadout| loadout.hat.as_deref());
         if let Some(worn) = worn
             && worn.model.as_deref() == named

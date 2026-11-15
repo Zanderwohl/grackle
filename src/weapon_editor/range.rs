@@ -336,8 +336,8 @@ fn enter_range(
         Tonemapping::TonyMcMapface,
         // `INSIDE_HEAD`, so it shows the shooter the first-person view looks out of.
         RenderLayers::from_layers(&[render_layers::WORLD, render_layers::GIZMOS, render_layers::INSIDE_HEAD]),
-        // Placed by `frame_the_stage`; from here it eases in.
-        Transform::from_translation(RANGE_ORIGIN + Vec3::new(9.0, 4.0, 5.0)).looking_to(STAGE_LOOK, Vec3::Y),
+        // Placed by `frame_the_stage` on its first frame.
+        Transform::default(),
     ));
 }
 
@@ -700,8 +700,8 @@ fn tally(
     }
 }
 
-/// The play camera and its viewmodel on the top half of the middle, the stage camera under it:
-/// the middle is wider than it is tall, so side by side each view would be a tall strip.
+/// The play camera and its viewmodel on the top half of the middle, the stage camera under it.
+/// The middle is wider than it is tall, so side by side each view would be a tall strip.
 #[allow(clippy::type_complexity)]
 fn place_the_views(
     show: Res<RangeShow>,
@@ -740,12 +740,11 @@ fn place_the_views(
     }
 }
 
-/// Where the stage camera looks from: from the shooter's right and a little behind and above, so
-/// a body is seen side on doing the action and the stage ahead of it runs off into the distance.
+/// From the shooter's right, a little behind and above, so a body is seen side on.
 const STAGE_LOOK: Vec3 = Vec3::new(-1.0, -0.3, -0.5);
-/// Meters ahead of the shooter a puppet may stand and still be framed; past it, the first-person
-/// view shows it and the shooter stays large.
-const FRAME_AHEAD: f32 = 8.0;
+/// Meters ahead of the shooter a puppet may stand and still be framed: past the farthest target a
+/// beat stands up (a reflect's rocketeer at 15 m), so the stage view shows both ends of the action.
+const FRAME_AHEAD: f32 = 16.0;
 /// Meters above a body's box kept in frame, for a hat.
 const HAT_ROOM: f32 = 0.45;
 /// Share of the frame's half-width left clear round what is framed.
@@ -753,8 +752,7 @@ const FRAME_PADDING: f32 = 0.08;
 /// Per second, exponential, how fast the stage camera eases onto its framing.
 const FRAME_EASE: f32 = 6.0;
 
-/// What the stage camera keeps in frame: every puppet's box and the hat above it within [`FRAME_AHEAD`] of the
-/// shooter's spawn, the floor under the spawn, and a stretch of air ahead of it for the action.
+/// What the stage camera keeps in frame, with the floor under the spawn and air ahead of it.
 fn framed_points(puppets: impl IntoIterator<Item = Vec3>) -> Vec<Vec3> {
     let mut points = vec![RANGE_ORIGIN, RANGE_ORIGIN + Vec3::new(0.0, 1.0, -3.0)];
     for center in puppets {
@@ -774,14 +772,15 @@ fn framed_points(puppets: impl IntoIterator<Item = Vec3>) -> Vec<Vec3> {
     points
 }
 
-/// Eases the stage camera onto the closest place that frames [`framed_points`] in its viewport,
-/// on real time, so it settles while the range is paused or slowed.
+/// On real time, so it settles while the range is paused or slowed.
 fn frame_the_stage(
     time: Res<Time<Real>>,
     puppets: Query<&PhysicsBody, With<RangePuppet>>,
-    mut camera: Single<(&Camera, &Projection, &mut Transform), With<RangeCamera>>,
+    mut camera: Single<(Entity, &Camera, &Projection, &mut Transform), With<RangeCamera>>,
+    // A camera not framed before is put in place at once rather than eased.
+    mut framed: Local<Option<Entity>>,
 ) {
-    let (camera, projection, transform) = &mut *camera;
+    let (entity, camera, projection, transform) = &mut *camera;
     let Projection::Perspective(perspective) = projection else { return };
     let aspect = camera.viewport.as_ref().map_or(perspective.aspect_ratio, |viewport| {
         viewport.physical_size.x as f32 / viewport.physical_size.y.max(1) as f32
@@ -791,7 +790,10 @@ fn frame_the_stage(
     let Some(framing) = crate::prop::thumbnail::frame_wide(points, rotation, perspective.fov, aspect, FRAME_PADDING) else {
         return;
     };
-    let ease = 1.0 - (-FRAME_EASE * time.delta_secs()).exp();
+    let ease = match framed.replace(*entity) == Some(*entity) {
+        true => 1.0 - (-FRAME_EASE * time.delta_secs()).exp(),
+        false => 1.0,
+    };
     transform.translation = transform.translation.lerp(framing.translation, ease);
     transform.rotation = rotation;
 }
