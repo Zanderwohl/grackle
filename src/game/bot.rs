@@ -247,7 +247,7 @@ pub struct Gear<'a> {
     pub self_damage: f32,
     /// Carried with a round to fire.
     pub loaded: &'a [WeaponId],
-    /// What is carried and its ammo, asked only when a rocket jump is weighed, beside `loaded`.
+    /// What is carried and its ammo, read only when a rocket jump is weighed.
     pub arms: Option<(&'a Equipped, &'a Ammo)>,
 }
 

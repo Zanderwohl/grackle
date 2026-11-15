@@ -1,8 +1,7 @@
 //! Which static shapes are near a box: a uniform grid over their bounds.
 //!
-//! [`Grid::near`] answers sorted by index, so "the first shape overlapped" means
-//! the same thing it did when every query was a linear scan. The other queries
-//! visit in no particular order and allocate nothing.
+//! [`Grid::near`] answers sorted by index. The other queries visit in no
+//! particular order and allocate nothing.
 
 use std::ops::ControlFlow;
 

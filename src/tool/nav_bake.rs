@@ -549,7 +549,7 @@ fn auto_bake_nav(
         state.snapshot = Some(inputs.snapshot());
         state.dirty_since = None;
     }
-    // While the map is moving the old snapshot is stale, and a bake of it must not start.
+    // While the map is moving the snapshot is stale, and a bake of it must not start.
     if state.dirty_since.is_none() {
         let snapshot = state.snapshot.take().expect("taken above");
         state.take_from_cache(&snapshot);

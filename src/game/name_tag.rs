@@ -253,7 +253,7 @@ impl Plates<'_, '_> {
         if rewritten || size == Vec2::ZERO {
             return false;
         }
-        // Within half a pixel the old panel still fits; layout's sizes jitter by fractions.
+        // Within half a pixel the panel already drawn still fits; layout's sizes jitter by fractions.
         let fits = drawn.is_some_and(|(drawn_size, drawn_swatch)| drawn_swatch == swatch && (drawn_size - size).abs().max_element() <= 0.5);
         if !fits
             && let Some(materials) = self.materials.as_deref_mut()
@@ -280,8 +280,8 @@ fn name_tag(body: Entity, font: &Handle<Font>) -> impl Bundle {
     )
 }
 
-/// What a bot wants, scored, and the different want that came closest. Filled uncached: the
-/// scores would crowd the lang cache.
+/// What a bot wants, scored, and the different want that came closest. Filled uncached: a
+/// string per pair of scores would fill the lang cache.
 fn thought_line(thought: &BotThought) -> String {
     use crate::common::lang::fill_uncached;
     let score = |score: f32| format!("{score:.2}");

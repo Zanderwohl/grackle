@@ -441,7 +441,7 @@ mod tests {
     }
 
     /// Breaks if walking the ray along the grid finds a different wall, distance or normal from
-    /// testing every wall, ties to the lowest index as before.
+    /// testing every wall, with ties going to the lowest index.
     #[test]
     fn a_ray_walked_along_the_grid_meets_what_testing_every_wall_meets() {
         let world = a_sprawl();

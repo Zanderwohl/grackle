@@ -1049,8 +1049,7 @@ pub fn shown_layers_where<'a>(
     clips: &'a Assets<Clip>,
     keep: impl Fn(&Playing) -> bool + Copy + 'a,
 ) -> impl Iterator<Item = (&'a Playing, &'a Clip, f32, Regions)> + 'a {
-    // Layer by layer in stack order, which is the order a stable sort by layer gives, without
-    // the sorted copy.
+    // Layer by layer in stack order, which is the order a stable sort by layer gives.
     let ranked = Layer::ALL
         .into_iter()
         .filter(move |_| !stack.0.is_empty())

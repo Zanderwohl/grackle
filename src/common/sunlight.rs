@@ -88,7 +88,7 @@ impl LitSurface {
         while start < self.reach {
             let end = (start + CELL).min(self.reach);
             let (a, b) = (origin + direction * start, origin + direction * end);
-            // Ties go to the lowest index, as a scan in index order would have it.
+            // Ties go to the lowest index.
             let mut hit: Option<(usize, f32)> = None;
             self.grid.for_each_near(a.min(b), a.max(b), |index| {
                 let index = index as usize;

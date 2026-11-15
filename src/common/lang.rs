@@ -350,7 +350,7 @@ pub fn get_template_parsed(key: &str, pairs: &[(&str, &str)]) -> String {
 }
 
 /// As `get!` with arguments, but never stored: for strings whose arguments change all the time,
-/// such as scores, which would only crowd everything else out of the cache.
+/// such as scores, which would fill the cache and force it to be cleared.
 pub fn fill_uncached(key: &str, pairs: &[(&str, &str)]) -> String {
     let keys = key.split('.').collect::<Vec<&str>>();
     let lang = LANG.read().unwrap();
