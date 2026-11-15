@@ -46,6 +46,8 @@ pub struct BodyClips {
     /// Every rig file the packs hold, used or not, so another rig's clips can be edited before a
     /// class is built on it. Not part of the document: the editor reads rigs and never writes them.
     rigs: BTreeMap<String, RigFile>,
+    /// Bumped whenever `rigs` is read, which a reload can do without bumping `generation`.
+    rigs_read: u64,
     /// The packs as last read or written, so a save leaves another pack's unchanged content alone.
     on_disk: PackDoc,
 }
@@ -114,6 +116,18 @@ impl BodyClips {
             .collect()
     }
 
+    /// Whether [`BodyClips::names`] holds `name`, without building the list.
+    pub fn has_name(&self, name: &str) -> bool {
+        if let Some(StateAnimation::Single(_)) = self.doc.clips.get(name) {
+            return true;
+        }
+        let Some((state, index)) = name.rsplit_once('#') else { return false };
+        let Ok(at) = index.parse::<usize>() else { return false };
+        // `variant_name` writes the index plainly, so `run#01` is not `run#1`.
+        at.to_string() == index
+            && matches!(self.doc.clips.get(state), Some(StateAnimation::Blend(variants)) if at < variants.len())
+    }
+
     pub fn generation(&self) -> u64 {
         self.generation
     }
@@ -137,6 +151,10 @@ impl BodyClips {
         &self.rigs
     }
 
+    pub fn rigs_read(&self) -> u64 {
+        self.rigs_read
+    }
+
     pub fn ensure_loaded(&mut self, assets: &Assets) {
         if self.loaded {
             return;
@@ -144,6 +162,7 @@ impl BodyClips {
         self.loaded = true;
         self.doc = read_the_packs(assets, &default_packs());
         self.rigs = read_the_rigs(assets, &default_packs());
+        self.rigs_read += 1;
         self.on_disk = self.doc.clone();
         // Not an edit, but bumped so whatever rebuilds on the counter sees the clips arrive.
         self.generation += 1;
@@ -156,6 +175,7 @@ impl BodyClips {
         let count = fresh.clips.len();
         self.loaded = true;
         self.rigs = read_the_rigs(assets, &default_packs());
+        self.rigs_read += 1;
         self.on_disk = fresh.clone();
         self.edit_doc(|doc| *doc = fresh);
         // `edit` counts no change when the document was unedited, but `dirty` must come off either way.
@@ -484,9 +504,13 @@ pub fn publish_the_body_clips(
                 HUMANOID => state.clip_name().to_string(),
                 _ => format!("{rig}/{}", state.clip_name()),
             };
+            // Compared first, since a key drag bumps the generation every frame and changes one clip.
             match clips.animations().get(&name) {
-                Some(animation) => library.insert_for(rig, state, animation.clone()),
-                None => library.remove_for(rig, state),
+                Some(animation) if library.get_for(rig, state) != Some(animation) => {
+                    library.insert_for(rig, state, animation.clone())
+                }
+                None if library.get_for(rig, state).is_some() => library.remove_for(rig, state),
+                _ => {}
             }
         }
     }
@@ -528,6 +552,26 @@ mod tests {
         Clip {
             length,
             ..Clip::default()
+        }
+    }
+
+    /// Fails if `has_name` and `names` disagree about any name.
+    #[test]
+    fn has_name_agrees_with_names() {
+        let mut clips = BodyClips::default();
+        clips.edit(|doc| {
+            doc.insert("idle".into(), a_clip(1.0).into());
+            doc.insert(
+                "run".into(),
+                StateAnimation::Blend(vec![
+                    crate::common::skeleton::clip::Variant { heading: 0.0, clip: a_clip(1.0) },
+                    crate::common::skeleton::clip::Variant { heading: 1.0, clip: a_clip(1.0) },
+                ]),
+            );
+        });
+        let names = clips.names();
+        for name in ["idle", "run", "run#0", "run#1", "run#2", "run#01", "idle#0", "jump", ""] {
+            assert_eq!(clips.has_name(name), names.iter().any(|had| had == name), "{name}");
         }
     }
 
