@@ -579,7 +579,7 @@ Four more keys while playing: **`.`** brings the team picker back (see "Teams"),
 condition can override; `ViewMode` is what is drawn, and the camera swings
 between the two over `CAMERA_PULL_SECONDS` rather than cutting — your own body and
 its hitboxes are hidden from inside your own head, nobody else's are),
-**`F4`** toggles the hitbox gizmos, the debug laser aimed at them and each shot's line, and
+**`F4`** toggles the hitbox gizmos, the debug laser aimed at them and each shot's line and the flame's traced cone, and
 **`F6`** toggles the bone gizmos and the pickups' trigger volumes
 (green, dim while one restocks), **`F7`** shows the nav overlay picked in
 the Bakes panel, and **`F8`** draws each bot's route over the floor, its view
@@ -2595,8 +2595,11 @@ it needed no new machinery for that: `burn` sits in `Deal` and writes a
   weapon that hurt more because it was traced more finely would be a weapon
   whose damage is a fidelity setting. There is no RNG in the spread — a fixed
   pattern is what a server can re-run and what a player can learn to aim.
-- **Burning is an input to how a body is drawn, not a `BodyTint` written onto
-  it.** Overwriting the tint means remembering what was underneath and putting
+- **Being on fire is an input to how a body is drawn, not a `BodyTint`
+  written onto it.** What is drawn is `OnFire`, a replicated marker the
+  authority keeps on exactly the bodies with `Burning`
+  (`show_who_is_on_fire`), so solo, host and client draw it alike; `Burning`,
+  whose timers change every tick, never leaves the authority. Overwriting the tint means remembering what was underneath and putting
   it back, and forgetting leaves a body scorched for the rest of the match.
   `body_look` in [`body_mesh.rs`](src/game/body_mesh.rs) is the one place that
   decides, and `recolor_bodies` swaps materials on the existing parts rather
@@ -2605,7 +2608,26 @@ it needed no new machinery for that: `burn` sits in `Deal` and writes a
   orange, which worked while every body was the same gray; now that a body's
   color is its team, an emissive term (`BURNING_GLOW`) is the one signal that
   reads the same on all four of them. A burning red pulling further toward
-  red is a burning body you cannot see.
+  red is a burning body you cannot see. It is faint now that the afterburn's
+  flames show the fire.
+
+**Flames are particles** ([`src/game/flame_jet.rs`](src/game/flame_jet.rs)),
+a `bevy_hanabi` emitter per body lit by each `ShotSeen`, at the muzzle (the
+viewmodel's in first person). Each flies straight down the cone for three
+quarters of its range, or to a quarter short of a wall, then brakes to a
+stop at the end of the range while it rises and fades. A body `OnFire` has
+an emitter of the same flames rising from inside its hull, drawn in first
+person too, since the glow is faint. Each corpse or gib of a body that died burning is
+marked `DiedBurning` (`raise_ragdolls`, replicated once) and smolders for as
+long as it lies there: half the afterburn's flames, a third the size, rising
+a sixth as fast and lasting twice as long, started in the middle half of the box
+round its kept bones (`Ragdoll::bounds`). Each flame is a billboard from a generated sheet of flame
+shapes (`flame_sheet`), stood upright on screen rather than along its flight,
+since a flame flying away from the eye would be a sliver. They are unlit and
+brighter than one, so they glow and light nothing. The traced cone is drawn
+only on `F4`. The flamethrower's `fire` and `recoil` clips are a flat pull back that
+outlasts its shot interval, so each shot restarts the same pose and the clip's
+`blend_out` takes the weapon home after the trigger is let go.
 
 **An airblast hurts nobody** ([`src/game/airblast.rs`](src/game/airblast.rs),
 `AirblastSpec`), so `apply_damage` never sees it and each of its parts asks
@@ -3009,10 +3031,9 @@ origin until somebody starts a round.
 
 **Known gaps, all of them "not sent yet" rather than "broken":**
 
-- A remote body's flame cone is drawn from what it is *holding* rather than
-  from an `Effect`, so it appears on every machine now that `Equipped` is
-  replicated — but a puff fired by somebody whose weapon you cannot resolve yet
-  draws nothing. Fire has no `Effect` variant of its own.
+- A remote body's flames are lit by the relayed `Effect::Fired`, but their
+  spec is looked up from what it is holding, so a puff fired by somebody whose
+  weapon you cannot resolve yet draws nothing.
 - `BodyTint` is not replicated either, so a corpse elsewhere is drawn in its
   class's default color rather than whatever its body was tinted.
 - Aim is part of the predicted `Player`, so turning triggers a rollback per

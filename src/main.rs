@@ -106,7 +106,7 @@ fn main() {
             PropEditorPlugin,
             (AnimPlugin, MaterialEditorPlugin, grackle::weapon_editor::WeaponEditorPlugin, LangEditorPlugin),
             GamePlugin,
-            (WorldPropPlugin, ThumbnailPlugin, ForwardCameraPlugin, SunlitPlugin, DecalPlugin, SprayPlugin, grackle::game::streak::StreakPlugin, grackle::game::gib_blood::GibBloodPlugin),
+            (WorldPropPlugin, ThumbnailPlugin, ForwardCameraPlugin, SunlitPlugin, DecalPlugin, SprayPlugin, grackle::game::streak::StreakPlugin, grackle::game::gib_blood::GibBloodPlugin, grackle::game::flame_jet::FlameJetPlugin),
             SkeletonPlugin,
             (PerfPlugin, FontsPlugin, grackle::common::icons::IconsPlugin, UiShapePlugin, grackle::common::player_settings::PlayerSettingsPlugin { profile: editor_params.profile }),
             ))

@@ -32,6 +32,7 @@ pub mod damage;
 pub mod damage_direction;
 pub mod death;
 pub mod decal;
+pub mod flame_jet;
 pub mod gib_blood;
 pub mod hat;
 pub mod held;

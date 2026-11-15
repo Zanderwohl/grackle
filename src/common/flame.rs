@@ -10,6 +10,12 @@ use serde::{Deserialize, Serialize};
 use crate::common::damage::DamageSource;
 use crate::common::weapon::{distance_scale, DistanceScale, Unit};
 
+/// That a body is alight, for drawing it so. Replicated, so every machine
+/// draws fire the same; [`Burning`], whose timers change every tick, stays on
+/// the authority, which keeps this in step with it.
+#[derive(Component, Debug, Default, Clone, Copy, PartialEq, Reflect, Serialize, Deserialize)]
+pub struct OnFire;
+
 /// Rate of fire is on [`crate::common::weapon::Mounted`], not here.
 #[derive(Clone, Copy, Debug, PartialEq, Reflect, Serialize, Deserialize)]
 #[reflect(Default)]

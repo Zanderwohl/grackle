@@ -19,7 +19,7 @@ use bevy::ecs::change_detection::Tick;
 use bevy::prelude::*;
 
 use crate::common::app_mode::AppMode;
-use crate::common::flame::Burning;
+use crate::common::flame::OnFire;
 use crate::common::skeleton::ik::Reach;
 use crate::common::skeleton::{Pose, Skeleton};
 use crate::common::player_color::PlayerColor;
@@ -373,7 +373,7 @@ fn dress_the_viewmodel_arms(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<LitMaterial>>,
     bodies: Query<
-        (Entity, &Skeleton, Option<&Team>, Option<&PlayerColor>, Option<&BodyTint>, Option<&Burning>),
+        (Entity, &Skeleton, Option<&Team>, Option<&PlayerColor>, Option<&BodyTint>, Option<&OnFire>),
         Viewed,
     >,
     mut views: Query<&mut Viewmodel>,

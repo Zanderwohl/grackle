@@ -15,7 +15,7 @@ use bevy::transform::TransformSystems;
 
 use crate::common::air_lit::{self, lit, LitMaterial};
 
-use crate::common::flame::Burning;
+use crate::common::flame::OnFire;
 use crate::common::skeleton::mesh::body_meshes;
 use crate::common::skeleton::rig::Build;
 use crate::common::skeleton::{Pose, Skeleton};
@@ -51,9 +51,9 @@ pub struct BodyTint(pub Color);
 pub const DEFAULT_BODY_COLOR: Color = Color::srgb(0.62, 0.64, 0.70);
 
 /// The emissive light of a body on fire, in linear light. A glow rather than a
-/// hue shift, so it reads the same on all four team colors. Over 1.0 on
-/// purpose: the play camera is HDR and tone-mapped.
-pub const BURNING_GLOW: LinearRgba = LinearRgba::rgb(2.4, 0.55, 0.06);
+/// hue shift, so it reads the same on all four team colors. Faint, since the
+/// afterburn's flames ([`crate::game::flame_jet`]) are what show it.
+pub const BURNING_GLOW: LinearRgba = LinearRgba::rgb(0.24, 0.055, 0.006);
 
 /// How a body is drawn. Also the material cache's key.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -75,7 +75,7 @@ pub fn body_look(
     team: Option<&Team>,
     player: Option<&PlayerColor>,
     tint: Option<&BodyTint>,
-    burning: Option<&Burning>,
+    burning: Option<&OnFire>,
 ) -> BodyLook {
     BodyLook {
         color: team
@@ -191,7 +191,7 @@ fn build_body_meshes(
             Option<&Team>,
             Option<&PlayerColor>,
             Option<&BodyTint>,
-            Option<&Burning>,
+            Option<&OnFire>,
             Option<&BodyMesh>,
             Option<&Ragdoll>,
         ),
@@ -248,9 +248,9 @@ fn build_body_meshes(
 fn recolor_bodies(
     mut palette: ResMut<BodyMaterials>,
     mut materials: ResMut<Assets<LitMaterial>>,
-    mut extinguished: RemovedComponents<Burning>,
-    lit: Query<Entity, Added<Burning>>,
-    bodies: Query<(&BodyMesh, Option<&Team>, Option<&PlayerColor>, Option<&BodyTint>, Option<&Burning>)>,
+    mut extinguished: RemovedComponents<OnFire>,
+    lit: Query<Entity, Added<OnFire>>,
+    bodies: Query<(&BodyMesh, Option<&Team>, Option<&PlayerColor>, Option<&BodyTint>, Option<&OnFire>)>,
     mut parts: Query<&mut MeshMaterial3d<LitMaterial>>,
 ) {
     // Both edges, or a body stays scorched after the fire is out.
@@ -410,10 +410,7 @@ mod tests {
     /// A burning body keeps its team color and gets a separate material.
     #[test]
     fn burning_lights_a_body_up_without_changing_whose_it_is() {
-        use crate::common::damage::DamageSource;
-        use crate::common::flame::{Burning, FlameSpec};
-
-        let burning = Burning::lit(&FlameSpec::FLAMETHROWER, DamageSource::World);
+        let burning = crate::common::flame::OnFire;
 
         for team in Team::ALL {
             let plain = body_look(Some(&team), None, None, None);
