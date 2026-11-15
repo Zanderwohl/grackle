@@ -370,7 +370,7 @@ const THIRD_PERSON_DISTANCE: f32 = 3.5;
 /// The half-extent of the box the camera is swept as when looking for a wall.
 /// Half-extent of the box the third-person camera is swept as, so it stops
 /// in front of a wall.
-const CAMERA_RADIUS: f32 = 0.15;
+pub(crate) const CAMERA_RADIUS: f32 = 0.15;
 
 /// Which way a body faces when there is no spawn point to ask.
 /// Only for [`fallback_spawn`]; a spawn point carries its own yaw.
@@ -671,6 +671,7 @@ pub fn place_camera(
     latch: Res<InputLatch>,
     death_cam: Option<Res<DeathCam>>,
     through: Option<Res<ThroughCamera>>,
+    kill_cam: Option<Res<crate::game::kill_cam::KillCam>>,
     fixed: Res<Time<Fixed>>,
     body: Option<Single<(&Transform, &Stance, &Player), (With<LocalPlayer>, Without<PlayerCamera>)>>,
     watched: Option<Single<(Entity, &Transform, &Stance, &Player, Has<UneasedAim>), (With<Watched>, Without<LocalPlayer>, Without<PlayerCamera>)>>,
@@ -702,6 +703,13 @@ pub fn place_camera(
             for mut camera in &mut cameras {
                 camera.translation = through.translation;
                 camera.rotation = through.rotation;
+            }
+            return;
+        }
+        (None, None, _) if let Some(placed) = kill_cam.and_then(|kill_cam| kill_cam.camera()) => {
+            for mut camera in &mut cameras {
+                camera.translation = placed.translation;
+                camera.rotation = placed.rotation;
             }
             return;
         }
@@ -811,6 +819,12 @@ pub struct OurLastBody {
     died: bool,
 }
 
+impl OurLastBody {
+    pub fn whose(&self) -> Option<PlayerId> {
+        self.cam.whose
+    }
+}
+
 /// Not on `Added<Dying>`: a frame longer than two ticks runs `Dying` and the
 /// despawn before `Update` sees either. On a client `Died` and the despawn
 /// arrive in either order.
@@ -849,18 +863,27 @@ pub fn start_the_death_cam(
     }
 }
 
-/// With no corpse of ours, the pivot stays where it is.
+/// With no corpse of ours, the pivot stays where it is. During a kill cam, the corpse as the
+/// replay draws it.
 pub fn follow_our_corpse(
     time: Res<Time>,
     death_cam: Option<ResMut<DeathCam>>,
+    kill_cam: Option<Res<crate::game::kill_cam::KillCam>>,
     corpses: Query<(&crate::game::ragdoll::Ragdoll, &crate::game::ragdoll::CorpseOf)>,
 ) {
     let Some(mut death_cam) = death_cam else { return };
     let Some(whose) = death_cam.whose else { return };
-    // Corpses outlive a respawn, so an earlier one of ours may still lie there.
-    let ours = corpses.iter().filter(|(_, of)| of.0 == whose);
-    let Some((corpse, _)) = ours.min_by(|(a, _), (b, _)| a.age().total_cmp(&b.age())) else { return };
-    let target = corpse.pelvis() + Vec3::Y * DEATH_CAM_LIFT;
+    let pelvis = match kill_cam.filter(|kill_cam| !kill_cam.spectating()) {
+        Some(kill_cam) => kill_cam.corpse_at(kill_cam.view()),
+        // Corpses outlive a respawn, so an earlier one of ours may still lie there.
+        None => corpses
+            .iter()
+            .filter(|(_, of)| of.0 == whose)
+            .min_by(|(a, _), (b, _)| a.age().total_cmp(&b.age()))
+            .map(|(corpse, _)| corpse.pelvis()),
+    };
+    let Some(pelvis) = pelvis else { return };
+    let target = pelvis + Vec3::Y * DEATH_CAM_LIFT;
     let t = 1.0 - (-DEATH_CAM_FOLLOW_RATE * time.delta_secs()).exp();
     death_cam.pivot = death_cam.pivot.lerp(target, t);
 }
@@ -1217,6 +1240,7 @@ mod tests {
             killer: crate::common::damage::DamageSource::World,
             assist: None,
             at: Vec3::ZERO,
+            cause: Default::default(),
         }
     }
 

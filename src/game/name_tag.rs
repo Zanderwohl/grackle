@@ -12,6 +12,9 @@
 //!
 //! A spectator watching somebody has their name on the same panel at the
 //! bottom middle of the [`SafeZone`], with the goal under it for a bot.
+//!
+//! Until a [`KillCam`] hands over to spectating, the same panel at the middle of the right edge
+//! of the [`WindowSafeZone`] says who killed us and with what, in their color.
 
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
@@ -26,7 +29,9 @@ use crate::common::swatch::Swatch;
 use crate::common::team::Team;
 use crate::common::ui_shape::{Corner, ShapeMaterial};
 use crate::game::bot::{BotOf, ShowBots};
+use crate::common::weapon::{WeaponCatalog, WeaponId};
 use crate::game::bot_think::{BotThought, Candidate, Want};
+use crate::game::kill_cam::KillCam;
 use crate::game::collision::CollisionWorld;
 use crate::game::death::Dying;
 use crate::game::hud::{hud_text, leaning_panel, panel_style, SafeZone, WindowSafeZone, MARGIN_Y, WINDOW_MARGIN, ZONE_DROP, ZONE_STROKE};
@@ -57,7 +62,7 @@ impl Plugin for NameTagPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ShowBots>().add_systems(
             PostUpdate,
-            (tag_whoever_is_aimed_at, place_the_tags, name_whoever_is_watched)
+            (tag_whoever_is_aimed_at, place_the_tags, name_whoever_is_watched, name_our_killer)
                 .chain()
                 // Where bodies and the camera are drawn this frame, and a new
                 // name laid out in the frame it is written.
@@ -108,6 +113,39 @@ struct WatchedPlate {
     /// The size and colors the panel was built for.
     drawn: Option<(Vec2, Swatch)>,
     words: Words,
+}
+
+/// The center-right panel naming who killed us.
+#[derive(Component)]
+struct KillerBanner;
+
+#[derive(Component, Default)]
+struct KillerPlate {
+    /// The size and colors the panel was built for.
+    drawn: Option<(Vec2, Swatch)>,
+    words: Words,
+    /// The killer's name, weapon and language the lines were built for.
+    built_for: Option<(String, Option<WeaponId>, u64)>,
+    killed_by: String,
+    using: Option<String>,
+}
+
+impl KillerPlate {
+    fn refresh(&mut self, killer: PlayerId, weapon: Option<WeaponId>, standings: &Query<&Standing>, catalog: Option<&WeaponCatalog>) {
+        self.words.refresh_name(killer, standings);
+        let generation = crate::common::lang::generation();
+        if self.built_for.as_ref().is_some_and(|(name, built_weapon, built_generation)| {
+            *name == self.words.name && *built_weapon == weapon && *built_generation == generation
+        }) {
+            return;
+        }
+        let key = (self.words.name.clone(), weapon, generation);
+        self.killed_by = get!("kill_cam.killed_by", "name", self.words.name);
+        self.using = weapon
+            .and_then(|weapon| catalog?.get(weapon))
+            .map(|weapon| get!("kill_cam.using", "weapon", get!(weapon.name_key)));
+        self.built_for = Some(key);
+    }
 }
 
 /// What a bot's goal line is built from.
@@ -213,6 +251,26 @@ fn watched_banner(font: &Handle<Font>) -> impl Bundle {
         Pickable::IGNORE,
         Name::new("Watched banner"),
         children![(WatchedPlate::default(), plate_node(), Pickable::IGNORE, plate_lines(font))],
+    )
+}
+
+/// Goes when the HUD does: it is the window safe zone's child.
+fn killer_banner(font: &Handle<Font>) -> impl Bundle {
+    (
+        KillerBanner,
+        Node {
+            position_type: PositionType::Absolute,
+            top: Val::Px(0.0),
+            bottom: Val::Px(0.0),
+            right: Val::Px(0.0),
+            flex_direction: FlexDirection::Column,
+            justify_content: JustifyContent::Center,
+            ..default()
+        },
+        Visibility::Hidden,
+        Pickable::IGNORE,
+        Name::new("Killer banner"),
+        children![(KillerPlate::default(), plate_node(), Pickable::IGNORE, plate_lines(font))],
     )
 }
 
@@ -444,6 +502,37 @@ fn name_whoever_is_watched(
     visibility.set_if_neq(if ready { Visibility::Inherited } else { Visibility::Hidden });
 }
 
+#[allow(clippy::too_many_arguments)]
+fn name_our_killer(
+    font: Res<DisplayFont>,
+    zone: Option<Single<Entity, With<WindowSafeZone>>>,
+    kill_cam: Option<Res<KillCam>>,
+    catalog: Option<Res<WeaponCatalog>>,
+    standings: Query<&Standing>,
+    mut banners: Query<(&mut Visibility, &Children), With<KillerBanner>>,
+    mut plate: Query<(&mut KillerPlate, &ComputedNode, &Children)>,
+    mut plates: Plates,
+) {
+    let Some(zone) = zone else { return };
+    let Some((mut visibility, children)) = banners.iter_mut().next() else {
+        plates.commands.entity(*zone).with_child(killer_banner(&font.0));
+        return;
+    };
+    // Spectating, the bottom banner names whoever is watched.
+    let Some(kill_cam) = kill_cam.filter(|kill_cam| !kill_cam.spectating()) else {
+        visibility.set_if_neq(Visibility::Hidden);
+        return;
+    };
+    let Some((mut drawn, computed, lines)) = children.first().and_then(|inner| plate.get_mut(*inner).ok()) else { return };
+    let size = computed.size() * computed.inverse_scale_factor();
+    let standing = standings.iter().find(|standing| standing.id == kill_cam.killer);
+    let swatch = Swatch::of_body(standing.and_then(|standing| standing.team), standing.map(|standing| standing.color));
+    let plate = &mut *drawn;
+    plate.refresh(kill_cam.killer, kill_cam.weapon, &standings, catalog.as_deref());
+    let ready = plates.fill(lines, &plate.killed_by, plate.using.as_deref(), swatch, size, &mut plate.drawn);
+    visibility.set_if_neq(if ready { Visibility::Inherited } else { Visibility::Hidden });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -497,6 +586,30 @@ mod tests {
         let lines: Vec<(String, Display, bool)> = lines.iter(&world).map(|(text, node, goal)| (text.0.clone(), node.display, goal)).collect();
         assert!(lines.contains(&(get!("scoreboard.player", "id", 7), Display::Flex, false)), "{lines:?}");
         assert!(lines.contains(&(get!("bot.thought.none"), Display::Flex, true)), "{lines:?}");
+    }
+
+    /// Breaks if the kill cam does not say who killed us and with what, or the banner stays up
+    /// without one.
+    #[test]
+    fn the_killer_banner_names_the_killer_and_the_weapon() {
+        use bevy::ecs::system::RunSystemOnce;
+        let mut world = World::new();
+        world.init_resource::<DisplayFont>();
+        world.spawn(WindowSafeZone);
+        world.insert_resource(KillCam::new(PlayerId(7), None, 0.0, Vec3::ZERO));
+        world.run_system_once(name_our_killer).unwrap();
+        world.run_system_once(name_our_killer).unwrap();
+
+        let mut lines = world.query::<(&Text, &Node, Has<NameTagGoal>)>();
+        let lines: Vec<(String, Display, bool)> = lines.iter(&world).map(|(text, node, goal)| (text.0.clone(), node.display, goal)).collect();
+        let named = get!("kill_cam.killed_by", "name", get!("scoreboard.player", "id", 7));
+        assert!(lines.contains(&(named, Display::Flex, false)), "{lines:?}");
+        assert!(lines.iter().any(|(_, display, goal)| *goal && *display == Display::None), "a weapon line with no weapon: {lines:?}");
+
+        world.remove_resource::<KillCam>();
+        world.run_system_once(name_our_killer).unwrap();
+        let mut banners = world.query_filtered::<&Visibility, With<KillerBanner>>();
+        assert_eq!(banners.single(&world).unwrap(), &Visibility::Hidden);
     }
 
     #[test]

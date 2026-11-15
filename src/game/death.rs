@@ -47,7 +47,12 @@ pub fn record_damage(
     for hit in hits.read() {
         // Already reaped.
         let Ok(mut log) = logs.get_mut(hit.target) else { continue };
+        // A hit on a body already emptied, later in the same tick, did not kill it.
+        if hit.amount == 0 && hit.remaining == 0 {
+            continue;
+        }
         log.record(hit.source, now);
+        log.caused(hit.cause);
     }
 }
 
@@ -87,8 +92,9 @@ pub fn announce_the_dead(
             victim_name: name.map(|name| name.to_string()),
             victim_id: id.copied(),
             killer: log.killer().unwrap_or(DamageSource::World),
-            assist: log.assist(now),
+            assist: log.assist(now, id.copied()),
             at: placed.map(|placed| placed.translation()).unwrap_or_default(),
+            cause: log.cause(),
         });
 
         commands.entity(entity).insert(Dying);
@@ -192,6 +198,25 @@ mod tests {
         assert_eq!(record[0].victim_name.as_deref(), Some("Scout"));
         assert_eq!(record[0].victim_id, Some(PlayerId(9)));
         assert!(world.get_entity(victim).is_err(), "the body was not removed");
+    }
+
+    /// Breaks if a death does not carry the killing hit's cause, or a hit landing on the emptied
+    /// body afterward takes the kill or the cause.
+    #[test]
+    fn a_death_carries_the_killing_hit_and_not_one_after_it() {
+        use crate::common::damage::{Cause, How};
+        let mut world = a_world();
+        let victim = world.spawn((Damageable::with_health(100), DamageLog::default(), PlayerId(9))).id();
+        let rocket = Cause::of(Some(crate::common::weapon::WeaponId(7)), How::Splash);
+        world.get_mut::<Damageable>(victim).unwrap().apply(100);
+        for (source, amount, cause) in [(SHOOTER, 100, rocket), (HELPER, 0, Cause::of(None, How::Hitscan))] {
+            world.write_message(DamageDealt { target: victim, source, amount, remaining: 0, point: Vec3::ZERO, from: None, cause });
+        }
+        world.run_system_once(record_damage).unwrap();
+        resolve(&mut world);
+
+        let record = deaths(&mut world);
+        assert_eq!((record[0].killer, record[0].cause), (SHOOTER, rocket));
     }
 
     #[test]

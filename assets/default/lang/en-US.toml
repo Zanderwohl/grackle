@@ -430,6 +430,10 @@ over = "{ want } { score } over { other } { against }"
 [spray]
 nameless = "Player"
 
+[kill_cam]
+killed_by = "You were killed by { name }"
+using = "Using { weapon }"
+
 [scoreboard]
 player = "Player { id }"
 name = "Name"

@@ -2184,8 +2184,26 @@ mouse. `follow_our_corpse` eases the pivot onto the pelvis
 of the youngest corpse whose replicated `CorpseOf` names our `PlayerId`
 (corpses outlive the respawn delay, so there may be two) — the corpse
 carries an id for this and nothing else, so it is still not a player. `decide_the_view` ends it when a living body is ours
-again, and cuts back in rather than swinging from the corpse. It is TF2's
-death with nobody to credit; a killer cam is the next step. Two parts of the
+again, and cuts back in rather than swinging from the corpse.
+
+**Killed by somebody else, the death cam is a kill cam**
+([`src/game/kill_cam.rs`](src/game/kill_cam.rs),
+[documentation/kill-cam.md](documentation/kill-cam.md)): the match slows to a
+stop over a second while the view swings out over our corpse and glides to a
+framing of the killer, head to feet and never further than we died, holds a
+second, then spectates (from their eye) until the next body, which cuts it
+short at any point. Until it spectates, a panel at the middle of the window
+safe zone's right edge names the killer and the weapon (`Died` carries the killing `Cause`).
+The killer is `Died`'s, the last hit; a death at our own
+hand or the map's keeps the orbit. Somebody who hurt a body inside the window
+before it killed itself is its assist (`DamageLog::assist` passes over the
+victim and the map). **The slow motion is drawn, not simulated**
+([`src/game/replay.rs`](src/game/replay.rs)): while `Replay` exists, every
+world mesh's `GlobalTransform` is recorded after propagation and an older one,
+tweened, written in its place before visibility; the live values are put back
+in `First`, so nothing that simulates reads a replayed one. A mesh born after
+the view time is drawn out of sight and one despawned before it by a ghost.
+Without `Replay` nothing is recorded and the history is empty. Two parts of the
 shape are not placeholders, and both live in
 [`src/game/respawn.rs`](src/game/respawn.rs):
 
