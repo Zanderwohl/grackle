@@ -14,7 +14,7 @@ use crate::common::assets::Assets as PackAssets;
 use crate::common::clip_file::NamedClips;
 use crate::common::skeleton::clip::Clip;
 use crate::common::skeleton::play::{ClipStack, Layer, LayerClaims};
-use crate::common::taunt::{TauntId, TauntTurning, TauntWeapon, Taunts};
+use crate::common::taunt::{TauntId, TauntRequest, TauntTurning, TauntWeapon, Taunts};
 use crate::game::player::{
     CameraPull, DeathCam, Inputs, LocalPlayer, ViewMode, ViewPreference, Viewed, CAMERA_PULL_SECONDS,
 };
@@ -26,7 +26,7 @@ use crate::game::player::{
 pub struct Condition {
     /// `H` toggles it until there are rounds to lose.
     pub humiliated: bool,
-    /// `G` toggles the first taunt in `taunts.toml` until there is a menu.
+    /// Chosen from the taunt menu; see [`crate::game::taunt_menu`].
     pub taunt: Option<TauntId>,
     /// The authority's tick the taunt began on, so a viewer arriving mid-taunt
     /// starts the clip partway. Lightyear's, since a client's timeline is
@@ -116,14 +116,18 @@ pub fn toggle_conditions(
         if input.humiliate {
             condition.humiliated = !condition.humiliated;
         }
-        if input.taunt {
-            condition.taunt = match condition.taunt {
-                Some(_) => None,
-                None => taunts.as_deref().and_then(|taunts| taunts.first_for(kind)).map(|taunt| taunt.id),
-            };
-            condition.taunt_started = timeline.as_deref().map_or_else(Tick::default, LocalTimeline::tick);
-            clock.0 = 0.0;
-        }
+        let wanted = match input.taunt {
+            None => continue,
+            Some(TauntRequest::Stop) => None,
+            // One this rig has no clip for would hold it in rest.
+            Some(TauntRequest::Start(id)) => match taunts.as_deref().and_then(|taunts| taunts.get(id)) {
+                Some(taunt) if taunt.clip_for(kind).is_some() => Some(id),
+                _ => continue,
+            },
+        };
+        condition.taunt = wanted;
+        condition.taunt_started = timeline.as_deref().map_or_else(Tick::default, LocalTimeline::tick);
+        clock.0 = 0.0;
     }
 }
 

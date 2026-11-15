@@ -62,6 +62,7 @@ pub mod pause_menu;
 pub mod hud;
 pub mod name_tag;
 pub mod kill_feed;
+pub mod taunt_menu;
 pub mod kill_icon;
 pub mod plate;
 pub mod pickup_beam;
@@ -100,7 +101,7 @@ impl Plugin for GamePlugin {
             .add_plugins((crate::game::team_choice::TeamChoicePlugin, crate::game::team_picker::TeamPickerPlugin, crate::game::spectate::SpectatePlugin, crate::game::kill_cam::KillCamPlugin))
             .add_plugins(crate::game::damage_direction::DamageDirectionPlugin)
             .add_plugins(crate::game::name_tag::NameTagPlugin)
-            .add_plugins((crate::game::plate::PlatePlugin, crate::game::kill_feed::KillFeedPlugin))
+            .add_plugins((crate::game::plate::PlatePlugin, crate::game::kill_feed::KillFeedPlugin, crate::game::taunt_menu::TauntMenuPlugin))
             .add_plugins(crate::game::trigger::TriggerPlugin)
             .init_state::<AppMode>()
             .init_resource::<StartInPlay>()
@@ -165,6 +166,8 @@ impl Plugin for GamePlugin {
             .add_systems(PreUpdate, aim_the_view_at_our_body.run_if(in_state(AppMode::Play)))
             .add_systems(PreUpdate, measure_eyes.run_if(crate::common::net::has_authority))
             .add_systems(RunFixedMainLoop, (
+                // Owns `G`, and the digits while it is up, so it reads them first.
+                crate::game::taunt_menu::answer_the_taunt_keys,
                 // A released cursor must not walk the body.
                 gather_input.run_if(pause_menu::not_paused),
                 // Ungated: it drains the wheel, like `gather_aim`.
@@ -762,16 +765,18 @@ mod tests {
             tick(app, 40);
             (player_position(app) - from).with_y(0.0).length()
         };
-        let toggle = |app: &mut App| {
-            latch(app).0.taunt = true;
+        let wave = Some(crate::common::taunt::TauntRequest::Start(crate::common::taunt::TauntId::of("wave")));
+        let stop = Some(crate::common::taunt::TauntRequest::Stop);
+        let ask = |app: &mut App, request| {
+            latch(app).0.taunt = request;
             tick(app, 1);
         };
 
         assert!(walked(&mut app) > 0.5, "the body would not walk before taunting");
 
-        toggle(&mut app);
+        ask(&mut app, wave);
         let taunting = condition(&mut app);
-        assert!(taunting.taunt.is_some(), "G started no taunt");
+        assert!(taunting.taunt.is_some(), "asking for the wave started no taunt");
         assert!(!taunting.may_fire());
         assert!(walked(&mut app) < 1e-4, "the wave did not stop the body");
 
@@ -788,18 +793,98 @@ mod tests {
         tick(&mut app, 4);
         assert_eq!(body_yaw(&mut app), facing, "the wave let the body turn");
 
-        toggle(&mut app);
-        assert_eq!(condition(&mut app).taunt, None, "G again did not end the taunt");
+        ask(&mut app, stop);
+        assert_eq!(condition(&mut app).taunt, None, "asking to stop did not end the taunt");
         assert_ne!(body_yaw(&mut app), latch(&mut app).0.yaw, "the body snapped to the aim in one tick");
         tick(&mut app, 8);
         assert_eq!(body_yaw(&mut app), latch(&mut app).0.yaw, "the body did not turn back to the aim");
         assert!(walked(&mut app) > 0.5, "the body stayed stopped after the taunt");
 
         // Left alone, it ends by itself after its length.
-        toggle(&mut app);
+        ask(&mut app, wave);
         assert!(condition(&mut app).taunt.is_some());
         tick(&mut app, 2 * crate::constants::TICK_HZ as usize);
         assert_eq!(condition(&mut app).taunt, None, "the wave never ended by itself");
+    }
+
+    /// The taunt menu as a player meets it: `G` puts it up and the plate offers a square per
+    /// taunt, a digit plays the taunt over it rather than choosing a weapon, `G` while taunting
+    /// ends the taunt, and the pause menu takes the menu down.
+    #[test]
+    fn the_taunt_menu_opens_on_g_and_a_digit_plays_the_taunt_over_it() {
+        use crate::common::taunt::{TauntId, TauntRequest};
+        use crate::game::taunt_menu::{answer_the_taunt_keys, TauntMenu};
+        use crate::game::weapon_select::choose_weapons;
+
+        let mut app = headless(&[room(Vec3::new(-10.0, 0.0, -10.0), Vec3::new(10.0, 4.0, 10.0))]);
+        enter(&mut app);
+        tick(&mut app, 30);
+        let press = |app: &mut App, key: KeyCode| {
+            app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(key);
+            app.world_mut().run_system_once(answer_the_taunt_keys).unwrap();
+            app.world_mut().run_system_once(choose_weapons).unwrap();
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            keys.release(key);
+            keys.clear();
+        };
+        let open = |app: &mut App| app.world().resource::<TauntMenu>().is_open();
+
+        // Closed by the picker in `Update` once the seat is left, which these ticks do not run.
+        app.world_mut().resource_mut::<crate::game::pause_menu::MouseHeld>().team_picker = false;
+        press(&mut app, KeyCode::KeyG);
+        assert!(open(&mut app), "G did not put the menu up");
+        assert_eq!(latch(&mut app).0.taunt, None, "putting the menu up played a taunt");
+
+        // Drawn: a plate under the safe zone saying how to play the default, a digit per taunt.
+        for _ in 0..3 {
+            app.update();
+        }
+        let shown = app
+            .world_mut()
+            .run_system_once(
+                |roots: Query<(Entity, &Node), With<crate::game::plate::Plate>>,
+                 children: Query<&Children>,
+                 texts: Query<&Text>| {
+                    roots
+                        .iter()
+                        .flat_map(|(plate, _)| children.iter_descendants(plate).collect::<Vec<_>>())
+                        .filter_map(|entity| texts.get(entity).ok().map(|text| text.0.clone()))
+                        .collect::<Vec<String>>()
+                },
+            )
+            .unwrap();
+        assert!(shown.contains(&crate::get!("hud.taunt_default")), "the plate does not say G for default: {shown:?}");
+        assert!(shown.contains(&"1".to_string()) && shown.contains(&"2".to_string()), "no square per taunt: {shown:?}");
+
+        let held_before = app
+            .world_mut()
+            .query_filtered::<&crate::common::weapon::Equipped, With<LocalPlayer>>()
+            .single(app.world())
+            .unwrap()
+            .held();
+        press(&mut app, KeyCode::Digit2);
+        assert!(!open(&mut app), "the menu stayed up after a choice");
+        assert_eq!(latch(&mut app).0.taunt, Some(TauntRequest::Start(TauntId::of("spar"))));
+        assert_eq!(latch(&mut app).0.select, None, "the digit also chose a weapon");
+        tick(&mut app, 1);
+        let taunting = |app: &mut App| {
+            app.world_mut().query_filtered::<&crate::game::condition::Condition, With<LocalPlayer>>().single(app.world()).unwrap().taunt
+        };
+        assert_eq!(taunting(&mut app), Some(TauntId::of("spar")), "the second taunt did not start");
+        let held_after =
+            app.world_mut().query_filtered::<&crate::common::weapon::Equipped, With<LocalPlayer>>().single(app.world()).unwrap().held();
+        assert_eq!(held_before, held_after, "the weapon changed under the taunt menu");
+
+        press(&mut app, KeyCode::KeyG);
+        assert!(!open(&mut app), "G while taunting put the menu up");
+        tick(&mut app, 1);
+        assert_eq!(taunting(&mut app), None, "G while taunting did not end it");
+
+        press(&mut app, KeyCode::KeyG);
+        assert!(open(&mut app));
+        app.world_mut().resource_mut::<crate::game::pause_menu::MouseHeld>().pause = true;
+        app.world_mut().run_system_once(answer_the_taunt_keys).unwrap();
+        assert!(!open(&mut app), "the menu stayed up under the pause menu");
     }
 
     /// Rises until it stops, and returns how far above `from` it peaked.
@@ -1024,7 +1109,8 @@ mod tests {
         assert!(rounds(&mut app) < before, "the raptor could not shoot");
 
         tick(&mut app, 64);
-        latch(&mut app).0.taunt = true;
+        latch(&mut app).0.taunt =
+            Some(crate::common::taunt::TauntRequest::Start(crate::common::taunt::TauntId::of("spar")));
         tick(&mut app, 1);
         let taunt = app.world_mut().query_filtered::<&Condition, With<LocalPlayer>>().single(app.world()).unwrap().taunt;
         assert!(taunt.is_some(), "the raptor was offered no taunt");
