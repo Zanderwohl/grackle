@@ -1376,12 +1376,12 @@ mod tests {
         let mut body = body::BodyClips::default();
         body.ensure_loaded(&crate::common::assets::Assets::default());
         body.edit(|clips| {
-            clips.insert("strider/idle".into(), Clip { length: 1.0, ..Clip::default() }.into());
+            clips.insert("raptor/idle".into(), Clip { length: 1.0, ..Clip::default() }.into());
         });
         let builds = crate::common::class::ClassBuilds::shipped();
         let class = crate::common::class::Class::Mercenary;
-        let mut anim = AnimEditor { source: ClipSource::Body, selected: Some("strider/idle".into()), ..default() };
-        assert_eq!(preview_rig(&anim, &body, &builds, class).kind(), "strider");
+        let mut anim = AnimEditor { source: ClipSource::Body, selected: Some("raptor/idle".into()), ..default() };
+        assert_eq!(preview_rig(&anim, &body, &builds, class).kind(), "raptor");
 
         anim.selected = Some("idle".into());
         assert_eq!(preview_rig(&anim, &body, &builds, class).kind(), crate::common::skeleton::rig::HUMANOID);

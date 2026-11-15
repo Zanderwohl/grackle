@@ -385,7 +385,7 @@ pub fn fight(
     let gravity = rules.as_deref().map_or(MovementRules::default().gravity, |rules| rules.gravity);
     for (bot, senses, mind, arms, mut intent, mut aim) in &mut bots {
         let Ok((body, stance, player, _)) = bodies.get(bot) else { continue };
-        let eye = body.current + Vec3::Y * player.duck.eye_from_center(*stance);
+        let eye = body.current + Vec3::Y * player.duck.eye_from_center(*stance, player.eye);
         let skill = mind.aim;
         let airblast = arms.zip(catalog.as_deref()).and_then(|((equipped, _), catalog)| match catalog.get(equipped.held()?)?.secondary.action {
             WeaponAction::Airblast(spec) if spec.reflect => Some(spec),

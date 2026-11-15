@@ -118,6 +118,9 @@ pub struct Player {
     /// How far down the body is, this step and the one before, to draw between.
     pub duck: Duck,
     pub duck_before: Duck,
+    /// Standing eye height off the floor, meters: the rig's own where it states one. Written by
+    /// `measure_eyes` and never changed by a step.
+    pub eye: f32,
 }
 
 /// How far down a body is, moving at a steady rate toward what it asked for. The eye, the pose
@@ -143,9 +146,11 @@ impl Duck {
         self.feet - stance.half_extents().y
     }
 
-    /// Where the eye is, from the center of a body's box.
-    pub fn eye_from_center(self, stance: Stance) -> f32 {
-        self.feet_from_center(stance) + TALLEST_CLASS_EYE_HEIGHT.lerp(CROUCH_EYE_HEIGHT, self.amount)
+    /// Where the eye is, from the center of a body's box, for a body whose standing eye is
+    /// `eye` meters up. Crouched, it drops by the share the shared heights do.
+    pub fn eye_from_center(self, stance: Stance, eye: f32) -> f32 {
+        let crouched = eye * (CROUCH_EYE_HEIGHT / TALLEST_CLASS_EYE_HEIGHT);
+        self.feet_from_center(stance) + eye.lerp(crouched, self.amount)
     }
 }
 
@@ -184,6 +189,7 @@ impl Default for Player {
             sliding: 0.0,
             duck: Duck::default(),
             duck_before: Duck::default(),
+            eye: TALLEST_CLASS_EYE_HEIGHT,
         }
     }
 }
@@ -512,6 +518,17 @@ pub fn spawn_the_view(mut commands: Commands, existing: Query<(), With<PlayerCam
     ));
 }
 
+/// Sets each body's standing eye from its rig, on the authority, and replication carries it.
+/// Runs before the fixed loop, so a body's first shot already leaves its own eye.
+pub fn measure_eyes(mut bodies: Query<(&crate::common::skeleton::Skeleton, &mut Player), Changed<crate::common::skeleton::Skeleton>>) {
+    for (skeleton, mut player) in &mut bodies {
+        let eye = skeleton.anatomy().eye.unwrap_or(TALLEST_CLASS_EYE_HEIGHT);
+        if player.eye != eye {
+            player.eye = eye;
+        }
+    }
+}
+
 /// Point the view where our new body is already looking.
 ///
 /// The latch is what the view is aimed from and what the next tick sends, so a
@@ -679,7 +696,7 @@ pub fn place_camera(
 ) {
     // Ducking lowers the eye and the third-person pivot with it.
     let eye = |transform: &Transform, stance: &Stance, player: &Player| {
-        transform.translation + Vec3::Y * player.drawn_duck(fixed.overstep_fraction()).eye_from_center(*stance)
+        transform.translation + Vec3::Y * player.drawn_duck(fixed.overstep_fraction()).eye_from_center(*stance, player.eye)
     };
     let ours = (latch.0.yaw, latch.0.pitch);
     // So watching the same body again starts on its aim rather than easing from the last time.
@@ -837,7 +854,7 @@ pub fn start_the_death_cam(
 ) {
     let seen = ours.map(|ours| {
         let (body, stance, player, id, dying) = ours.into_inner();
-        let cam = DeathCam { pivot: body.translation + Vec3::Y * player.duck.eye_from_center(*stance), whose: id.copied() };
+        let cam = DeathCam { pivot: body.translation + Vec3::Y * player.duck.eye_from_center(*stance, player.eye), whose: id.copied() };
         (cam, dying)
     });
     let mut last = match (last, seen) {
@@ -1524,7 +1541,7 @@ mod tests {
         (0..ticks)
             .map(|_| {
                 duck(player, stance, body, wants, world, TICK);
-                body.current.y + player.duck.eye_from_center(*stance)
+                body.current.y + player.duck.eye_from_center(*stance, player.eye)
             })
             .collect()
     }
@@ -1569,7 +1586,7 @@ mod tests {
     fn the_eye_moves_at_a_steady_rate() {
         let world = open_room();
         let (mut player, mut stance, mut body) = standing_at(Vec3::ZERO);
-        let start = body.current.y + player.duck.eye_from_center(stance);
+        let start = body.current.y + player.duck.eye_from_center(stance, player.eye);
         let mut eyes = vec![start];
         eyes.extend(ducking(&world, &mut player, &mut stance, &mut body, true, true, 20));
         eyes.extend(ducking(&world, &mut player, &mut stance, &mut body, true, false, 20));
@@ -1604,7 +1621,7 @@ mod tests {
         let (mut player, mut stance, mut body) = standing_at(Vec3::new(0.0, 2.0, 0.0));
         player.ground = None;
         let drawn = |player: &Player, stance: Stance, body: &PhysicsBody, overstep: f32| {
-            body.previous.lerp(body.current, overstep).y + player.drawn_duck(overstep).eye_from_center(stance)
+            body.previous.lerp(body.current, overstep).y + player.drawn_duck(overstep).eye_from_center(stance, player.eye)
         };
         let before = drawn(&player, stance, &body, 1.0);
         body.previous = body.current;

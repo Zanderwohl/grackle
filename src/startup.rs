@@ -328,7 +328,7 @@ mod tests {
         assert!(params.start_spectating);
         assert_eq!(params.rounds, Some(2));
         assert!(parse(&["--rounds", "0"]).is_err());
-        assert_eq!(parse(&["--class", "strider"]).unwrap().class, Some(crate::common::class::Class::Strider));
+        assert_eq!(parse(&["--class", "raptor"]).unwrap().class, Some(crate::common::class::Class::Raptor));
         assert!(parse(&["--class", "wizard"]).is_err(), "a class nobody defines was taken");
         let params = parse(&[]).unwrap();
         assert!(params.map.is_none() && params.server.is_none() && !params.start_spectating && params.rounds.is_none());

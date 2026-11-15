@@ -201,7 +201,7 @@ mod tests {
     fn every_table_survives_the_round_trip() {
         round_trip(default_catalog());
         round_trip(ClassBuilds::shipped());
-        round_trip(crate::common::class_file::tests::builds_with_a_strider());
+        round_trip(crate::common::class_file::tests::builds_with_a_raptor());
         round_trip(crate::common::taunt::Taunts::shipped());
     }
 

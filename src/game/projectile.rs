@@ -198,7 +198,7 @@ pub fn launch(
 
 /// Where a body's shot leaves from: ahead of its eye along its aim.
 pub fn muzzle(center: Vec3, stance: Stance, player: &Player) -> Vec3 {
-    crate::game::hitscan::eye(center, stance, player.duck) + *crate::game::hitscan::aim(player) * MUZZLE_OFFSET
+    crate::game::hitscan::eye(center, stance, player.duck, player.eye) + *crate::game::hitscan::aim(player) * MUZZLE_OFFSET
 }
 
 /// A projectile just fired along `direction`.

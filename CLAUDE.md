@@ -219,7 +219,7 @@ with no build is drawn as `Proportions::DEFAULT` rather than not at all. Tests
 and tools read `ClassBuilds::shipped()`; there is no table in Rust to drift
 from the file.
 
-A build may name a **rig file** instead (`rig = "strider"`, with `height`,
+A build may name a **rig file** instead (`rig = "raptor"`, with `height`,
 `girth` and `[scales]` per bone group): `rigs/<name>.toml`
 ([`src/common/skeleton/rig_file.rs`](src/common/skeleton/rig_file.rs)), loaded
 because a build names it and checked by building it. The rigs ride in
@@ -228,8 +228,8 @@ body asks `ClassBuilds::rig_for` or `skeleton(build)`, never `humanoid`
 directly, and a `Build` — rig, proportions, scales — is what a skeleton, a
 corpse and the mesh cache remember. Another rig's state clips are
 `animations/<rig>/<state>.gpa`; without one a state stands in rest. The
-strider's, its taunt included, are written by `bake_body_clips` from
-[`strider_seed`](src/common/skeleton/strider_seed.rs), the one place besides
+raptor's, its taunt included, are written by `bake_body_clips` from
+[`raptor_seed`](src/common/skeleton/raptor_seed.rs), the one place besides
 its rig file that names its bones; a `Seed` names its rig. The
 animation editor lists every rig on disk, each with its states, and previews
 a rig's clip on that rig (`FigureRig`).
@@ -240,9 +240,16 @@ A clip names a rig's parts by name: an effector's `chain` is any limb
 after the six every rig has (`Anatomy::region_names`); a taunt's claims are
 names, resolved against each body's rig as it taunts.
 
-**`Class::Strider`** is the first class on a rig file: two digitigrade legs, a
-neck, a tail and no hands, so its weapon rides on the rig's `mount` and nothing
-grips. A limb's `bends_away` names the joint that bends away from its pole,
+**`Class::Raptor`** is the first class on a rig file: two digitigrade legs, a
+neck, a tail and two short arms folded under the chest, named `right_arm` and
+`left_arm` as the humanoid's are, so the hold's carry (from the spine's tail, in
+its arm-lengths) and grip work on it and shared clips that move an arm move
+its. A rig with no hands may instead state a `mount`, where the weapon is fixed
+and nothing grips. A rig file may name the bone its eye sits in (`[measures]
+eye`); `measure_eyes` copies that height onto `Player.eye` on the authority,
+and the camera, every shot and a bot's senses start there, crouched lower by
+the shared heights' share. Without one, as on the humanoid, the eye is the
+shared 1.8 m. The hull stays the same for every class. A limb's `bends_away` names the joint that bends away from its pole,
 and only a three-bone leg's last (knee forward, hock back) is accepted: it is
 solved exactly by `ik::digitigrade`, the metatarsus keeping its rest angle to
 the thigh, within the knee's and hock's own hinge `stops`. A
@@ -279,7 +286,7 @@ body by its own phase). Ducked in the air the box keeps its head and loses its
 lower half, so after `duck_under` puts the crown at its top,
 `ik::tuck_into_the_box` lifts each foot until the whole leg clears its bottom.
 A rig's `crouched_crown` (in `[measures]`, 1 for the humanoid) puts a planted
-crouch's crown lower than the box needs, so the strider stalks; in the air
+crouch's crown lower than the box needs, so the raptor stalks; in the air
 the crown stays at the box's top, since the legs need the room.
 
 A chain of three or more bones (a limb's `between`) is solved by FABRIK within
@@ -521,6 +528,11 @@ at the camera — from the **rest pose**, never the animated one, because the
 arms are welded to a view that neither bobs nor crouches. The eye is taken off
 the **rig** rather than the movement hull, whose 1.8 m is the same for every
 class and would hang a Scout's arms from a Heavy's shoulders.
+
+A rig whose trigger hand cannot reach the weapon from its eye (the raptor's
+eye is half a meter above its shoulders) is stood **by its carry** instead,
+set back from the weapon by the hold's carry, so its hands are where a match's
+hold puts them (`stand_and_grip`).
 
 Three consequences: only **forearms and hands** are drawn, since an upper arm
 runs back to a shoulder beside the camera and at a 5 mm near plane reads as a
@@ -1926,6 +1938,11 @@ Four things about it are load-bearing and easy to undo by accident:
   hips. Bodies pick up a bias that drag exactly cancels and slide across the
   room forever. It is seeded from the pose the body died in and only ever
   swung onto wherever the pelvis now points.
+- **A limit never pushes a point into a surface it is touching.** A joint
+  whose allowed direction points into the floor was lifted back out every
+  pass, and the sideways remainder walked the corpse across the room. The
+  limits are measured in a parent's frame whose roll goes untracked once a
+  corpse rolls, which is also why the raptor's arm joints are all wide cones.
 - **Limits are relaxed toward, not snapped onto.** A hinge removes sideways
   motion outright, and a hard projection fighting the distance constraints
   overshoots — an arm flaps at the elbow for as long as you watch it.

@@ -102,9 +102,9 @@ pub enum Class {
     /// A corpse's build is read off its rig, never keyed on a class; a body
     /// need not have one.
     Mercenary,
-    /// Two legs, a long neck and a tail, and no hands: the first class built on a rig file
-    /// (`rigs/strider.toml`). Its weapon rides on a mount.
-    Strider,
+    /// Two legs, a long neck, a tail and two short arms that grip a weapon: the first class
+    /// built on a rig file (`rigs/raptor.toml`).
+    Raptor,
 }
 
 impl Class {
@@ -139,7 +139,7 @@ impl Class {
             Class::Spy => get!("class.names.spy"),
             Class::Mercenary => get!("class.names.mercenary"),
             Class::Civilian => get!("class.names.civilian"),
-            Class::Strider => get!("class.names.strider"),
+            Class::Raptor => get!("class.names.raptor"),
         }
     }
 }
@@ -220,9 +220,9 @@ mod tests {
     }
 
     /// Ten, the `Mercenary` placeholder, which is in the iterator on purpose so the animation
-    /// grid shows it, and the strider.
+    /// grid shows it, and the raptor.
     #[test]
-    fn there_are_ten_classes_the_placeholder_and_the_strider() {
+    fn there_are_ten_classes_the_placeholder_and_the_raptor() {
         assert_eq!(Class::iter().count(), 12);
         assert_eq!(ClassBuilds::shipped().humanoids().count(), 11);
     }

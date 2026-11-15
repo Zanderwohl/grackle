@@ -321,7 +321,7 @@ None of these is animation, but a creature is not playable without them:
       measures are read off. Names are interned (`rig::intern`). A file is
       checked by building it: a bad one is dropped with a line, and the
       classes on it are built as humanoids. The default pack ships
-      `strider.toml`, two legs, a neck and a tail, which no class uses yet.
+      `raptor.toml`, two legs, a neck and a tail, which no class uses yet.
 - [x] `classes.toml` `rig =`, with `height`, `girth` and `[scales]` per bone
       group; a build resizes the rig to its height, lengthens each group, and
       puts the feet back on the floor.
@@ -334,7 +334,7 @@ None of these is animation, but a creature is not playable without them:
       stands in rest rather than in the humanoid's pose functions.
 - [x] The editor's figure, bone menu, pole and Problems come from the
       class's own rig.
-- [x] `every_corpse_settles_however_it_lands` drops striders too, with 16 s
+- [x] `every_corpse_settles_however_it_lands` drops raptors too, with 16 s
       rather than 12: their neck and tail can roll after resting.
 
 ### Stage 2b: what only a rig with other names needs
@@ -349,7 +349,7 @@ None of these is animation, but a creature is not playable without them:
 - [x] `Unit::Measure` was not needed: every rig answers leg, arm and hip
       (arm falls back to leg), which are what the units already name.
 - [x] Per-rig regions: `Regions` is 32 bits, every rig's six first and a
-      rig's own names after (`Anatomy::region_names`). The strider's tail is
+      rig's own names after (`Anatomy::region_names`). The raptor's tail is
       `tail`. A taunt's claims are names, resolved against each body's rig
       as it taunts; the Taunt inspector offers the previewed rig's regions
       and shows a claim it lacks in orange. Humiliation's claims stay the
@@ -364,7 +364,7 @@ None of these is animation, but a creature is not playable without them:
       to the target and back, then each bone turned within its joint limit,
       four rounds of eight passes, fixed so every machine agrees. Tested for
       reach, limits, determinism and pointing at what it cannot reach. The
-      strider's tail is a three-bone limb.
+      raptor's tail is a three-bone limb.
 - [x] Controllers are the passes the anatomy already feeds — `Plant` (its
       feet), `Look` (its look shares), `Hold` (its hands) — and a clip's
       `Weight` track turns each down (`play::controller_weight`), masked by a
@@ -381,8 +381,8 @@ None of these is animation, but a creature is not playable without them:
       larger (`FigureTargets`).
 
 ### Stage 4: the first creature
-- [x] `Class::Strider`, built on `rigs/strider.toml` (two digitigrade legs,
-      a long neck, a three-bone tail, no hands), with a loadout of its own.
+- [x] `Class::Raptor`, built on `rigs/raptor.toml` (two digitigrade legs,
+      a long neck, a three-bone tail, short arms), with a loadout of its own.
       The humanoid's own tests loop over `ClassBuilds::humanoids()`.
 - [x] Digitigrade legs: thigh, shin and metatarsus, the knee forward and the
       hock back. A limb's `bends_away` names the joints that bend away from
@@ -401,20 +401,32 @@ None of these is animation, but a creature is not playable without them:
       bent states its own hinge `stops` in degrees, since a named kind is
       measured from a straight rest and would not let it straighten; the
       ragdoll reads them too.
-- [x] State clips under `animations/strider/` (an idle that sways the tail)
-      and the wave's strider clip, `strider/taunt_wag`, named in the
+- [x] State clips under `animations/raptor/` (an idle that sways the tail)
+      and the wave's raptor clip, `raptor/taunt_wag`, named in the
       taunt's `rigs`. A body is offered only taunts it has a clip for
       (`Taunts::first_for`); the Taunt inspector picks each rig's clip.
 - [x] A rig file's `mount` holds a weapon on a body with no hands
       (`weapon_transform`); nothing grips. Hitboxes, the ragdoll, the death
       cam and hats come from the anatomy already; the viewmodel draws no
       arms where the rig names none.
-- [x] `a_strider_plays_a_round`: spawns as its rig, walks, shoots, is
-      offered its taunt, and dies into a strider corpse. `--class strider`
+- [x] Raptor arms: upper arm, forearm and hand hanging from the spine,
+      folded under the chest, as limbs `right_arm` and `left_arm` and the
+      rig's `hands`. The hold's carry is measured from the spine's tail in
+      the raptor's arm-lengths and both hands grip, so its weapon is held,
+      not mounted; shared clips that name those limbs (reload, humiliated)
+      move them. The class was renamed from the strider.
+- [x] `a_raptor_plays_a_round`: spawns as its rig, walks, shoots, is
+      offered its taunt, and dies into a raptor corpse. `--class raptor`
       plays every body as one until a class can be picked.
-- Not done: the play camera's eye is still the shared hull's 1.8 m, above
-  a strider's head; a per-class eye is the hull question from the
-  decisions above.
+- [x] A rig file's `[measures] eye` names the bone its eye sits in;
+      `measure_eyes` puts that height on `Player.eye`, which the camera,
+      shots and bot senses read. The raptor looks out of its head; the
+      humanoid keeps the shared 1.8 m. The hull is still shared.
+- [x] The viewmodel stands a rig by its eye, unless the trigger hand cannot
+      reach the weapon from there; then by its carry, set back from the
+      weapon by the hold's carry as in a match (`stand_and_grip`). The
+      raptor's eye is about 0.5 m above its shoulders, so it is stood by
+      its carry; a humanoid by its eye, as before.
 
 ### Stage 5: prop rigs
 - [x] Bones on a prop (pivot feature, parent, bound parts), edited in Model.

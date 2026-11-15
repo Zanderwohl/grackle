@@ -13,7 +13,7 @@ use crate::game::pause_menu::PauseMenuPlugin;
 use crate::game::reset::reset_for_play;
 use crate::game::respawn::OurIdentity;
 use crate::game::player::{
-    aim_the_view_at_our_body, despawn_the_view, face_bodies, follow_our_corpse, gather_aim,
+    aim_the_view_at_our_body, measure_eyes, despawn_the_view, face_bodies, follow_our_corpse, gather_aim,
     gather_input, interpolate_bodies, place_camera, spawn_the_view, start_the_death_cam, step_player, toggle_view, write_client_inputs, InputLatch, Player, ViewMode,
     ViewPreference,
 };
@@ -163,6 +163,7 @@ impl Plugin for GamePlugin {
             // the next frame's fixed loop before `Update` does. Any later and
             // the latch's zero overwrites the spawn point's facing.
             .add_systems(PreUpdate, aim_the_view_at_our_body.run_if(in_state(AppMode::Play)))
+            .add_systems(PreUpdate, measure_eyes.run_if(crate::common::net::has_authority))
             .add_systems(RunFixedMainLoop, (
                 // A released cursor must not walk the body.
                 gather_input.run_if(pause_menu::not_paused),
@@ -961,9 +962,9 @@ mod tests {
     }
 
     /// A class built on a rig file plays a round as anybody does: it spawns as that rig, walks,
-    /// shoots from its mount, taunts with its own clip, and dies into a corpse of its own rig.
+    /// shoots, taunts with its own clip, and dies into a corpse of its own rig.
     #[test]
-    fn a_strider_plays_a_round() {
+    fn a_raptor_plays_a_round() {
         use crate::common::class::Class;
         use crate::common::weapon::Ammo;
         use crate::game::condition::Condition;
@@ -981,7 +982,7 @@ mod tests {
             );
         }
         app.insert_resource(crate::common::game_rules::GameRules(crate::common::game_rules::ModeRules {
-            classes: vec![Class::Strider],
+            classes: vec![Class::Raptor],
             ..default()
         }));
         enter(&mut app);
@@ -996,16 +997,20 @@ mod tests {
 
         let (kind, class) = {
             let mut bodies = app.world_mut().query_filtered::<(&crate::common::skeleton::Skeleton, &Class), With<LocalPlayer>>();
-            let (rig, class) = bodies.single(app.world()).expect("no strider body");
+            let (rig, class) = bodies.single(app.world()).expect("no raptor body");
             (rig.kind().to_string(), *class)
         };
-        assert_eq!((kind.as_str(), class), ("strider", Class::Strider));
+        assert_eq!((kind.as_str(), class), ("raptor", Class::Raptor));
+        let eye = app.world_mut().query_filtered::<&Player, With<LocalPlayer>>().single(app.world()).unwrap().eye;
+        let rig_eye = crate::common::class::ClassBuilds::shipped().rig_for(Class::Raptor).anatomy().eye;
+        assert_eq!(Some(eye), rig_eye, "the raptor looks out from the shared eye height, not its own");
+        assert!(eye < 1.6, "the raptor's eye is above its 1.6 m crown, at {eye}");
 
         let from = player_position(&mut app);
         latch(&mut app).0.movement = Vec2::Y;
         tick(&mut app, 30);
         latch(&mut app).0.movement = Vec2::ZERO;
-        assert!((player_position(&mut app) - from).with_y(0.0).length() > 0.5, "the strider would not walk");
+        assert!((player_position(&mut app) - from).with_y(0.0).length() > 0.5, "the raptor would not walk");
 
         let rounds = |app: &mut App| {
             let mut bodies = app.world_mut().query_filtered::<&Ammo, With<LocalPlayer>>();
@@ -1016,13 +1021,13 @@ mod tests {
         latch(&mut app).0.attack_held = true;
         tick(&mut app, 2);
         latch(&mut app).0.attack_held = false;
-        assert!(rounds(&mut app) < before, "the strider could not shoot");
+        assert!(rounds(&mut app) < before, "the raptor could not shoot");
 
         tick(&mut app, 64);
         latch(&mut app).0.taunt = true;
         tick(&mut app, 1);
         let taunt = app.world_mut().query_filtered::<&Condition, With<LocalPlayer>>().single(app.world()).unwrap().taunt;
-        assert!(taunt.is_some(), "the strider was offered no taunt");
+        assert!(taunt.is_some(), "the raptor was offered no taunt");
 
         latch(&mut app).0.suicide = true;
         tick(&mut app, 2);
@@ -1033,7 +1038,7 @@ mod tests {
             .iter(app.world())
             .map(|build| build.0.kind().to_string())
             .collect();
-        assert_eq!(corpses, ["strider"], "the strider left no corpse of its own rig");
+        assert_eq!(corpses, ["raptor"], "the raptor left no corpse of its own rig");
     }
 
     #[test]

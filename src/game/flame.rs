@@ -64,7 +64,7 @@ pub fn fire_flame(
         };
         // The step's position, not the interpolated one, so every machine
         // agrees.
-        let origin = eye(body.current, *stance, player.duck);
+        let origin = eye(body.current, *stance, player.duck, player.eye);
 
         // One body, one puff, however many rays found it.
         let mut caught: Vec<Entity> = Vec::new();
@@ -175,7 +175,7 @@ fn draw_flame_cone(
         let held = catalog.held_by(equipped).map(|weapon| weapon.primary.action);
         let Some(WeaponAction::Flame(spec)) = held else { continue };
 
-        let (cone, isometry) = flame_cone(eye(transform.translation, *stance, player.duck), aim(player), &spec);
+        let (cone, isometry) = flame_cone(eye(transform.translation, *stance, player.duck, player.eye), aim(player), &spec);
         gizmos.primitive_3d(&cone, isometry, Color::srgba(1.0, 0.6, 0.1, 0.5));
     }
 }
