@@ -18,7 +18,7 @@ use crate::game::collision::CollisionWorld;
 use crate::game::condition::Condition;
 use crate::game::explosion::push_speed;
 use crate::game::world_prop;
-use crate::game::nav::{cell_near, center_on, Reach, CellId, NavGraph, MOST_TICKS, SAME_FLOOR, SPACING, TICK};
+use crate::game::nav::{center_on, Reach, CellId, NavGraph, MOST_TICKS, SAME_FLOOR, SPACING, TICK};
 use crate::game::player::{step, Duck, Mover, PhysicsBody, Player, PlayerInput, STEP_HEIGHT};
 
 /// Columns per side of the square one viewpoint stands for.
@@ -112,8 +112,10 @@ pub struct Seen {
     pub feet: bool,
 }
 
-/// Which viewpoints see which, kept for the probe. Each row lists what one eye sees.
+/// Which viewpoints see which, kept for the probe. Each row lists what one eye sees, in ascending
+/// viewpoint order, which [`Sightlines::could_see`] searches by.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(from = "StoredSightlines")]
 pub struct Sightlines {
     /// Per cell.
     pub viewpoint_of: Vec<u32>,
@@ -130,7 +132,36 @@ pub struct Sightlines {
     pub crouched_body: Vec<Vec<Seen>>,
 }
 
+/// [`Sightlines`] as it is written, sorted as it is read.
+#[derive(Deserialize)]
+struct StoredSightlines {
+    viewpoint_of: Vec<u32>,
+    viewpoints: Vec<Vec3>,
+    low: Vec<bool>,
+    standing: Vec<Vec<Seen>>,
+    crouched_eye: Vec<Vec<Seen>>,
+    crouched_body: Vec<Vec<Seen>>,
+}
+
+impl From<StoredSightlines> for Sightlines {
+    fn from(StoredSightlines { viewpoint_of, viewpoints, low, standing, crouched_eye, crouched_body }: StoredSightlines) -> Self {
+        let mut lines = Sightlines { viewpoint_of, viewpoints, low, standing, crouched_eye, crouched_body };
+        lines.sort_rows();
+        lines
+    }
+}
+
 impl Sightlines {
+    fn sort_rows(&mut self) {
+        for rows in [&mut self.standing, &mut self.crouched_eye, &mut self.crouched_body] {
+            for row in rows {
+                if !row.is_sorted_by_key(|seen| seen.viewpoint) {
+                    row.sort_unstable_by_key(|seen| seen.viewpoint);
+                }
+            }
+        }
+    }
+
     /// Whether an eye over `eye` might see a body over `body`: false only where the bake says no
     /// eye height there sees any of the body, so it is a quick no and never a yes. Pairs beyond
     /// [`SIGHT_RANGE`] were never cast and are a maybe.
@@ -139,7 +170,7 @@ impl Sightlines {
         if from == to || self.viewpoints[from as usize].distance(self.viewpoints[to as usize]) > SIGHT_RANGE {
             return true;
         }
-        [&self.standing, &self.crouched_eye, &self.crouched_body].iter().any(|rows| rows[from as usize].iter().any(|seen| seen.viewpoint == to))
+        [&self.standing, &self.crouched_eye, &self.crouched_body].iter().any(|rows| rows[from as usize].binary_search_by_key(&to, |seen| seen.viewpoint).is_ok())
     }
 }
 
@@ -418,7 +449,8 @@ impl SightBake {
 
     pub fn finish(self, graph: &NavGraph) -> Sight {
         let count = self.count();
-        let SightBake { sightlines, area, .. } = self;
+        let SightBake { mut sightlines, area, .. } = self;
+        sightlines.sort_rows();
         let share = |rows: &Vec<Vec<Seen>>, weight: &dyn Fn(&Seen) -> f32| {
             let (mut sees, mut seen) = (vec![0.0; count], vec![0.0; count]);
             for (eye, row) in rows.iter().enumerate() {
@@ -564,7 +596,7 @@ fn thrown_clear(world: &CollisionWorld, graph: &NavGraph, triggers: &[TriggerVol
         let velocity = mover.player.velocity;
         if tick > 0 && mover.player.on_ground() && Vec2::new(velocity.x, velocity.z).length() < AT_REST {
             let resting = center - Vec3::Y * half.y;
-            return !touching(center, half, |effect| matches!(effect, TriggerEffect::Hurt { .. })) && cell_near(graph.cells(), graph.columns(), resting).is_some();
+            return !touching(center, half, |effect| matches!(effect, TriggerEffect::Hurt { .. })) && graph.cell_at(resting).is_some();
         }
     }
     false
