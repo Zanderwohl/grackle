@@ -1,8 +1,8 @@
 //! What an [`Explosion`] does to the things around it. Every explosive writes
 //! the same message so they all agree about splash.
 //!
-//! A wall stops a blast (the same [`CollisionWorld::ray_distance`] a bullet
-//! uses). A direct hit takes the center once rather than splash on top of it; others take a share
+//! A wall stops a blast ([`CollisionWorld::ray_clear`], which answers as the
+//! [`CollisionWorld::ray_distance`] a bullet uses would). A direct hit takes the center once rather than splash on top of it; others take a share
 //! falling to the blast's edge share at the radius, scaled by how far the blast went off from
 //! the shooter, whose own blast is not. Corpses are
 //! thrown [`Push::Outward`] by the blast's `knockback`; a living body with an
@@ -225,7 +225,7 @@ fn in_sight(world: &CollisionWorld, from: Vec3, to: Vec3, distance: f32) -> bool
         return true;
     };
     let reach = (distance - SIGHT_CLEARANCE).max(0.0);
-    world.ray_distance(&Ray3d::new(from, direction), reach).is_none()
+    world.ray_clear(&Ray3d::new(from, direction), reach)
 }
 
 /// Reads [`Effect`] rather than `Explosion`: `Explosion` exists only on the
