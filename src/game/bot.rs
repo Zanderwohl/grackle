@@ -487,8 +487,8 @@ fn retire_bots(mut commands: Commands, bodies: Query<(Entity, &BotOf)>, seats: Q
 #[derive(Resource, Default, Debug)]
 pub struct ShowBots(pub bool);
 
-fn toggle_bot_routes(keys: Res<ButtonInput<KeyCode>>, mut show: ResMut<ShowBots>) {
-    if keys.just_pressed(KeyCode::F8) {
+fn toggle_bot_routes(actions: Res<crate::common::keybind::Actions>, mut show: ResMut<ShowBots>) {
+    if actions.just_pressed(crate::common::keybind::Action::BotRoutes) {
         show.0 = !show.0;
     }
 }
@@ -577,15 +577,12 @@ pub(crate) fn fill_empty_slots(
 }
 
 /// A debug key until bots can be added from a menu: `B` seats a bot, `Shift+B` retires the newest.
-fn seat_bots_from_the_keyboard(mut commands: Commands, keys: Res<ButtonInput<KeyCode>>, seats: Query<Entity, With<BotSeat>>) {
-    if !keys.just_pressed(KeyCode::KeyB) {
-        return;
-    }
-    if keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]) {
+fn seat_bots_from_the_keyboard(mut commands: Commands, actions: Res<crate::common::keybind::Actions>, seats: Query<Entity, With<BotSeat>>) {
+    if actions.just_pressed(crate::common::keybind::Action::RetireBot) {
         if let Some(newest) = seats.iter().max() {
             commands.entity(newest).despawn();
         }
-    } else {
+    } else if actions.just_pressed(crate::common::keybind::Action::SeatBot) {
         commands.spawn((BotSeat, Name::new("Bot seat")));
     }
 }
@@ -617,6 +614,7 @@ pub struct BotPlugin;
 
 impl Plugin for BotPlugin {
     fn build(&self, app: &mut App) {
+        crate::common::keybind::ensure(app);
         app.init_resource::<RoundSettings>()
             .init_resource::<ShowBots>()
             .add_systems(Startup, seat_the_startup_bots)

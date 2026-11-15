@@ -10,8 +10,8 @@
 //! sketch: a placed point or a drawn line is one [`PropEditor::edit`], and a
 //! dragged point one gesture.
 
+use crate::common::keybind::{Action, Actions};
 use bevy::prelude::*;
-use bevy_egui::input::EguiWantsInput;
 
 use crate::common::app_mode::AppMode;
 use crate::editor::input::CurrentMouseInput;
@@ -199,6 +199,7 @@ pub struct SketchEditPlugin;
 
 impl Plugin for SketchEditPlugin {
     fn build(&self, app: &mut App) {
+        crate::common::keybind::ensure(app);
         app.init_resource::<SketchSession>()
             .add_systems(
                 Update,
@@ -310,8 +311,7 @@ fn edit_the_sketch(
     mut editor: ResMut<PropEditor>,
     build: Res<PropBuild>,
     mouse: Res<CurrentMouseInput>,
-    keys: Res<ButtonInput<KeyCode>>,
-    egui: Res<EguiWantsInput>,
+    actions: Res<Actions>,
     cameras: Query<(&Camera, &GlobalTransform), With<Multicam>>,
 ) {
     let Some(id) = session.editing else { return };
@@ -339,23 +339,21 @@ fn edit_the_sketch(
         }
     }
 
-    let typing = egui.wants_keyboard_input();
-    if !typing && keys.just_pressed(KeyCode::Escape) {
+    if actions.just_pressed(Action::Cancel) {
         session.chain = None;
     }
     // Not mid-press, which would strand an eraser stroke or a drag. Onto the
     // tool already up it drops the line in progress, as the button does.
-    let chosen = [(KeyCode::KeyL, SketchTool::Line), (KeyCode::KeyK, SketchTool::Erase)]
+    let chosen = [(Action::SketchLine, SketchTool::Line), (Action::SketchErase, SketchTool::Erase)]
         .into_iter()
-        .find(|(key, _)| keys.just_pressed(*key))
+        .find(|(action, _)| actions.just_pressed(*action))
         .map(|(_, tool)| tool);
     if let Some(tool) = chosen
-        && !typing
         && session.press.is_none()
     {
         session.set_tool(tool);
     }
-    if !typing && keys.any_just_pressed([KeyCode::Delete, KeyCode::Backspace]) && !session.picks.is_empty() {
+    if actions.just_pressed(Action::Delete) && !session.picks.is_empty() {
         let ids: Vec<SketchId> = session.picks.iter().map(|pick| pick.id()).collect();
         editor.edit(|doc| sketch_of_mut(doc, id).map(|sketch| sketch.remove(&ids)));
         session.picks.clear();

@@ -87,6 +87,7 @@ pub struct GamePlugin;
 
 impl Plugin for GamePlugin {
     fn build(&self, app: &mut App) {
+        crate::common::keybind::ensure(app);
         app
             // Here rather than beside the damage layer: it is physics, on the
             // same fixed steps and `CollisionWorld` as the player step.
@@ -207,14 +208,14 @@ impl Plugin for GamePlugin {
 /// authority. A client's press is logged rather than swallowed, because a key
 /// that silently does nothing reads as a bug.
 fn toggle_mode(
-    keys: Res<ButtonInput<KeyCode>>,
+    actions: Res<crate::common::keybind::Actions>,
     // Optional: a build or test without `NetPlugin` is a closed game, which is
     // its own authority.
     role: Option<Res<NetRole>>,
     mode: Res<State<AppMode>>,
     mut next: ResMut<NextState<AppMode>>,
 ) {
-    if !keys.just_pressed(KeyCode::F5) {
+    if !actions.just_pressed(crate::common::keybind::Action::ToggleMode) {
         return;
     }
     if !role.is_none_or(|role| role.is_authority()) {
@@ -425,6 +426,7 @@ mod tests {
         app.add_plugins((MinimalPlugins, bevy::state::app::StatesPlugin))
             .init_state::<AppMode>()
             .init_resource::<ButtonInput<KeyCode>>()
+            .add_plugins(crate::common::keybind::KeybindPlugin)
             .add_systems(Update, toggle_mode);
 
         press(&mut app);
@@ -671,10 +673,12 @@ mod tests {
         app.world_mut()
             .resource_mut::<ButtonInput<KeyCode>>()
             .press(KeyCode::Space);
+        crate::common::keybind::resolve_now(app.world_mut());
         app.world_mut().run_system_once(gather_input).unwrap();
         app.world_mut()
             .resource_mut::<ButtonInput<KeyCode>>()
             .release(KeyCode::Space);
+        crate::common::keybind::resolve_now(app.world_mut());
         app.world_mut().run_system_once(gather_input).unwrap();
 
         assert!(latch(&mut app).0.jump, "the press was dropped");

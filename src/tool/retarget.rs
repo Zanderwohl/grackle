@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use crate::common::keybind::{Action, Actions};
 use crate::common::app_mode::AppMode;
 use crate::editor::editable::{AxisRef, EditEvent, FeatureId, FeatureTimeline};
 use crate::editor::input::CurrentMouseInput;
@@ -9,6 +10,7 @@ pub struct RetargetPlugin;
 
 impl Plugin for RetargetPlugin {
     fn build(&self, app: &mut App) {
+        crate::common::keybind::ensure(app);
         app
             .init_resource::<RetargetState>()
             .add_systems(Update, (
@@ -38,19 +40,18 @@ impl RetargetPlugin {
     fn interface(
         mut state: ResMut<RetargetState>,
         mouse_input: Res<CurrentMouseInput>,
-        keys: Res<ButtonInput<KeyCode>>,
+        actions: Res<Actions>,
         mut features: ResMut<FeatureTimeline>,
         mut next_tool: ResMut<NextState<Tools>>,
         mut commands: Commands,
         mut edit_events: MessageWriter<EditEvent>,
-        egui: Res<bevy_egui::input::EguiWantsInput>,
     ) {
         let Some(target_feature_id) = state.target_feature else {
             next_tool.set(Tools::Select);
             return;
         };
 
-        if keys.just_pressed(KeyCode::Escape) && !egui.wants_keyboard_input() {
+        if actions.just_pressed(Action::Cancel) {
             next_tool.set(Tools::Select);
             return;
         }

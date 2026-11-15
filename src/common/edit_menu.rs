@@ -7,7 +7,8 @@
 use bevy_egui::egui;
 use bevy_egui::egui::UiKind;
 
-use crate::common::shortcuts::Chord;
+use crate::common::keybind::{self, Action};
+use crate::common::settings::request_settings;
 use crate::get;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,10 +53,10 @@ impl EditAction {
 
     /// Revert has no chord: it throws edits away and a chord is easy to hit
     /// by accident.
-    pub fn chord(self) -> Option<Chord> {
+    pub fn chord(self) -> Option<Action> {
         match self {
-            EditAction::Undo => Some(Chord::UNDO),
-            EditAction::Redo => Some(Chord::REDO),
+            EditAction::Undo => Some(Action::Undo),
+            EditAction::Redo => Some(Action::Redo),
             EditAction::Revert => None,
         }
     }
@@ -68,13 +69,23 @@ pub fn edit_menu(ui: &mut egui::Ui, available: EditAvailability, request: &mut O
                 ui.separator();
             }
             let mut button = egui::Button::new(get!(action.name_key()));
-            if let Some(chord) = action.chord() {
-                button = button.shortcut_text(chord.hint());
+            if let Some(hint) = action.chord().and_then(|chord| keybind::hint(ui.ctx(), chord)) {
+                button = button.shortcut_text(hint);
             }
             if ui.add_enabled(available.allows(*action), button).clicked() {
                 ui.close_kind(UiKind::Menu);
                 *request = Some(*action);
             }
+        }
+        // Answered by the Settings plugin, not the mode, so no mode handles it.
+        ui.separator();
+        let mut settings = egui::Button::new(get!("edit.menu.settings"));
+        if let Some(hint) = keybind::hint(ui.ctx(), Action::Settings) {
+            settings = settings.shortcut_text(hint);
+        }
+        if ui.add(settings).clicked() {
+            ui.close_kind(UiKind::Menu);
+            request_settings(ui.ctx());
         }
     });
 }
@@ -95,6 +106,7 @@ mod tests {
 
         let mut keys: Vec<&str> = ALL.iter().map(|action| action.name_key()).collect();
         keys.push("edit.menu.title");
+        keys.push("edit.menu.settings");
         for key in keys {
             let mut at = &table;
             for part in key.split('.') {
