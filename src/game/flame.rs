@@ -11,7 +11,7 @@ use bevy::prelude::*;
 use crate::common::app_mode::AppMode;
 use crate::common::class::Stance;
 use crate::common::damage::{Cause, Damage, DamageSource, How, PlayerId};
-use crate::common::flame::{cone_directions, Burning, FlameSpec};
+use crate::common::flame::{cone_directions, Burning, FlameSpec, OnFire};
 use crate::common::hitbox::Hitboxes;
 use crate::common::team::Allegiances;
 use crate::game::collision::CollisionWorld;
@@ -27,7 +27,16 @@ impl Plugin for FlamePlugin {
     fn build(&self, app: &mut App) {
         app
             .add_systems(FixedUpdate, (fire_flame, burn).in_set(DamageSystems::Deal))
-            .add_systems(PostUpdate, draw_flame_cone.run_if(crate::common::app_mode::simulating).run_if(resource_exists::<GizmoConfigStore>))
+            .add_systems(
+                PostUpdate,
+                draw_flame_cone
+                    .run_if(crate::common::app_mode::simulating)
+                    .run_if(resource_exists::<GizmoConfigStore>)
+                    .run_if(|show: Option<Res<crate::game::hitbox::ShowHitboxes>>| show.is_some_and(|show| show.0)),
+            )
+            // Every frame and in every mode, since `Burning` is taken off in
+            // several places.
+            .add_systems(PostUpdate, show_who_is_on_fire.run_if(crate::common::net::has_authority))
             .add_systems(OnExit(AppMode::Play), put_out_fires)
             .add_systems(OnExit(AppMode::Weapon), put_out_fires)
         ;
@@ -154,8 +163,9 @@ fn flame_cone(origin: Vec3, direction: Dir3, spec: &FlameSpec) -> (Cone, Isometr
     cone_gizmo(origin, direction, spec.range_m, spec.spread)
 }
 
-/// Reads `Equipped` rather than what was fired, because it draws between
-/// shots. `Equipped` is replicated, so this works on clients.
+/// The traced cone, on `F4` with the hitboxes; what a player sees is
+/// [`crate::game::flame_jet`]. Reads `Equipped` rather than what was fired,
+/// because it draws between shots. `Equipped` is replicated, so this works on clients.
 fn draw_flame_cone(
     mut gizmos: Gizmos,
     catalog: Res<WeaponCatalog>,
@@ -167,6 +177,20 @@ fn draw_flame_cone(
 
         let (cone, isometry) = flame_cone(eye(transform.translation, *stance, player.duck), aim(player), &spec);
         gizmos.primitive_3d(&cone, isometry, Color::srgba(1.0, 0.6, 0.1, 0.5));
+    }
+}
+
+/// Keeps [`OnFire`] on exactly the bodies with [`Burning`].
+pub fn show_who_is_on_fire(
+    mut commands: Commands,
+    lit: Query<Entity, (With<Burning>, Without<OnFire>)>,
+    out: Query<Entity, (With<OnFire>, Without<Burning>)>,
+) {
+    for body in &lit {
+        commands.entity(body).insert(OnFire);
+    }
+    for body in &out {
+        commands.entity(body).remove::<OnFire>();
     }
 }
 
@@ -190,6 +214,18 @@ mod tests {
     use crate::tool::room::Room;
 
     const SPEC: FlameSpec = FlameSpec::FLAMETHROWER;
+
+    /// Fails if a client would be told a body is alight that is not, or not
+    /// told of one that is.
+    #[test]
+    fn on_fire_follows_burning_both_ways() {
+        let mut world = World::new();
+        let lit = world.spawn(Burning::lit(&SPEC, DamageSource::World)).id();
+        let put_out = world.spawn(OnFire).id();
+        world.run_system_once(show_who_is_on_fire).unwrap();
+        assert!(world.get::<OnFire>(lit).is_some(), "a burning body is not shown on fire");
+        assert!(world.get::<OnFire>(put_out).is_none(), "a body put out is still shown on fire");
+    }
 
     fn a_world() -> World {
         let mut world = World::new();

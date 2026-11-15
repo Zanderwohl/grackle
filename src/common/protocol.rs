@@ -62,6 +62,7 @@ impl Plugin for ProtocolPlugin {
         // The build is read off the rig, not a `Class`, which not every body has.
         app.component::<crate::game::ragdoll::CorpseBuild>().replicate_once();
         app.component::<crate::game::ragdoll::CorpseOf>().replicate_once();
+        app.component::<crate::game::ragdoll::DiedBurning>().replicate_once();
 
         // Replicated rather than re-simulated: see `replicate_projectiles`.
         app.component::<crate::game::projectile::Projectile>().replicate();
@@ -70,6 +71,9 @@ impl Plugin for ProtocolPlugin {
         // deliver two components in one packet. Not predicted, so there is
         // one writer.
         app.component::<crate::common::weapon::Equipped>().replicate();
+
+        // Drawing only; the afterburn's timers stay on the authority.
+        app.component::<crate::common::flame::OnFire>().replicate();
 
         // Not predicted, though a client's own body reads it: one writer.
         app.component::<crate::game::condition::Condition>().replicate();

@@ -384,3 +384,75 @@ at = [
     0.0,
     -0.58,
 ]
+
+[animations.clips.fire]
+name_key = "anim.clips.fire"
+length = 0.16
+clock = "seconds"
+looping = false
+note = "Held pulled back while firing, rather than kicked: each shot restarts this flat clip, which outlasts the shot interval, and its blend out takes the weapon home once the trigger is let go."
+blend_in = 0.06
+blend_out = 0.15
+
+[[animations.clips.fire.tracks]]
+combine = "compose"
+space = "carry"
+unit = "arm_lengths"
+enabled = true
+
+[animations.clips.fire.tracks.channel]
+channel = "weapon"
+
+[[animations.clips.fire.tracks.channel.keys]]
+at = 0.0
+to = [
+    "free",
+    0.0,
+    0.06,
+]
+ease = "linear"
+
+[[animations.clips.fire.tracks.channel.keys]]
+at = 0.16
+to = [
+    "free",
+    0.0,
+    0.06,
+]
+ease = "linear"
+
+[animations.clips.recoil]
+name_key = "anim.clips.recoil"
+length = 0.16
+clock = "seconds"
+looping = false
+note = "The third-person counterpart of fire: the same flat pull back, held while firing and blended home after."
+blend_in = 0.06
+blend_out = 0.15
+
+[[animations.clips.recoil.tracks]]
+combine = "compose"
+space = "carry"
+unit = "arm_lengths"
+enabled = true
+
+[animations.clips.recoil.tracks.channel]
+channel = "weapon"
+
+[[animations.clips.recoil.tracks.channel.keys]]
+at = 0.0
+to = [
+    "free",
+    0.0,
+    0.06,
+]
+ease = "linear"
+
+[[animations.clips.recoil.tracks.channel.keys]]
+at = 0.16
+to = [
+    "free",
+    0.0,
+    0.06,
+]
+ease = "linear"

@@ -175,6 +175,10 @@ pub struct CorpseBuild(pub Build);
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CorpseOf(pub PlayerId);
 
+/// On a corpse, or every piece of one, whose body was on fire when it died.
+#[derive(Component, Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiedBurning;
+
 /// A corpse.
 #[derive(Component, Debug, Clone, Serialize, Deserialize)]
 pub struct Ragdoll {
@@ -489,6 +493,21 @@ impl Ragdoll {
     /// Whether this corpse has bone `index`.
     pub fn keeps(&self, index: usize) -> bool {
         self.kept.get(index).copied().unwrap_or(false)
+    }
+
+    /// The smallest box round every bone this corpse keeps, as its least and
+    /// greatest corners in world space.
+    pub fn bounds(&self) -> Option<(Vec3, Vec3)> {
+        (0..self.kept.len())
+            .filter(|&index| self.keeps(index))
+            .flat_map(|index| {
+                let (head, tail) = self.bone_points(index);
+                [head, tail]
+            })
+            .fold(None, |bounds, point| match bounds {
+                None => Some((point, point)),
+                Some((least, most)) => Some((least.min(point), most.max(point))),
+            })
     }
 
     pub fn bones_kept(&self) -> usize {
@@ -844,11 +863,12 @@ pub fn raise_ragdolls(
             Option<&Name>,
             Option<&PlayerId>,
             Option<&BlownApart>,
+            Has<crate::common::flame::Burning>,
         ),
         (Added<Dying>, Without<Ragdolled>),
     >,
 ) {
-    for (entity, skeleton, pose, global, offset, tint, team, player, physics, name, id, blown) in &bodies {
+    for (entity, skeleton, pose, global, offset, tint, team, player, physics, name, id, blown, burning) in &bodies {
         // Per-tick displacement, which is the unit the solver keeps.
         let carried = physics.map_or(Vec3::ZERO, |body| body.current - body.previous);
         let root = skeleton_root(global, offset);
@@ -896,6 +916,10 @@ pub fn raise_ragdolls(
                 && Some(index) == largest
             {
                 corpse.insert(CorpseOf(*id));
+            }
+
+            if burning {
+                corpse.insert(DiedBurning);
             }
 
             // Read off the rig the body actually had.
@@ -1463,6 +1487,30 @@ mod tests {
         world.run_system_once(raise_ragdolls).unwrap();
 
         assert_eq!(corpses(&mut world), 1);
+    }
+
+    /// Fails if a body that died burning leaves a corpse or gib without
+    /// `DiedBurning`, or one that was not burning leaves one with it.
+    #[test]
+    fn every_piece_of_a_body_that_died_burning_remembers_it() {
+        use crate::common::damage::DamageSource;
+        use crate::common::flame::{Burning, FlameSpec};
+
+        let mut world = World::new();
+        let lit = Burning::lit(&FlameSpec::FLAMETHROWER, DamageSource::World);
+        a_dead_body(&mut world, (PlayerId(1), lit, BlownApart { at: Vec3::new(0.0, 1.0, 0.0) }));
+        a_dead_body(&mut world, PlayerId(2));
+        world.run_system_once(raise_ragdolls).unwrap();
+
+        let pieces: Vec<(Option<PlayerId>, bool)> = world
+            .query::<(&Ragdoll, Option<&CorpseOf>, Has<DiedBurning>)>()
+            .iter(&world)
+            .map(|(_, of, burnt)| (of.map(|of| of.0), burnt))
+            .collect();
+        let burnt = pieces.iter().filter(|(_, burnt)| *burnt).count();
+        assert!(burnt >= 2, "the burning body's pieces: {pieces:?}");
+        assert!(pieces.iter().any(|&piece| piece == (Some(PlayerId(2)), false)), "{pieces:?}");
+        assert_eq!(burnt, pieces.len() - 1, "the plain body's corpse burns too: {pieces:?}");
     }
 
     /// A dead thing with no skeleton, such as a crate, leaves no corpse.
