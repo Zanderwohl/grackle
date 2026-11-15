@@ -62,14 +62,15 @@ fn dress_hats(
     bodies: Query<(Entity, &Class, Has<LocalPlayer>, Option<&WornHat>), With<Skeleton>>,
 ) {
     for (body, class, ours, worn) in &bodies {
-        let wanted = catalog.loadout(*class).and_then(|loadout| loadout.hat.clone());
+        let named = catalog.loadout(*class).and_then(|loadout| loadout.hat.as_deref());
         if let Some(worn) = worn
-            && worn.model == wanted
+            && worn.model.as_deref() == named
             && worn.class == *class
             && worn.cached_at == cache.generation()
         {
             continue;
         }
+        let wanted = named.map(str::to_owned);
 
         if let Some(worn) = worn {
             for part in &worn.parts {
@@ -129,7 +130,7 @@ fn place_hats(
         let Some(placed) = hat_transform(skeleton, pose, &root, &worn.fit) else { continue };
         for part in &worn.parts {
             if let Ok(mut transform) = parts.get_mut(*part) {
-                *transform = placed;
+                transform.set_if_neq(placed);
             }
         }
     }

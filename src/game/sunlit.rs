@@ -18,6 +18,7 @@ use crate::common::sky::{Brightness, SunPosition};
 use crate::common::air_lit::LitMaterial;
 use crate::game::player::{LocalPlayer, Watched};
 use crate::game::projectile::Projectile;
+use crate::game::viewmodel::{ViewmodelArm, ViewmodelPart};
 use crate::game::world_prop::WorldProp;
 use crate::tool::sun_bake::{OpenSky, SunBake};
 
@@ -78,30 +79,76 @@ fn tag_at(probe: Vec3, toward: Vec3, open_sky: &OpenSky, air: &AirLight, base: f
     air_light::pack(ambient, open_sky.sees_sun(probe, toward))
 }
 
-/// Every frame: a body can walk into the sun with nothing changing but its position.
-#[allow(clippy::type_complexity)]
+/// Where a thing was last probed and what its meshes were tagged with then.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct SunProbe {
+    at: Vec3,
+    tag: Option<u32>,
+}
+
+/// Meters a thing moves before it is probed again. Below what the air's 2 m lattice or a shadow's
+/// edge shows.
+const REPROBE_DISTANCE: f32 = 0.02;
+
+/// Every frame: a body can walk into the sun with nothing changing but its position. A thing
+/// that has not moved keeps its tag, and its meshes are visited only when that changes or a mesh
+/// joins it, as when a body is dressed or a weapon is swapped.
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn light_what_moves(
     mode: Res<State<AppMode>>,
     open_sky: Res<OpenSky>,
     sun_bake: Res<SunBake>,
     position: Res<SunPosition>,
     brightness: Res<Brightness>,
-    roots: Query<(Entity, &GlobalTransform, Has<Skeleton>, Has<LocalPlayer>, Has<Watched>), Or<(With<Skeleton>, With<WorldProp>, With<Projectile>)>>,
+    roots: Query<
+        (Entity, &GlobalTransform, Has<Skeleton>, Has<LocalPlayer>, Has<Watched>, Option<&SunProbe>),
+        Or<(With<Skeleton>, With<WorldProp>, With<Projectile>)>,
+    >,
+    arrived: Query<Entity, Or<(Added<Mesh3d>, Changed<ChildOf>)>>,
+    parents: Query<&ChildOf>,
     children: Query<&Children>,
     meshes: Query<Option<&MeshTag>, With<Mesh3d>>,
-    viewmodel: Query<(Entity, &RenderLayers, Option<&MeshTag>), With<Mesh3d>>,
+    viewmodel: Query<
+        (Entity, &RenderLayers, Option<&MeshTag>),
+        (With<Mesh3d>, Or<(With<ViewmodelPart>, With<ViewmodelArm>)>),
+    >,
+    mut joined: Local<bevy::platform::collections::HashSet<Entity>>,
     mut commands: Commands,
 ) {
     let toward = position.toward();
     // The prop editor stands a figure at the origin with the map hidden round it.
     let shows_the_world = mode.get().shows_the_world();
+    let stale = mode.is_changed()
+        || open_sky.is_changed()
+        || sun_bake.is_changed()
+        || position.is_changed()
+        || brightness.is_changed();
+
+    joined.clear();
+    for mesh in &arrived {
+        let root = std::iter::once(mesh).chain(parents.iter_ancestors(mesh)).find(|entity| roots.contains(*entity));
+        if let Some(root) = root {
+            joined.insert(root);
+        }
+    }
+
     let mut ours = None;
-    for (root, at, body, local, watched) in &roots {
+    for (root, at, body, local, watched, probed) in &roots {
         let probe = at.translation() + Vec3::Y * if body { CHEST } else { ABOVE_ORIGIN };
-        let tag = shows_the_world.then(|| tag_at(probe, toward, &open_sky, sun_bake.air(), brightness.ambient));
+        let kept = probed.filter(|probed| !stale && probed.at.distance_squared(probe) <= REPROBE_DISTANCE * REPROBE_DISTANCE);
+        let tag = match kept {
+            Some(probed) => probed.tag,
+            None => shows_the_world.then(|| tag_at(probe, toward, &open_sky, sun_bake.air(), brightness.ambient)),
+        };
         // The viewmodel shows ours, or the one being spectated.
         if local || watched {
             ours = tag;
+        }
+        if kept.is_none() {
+            commands.entity(root).try_insert(SunProbe { at: probe, tag });
+        }
+        if probed.is_some_and(|probed| probed.tag == tag) && !joined.contains(&root) {
+            continue;
         }
         for entity in std::iter::once(root).chain(children.iter_descendants(root)) {
             if let Ok(current) = meshes.get(entity) {
@@ -156,7 +203,7 @@ mod tests {
         };
         let outside = body(Vec3::new(4.0, 0.0, 4.0), true);
         let inside = body(Vec3::new(24.0, 0.0, 4.0), false);
-        let viewmodel = app.world_mut().spawn((Mesh3d::default(), RenderLayers::layer(VIEWMODEL))).id();
+        let viewmodel = app.world_mut().spawn((Mesh3d::default(), RenderLayers::layer(VIEWMODEL), ViewmodelPart)).id();
         app.update();
         (app, outside, inside, viewmodel)
     }

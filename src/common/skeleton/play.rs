@@ -800,28 +800,58 @@ pub fn apply_masked(
     skeleton: &Skeleton,
     pose: &mut Pose,
     frames: &Frames,
-    mut weapon: Option<&mut Transform>,
+    weapon: Option<&mut Transform>,
     masked: Regions,
 ) -> Vec<Reach> {
+    let mut reaches = Vec::new();
+    apply_masked_into(clip, time, skeleton, pose, frames, weapon, masked, Some(&mut reaches));
+    reaches
+}
+
+/// [`apply_masked`], pushing each effector track's [`Reach`] onto `reaches` if given.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn apply_masked_into(
+    clip: &Clip,
+    time: f32,
+    skeleton: &Skeleton,
+    pose: &mut Pose,
+    frames: &Frames,
+    mut weapon: Option<&mut Transform>,
+    masked: Regions,
+    mut reaches: Option<&mut Vec<Reach>>,
+) {
     let time = clip.wrap(time);
     let length = clip.length;
     let looping = clip.looping;
-    let mut reaches = Vec::new();
 
     for track in &clip.tracks {
-        if !track.enabled || masked.overlaps(Regions::of_track(&track.channel, skeleton)) {
+        if !track.enabled {
             continue;
+        }
+        // Looked up once, for the mask and the track alike.
+        let rotated = match &track.channel {
+            Channel::Rotation { bone, .. } => Some(skeleton.index_of(bone)),
+            _ => None,
+        };
+        if masked != Regions::NONE {
+            let moved = match rotated {
+                Some(index) => index.map_or(Regions::NONE, |index| skeleton.anatomy().region_of(index)),
+                None => Regions::of_track(&track.channel, skeleton),
+            };
+            if masked.overlaps(moved) {
+                continue;
+            }
         }
         let time = track_time(track.timing, time, frames.footfalls.as_deref());
 
         match &track.channel {
-            Channel::Rotation { bone, keys } => {
+            Channel::Rotation { keys, .. } => {
                 let Some(to) = sample_key(keys, time, length, looping) else {
                     continue;
                 };
                 // `Pose::set` needs the rig's `&'static str`. An unknown bone is
                 // dropped here; `Clip::problems` reports it.
-                let Some(index) = skeleton.index_of(bone) else {
+                let Some(Some(index)) = rotated else {
                     continue;
                 };
                 let name = skeleton.bones()[index].name;
@@ -850,11 +880,14 @@ pub fn apply_masked(
                 // Authored and default poles alike are in the body's frame.
                 let pole = frames.body.rotation * pole.map(Vec3::from_array).unwrap_or(limb.pole);
 
-                reaches.push(if limb.straightens {
+                let reach = if limb.straightens {
                     ik::solve(skeleton, pose, &frames.body, &solved, target, pole)
                 } else {
                     ik::reach_or_leave(skeleton, pose, &frames.body, &solved, target, pole)
-                });
+                };
+                if let Some(reaches) = reaches.as_deref_mut() {
+                    reaches.push(reach);
+                }
             }
 
             Channel::LookAt { bone, keys } => {
@@ -932,8 +965,6 @@ pub fn apply_masked(
             }
         }
     }
-
-    reaches
 }
 
 /// Where the stack has moved each hand's grip, trigger hand first: meters
@@ -1009,13 +1040,30 @@ pub fn shown_layers<'a>(
     stack: &'a ClipStack,
     clips: &'a Assets<Clip>,
 ) -> impl Iterator<Item = (&'a Playing, &'a Clip, f32, Regions)> + 'a {
-    let mut ranked: Vec<&Playing> = stack.0.iter().collect();
-    // Stable, so a blend's two variants keep their order.
-    ranked.sort_by_key(|playing| playing.layer);
-    ranked.into_iter().filter_map(move |playing| {
+    shown_layers_where(stack, clips, |_| true)
+}
+
+/// [`shown_layers`] over only the clips `keep` accepts, as if the rest were not on the stack.
+pub fn shown_layers_where<'a>(
+    stack: &'a ClipStack,
+    clips: &'a Assets<Clip>,
+    keep: impl Fn(&Playing) -> bool + Copy + 'a,
+) -> impl Iterator<Item = (&'a Playing, &'a Clip, f32, Regions)> + 'a {
+    // Layer by layer in stack order, which is the order a stable sort by layer gives, without
+    // the sorted copy.
+    let ranked = Layer::ALL
+        .into_iter()
+        .filter(move |_| !stack.0.is_empty())
+        .flat_map(move |layer| stack.0.iter().filter(move |playing| playing.layer == layer && keep(playing)));
+    ranked.filter_map(move |playing| {
         let shown = (playing.weight * playing.strength).clamp(0.0, 1.0);
         let clip = clips.get(&playing.clip).filter(|_| shown > 0.0)?;
-        Some((playing, clip, shown, stack.claimed_above(playing.layer)))
+        let masked = stack
+            .0
+            .iter()
+            .filter(|above| above.weight >= 1.0 && above.layer > playing.layer && keep(above))
+            .fold(Regions::NONE, |claimed, above| claimed.union(above.claims));
+        Some((playing, clip, shown, masked))
     })
 }
 
@@ -1027,19 +1075,35 @@ pub fn apply_stack(
     skeleton: &Skeleton,
     pose: &mut Pose,
     frames: &Frames,
-    mut weapon: Option<&mut Transform>,
+    weapon: Option<&mut Transform>,
 ) {
-    for (playing, clip, shown, masked) in shown_layers(stack, clips) {
+    apply_stack_where(stack, clips, skeleton, pose, frames, weapon, |_| true);
+}
+
+/// [`apply_stack`] over only the clips `keep` accepts, as if the rest were not on the stack.
+pub fn apply_stack_where(
+    stack: &ClipStack,
+    clips: &Assets<Clip>,
+    skeleton: &Skeleton,
+    pose: &mut Pose,
+    frames: &Frames,
+    mut weapon: Option<&mut Transform>,
+    keep: impl Fn(&Playing) -> bool + Copy,
+) {
+    let mut before: Option<super::rig::ScratchPose> = None;
+    for (playing, clip, shown, masked) in shown_layers_where(stack, clips, keep) {
         if shown >= 1.0 {
-            apply_masked(clip, playing.time, skeleton, pose, frames, weapon.as_deref_mut(), masked);
+            apply_masked_into(clip, playing.time, skeleton, pose, frames, weapon.as_deref_mut(), masked, None);
             continue;
         }
 
-        let before = pose.clone();
+        let before = before.get_or_insert_with(super::rig::ScratchPose::take);
+        before.copy_from(pose);
         // The weapon blends by weight too.
         let was = weapon.as_deref().copied();
-        apply_masked(clip, playing.time, skeleton, pose, frames, weapon.as_deref_mut(), masked);
-        *pose = Pose::lerp(&before, pose, shown);
+        apply_masked_into(clip, playing.time, skeleton, pose, frames, weapon.as_deref_mut(), masked, None);
+        before.blend_toward(pose, shown);
+        std::mem::swap(pose, &mut **before);
 
         if let (Some(placed), Some(was)) = (weapon.as_deref_mut(), was) {
             placed.translation = was.translation.lerp(placed.translation, shown);
