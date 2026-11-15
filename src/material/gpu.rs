@@ -157,6 +157,7 @@ static GATE: (Mutex<GateState>, Condvar) =
 /// the render world's window preparation. Call it only from a system pinned to the main thread (a
 /// `NonSend` or `NonSendMarker` parameter): a render system waiting on a task scope while the gate is
 /// shut can run any other main-world system on its own thread, and that one waiting here deadlocks.
+/// The gate is therefore never shut across a render system that needs the main thread.
 pub fn submitting<R>(f: impl FnOnce() -> R) -> R {
     let (lock, signal) = &GATE;
     {
@@ -271,15 +272,17 @@ impl Plugin for MaterialGpuPlugin {
                     .in_set(RenderSystems::PrepareAssets)
                     .after(prepare_assets::<GpuImage>),
             );
-            render_app.add_systems(
-                Render,
-                (
-                    // Shut as late as possible: a render system waiting on a task scope while the
-                    // gate is shut may run a main-world system that waits for it to open.
-                    shut_the_gate.after(RenderSystems::Specialize).before(create_surfaces).before(prepare_windows),
-                    open_the_gate.after(prepare_windows),
-                ),
-            );
+            // Shut as late as possible: a render system waiting on a task scope while the gate is
+            // shut may run a main-world system that waits for it to open.
+            let shut = shut_the_gate.after(RenderSystems::Specialize).before(prepare_windows);
+            // On macOS `create_surfaces` runs on the main thread, as every bake does, so the two
+            // cannot overlap. Shut before it, a bake on the main thread waits for a gate that
+            // opens only after a system needing the main thread: the window hangs at startup.
+            #[cfg(any(target_os = "macos", target_os = "ios"))]
+            let shut = shut.after(create_surfaces);
+            #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+            let shut = shut.before(create_surfaces);
+            render_app.add_systems(Render, (shut, open_the_gate.after(prepare_windows)));
         }
     }
 }
