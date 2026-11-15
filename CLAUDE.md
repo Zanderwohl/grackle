@@ -498,6 +498,18 @@ goal on a second line — spectating too, which is why the HUD goes up with the
 round rather than with a body: without one its crosshair and readouts hide. Each stays up half a second after the
 crosshair leaves, so several can be up at once.
 
+The **kill feed** ([`src/game/kill_feed.rs`](src/game/kill_feed.rs)) is up to five recent deaths
+at the top right of the safe zone, in the order they happened, oldest at the top. A line is up
+for ten seconds, or twenty if it names us; the latest two naming us are kept, and the other
+slots go to the latest of the rest, so ours are bumped less. It is built from the `Died` every
+machine gets, so spectators and every mode see it. "Killer > victim" or "killer + assist > victim" is painted in
+the killer's color; "assist finished off victim" (killed by themself or the map, with help) and
+"victim died" are cream. Each line is a **`Plate`** ([`src/game/plate.rs`](src/game/plate.rs)):
+a node with `PlateText` children, given its leaning panel after layout, repainted when its size
+or `swatch` changes, its text black or white by `Swatch::text`. Its lines and panel stay hidden
+until the panel is laid out; the plate's own `Visibility` is its owner's, which is how a name tag
+hides one that is off screen. Name tags and the watched and killer banners are plates too.
+
 **The viewmodel's arms are solved, not authored.** `place_the_viewmodel_arms`
 calls the same `grip_with` that puts a body's hands on a weapon, so a grip
 tuned in the prop editor is the grip first person uses and there is no second

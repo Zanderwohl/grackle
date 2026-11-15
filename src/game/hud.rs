@@ -45,7 +45,7 @@ pub const HUD_CAMERA_ORDER: isize = VIEWMODEL_CAMERA_ORDER + 1;
 
 const SAFE_ZONE_ASPECT: f32 = 4.0 / 3.0;
 /// Logical pixels in from the safe zone's edges.
-const MARGIN_X: f32 = 24.0;
+pub(crate) const MARGIN_X: f32 = 24.0;
 pub(crate) const MARGIN_Y: f32 = 20.0;
 
 const BIG: f32 = 44.0;

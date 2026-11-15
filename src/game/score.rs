@@ -20,6 +20,7 @@ use crate::common::game_rules::GameRules;
 use crate::common::net::{has_authority, NetRole};
 use crate::common::player_color::PlayerColor;
 use crate::common::round_settings::RoundSettings;
+use crate::common::swatch::Swatch;
 use crate::common::player_settings::{settings_of, ClientSettings, PlayerSettings};
 use crate::common::team::Team;
 use crate::game::body_mesh::body_look;
@@ -103,6 +104,11 @@ impl Standing {
             true => get!("scoreboard.player", "id", self.id.0),
             false => self.name.clone(),
         }
+    }
+
+    /// What their HUD and panels are painted in.
+    pub fn hud_swatch(&self) -> Swatch {
+        Swatch::of_body(self.team, Some(self.color))
     }
 
     /// The same rule a body is drawn by, so a row matches its body.
