@@ -270,16 +270,27 @@ pub(crate) fn seat_whoever_chose(
 fn offers_may_have_changed(
     us: Option<Res<OurIdentity>>,
     identities: Query<(), Changed<Identity>>,
-    standings: Query<(), Changed<Standing>>,
+    (changed_standings, standings, mut points): (Query<(), Changed<Standing>>, Query<&Standing>, Local<Vec<(PlayerId, i32)>>),
     spawns: Query<(), (With<SpawnPointMarker>, Or<(Added<SpawnPointMarker>, Changed<Side>)>)>,
     rules: Res<GameRules>,
     gone_identities: RemovedComponents<Identity>,
     gone_sides: RemovedComponents<Side>,
     gone_spawns: RemovedComponents<SpawnPointMarker>,
 ) -> bool {
-    us.is_some_and(|us| us.is_changed())
+    // An offer reads a standing only for its points, and a hit seldom moves them. Checked before
+    // the rest so the points kept are always the ones last offered from.
+    let mut points_moved = false;
+    if !changed_standings.is_empty() {
+        let mut now: Vec<(PlayerId, i32)> = standings.iter().map(|standing| (standing.id, standing.points())).collect();
+        now.sort_unstable_by_key(|(id, _)| *id);
+        if now != *points {
+            *points = now;
+            points_moved = true;
+        }
+    }
+    points_moved
+        || us.is_some_and(|us| us.is_changed())
         || !identities.is_empty()
-        || !standings.is_empty()
         || !spawns.is_empty()
         || rules.is_changed()
         || !gone_identities.is_empty()
