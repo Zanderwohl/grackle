@@ -805,6 +805,20 @@ impl AnimTabs<'_> {
                 }
             });
             ui.end_row();
+
+            ui.label(get!("anim.label.taunt_view"));
+            ui.horizontal(|ui| {
+                let mut set = edited.view.is_some();
+                ui.selectable_value(&mut set, false, get!("anim.taunt.view_as_it_was"));
+                ui.selectable_value(&mut set, true, get!("anim.taunt.view_from"));
+                if set != edited.view.is_some() {
+                    edited.view = set.then_some(180.0);
+                }
+                if let Some(degrees) = &mut edited.view {
+                    ui.add(egui::DragValue::new(degrees).speed(1.0).range(-180.0..=180.0).suffix(get!("anim.suffix.degrees")));
+                }
+            });
+            ui.end_row();
         });
 
         if edited != spec {

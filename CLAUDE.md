@@ -194,7 +194,7 @@ shape is a new producer and not a rewrite of every consumer — see
 | `src/lang_editor/` | The lang editor: a pack's strings for one language. See "Editing a lang file". |
 | `src/common/` | Shared: i18n, geometry, rays, gamemodes, items. |
 | `src/unlock/` | The crate-drop prototype. Orthogonal — see above. |
-| `src/bin/` | `ensure_lang` (fills missing translation keys), `new_map_template` (writes the new-map, demo-scene, arena and cloister blueprints), `map_stats` (bakes a blueprint's nav graph headless and prints its statistics and top-down charts of each field), `decal_images` (rasterizes the default pack's decal SVGs), `bake_body_clips` (seeds a pack's body animations from the pose functions they replace), `default_materials` (writes the default pack's materials), `crate_drop`. |
+| `src/bin/` | `ensure_lang` (fills missing translation keys), `new_map_template` (writes the new-map, demo-scene, arena and cloister blueprints), `map_stats` (bakes a blueprint's nav graph headless and prints its statistics and top-down charts of each field), `decal_images` (rasterizes the default pack's decal SVGs), `bake_body_clips` (seeds a pack's body animations from the pose functions they replace, and writes the clips `seed::WRITTEN` generates key by key), `default_materials` (writes the default pack's materials), `crate_drop`. |
 | `assets/default/` | The default pack: `lang/`, `blueprints/`, `servers/` (example `--server-config` files). |
 | `assets/user/` | The user pack: gitignored, made at startup, last in `default_packs()` so it overrides the shipped one. A new map or prop is saved here unless the document already has a folder. |
 | `cache/` | Gitignored, derived from the packs and maps: `thumbnail/props/{name}.png`, `nav/{hash}.bin`, `lightmap/{hash}.bin`, `rounds/{map}/*.jsonl`. Safe to delete. |
@@ -607,13 +607,34 @@ primary and the right its secondary — held, for anything automatic — and
 **`R`** reloads. Holding **`Tab`** swaps the HUD for a scoreboard
 ranked by points (`tab_board`, recomputed from the key every frame so it
 cannot stick). **`H`** toggles humiliation, a debug key until there are
-rounds to lose: hands up, no weapon, no firing, third person. **`G`** starts
-the first taunt in `assets/default/taunts.toml` (a wave, which ends by itself;
-`G` again ends it early), and works while humiliated, as in TF2; **`O`** is
+rounds to lose: hands up, no weapon, no firing, third person. **`G`** opens
+the taunt menu ([`src/game/taunt_menu.rs`](src/game/taunt_menu.rs)) and `G`
+again plays its first: the held weapon's own taunt, else the first in
+`assets/default/taunts.toml` (a wave, which ends by itself; `G` during a taunt
+ends it early). It works while humiliated, as in TF2. **A weapon's taunt is
+named by its prop** (`taunt`, a key in `taunts.toml`, picked in the Fit
+workspace's Hold panel): the prop refers to it and the taunt and its clip stay
+in `taunts.toml` and `animations/`. A taunt some weapon names is offered only
+while that weapon is held, and the authority refuses it otherwise
+(`WeaponTaunts`, built on every machine from the catalog and the props by
+`learn_weapon_taunts`). The pistol's is `twirl`: spun on the trigger finger,
+caught, and raised barrel-up before the mouth to be blown across, written by
+[`pistol_twirl`](src/common/skeleton/pistol_twirl.rs) through `bake_body_clips`;
+its tests play the shipped clip through the game's hold and grip on every
+humanoid build. With `weapon = "shown"` its clip moves the
+weapon with `Weapon`, `WeaponRotation` and `PropBone` tracks and the grip
+follows, so it should claim `weapon` and leave the arms that hold it unclaimed.
+**Nobody switches weapons while taunting** (`Condition::may_switch_weapons`):
+`select_weapons` drops the request, the selector stays shut, and a weapon
+picked up mid-taunt is carried but not drawn. **`O`** is
 suicide, **`T`** puts your spray on the surface you look at within 2 m, or moves it there (see "Decals"), 1000 damage credited to yourself, a debug key for the death cam; nobody
 crouches while taunting; each taunt states what it claims, whether it
 shows the weapon, how far you can move, and how far your body (never the
-camera) can turn — all of it edited in the animation editor's **Taunts**
+camera) can turn, and optionally a `view`: degrees left of the body's facing
+the third-person camera swings to as it starts and back from as it ends
+([`src/game/taunt_view.rs`](src/game/taunt_view.rs)), an offset on the camera
+alone; while it plays the mouse turns that offset and not the aim, so the body
+faces where it started when the taunt frees it — all of it edited in the animation editor's **Taunts**
 section (`write_taunts` edits the file in place, so its comments survive).
 `length = "clip"` lasts as long as the clip (until `G` again if the clip is
 in no pack); it is resolved to a number where the table is loaded, so a client

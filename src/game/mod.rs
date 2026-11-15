@@ -63,6 +63,7 @@ pub mod hud;
 pub mod name_tag;
 pub mod kill_feed;
 pub mod taunt_menu;
+pub mod taunt_view;
 pub mod kill_icon;
 pub mod plate;
 pub mod pickup_beam;
@@ -175,6 +176,7 @@ impl Plugin for GamePlugin {
                 // Ungated: it drains motion made while paused rather than
                 // applying all of it on the frame the menu closes.
                 gather_aim,
+                crate::game::taunt_view::swing_for_taunts,
             ).chain().in_set(RunFixedMainLoopSystems::BeforeFixedMainLoop)
                 .run_if(in_state(AppMode::Play)))
             // Rollback replays this tick's input, so nothing downstream may
@@ -197,6 +199,7 @@ impl Plugin for GamePlugin {
             .add_systems(RunFixedMainLoop, (interpolate_bodies, crate::game::skeleton::follow_ducks)
                 .chain()
                 .in_set(RunFixedMainLoopSystems::AfterFixedMainLoop))
+            .init_resource::<crate::game::taunt_view::TauntView>()
             .add_systems(RunFixedMainLoop, (face_bodies, follow_our_corpse, place_camera, crate::game::player::widen_the_view)
                 .chain()
                 .after(interpolate_bodies)

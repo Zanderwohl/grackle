@@ -1,4 +1,5 @@
 name_key = "weapon.names.pistol"
+taunt = "twirl"
 next_id = 12
 
 [[features]]

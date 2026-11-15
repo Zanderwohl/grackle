@@ -653,6 +653,7 @@ turning = "Turning"
 taunt_weapon = "Weapon"
 taunt_length = "Lasts"
 taunt_icon = "Icon"
+taunt_view = "Camera"
 taunt_rig_clip = "On a { rig }"
 
 [anim.panels]
@@ -696,12 +697,15 @@ at_most = "At most"
 shown = "Shown"
 hidden = "Hidden"
 clip_length = "Its clip"
+view_as_it_was = "As it was"
+view_from = "Swung left"
 seconds = "Seconds"
 until_again = "Until pressed again"
 
 [anim.suffix]
 seconds = " s"
 degrees_per_second = "°/s"
+degrees = "°"
 percent = "%"
 
 [anim.track]
@@ -962,6 +966,8 @@ override_for = "Override for the { class }"
 viewmodel = "Viewmodel"
 muzzle = "Muzzle"
 has_muzzle = "Has a muzzle"
+taunt = "Taunt"
+no_taunt = "None"
 across = "Across"
 depth = "Depth"
 

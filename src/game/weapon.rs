@@ -280,12 +280,13 @@ fn begin_reload(state: &mut crate::common::weapon::AmmoState, magazine: &Magazin
 pub fn reload_weapons(
     time: Res<Time<Fixed>>,
     catalog: Res<WeaponCatalog>,
-    mut carriers: Query<(&Equipped, &mut Ammo, &Trigger, &Inputs, Option<&AutoReload>), With<Player>>,
+    mut carriers: Query<(&Equipped, &mut Ammo, &Trigger, &Inputs, Option<&AutoReload>, Option<&Condition>), With<Player>>,
 ) {
     let dt = time.delta_secs();
 
-    for (equipped, mut ammo, trigger, input, auto) in &mut carriers {
-        if !trigger.deployed() {
+    for (equipped, mut ammo, trigger, input, auto, condition) in &mut carriers {
+        // A taunt hides the reload's clips, so a reload neither starts nor runs on under one.
+        if !trigger.deployed() || condition.is_some_and(|condition| !condition.may_switch_weapons()) {
             continue;
         }
         let Some(weapon) = catalog.held_by(equipped) else { continue };
@@ -331,14 +332,17 @@ pub fn reload_weapons(
 pub fn select_weapons(
     time: Res<Time<Fixed>>,
     catalog: Res<WeaponCatalog>,
-    mut carriers: Query<(&mut Equipped, &mut Ammo, &mut Trigger, &Inputs), With<Player>>,
+    mut carriers: Query<(&mut Equipped, &mut Ammo, &mut Trigger, &Inputs, Option<&Condition>), With<Player>>,
 ) {
     let dt = time.delta_secs();
 
-    for (mut equipped, mut ammo, mut trigger, input) in &mut carriers {
+    for (mut equipped, mut ammo, mut trigger, input, condition) in &mut carriers {
         trigger.deploying = (trigger.deploying - dt).max(0.0);
 
         let Some(weapon) = input.select else { continue };
+        if condition.is_some_and(|condition| !condition.may_switch_weapons()) {
+            continue;
+        }
         if equipped.held() == Some(weapon) || !equipped.carries(weapon) {
             continue;
         }
@@ -680,6 +684,48 @@ mod tests {
             Some(next),
             "the tick's input was emptied by the system that read it"
         );
+    }
+
+    /// Auto-reload would refill the clip unseen partway through a taunt.
+    #[test]
+    fn a_taunting_body_does_not_reload() {
+        let mut world = a_world(default_catalog());
+        let body = a_shooter(&mut world);
+        world.entity_mut(body).insert(Condition {
+            taunt: Some(crate::common::taunt::TauntId::of("wave")),
+            ..default()
+        });
+        let held = world.get::<Equipped>(body).unwrap().held().unwrap();
+        world.get_mut::<Ammo>(body).unwrap().at_mut(held).clip = 0;
+        input(&mut world, body).reload = true;
+
+        world.run_system_once(reload_weapons).unwrap();
+        assert_eq!(ammo(&world, body).reloading, 0.0, "a reload started mid-taunt");
+
+        world.get_mut::<Condition>(body).unwrap().taunt = None;
+        world.run_system_once(reload_weapons).unwrap();
+        assert!(ammo(&world, body).reloading > 0.0, "the empty clip did not reload once the taunt ended");
+    }
+
+    /// A taunt may be the held weapon's own, so it keeps the weapon until it ends.
+    #[test]
+    fn a_taunting_body_does_not_switch_weapons() {
+        let mut world = a_world(default_catalog());
+        let body = a_shooter(&mut world);
+        let held = world.get::<Equipped>(body).unwrap().held();
+        let next = second(&world, body);
+        world.entity_mut(body).insert(Condition {
+            taunt: Some(crate::common::taunt::TauntId::of("wave")),
+            ..default()
+        });
+        input(&mut world, body).select = Some(next);
+
+        world.run_system_once(select_weapons).unwrap();
+        assert_eq!(world.get::<Equipped>(body).unwrap().held(), held, "switched mid-taunt");
+
+        world.get_mut::<Condition>(body).unwrap().taunt = None;
+        world.run_system_once(select_weapons).unwrap();
+        assert_eq!(world.get::<Equipped>(body).unwrap().held(), Some(next));
     }
 
     #[test]

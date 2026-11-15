@@ -691,6 +691,7 @@ pub fn place_camera(
     through: Option<Res<ThroughCamera>>,
     kill_cam: Option<Res<crate::game::kill_cam::KillCam>>,
     fixed: Res<Time<Fixed>>,
+    taunt_view: Option<Res<crate::game::taunt_view::TauntView>>,
     body: Option<Single<(&Transform, &Stance, &Player), (With<LocalPlayer>, Without<PlayerCamera>)>>,
     watched: Option<Single<(Entity, &Transform, &Stance, &Player, Has<UneasedAim>), (With<Watched>, Without<LocalPlayer>, Without<PlayerCamera>)>>,
     mut cameras: Query<&mut Transform, With<PlayerCamera>>,
@@ -699,7 +700,9 @@ pub fn place_camera(
     let eye = |transform: &Transform, stance: &Stance, player: &Player| {
         transform.translation + Vec3::Y * player.drawn_duck(fixed.overstep_fraction()).eye_from_center(*stance, player.eye)
     };
-    let ours = (latch.0.yaw, latch.0.pitch);
+    // A taunt's swing turns the camera and not the aim the body follows.
+    let swing = taunt_view.map_or(Vec2::ZERO, |view| view.offset());
+    let ours = (latch.0.yaw + swing.x, latch.0.pitch + swing.y);
     // So watching the same body again starts on its aim rather than easing from the last time.
     if watched.is_none() || body.is_some() {
         *eased = None;

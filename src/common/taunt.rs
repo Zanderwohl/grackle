@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::common::assets::{AssetError, Assets};
 use crate::common::skeleton::play::Regions;
+use crate::common::weapon::WeaponId;
 
 pub const TAUNTS_FILE: &str = "taunts.toml";
 
@@ -87,6 +88,25 @@ pub enum TauntRequest {
     Start(TauntId),
 }
 
+/// Each weapon's taunt, by the key its model's prop names. Built on every machine from the catalog
+/// and the props rather than sent.
+#[derive(Resource, Clone, Debug, Default, PartialEq)]
+pub struct WeaponTaunts(pub std::collections::BTreeMap<WeaponId, String>);
+
+impl WeaponTaunts {
+    pub fn of(&self, weapon: Option<WeaponId>) -> Option<&str> {
+        weapon.and_then(|weapon| self.0.get(&weapon)).map(String::as_str)
+    }
+
+    pub fn belongs_to_a_weapon(&self, key: &str) -> bool {
+        self.0.values().any(|own| own == key)
+    }
+
+    pub fn may_play(&self, key: &str, held: Option<WeaponId>) -> bool {
+        !self.belongs_to_a_weapon(key) || self.of(held) == Some(key)
+    }
+}
+
 /// The most taunts the menu offers: one per digit key.
 pub const MOST_OFFERED: usize = 9;
 
@@ -117,6 +137,8 @@ pub struct Taunt {
     /// Seconds until the authority ends it; `None` lasts until `G` again. `length = "clip"` is
     /// resolved where the table is loaded, so a client gets the authority's number.
     pub length: Option<f32>,
+    /// Degrees the third-person camera swings left of the body's facing: 180 looks at its front.
+    pub view: Option<f32>,
 }
 
 /// In file order: `G` plays the first. A list rather than a map so two loads
@@ -133,15 +155,22 @@ impl Taunts {
         self.0.first()
     }
 
-    /// The first taunt a body of rig `kind` has a clip for.
-    pub fn first_for(&self, kind: &str) -> Option<&Taunt> {
-        self.0.iter().find(|taunt| taunt.clip_for(kind).is_some())
+    pub fn by_key(&self, key: &str) -> Option<&Taunt> {
+        self.0.iter().find(|taunt| taunt.key == key)
     }
 
-    /// What the menu offers a body of rig `kind`, in file order: each taunt it has a clip for,
-    /// up to one per digit. The first is the default.
-    pub fn offered<'a>(&'a self, kind: &'a str) -> impl Iterator<Item = &'a Taunt> + 'a {
-        self.0.iter().filter(move |taunt| taunt.clip_for(kind).is_some()).take(MOST_OFFERED)
+    /// Each taunt the rig has a clip for and may play, up to one per digit: the held weapon's own
+    /// first, the default, then file order.
+    pub fn offered<'a>(
+        &'a self,
+        kind: &'a str,
+        weapons: &'a WeaponTaunts,
+        held: Option<WeaponId>,
+    ) -> impl Iterator<Item = &'a Taunt> + 'a {
+        let fits = move |taunt: &&Taunt| taunt.clip_for(kind).is_some();
+        let own = weapons.of(held).and_then(|key| self.by_key(key)).filter(fits);
+        let rest = self.0.iter().filter(fits).filter(move |taunt| !weapons.belongs_to_a_weapon(&taunt.key));
+        own.into_iter().chain(rest).take(MOST_OFFERED)
     }
 
     pub fn shipped() -> Taunts {
@@ -178,6 +207,8 @@ pub struct TauntSpec {
     pub weapon: TauntWeapon,
     pub icon: Option<String>,
     pub length: TauntLength,
+    /// See [`Taunt::view`].
+    pub view: Option<f32>,
 }
 
 impl TauntSpec {
@@ -191,6 +222,7 @@ impl TauntSpec {
             weapon: TauntWeapon::Hidden,
             icon: None,
             length: TauntLength::Clip,
+            view: None,
         }
     }
 
@@ -204,6 +236,11 @@ impl TauntSpec {
             && !(degrees.is_finite() && degrees >= 0.0)
         {
             return Err(format!("a taunt turns at some degrees a second, not {degrees}"));
+        }
+        if let Some(view) = self.view
+            && !view.is_finite()
+        {
+            return Err(format!("a view is some degrees, not {view}"));
         }
         if let TauntLength::Seconds(length) = self.length
             && !(length.is_finite() && length > 0.0)
@@ -233,6 +270,7 @@ impl TauntSpec {
             weapon: self.weapon,
             icon: self.icon.clone(),
             length,
+            view: self.view,
         })
     }
 }
@@ -252,6 +290,8 @@ struct TauntEntry {
     icon: Option<String>,
     #[serde(default)]
     length: Option<LengthEntry>,
+    #[serde(default)]
+    view: Option<f32>,
 }
 
 #[derive(Deserialize)]
@@ -280,6 +320,7 @@ impl TauntEntry {
             weapon: self.weapon,
             icon: self.icon,
             length,
+            view: self.view,
         };
         spec.check()?;
         Ok(spec)
@@ -420,6 +461,7 @@ pub fn write_taunts(existing: Option<&str>, specs: &[(String, TauntSpec)]) -> St
                     TauntLength::Seconds(seconds) => Some(number(seconds)),
                 },
             ),
+            ("view", spec.view.map(number)),
         ];
         for (field, wanted) in fields {
             match wanted {
@@ -474,6 +516,95 @@ mod tests {
              [conga]\nclip = \"y\"\nclaims = []\nmovement = \"free\"\nturning = \"free\"\nweapon = \"shown\"\n",
         );
         assert_eq!(taunts.first().unwrap().key, "wave", "the taunts were sorted by name");
+    }
+
+    const PISTOL: WeaponId = WeaponId::of("pistol");
+    const ROCKETS: WeaponId = WeaponId::of("rocket_launcher");
+
+    fn pistol_twirls() -> WeaponTaunts {
+        WeaponTaunts([(PISTOL, "twirl".to_string())].into())
+    }
+
+    fn offered_keys(taunts: &Taunts, kind: &str, weapons: &WeaponTaunts, held: Option<WeaponId>) -> Vec<String> {
+        taunts.offered(kind, weapons, held).map(|taunt| taunt.key.clone()).collect()
+    }
+
+    #[test]
+    fn the_held_weapons_taunt_is_offered_first_and_once() {
+        let taunts = parse(
+            "[wave]\nclip = \"x\"\nclaims = []\nmovement = \"free\"\nturning = \"free\"\nweapon = \"hidden\"\n\
+             [conga]\nclip = \"y\"\nclaims = []\nmovement = \"free\"\nturning = \"free\"\nweapon = \"hidden\"\n\
+             [twirl]\nclip = \"z\"\nclaims = []\nmovement = \"free\"\nturning = \"free\"\nweapon = \"shown\"\n",
+        );
+        let human = crate::common::skeleton::rig::HUMANOID;
+        let weapons = pistol_twirls();
+        assert_eq!(offered_keys(&taunts, human, &WeaponTaunts::default(), Some(PISTOL)), ["wave", "conga", "twirl"]);
+        assert_eq!(offered_keys(&taunts, human, &weapons, Some(PISTOL)), ["twirl", "wave", "conga"]);
+        let missing = WeaponTaunts([(PISTOL, "nothing".to_string())].into());
+        assert_eq!(offered_keys(&taunts, human, &missing, Some(PISTOL)), ["wave", "conga", "twirl"], "an unknown key moved the order");
+    }
+
+    /// Another weapon's taunt would move this one as if it were that weapon.
+    #[test]
+    fn a_weapons_taunt_is_hidden_unless_that_weapon_is_held() {
+        let taunts = parse(
+            "[wave]\nclip = \"x\"\nclaims = []\nmovement = \"free\"\nturning = \"free\"\nweapon = \"hidden\"\n\
+             [twirl]\nclip = \"z\"\nclaims = []\nmovement = \"free\"\nturning = \"free\"\nweapon = \"shown\"\n",
+        );
+        let human = crate::common::skeleton::rig::HUMANOID;
+        let weapons = pistol_twirls();
+        assert_eq!(offered_keys(&taunts, human, &weapons, Some(ROCKETS)), ["wave"]);
+        assert_eq!(offered_keys(&taunts, human, &weapons, None), ["wave"]);
+        assert!(weapons.may_play("wave", Some(ROCKETS)));
+        assert!(!weapons.may_play("twirl", Some(ROCKETS)));
+        assert!(weapons.may_play("twirl", Some(PISTOL)));
+    }
+
+    /// A weapon's taunt the rig has no clip for would hold the body in rest.
+    #[test]
+    fn a_held_weapons_taunt_the_rig_cannot_play_is_not_offered() {
+        let taunts = parse(
+            "[wave]\nclip = \"x\"\nrigs = { raptor = \"raptor/x\" }\nclaims = []\nmovement = \"free\"\nturning = \"free\"\nweapon = \"hidden\"\n\
+             [twirl]\nclip = \"z\"\nclaims = []\nmovement = \"free\"\nturning = \"free\"\nweapon = \"shown\"\n",
+        );
+        assert_eq!(offered_keys(&taunts, "raptor", &pistol_twirls(), Some(PISTOL)), ["wave"]);
+    }
+
+    /// A prop naming a taunt nobody defines offers nothing while held, with no error.
+    #[test]
+    fn every_taunt_a_shipped_prop_names_is_shipped() {
+        let taunts = Taunts::shipped();
+        let assets = Assets::default();
+        let mut named = 0;
+        for entry in std::fs::read_dir("assets/default/props").unwrap() {
+            let path = entry.unwrap().path();
+            let name = path.file_stem().unwrap().to_str().unwrap();
+            if let Some(key) = crate::prop::document::taunt_named_by(&assets, name) {
+                assert!(taunts.by_key(&key).is_some(), "props/{name} names `{key}`, which taunts.toml does not define");
+                named += 1;
+            }
+        }
+        assert!(named > 0, "no shipped prop names a taunt, so this checks nothing");
+    }
+
+    #[test]
+    fn the_shipped_taunts_swing_the_camera_where_they_are_best_seen() {
+        let taunts = Taunts::shipped();
+        let view = |key: &str| taunts.by_key(key).unwrap_or_else(|| panic!("no {key}")).view;
+        assert_eq!(view("wave"), None);
+        assert_eq!(view("spar"), Some(90.0));
+        assert_eq!(view("twirl"), Some(180.0));
+    }
+
+    #[test]
+    fn a_view_survives_a_write_and_its_absence_is_written_as_none() {
+        let mut specs = specs("[a]\nclip = \"x\"\nclaims = []\nmovement = \"free\"\nturning = \"free\"\nweapon = \"shown\"\nview = 90\n");
+        assert_eq!(specs[0].1.view, Some(90.0));
+        specs[0].1.view = Some(-45.5);
+        let written = write_taunts(None, &specs);
+        assert_eq!(taunt_specs_in(&written)[0].1.view, Some(-45.5), "{written}");
+        specs[0].1.view = None;
+        assert!(!write_taunts(Some(&written), &specs).contains("view"), "a cleared view stayed in the file");
     }
 
     #[test]

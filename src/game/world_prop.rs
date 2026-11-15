@@ -683,6 +683,7 @@ fn take_pickups(
             Option<&mut Equipped>,
             Option<&mut Trigger>,
             Option<&PlayerId>,
+            Option<&crate::game::condition::Condition>,
         ),
         With<Player>,
     >,
@@ -713,7 +714,7 @@ fn take_pickups(
             (None, None) => continue,
         };
         let Some(reach) = bounding(pickup_triggers(gives, baked, &at)) else { continue };
-        for (body_entity, body, stance, health, armor, ammo, equipped, trigger, id) in &mut bodies {
+        for (body_entity, body, stance, health, armor, ammo, equipped, trigger, id, condition) in &mut bodies {
             let half = stance.half_extents();
             // Overlapping a trigger needs overlapping the box around all of them.
             if ((body.current - reach.center).abs() - half - reach.half_extents).max_element() > 1.0e-4 {
@@ -727,7 +728,8 @@ fn take_pickups(
                     let (Some(mut ammo), Some(mut equipped), Some(mut trigger)) = (ammo, equipped, trigger) else {
                         continue;
                     };
-                    give_weapon(gives, &mut equipped, &mut ammo, &mut trigger, &catalog)
+                    let draws = condition.is_none_or(|condition| condition.may_switch_weapons());
+                    give_weapon(gives, &mut equipped, &mut ammo, &mut trigger, &catalog, draws)
                 }
                 None => {
                     let Some(baked) = cache.get(&prop.model) else { continue };
@@ -847,14 +849,15 @@ fn weapon_trigger(at: &Transform) -> RoundedBox {
     .placed(at)
 }
 
-/// A weapon not carried is added with full ammo and drawn; one carried tops
-/// up its reserve. Returns whether the taker got anything.
+/// A weapon not carried is added with full ammo, and drawn if `draws`; one
+/// carried tops up its reserve. Returns whether the taker got anything.
 fn give_weapon(
     gives: &GivesWeapon,
     equipped: &mut Mut<Equipped>,
     ammo: &mut Mut<Ammo>,
     trigger: &mut Trigger,
     catalog: &WeaponCatalog,
+    draws: bool,
 ) -> bool {
     let Some(weapon) = catalog.get(gives.weapon) else { return false };
 
@@ -871,7 +874,9 @@ fn give_weapon(
 
     equipped.add(weapon.id);
     *ammo.at_mut(weapon.id) = Ammo::full(&weapon.magazine);
-    draw(weapon.id, equipped, ammo, trigger, catalog);
+    if draws {
+        draw(weapon.id, equipped, ammo, trigger, catalog);
+    }
     true
 }
 
@@ -1242,12 +1247,22 @@ mod tests {
         ammo: Ammo,
         catalog: &WeaponCatalog,
     ) -> (bool, Equipped, Ammo, Trigger) {
+        take_weapon_drawing(gives, equipped, ammo, catalog, true)
+    }
+
+    fn take_weapon_drawing(
+        gives: GivesWeapon,
+        equipped: Equipped,
+        ammo: Ammo,
+        catalog: &WeaponCatalog,
+        draws: bool,
+    ) -> (bool, Equipped, Ammo, Trigger) {
         let mut world = World::new();
         let body = world.spawn((equipped, ammo)).id();
         let mut trigger = Trigger::default();
         let mut query = world.query::<(&mut Equipped, &mut Ammo)>();
         let (mut e, mut a) = query.get_mut(&mut world, body).unwrap();
-        let gained = give_weapon(&gives, &mut e, &mut a, &mut trigger, catalog);
+        let gained = give_weapon(&gives, &mut e, &mut a, &mut trigger, catalog, draws);
         (gained, world.get::<Equipped>(body).unwrap().clone(), world.get::<Ammo>(body).unwrap().clone(), trigger)
     }
 
@@ -1261,6 +1276,20 @@ mod tests {
         assert!(gained);
         assert_eq!(equipped.carried(), [WeaponId::of("rifle"), launcher]);
         assert_eq!((ammo.at(launcher).unwrap().clip, ammo.at(launcher).unwrap().reserve), (4, 20));
+    }
+
+    /// A body taunting keeps the weapon its taunt may be using.
+    #[test]
+    fn a_weapon_taken_mid_taunt_is_carried_but_not_drawn() {
+        let (mut catalog, equipped) = rifle();
+        let launcher = with_launcher(&mut catalog);
+        let held = equipped.held();
+
+        let (gained, equipped, _, _) = take_weapon_drawing(gives(launcher), equipped, Ammo::default(), &catalog, false);
+
+        assert!(gained);
+        assert!(equipped.carries(launcher));
+        assert_eq!(equipped.held(), held, "the pickup was drawn mid-taunt");
     }
 
     #[test]
