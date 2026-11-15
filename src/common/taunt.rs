@@ -77,6 +77,19 @@ impl TauntTurning {
     }
 }
 
+/// What a body is asked to do about taunting, carried in its input.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Reflect, Serialize, Deserialize)]
+pub enum TauntRequest {
+    /// End the taunt being played.
+    Stop,
+    /// Start this one, in place of any being played. Ignored for a taunt the body's rig has no
+    /// clip for.
+    Start(TauntId),
+}
+
+/// The most taunts the menu offers: one per digit key.
+pub const MOST_OFFERED: usize = 9;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TauntWeapon {
@@ -99,6 +112,8 @@ pub struct Taunt {
     pub movement: TauntMovement,
     pub turning: TauntTurning,
     pub weapon: TauntWeapon,
+    /// A white SVG at `icons/{icon}.svg` in any pack, drawn in the taunt menu.
+    pub icon: Option<String>,
     /// Seconds until the authority ends it; `None` lasts until `G` again. `length = "clip"` is
     /// resolved where the table is loaded, so a client gets the authority's number.
     pub length: Option<f32>,
@@ -121,6 +136,12 @@ impl Taunts {
     /// The first taunt a body of rig `kind` has a clip for.
     pub fn first_for(&self, kind: &str) -> Option<&Taunt> {
         self.0.iter().find(|taunt| taunt.clip_for(kind).is_some())
+    }
+
+    /// What the menu offers a body of rig `kind`, in file order: each taunt it has a clip for,
+    /// up to one per digit. The first is the default.
+    pub fn offered<'a>(&'a self, kind: &'a str) -> impl Iterator<Item = &'a Taunt> + 'a {
+        self.0.iter().filter(move |taunt| taunt.clip_for(kind).is_some()).take(MOST_OFFERED)
     }
 
     pub fn shipped() -> Taunts {
@@ -155,6 +176,7 @@ pub struct TauntSpec {
     pub movement: TauntMovement,
     pub turning: TauntTurning,
     pub weapon: TauntWeapon,
+    pub icon: Option<String>,
     pub length: TauntLength,
 }
 
@@ -167,6 +189,7 @@ impl TauntSpec {
             movement: TauntMovement::Stopped,
             turning: TauntTurning::Locked,
             weapon: TauntWeapon::Hidden,
+            icon: None,
             length: TauntLength::Clip,
         }
     }
@@ -208,6 +231,7 @@ impl TauntSpec {
             movement: self.movement,
             turning: self.turning,
             weapon: self.weapon,
+            icon: self.icon.clone(),
             length,
         })
     }
@@ -224,6 +248,8 @@ struct TauntEntry {
     movement: TauntMovement,
     turning: TauntTurning,
     weapon: TauntWeapon,
+    #[serde(default)]
+    icon: Option<String>,
     #[serde(default)]
     length: Option<LengthEntry>,
 }
@@ -252,6 +278,7 @@ impl TauntEntry {
             movement: self.movement,
             turning: self.turning,
             weapon: self.weapon,
+            icon: self.icon,
             length,
         };
         spec.check()?;
@@ -384,6 +411,7 @@ pub fn write_taunts(existing: Option<&str>, specs: &[(String, TauntSpec)]) -> St
             ("movement", Some(movement)),
             ("turning", Some(turning)),
             ("weapon", Some(Value::from(weapon))),
+            ("icon", spec.icon.as_deref().map(Value::from)),
             (
                 "length",
                 match spec.length {
@@ -551,6 +579,27 @@ mod tests {
         assert_eq!(spec.length, TauntLength::Clip);
         assert_eq!(spec.resolve(key, |_| None).unwrap().length, None, "a clip in no pack gave a length");
         assert_eq!(spec.resolve(key, |_| Some(2.5)).unwrap().length, Some(2.5));
+    }
+
+    /// A taunt's length is read off its humanoid clip, so another rig's clip of another length is
+    /// cut short or held at its end.
+    #[test]
+    fn every_rigs_clip_of_a_shipped_taunt_lasts_as_long_as_the_humanoids() {
+        let packs = crate::common::assets::default_packs();
+        let length = |clip: &str| crate::common::clip_file::load_named_clip(&Assets::default(), &packs, clip).map(|clip| clip.length);
+        let mut checked = 0;
+        for (key, spec) in load_taunt_specs(&Assets::default(), &packs) {
+            if spec.length != TauntLength::Clip {
+                continue;
+            }
+            let humanoid = length(&spec.clip).unwrap_or_else(|| panic!("`{key}`'s clip is in no pack"));
+            for (rig, clip) in &spec.rigs {
+                let theirs = length(clip).unwrap_or_else(|| panic!("`{key}`'s {rig} clip is in no pack"));
+                assert!((theirs - humanoid).abs() < 1e-4, "`{key}` lasts {humanoid} s but its {rig} clip {theirs} s");
+                checked += 1;
+            }
+        }
+        assert!(checked > 0, "no shipped taunt has another rig's clip, so this checked nothing");
     }
 
     /// Fails if writing back an unedited file changes it, or an edit does not read back.

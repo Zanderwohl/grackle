@@ -755,6 +755,24 @@ impl AnimTabs<'_> {
             });
             ui.end_row();
 
+            ui.label(get!("anim.label.taunt_icon"));
+            ui.horizontal(|ui| {
+                let mut name = edited.icon.clone().unwrap_or_default();
+                if ui.add(egui::TextEdit::singleline(&mut name).desired_width(140.0)).changed() {
+                    let name = name.trim();
+                    edited.icon = (!name.is_empty()).then(|| name.to_string());
+                }
+                let found = |icon: &str| {
+                    crate::common::assets::default_packs().iter().any(|pack| pack.join(format!("icons/{icon}.svg")).is_file())
+                };
+                if let Some(icon) = edited.icon.as_deref()
+                    && !found(icon)
+                {
+                    ui.colored_label(PROBLEM_COLOR, get!("anim.taunt.no_icon", "icon", icon));
+                }
+            });
+            ui.end_row();
+
             ui.label(get!("anim.label.taunt_length"));
             ui.horizontal(|ui| {
                 let mut kind = match edited.length {
