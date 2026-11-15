@@ -14,6 +14,7 @@ use lightyear::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::common::app_mode::AppMode;
+use crate::common::bot_names::{is_blank, BotNames};
 use crate::common::damage::{DamageDealt, DamageSource, Died, Healed, PlayerId};
 use crate::common::fonts::DisplayFont;
 use crate::common::game_rules::GameRules;
@@ -165,6 +166,7 @@ impl Plugin for ScorePlugin {
         app.add_message::<Died>()
             .add_message::<DamageDealt>()
             .add_message::<Healed>()
+            .add_systems(Startup, crate::common::bot_names::load_bot_names)
             .add_systems(
                 FixedUpdate,
                 // Before the reaping, while a hit's target still says who it was.
@@ -234,16 +236,24 @@ fn keep_standings(
     our_settings: Option<Res<PlayerSettings>>,
     links: Query<(&Identity, Option<&ClientSettings>)>,
     start: Option<Res<HueStart>>,
+    bot_names: Option<Res<BotNames>>,
     mut standings: Query<(Entity, &mut Standing)>,
 ) {
     // Made in the same command flush as the first identity.
     let Some(start) = start else { return };
     let unset = PlayerSettings::default();
+    // Somebody who gave no name, every bot included, is dealt one from the packs.
+    let named = |who: &Identity, given: &'_ str| -> String {
+        match is_blank(given) {
+            false => given.to_owned(),
+            true => bot_names.as_deref().and_then(|names| names.for_player(who.id)).unwrap_or_default().to_owned(),
+        }
+    };
     // Nobody choosing a team or watching is in the round.
-    let here: Vec<(Identity, &str)> = links
+    let here: Vec<(Identity, String)> = links
         .iter()
-        .map(|(who, link)| (*who, settings_of(false, link, None, &unset).name.as_str()))
-        .chain(us.map(|us| (us.0, settings_of(true, None, our_settings.as_deref(), &unset).name.as_str())))
+        .map(|(who, link)| (*who, named(who, &settings_of(false, link, None, &unset).name)))
+        .chain(us.map(|us| (us.0, named(&us.0, &settings_of(true, None, our_settings.as_deref(), &unset).name))))
         .filter(|(who, _)| who.seat.is_playing())
         .collect();
 
@@ -256,7 +266,7 @@ fn keep_standings(
                 if standing.team != who.team() || standing.color != color || standing.name != *name {
                     standing.team = who.team();
                     standing.color = color;
-                    standing.name = (*name).to_owned();
+                    name.clone_into(&mut standing.name);
                 }
             }
         }
@@ -683,6 +693,19 @@ mod tests {
         world.run_system_once(keep_standings).unwrap();
         world.flush();
         assert_eq!(ids(&mut world), vec![0]);
+    }
+
+    #[test]
+    fn somebody_unnamed_is_dealt_a_name_from_the_packs() {
+        let mut world = World::new();
+        world.insert_resource(HueStart(0.0));
+        world.insert_resource(BotNames::from_files(["Salad"], &mut rand::rng()));
+        world.spawn(Identity { id: PlayerId(4), seat: crate::game::respawn::Seat::Playing(None), color: 0 });
+
+        world.run_system_once(keep_standings).unwrap();
+        world.flush();
+        let names: Vec<String> = world.query::<&Standing>().iter(&world).map(|standing| standing.display_name()).collect();
+        assert_eq!(names, vec!["Salad".to_owned()]);
     }
 
     #[test]
