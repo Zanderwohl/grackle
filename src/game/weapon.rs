@@ -441,6 +441,7 @@ mod tests {
             id: WeaponId::of("test"),
             name_key: "weapon.names.test".into(),
             model: None,
+            icon: None,
             bucket: 1,
             deploy: 0.0,
             primary,

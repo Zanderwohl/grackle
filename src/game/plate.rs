@@ -2,9 +2,9 @@
 //! of lines, painted in a [`Swatch`], each [`PlateText`] line in whichever of black and white
 //! stands out on it ([`Swatch::text`]).
 //!
-//! Spawn [`plate`] with [`plate_text`] children, and set [`Plate::swatch`] to recolor it. After
-//! layout, [`paint_the_plates`] gives the plate its panel (the first child) and repaints it when
-//! the plate's size or swatch changes. Its lines and panel stay hidden until the panel has been
+//! Spawn [`plate`] with [`plate_text`] children and any [`PlateIcon`] images, and set
+//! [`Plate::swatch`] to recolor it. After layout, [`paint_the_plates`] gives the plate its panel
+//! (the first child) and repaints it when the plate's size or swatch changes. Its lines and panel stay hidden until the panel has been
 //! through layout, so a new plate never shows text with no panel behind it. The plate's own
 //! `Visibility` is never touched: it belongs to whoever spawned it.
 
@@ -57,6 +57,11 @@ impl Plate {
 #[require(Visibility = Visibility::Hidden)]
 pub struct PlateText;
 
+/// An image inked as a [`PlateText`] is. Drawn white, so its `ImageNode::color` is its ink.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+#[require(Visibility = Visibility::Hidden)]
+pub struct PlateIcon;
+
 /// The node a plate's panel is drawn on, put first among its children.
 #[derive(Component)]
 struct PlatePanel;
@@ -98,7 +103,8 @@ fn paint_the_plates(
     mut plates: Query<(Entity, &mut Plate, &ComputedNode, Option<&Children>)>,
     panels: Query<(), With<PlatePanel>>,
     mut lines: Query<&mut TextColor, With<PlateText>>,
-    mut hidden: Query<&mut Visibility, Or<(With<PlatePanel>, With<PlateText>)>>,
+    mut icons: Query<&mut ImageNode, With<PlateIcon>>,
+    mut hidden: Query<&mut Visibility, Or<(With<PlatePanel>, With<PlateText>, With<PlateIcon>)>>,
     mut materials: Option<ResMut<Assets<ShapeMaterial>>>,
 ) {
     for (entity, mut plate, computed, children) in &mut plates {
@@ -106,6 +112,11 @@ fn paint_the_plates(
         for &child in children.into_iter().flatten() {
             if let Ok(mut color) = lines.get_mut(child) {
                 color.set_if_neq(ink);
+            }
+            if let Ok(mut icon) = icons.get_mut(child)
+                && icon.color != ink.0
+            {
+                icon.color = ink.0;
             }
         }
 
