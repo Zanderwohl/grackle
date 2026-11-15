@@ -70,6 +70,8 @@ pub struct SettingsWindow {
     languages: Vec<Language>,
     /// Every icon name in every pack, read on opening.
     icons: Vec<String>,
+    /// Apply wrote the keymap this frame, so the resource is marked changed.
+    keys_applied: bool,
 }
 
 impl Default for SettingsWindow {
@@ -84,6 +86,7 @@ impl Default for SettingsWindow {
             sheet: Sheet::default(),
             languages: Vec::new(),
             icons: Vec::new(),
+            keys_applied: false,
         }
     }
 }
@@ -135,7 +138,10 @@ impl SettingsWindow {
         }
         if self.keys_draft != *keymap {
             match self.keys_draft.save() {
-                Ok(()) => *keymap = self.keys_draft.clone(),
+                Ok(()) => {
+                    *keymap = self.keys_draft.clone();
+                    self.keys_applied = true;
+                }
                 Err(problem) => {
                     warn!("{problem}");
                     self.problem = Some(problem);
@@ -417,10 +423,9 @@ fn draw_settings(
         window.dismiss();
     }
     if window.is_open() {
-        // Compared rather than written through, so drawing is not an edit.
-        let before = keymap.clone();
+        // Written through only by Apply, so drawing is not an edit.
         window.show(ctx, &mut settings, keymap.bypass_change_detection(), Held::of(&keys));
-        if *keymap != before {
+        if std::mem::take(&mut window.keys_applied) {
             keymap.set_changed();
         }
     }
@@ -509,7 +514,7 @@ mod tests {
             texts = frame(&ctx, &mut window);
         }
         // Only those scrolled into view are painted, so check the first context's.
-        for &action in Action::ALL.iter().filter(|a| a.context() == keybind::Context::Everywhere) {
+        for &action in Action::ALL.iter().filter(|a| a.context() == keybind::Context::Everywhere && !a.is_debug()) {
             assert!(find(&texts, &action.name()).is_some(), "{action:?} is not listed");
         }
     }

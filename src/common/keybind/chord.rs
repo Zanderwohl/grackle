@@ -34,12 +34,16 @@ pub struct Held {
 }
 
 impl Held {
+    /// From [`modifier_of`], so which keys are modifiers is said once.
     pub fn of(keys: &ButtonInput<KeyCode>) -> Self {
-        Self {
-            command: keys.any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight, KeyCode::SuperLeft, KeyCode::SuperRight]),
-            shift: keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]),
-            alt: keys.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]),
-        }
+        keys.get_pressed().filter_map(|key| modifier_of(*key)).fold(Self::default(), |mut held, modifier| {
+            match modifier {
+                Modifier::Command => held.command = true,
+                Modifier::Shift => held.shift = true,
+                Modifier::Alt => held.alt = true,
+            }
+            held
+        })
     }
 
     pub fn count(self) -> usize {
@@ -325,6 +329,42 @@ mod tests {
     fn a_modifier_key_is_not_its_own_modifier() {
         let sprint = Chord::key(KeyCode::ShiftLeft);
         assert!(sprint.modifiers_match(Held { shift: true, ..default() }, true));
+    }
+
+    /// Fails if a menu hint or the Shortcuts page names a key by its code or
+    /// shows a missing lang key. de-DE falls back to en-US for these, so the
+    /// language another test sets does not change them.
+    #[test]
+    fn labels_read_as_the_keys_do() {
+        assert_eq!(Chord::command(KeyCode::KeyS).with_shift().label(), "Ctrl+Shift+S");
+        assert_eq!(Chord::command(KeyCode::KeyN).with_alt().label(), "Ctrl+Alt+N");
+        assert_eq!(Chord::command(KeyCode::Comma).label(), "Ctrl+,");
+        assert_eq!(Chord::key(KeyCode::Digit1).label(), "1");
+        assert_eq!(Chord::key(KeyCode::F5).label(), "F5");
+        assert_eq!(Chord::key(KeyCode::Numpad0).label(), "Num 0");
+        assert_eq!(Chord::key(KeyCode::Space).label(), "Space");
+        assert_eq!(Chord::key(KeyCode::ShiftLeft).label(), "Left Shift");
+        assert_eq!(Chord::mouse(MouseButton::Left).label(), "Left Mouse");
+        assert_eq!(Chord::held_prefix(Held { command: true, shift: true, alt: false }), "Ctrl+Shift+");
+        for input in KEYS.iter().map(|(key, _)| Input::Key(*key)).chain(BUTTONS.iter().map(|(b, _)| Input::Mouse(*b))) {
+            let label = input_label(input);
+            assert!(!label.starts_with('<'), "{input:?} shows {label}");
+        }
+    }
+
+    #[test]
+    fn held_reads_each_modifier_on_either_side() {
+        for (key, want) in [
+            (KeyCode::SuperRight, Held { command: true, ..default() }),
+            (KeyCode::ControlLeft, Held { command: true, ..default() }),
+            (KeyCode::ShiftRight, Held { shift: true, ..default() }),
+            (KeyCode::AltLeft, Held { alt: true, ..default() }),
+            (KeyCode::KeyA, Held::default()),
+        ] {
+            let mut keys = ButtonInput::<KeyCode>::default();
+            keys.press(key);
+            assert_eq!(Held::of(&keys), want, "{key:?}");
+        }
     }
 
     #[test]

@@ -79,7 +79,7 @@ impl Context {
 }
 
 macro_rules! actions {
-    ($($variant:ident => $key:literal, $context:ident, $exact:literal;)*) => {
+    ($($variant:ident => $key:literal, $context:ident, $exact:literal, $debug:literal;)*) => {
         /// Something a key press or a mouse button asks for.
         #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
         pub enum Action { $($variant),* }
@@ -103,75 +103,82 @@ macro_rules! actions {
             pub fn exact(self) -> bool {
                 match self { $(Action::$variant => $exact),* }
             }
+
+            /// A debug view or cheat, listed apart on the Shortcuts page. It
+            /// still clashes by its [`Context`].
+            pub fn is_debug(self) -> bool {
+                match self { $(Action::$variant => $debug),* }
+            }
         }
     };
 }
 
 actions! {
-    ToggleMode => "toggle_mode", Everywhere, false;
-    Settings => "settings", Everywhere, true;
-    PerfOverlay => "perf_overlay", Everywhere, false;
-    ShowHitboxes => "show_hitboxes", Everywhere, false;
-    ShowBones => "show_bones", Everywhere, false;
+    ToggleMode => "toggle_mode", Everywhere, false, false;
+    Settings => "settings", Everywhere, true, false;
 
-    New => "new", Editing, true;
-    Save => "save", Editing, true;
-    SaveAs => "save_as", Editing, true;
-    Undo => "undo", Editing, true;
-    Redo => "redo", Editing, true;
-    Delete => "delete", Editing, true;
-    Modify => "modify", Editing, false;
-    Alternate => "alternate", Editing, false;
-    Cancel => "cancel", Editing, false;
-    Confirm => "confirm", Editing, false;
+    New => "new", Editing, true, false;
+    Save => "save", Editing, true, false;
+    SaveAs => "save_as", Editing, true, false;
+    Undo => "undo", Editing, true, false;
+    Redo => "redo", Editing, true, false;
+    Delete => "delete", Editing, true, false;
+    Modify => "modify", Editing, false, false;
+    Alternate => "alternate", Editing, false, false;
+    Cancel => "cancel", Editing, false, false;
+    Confirm => "confirm", Editing, false, false;
 
-    FlyForward => "fly_forward", MapEditor, false;
-    FlyBack => "fly_back", MapEditor, false;
-    FlyLeft => "fly_left", MapEditor, false;
-    FlyRight => "fly_right", MapEditor, false;
-    FlyUp => "fly_up", MapEditor, false;
-    FlyDown => "fly_down", MapEditor, false;
+    FlyForward => "fly_forward", MapEditor, false, false;
+    FlyBack => "fly_back", MapEditor, false, false;
+    FlyLeft => "fly_left", MapEditor, false, false;
+    FlyRight => "fly_right", MapEditor, false, false;
+    FlyUp => "fly_up", MapEditor, false, false;
+    FlyDown => "fly_down", MapEditor, false, false;
 
-    FrameProp => "frame_prop", PropEditor, true;
-    ResetView => "reset_view", PropEditor, true;
-    SketchLine => "sketch_line", PropEditor, true;
-    SketchErase => "sketch_erase", PropEditor, true;
+    FrameProp => "frame_prop", PropEditor, true, false;
+    ResetView => "reset_view", PropEditor, true, false;
+    SketchLine => "sketch_line", PropEditor, true, false;
+    SketchErase => "sketch_erase", PropEditor, true, false;
 
-    PlayClip => "play_clip", Animation, true;
-    SetKey => "set_key", Animation, true;
+    PlayClip => "play_clip", Animation, true, false;
+    SetKey => "set_key", Animation, true, false;
 
-    MoveForward => "move_forward", Play, false;
-    MoveBack => "move_back", Play, false;
-    MoveLeft => "move_left", Play, false;
-    MoveRight => "move_right", Play, false;
-    Jump => "jump", Play, false;
-    Crouch => "crouch", Play, false;
-    Sprint => "sprint", Play, false;
-    Fire => "fire", Play, false;
-    AltFire => "alt_fire", Play, false;
-    Reload => "reload", Play, false;
-    Bucket1 => "bucket_1", Play, false;
-    Bucket2 => "bucket_2", Play, false;
-    Bucket3 => "bucket_3", Play, false;
-    Bucket4 => "bucket_4", Play, false;
-    Bucket5 => "bucket_5", Play, false;
-    Bucket6 => "bucket_6", Play, false;
-    Bucket7 => "bucket_7", Play, false;
-    Bucket8 => "bucket_8", Play, false;
-    Bucket9 => "bucket_9", Play, false;
-    ToggleView => "toggle_view", Play, false;
-    Scoreboard => "scoreboard", Play, false;
-    TeamPicker => "team_picker", Play, false;
-    Taunt => "taunt", Play, false;
-    Spray => "spray", Play, false;
-    Pause => "pause", Play, false;
-    Humiliate => "humiliate", Play, false;
-    Suicide => "suicide", Play, false;
-    SeatBot => "seat_bot", Play, false;
-    RetireBot => "retire_bot", Play, false;
-    NavOverlay => "nav_overlay", Play, false;
-    BotRoutes => "bot_routes", Play, false;
-    SafeZone => "safe_zone", Play, false;
+    MoveForward => "move_forward", Play, false, false;
+    MoveBack => "move_back", Play, false, false;
+    MoveLeft => "move_left", Play, false, false;
+    MoveRight => "move_right", Play, false, false;
+    Jump => "jump", Play, false, false;
+    Crouch => "crouch", Play, false, false;
+    Sprint => "sprint", Play, false, false;
+    Fire => "fire", Play, false, false;
+    AltFire => "alt_fire", Play, false, false;
+    Reload => "reload", Play, false, false;
+    Bucket1 => "bucket_1", Play, false, false;
+    Bucket2 => "bucket_2", Play, false, false;
+    Bucket3 => "bucket_3", Play, false, false;
+    Bucket4 => "bucket_4", Play, false, false;
+    Bucket5 => "bucket_5", Play, false, false;
+    Bucket6 => "bucket_6", Play, false, false;
+    Bucket7 => "bucket_7", Play, false, false;
+    Bucket8 => "bucket_8", Play, false, false;
+    Bucket9 => "bucket_9", Play, false, false;
+    ToggleView => "toggle_view", Play, false, false;
+    Scoreboard => "scoreboard", Play, false, false;
+    TeamPicker => "team_picker", Play, false, false;
+    Taunt => "taunt", Play, false, false;
+    Spray => "spray", Play, false, false;
+    Pause => "pause", Play, false, false;
+
+    PerfOverlay => "perf_overlay", Everywhere, false, true;
+    ShowHitboxes => "show_hitboxes", Everywhere, false, true;
+    ShowBones => "show_bones", Everywhere, false, true;
+    Humiliate => "humiliate", Play, false, true;
+    Suicide => "suicide", Play, false, true;
+    SeatBot => "seat_bot", Play, false, true;
+    RetireBot => "retire_bot", Play, false, true;
+    NavOverlay => "nav_overlay", Play, false, true;
+    BotRoutes => "bot_routes", Play, false, true;
+    SafeZone => "safe_zone", Play, false, true;
 }
 
 impl Action {
@@ -210,18 +217,20 @@ impl Action {
     }
 }
 
-/// What each action is doing this frame. Written by [`resolve_actions`] only.
-#[derive(Resource, Clone, Debug)]
+const COUNT: usize = Action::ALL.len();
+
+/// What each action is doing this frame. Written by [`resolve_actions`] only,
+/// and only when it differs, so change detection means something changed.
+#[derive(Resource, Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Actions {
-    pressed: Vec<bool>,
-    just_pressed: Vec<bool>,
-    just_released: Vec<bool>,
+    pressed: [bool; COUNT],
+    just_pressed: [bool; COUNT],
+    just_released: [bool; COUNT],
 }
 
 impl Default for Actions {
     fn default() -> Self {
-        let none = vec![false; Action::ALL.len()];
-        Self { pressed: none.clone(), just_pressed: none.clone(), just_released: none }
+        Self { pressed: [false; COUNT], just_pressed: [false; COUNT], just_released: [false; COUNT] }
     }
 }
 
@@ -330,11 +339,11 @@ pub fn resolve_actions(
     mut actions: ResMut<Actions>,
 ) {
     if quiet.0 {
-        *actions = Actions::default();
+        actions.set_if_neq(Actions::default());
         return;
     }
     let quiet = egui.is_some_and(|egui| egui.wants_any_keyboard_input());
-    *actions = Actions::read(&keymap, keys.as_deref(), buttons.as_deref(), quiet);
+    actions.set_if_neq(Actions::read(&keymap, keys.as_deref(), buttons.as_deref(), quiet));
 }
 
 /// Runs [`resolve_actions`] on `world` now, for tests that run systems one at

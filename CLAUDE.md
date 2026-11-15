@@ -636,7 +636,8 @@ lowest-order one, the same way the viewmodel and HUD cameras already set
 blank, with no error.
 
 Every key named in this file is a default binding; Settings → Shortcuts
-rebinds it.
+rebinds it. Debug views and cheats (`Action::is_debug`) are listed in a
+section of their own there, but clash by their context like any action.
 
 Four more keys while playing: **`.`** brings the team picker back (see "Teams"), **`F`** swaps between first and third person
 (`ViewPreference` in [`src/game/player.rs`](src/game/player.rs), which a
@@ -3408,6 +3409,8 @@ key that has slots — fill those in by hand.
   `Prop` feature's placeholder cube is on it too.
 - Panels are `egui_dock` tabs — add a `TabKinds` variant in
   [`src/editor/panels.rs`](src/editor/panels.rs), not a floating `egui::Window`.
+  A dialog is the exception: a modal question (the connect dialog) or a window
+  every mode opens (Settings), which no one mode's dock can hold.
 - Asset paths are relative to the working directory (`assets/default/...`), so
   binaries must run from the repo root.
 - **Every binary links `lib.rs`; none re-declares the module tree.** `main.rs`

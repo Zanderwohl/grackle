@@ -26,9 +26,13 @@ pub struct Keymap {
 
 impl Default for Keymap {
     fn default() -> Self {
-        Self { bindings: Action::ALL.iter().map(|&action| (action, defaults(action))).collect() }
+        Self::shipped().clone()
     }
 }
+
+static SHIPPED: std::sync::LazyLock<Keymap> = std::sync::LazyLock::new(|| Keymap {
+    bindings: Action::ALL.iter().map(|&action| (action, defaults(action))).collect(),
+});
 
 fn defaults(action: Action) -> Vec<Chord> {
     use KeyCode as K;
@@ -190,6 +194,11 @@ impl Keymap {
             .map(|(action, chords)| (action.to_key().to_owned(), chords.iter().map(|chord| chord.to_key()).collect()))
             .collect();
         KeymapFile { bindings }
+    }
+
+    /// The defaults, built once, to compare against without building them.
+    pub fn shipped() -> &'static Keymap {
+        &SHIPPED
     }
 
     pub fn chords(&self, action: Action) -> &[Chord] {

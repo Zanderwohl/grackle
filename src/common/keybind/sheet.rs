@@ -122,9 +122,9 @@ impl Sheet {
         ui.horizontal(|ui| {
             ui.heading(get!("keybind.sheet.heading"));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let changed = *keymap != Keymap::default();
+                let changed = keymap != Keymap::shipped();
                 if ui.add_enabled(changed, egui::Button::new(get!("keybind.sheet.reset"))).clicked() {
-                    *keymap = Keymap::default();
+                    *keymap = Keymap::shipped().clone();
                     self.stop();
                 }
             });
@@ -142,27 +142,43 @@ impl Sheet {
         }
 
         for context in Context::ALL {
-            ui.add_space(10.0);
-            ui.label(RichText::new(context_name(context)).strong());
-            ui.add_space(4.0);
-            egui::Grid::new(("settings_shortcuts", context))
-                .num_columns(2)
-                .spacing([10.0, 6.0])
-                .striped(true)
-                .show(ui, |ui| {
-                    for &action in Action::ALL.iter().filter(|a| a.context() == context) {
-                        ui.label(action.name());
-                        if action.is_fixed() {
-                            // Plain text, because they cannot be changed.
-                            let labels: Vec<String> = keymap.chords(action).iter().map(|c| c.label()).collect();
-                            ui.label(RichText::new(labels.join(", ")).monospace().weak());
-                        } else {
-                            ui.horizontal_wrapped(|ui| self.chords(ui, keymap, action, held));
-                        }
-                        ui.end_row();
-                    }
-                });
+            let actions: Vec<Action> =
+                Action::ALL.iter().copied().filter(|a| a.context() == context && !a.is_debug()).collect();
+            self.section(ui, keymap, held, &context_name(context), ("settings_shortcuts", context), &actions);
         }
+        let debug: Vec<Action> = Action::ALL.iter().copied().filter(|a| a.is_debug()).collect();
+        self.section(ui, keymap, held, &get!("keybind.sheet.debug"), ("settings_shortcuts", "debug"), &debug);
+    }
+
+    /// A heading and a grid of `actions`, or nothing when there are none.
+    fn section(
+        &mut self,
+        ui: &mut Ui,
+        keymap: &mut Keymap,
+        held: Held,
+        heading: &str,
+        id: impl std::hash::Hash + std::fmt::Debug,
+        actions: &[Action],
+    ) {
+        if actions.is_empty() {
+            return;
+        }
+        ui.add_space(10.0);
+        ui.label(RichText::new(heading).strong());
+        ui.add_space(4.0);
+        egui::Grid::new(id).num_columns(2).spacing([10.0, 6.0]).striped(true).show(ui, |ui| {
+            for &action in actions {
+                ui.label(action.name());
+                if action.is_fixed() {
+                    // Plain text, because they cannot be changed.
+                    let labels: Vec<String> = keymap.chords(action).iter().map(|c| c.label()).collect();
+                    ui.label(RichText::new(labels.join(", ")).monospace().weak());
+                } else {
+                    ui.horizontal_wrapped(|ui| self.chords(ui, keymap, action, held));
+                }
+                ui.end_row();
+            }
+        });
     }
 
     fn chords(&mut self, ui: &mut Ui, keymap: &mut Keymap, action: Action, held: Held) {
