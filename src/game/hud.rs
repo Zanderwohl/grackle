@@ -621,8 +621,31 @@ impl Readout {
     }
 }
 
+/// What a [`Readout`] is built from, as numbers.
+#[derive(Clone, Copy, PartialEq)]
+struct ReadoutFrom {
+    health: u32,
+    armor: u32,
+    weapon: Option<crate::common::weapon::WeaponId>,
+    /// Clip, reserve, reloading.
+    ammo: Option<(u32, u32, bool)>,
+}
+
+impl ReadoutFrom {
+    fn of(health: &Damageable, armor: Option<&Armor>, equipped: &Equipped, ammo: &Ammo) -> Self {
+        let weapon = equipped.held();
+        Self {
+            health: health.health(),
+            armor: armor.map_or(0, Armor::points),
+            weapon,
+            ammo: weapon.and_then(|weapon| ammo.at(weapon)).map(|state| (state.clip, state.reserve, state.reloading > 0.0)),
+        }
+    }
+}
+
 /// Compares before writing: a written `Text` or `Node` counts as changed and
 /// would be re-laid-out every frame.
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn fill_in_the_readouts(
     catalog: Res<WeaponCatalog>,
     body: Option<Single<(&Damageable, Option<&Armor>, &Equipped, &Ammo), Viewed>>,
@@ -630,11 +653,21 @@ fn fill_in_the_readouts(
     mut armor_readout: Query<&mut Node, (With<ArmorReadout>, Without<HudText>)>,
     mut armor_label: Query<&mut Text, (With<ArmorLabel>, Without<HudText>)>,
     mut living: Query<&mut Visibility, With<ForTheLiving>>,
+    fresh: Query<(), Or<(Added<HudText>, Added<ArmorReadout>, Added<ArmorLabel>)>>,
+    mut read_from: Local<Option<(Option<ReadoutFrom>, u64)>>,
 ) {
     let shown = if body.is_some() { Visibility::Inherited } else { Visibility::Hidden };
     for mut visibility in &mut living {
         visibility.set_if_neq(shown);
     }
+
+    // The strings are built only when a number they show, the language or the catalog moves.
+    let from = body.as_deref().map(|(health, armor, equipped, ammo)| ReadoutFrom::of(health, *armor, equipped, ammo));
+    let from = Some((from, crate::common::lang::generation()));
+    if *read_from == from && !catalog.is_changed() && fresh.is_empty() {
+        return;
+    }
+    *read_from = from;
 
     let readout = match body.as_deref() {
         Some((health, armor, equipped, ammo)) => Readout::of(&catalog, health, *armor, equipped, ammo),
