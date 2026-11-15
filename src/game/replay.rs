@@ -128,6 +128,7 @@ impl Plugin for ReplayPlugin {
                 (record, play)
                     .chain()
                     .after(TransformSystems::Propagate)
+                    .after(VisibilitySystems::VisibilityPropagate)
                     .before(VisibilitySystems::CheckVisibility),
             );
     }
@@ -146,7 +147,7 @@ fn record(
             Entity,
             Ref<GlobalTransform>,
             Option<&InheritedVisibility>,
-            &Mesh3d,
+            Ref<Mesh3d>,
             Option<&MeshMaterial3d<StandardMaterial>>,
             Option<&MeshMaterial3d<LitMaterial>>,
             Option<&RenderLayers>,
@@ -201,8 +202,9 @@ fn record(
                     tag: tag.cloned(),
                     no_shadow,
                 });
-                // On the first frame everything already stood there.
-                let born = (!first && placed.is_added()).then_some(now);
+                // On the first frame everything already stood there. A mesh may be put on an entity
+                // a frame after its transform, as a replicated one is dressed.
+                let born = (!first && (placed.is_added() || mesh.is_added())).then_some(now);
                 history.tracks.insert(entity, Track { frames: VecDeque::from([frame]), born, look, ghost: None });
             }
         }

@@ -15,6 +15,7 @@ use crate::game::player::{start_the_death_cam, DeathCam, LocalPlayer, OurLastBod
 use crate::game::ragdoll::{CorpseOf, Ragdoll};
 use crate::game::replay::Replay;
 use crate::game::spectate::{SpectatorView, Viewpoint};
+use crate::game::team_choice::TeamOptions;
 
 /// Seconds out from the eye to third person over our body.
 pub const SWING_SECONDS: f32 = 0.5;
@@ -59,13 +60,15 @@ pub struct KillCam {
     /// Real seconds since it started.
     pub elapsed: f32,
     glide: Option<Glide>,
+    /// Our eye as we died: the framing never stands further from the killer than this.
+    died_at: Vec3,
     /// Our corpse's pelvis as it was drawn live, so the death cam's pivot can follow the replay.
     corpse: VecDeque<(f64, Vec3)>,
 }
 
 impl KillCam {
-    pub fn new(killer: PlayerId, started: f64) -> Self {
-        Self { killer, started, elapsed: 0.0, glide: None, corpse: VecDeque::new() }
+    pub fn new(killer: PlayerId, started: f64, died_at: Vec3) -> Self {
+        Self { killer, started, elapsed: 0.0, glide: None, died_at, corpse: VecDeque::new() }
     }
 
     pub fn phase(&self) -> Phase {
@@ -140,9 +143,15 @@ pub fn framing(feet: Vec3, height: f32, pivot: Vec3, fov: f32, world: &Collision
     };
     let placed = world.travel(center, Vec3::splat(CAMERA_RADIUS), wanted - center);
     let mut camera = Transform::from_translation(placed);
+    let toward = center - placed;
     // Standing inside them, there is nothing to turn toward.
-    if placed.distance_squared(center) > 1e-4 {
-        camera.look_at(center, Vec3::Y);
+    if toward.length_squared() > 1e-4 {
+        // Straight above or below, Y is no up.
+        let up = match toward.normalize().y.abs() > 0.99 {
+            true => Vec3::NEG_Z,
+            false => Vec3::Y,
+        };
+        camera.look_at(center, up);
     }
     camera
 }
@@ -187,13 +196,17 @@ fn run_the_kill_cam(
     death_cam: Option<Res<DeathCam>>,
     kill_cam: Option<ResMut<KillCam>>,
     replay: Option<Res<Replay>>,
+    // Absent in tests that build no team choice.
+    offer: Option<Res<TeamOptions>>,
     mut view: ResMut<SpectatorView>,
     bodies: Query<(&PlayerId, &Transform, &Stance), (With<Player>, Without<Dying>, Without<LocalPlayer>)>,
     corpses: Query<(&Ragdoll, &CorpseOf)>,
     camera: Option<Single<(&Transform, &Projection), With<PlayerCamera>>>,
 ) {
     let now = time.elapsed_secs_f64();
-    if !ours.is_empty() {
+    // Choosing a team again or spectating ends it as a body would: the picker owns the view.
+    let playing = offer.is_none_or(|offer| offer.seat.is_playing());
+    if !ours.is_empty() || !playing {
         if kill_cam.is_some() {
             commands.remove_resource::<KillCam>();
         }
@@ -203,9 +216,10 @@ fn run_the_kill_cam(
         return;
     }
     let Some(mut kill_cam) = kill_cam else {
-        let dead = death_cam.is_some_and(|cam| cam.whose.is_some());
+        let dead = death_cam.as_ref().is_some_and(|cam| cam.whose.is_some());
         if let Some(killer) = killer.filter(|killer| dead && now - killer.at <= KILL_CAM_GRACE as f64) {
-            commands.insert_resource(KillCam::new(killer.killer, now));
+            let died_at = death_cam.as_ref().map_or(Vec3::ZERO, |cam| cam.pivot);
+            commands.insert_resource(KillCam::new(killer.killer, now, died_at));
             commands.insert_resource(Replay { view: now, frozen: false });
             commands.remove_resource::<OurKiller>();
         }
@@ -232,7 +246,7 @@ fn run_the_kill_cam(
             Projection::Perspective(perspective) => perspective.fov,
             _ => std::f32::consts::FRAC_PI_2,
         };
-        let pivot = death_cam.as_ref().map_or(from.translation, |cam| cam.pivot);
+        let pivot = kill_cam.died_at;
         let to = bodies
             .iter()
             .find(|(id, ..)| **id == kill_cam.killer)
@@ -269,8 +283,6 @@ pub struct KillCamPlugin;
 impl Plugin for KillCamPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(crate::game::replay::ReplayPlugin)
-            .init_resource::<SpectatorView>()
-            .add_message::<Died>()
             .add_systems(
                 Update,
                 (learn_our_killer, run_the_kill_cam)
@@ -316,6 +328,8 @@ mod tests {
 
         let near = Vec3::new(0.0, 1.0, 1.0);
         assert_eq!(framing(Vec3::ZERO, 2.0, near, fov, &world).translation, near, "backed away from where we died");
+        let above = framing(Vec3::ZERO, 2.0, Vec3::new(0.0, 4.0, 0.0), fov, &world);
+        assert!(above.rotation.is_finite() && above.forward().dot(Vec3::NEG_Y) > 0.999, "not looking straight down from above");
     }
 
     fn death(victim: u64, killer: DamageSource) -> Died {
@@ -333,7 +347,7 @@ mod tests {
         world.init_resource::<SpectatorView>();
         let learn = world.register_system(learn_our_killer);
         let run = world.register_system(run_the_kill_cam);
-        let mut tick = |world: &mut World, seconds: f32| {
+        let tick = |world: &mut World, seconds: f32| {
             world.resource_mut::<Time>().advance_by(std::time::Duration::from_secs_f32(seconds));
             world.run_system(learn).unwrap();
             world.run_system(run).unwrap();
@@ -368,7 +382,7 @@ mod tests {
     /// Breaks if the phases do not come in order, or the glide does not arrive.
     #[test]
     fn the_glide_arrives_and_holds_before_spectating() {
-        let mut cam = KillCam::new(PlayerId(1), 0.0);
+        let mut cam = KillCam::new(PlayerId(1), 0.0, Vec3::ZERO);
         assert_eq!(cam.phase(), Phase::Swing);
         let to = Transform::from_xyz(5.0, 1.0, 0.0);
         cam.glide = Some(Glide { from: Transform::IDENTITY, to });

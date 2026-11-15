@@ -102,4 +102,4 @@ records drawn `GlobalTransform`s and puts old ones back for the render.
 - [x] The death cam's pivot follows the replayed corpse
 - [x] Respawn cuts the kill cam short at any phase
 - [x] Tests: framing, the rate curve, replay restore leaves live transforms untouched, respawn cut
-- [ ] Watched in a round against bots: the swing, the glide, ghosts of rockets, the hand-off
+- [x] Watched in a round against bots: the swing, the glide, ghosts of rockets, the hand-off
