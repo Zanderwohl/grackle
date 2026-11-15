@@ -60,6 +60,8 @@ pub mod net_bodies;
 pub mod pause_menu;
 pub mod hud;
 pub mod name_tag;
+pub mod kill_feed;
+pub mod plate;
 pub mod pickup_beam;
 pub mod rounds;
 pub mod sunlit;
@@ -96,6 +98,7 @@ impl Plugin for GamePlugin {
             .add_plugins((crate::game::team_choice::TeamChoicePlugin, crate::game::team_picker::TeamPickerPlugin, crate::game::spectate::SpectatePlugin, crate::game::kill_cam::KillCamPlugin))
             .add_plugins(crate::game::damage_direction::DamageDirectionPlugin)
             .add_plugins(crate::game::name_tag::NameTagPlugin)
+            .add_plugins((crate::game::plate::PlatePlugin, crate::game::kill_feed::KillFeedPlugin))
             .add_plugins(crate::game::trigger::TriggerPlugin)
             .init_state::<AppMode>()
             .init_resource::<StartInPlay>()

@@ -12,6 +12,7 @@ use crate::common::damage::{DamageSource, Died, PlayerId};
 use crate::common::weapon::WeaponId;
 use crate::game::collision::CollisionWorld;
 use crate::game::death::Dying;
+use crate::game::respawn::OurIdentity;
 use crate::game::player::{start_the_death_cam, DeathCam, LocalPlayer, OurLastBody, Player, PlayerCamera, CAMERA_RADIUS};
 use crate::game::ragdoll::{CorpseOf, Ragdoll};
 use crate::game::replay::Replay;
@@ -159,9 +160,10 @@ pub fn framing(feet: Vec3, height: f32, pivot: Vec3, fov: f32, world: &Collision
     camera
 }
 
-/// Ours while alive, else the body that died.
-fn our_id(ours: Option<PlayerId>, last: Option<&OurLastBody>, death_cam: Option<&DeathCam>) -> Option<PlayerId> {
-    ours.or(last.and_then(|last| last.whose())).or(death_cam.and_then(|cam| cam.whose))
+/// Our body's, else our identity's (a host's, with or without a body), else the body that died:
+/// a client has no identity of its own and knows itself only by a body.
+pub(crate) fn our_id(ours: Option<PlayerId>, identity: Option<&OurIdentity>, last: Option<&OurLastBody>, death_cam: Option<&DeathCam>) -> Option<PlayerId> {
+    ours.or(identity.map(|identity| identity.0.id)).or(last.and_then(|last| last.whose())).or(death_cam.and_then(|cam| cam.whose))
 }
 
 fn learn_our_killer(
@@ -169,10 +171,11 @@ fn learn_our_killer(
     time: Res<Time>,
     mut deaths: MessageReader<Died>,
     ours: Option<Single<&PlayerId, With<LocalPlayer>>>,
+    identity: Option<Res<OurIdentity>>,
     last: Option<Res<OurLastBody>>,
     death_cam: Option<Res<DeathCam>>,
 ) {
-    let Some(us) = our_id(ours.map(|ours| **ours), last.as_deref(), death_cam.as_deref()) else {
+    let Some(us) = our_id(ours.map(|ours| **ours), identity.as_deref(), last.as_deref(), death_cam.as_deref()) else {
         deaths.clear();
         return;
     };

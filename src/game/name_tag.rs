@@ -27,14 +27,14 @@ use crate::common::hitscan::trace;
 use crate::common::player_color::PlayerColor;
 use crate::common::swatch::Swatch;
 use crate::common::team::Team;
-use crate::common::ui_shape::{Corner, ShapeMaterial};
 use crate::game::bot::{BotOf, ShowBots};
 use crate::common::weapon::{WeaponCatalog, WeaponId};
 use crate::game::bot_think::{BotThought, Candidate, Want};
 use crate::game::kill_cam::KillCam;
 use crate::game::collision::CollisionWorld;
 use crate::game::death::Dying;
-use crate::game::hud::{hud_text, leaning_panel, panel_style, SafeZone, WindowSafeZone, MARGIN_Y, WINDOW_MARGIN, ZONE_DROP, ZONE_STROKE};
+use crate::game::hud::{SafeZone, WindowSafeZone, MARGIN_Y, WINDOW_MARGIN};
+use crate::game::plate::{plate, plate_node, plate_text, Plate};
 use crate::game::player::{LocalPlayer, PhysicsBody, Player, PlayerCamera, Viewed, Watched};
 use crate::game::score::Standing;
 use crate::get;
@@ -47,14 +47,6 @@ const LINGER: f32 = 0.5;
 const GAP: f32 = 6.0;
 const TEXT: f32 = 20.0;
 const GOAL_TEXT: f32 = 14.0;
-/// Logical pixels inside the panel's box. The far sides are wider by the drop
-/// shadow, which centers the name on the panel rather than on panel and shadow.
-const PADDING: UiRect = UiRect {
-    left: Val::Px(ZONE_STROKE + 15.0),
-    right: Val::Px(ZONE_STROKE + ZONE_DROP.x + 15.0),
-    top: Val::Px(ZONE_STROKE + 1.0),
-    bottom: Val::Px(ZONE_STROKE + ZONE_DROP.y + 1.0),
-};
 
 pub struct NameTagPlugin;
 
@@ -78,14 +70,12 @@ struct NameTag {
     body: Entity,
     /// Seconds since the crosshair was last on the body.
     unseen: f32,
-    /// The size and colors the panel was built for.
-    drawn: Option<(Vec2, Swatch)>,
     words: Words,
 }
 
 impl NameTag {
     fn of(body: Entity) -> Self {
-        Self { body, unseen: 0.0, drawn: None, words: Words::default() }
+        Self { body, unseen: 0.0, words: Words::default() }
     }
 
     /// Whether it stays up.
@@ -99,9 +89,6 @@ impl NameTag {
 struct NameTagText;
 
 #[derive(Component)]
-struct NameTagPanel;
-
-#[derive(Component)]
 struct NameTagGoal;
 
 /// The bottom-middle panel naming whoever a spectator watches.
@@ -110,8 +97,6 @@ struct WatchedBanner;
 
 #[derive(Component, Default)]
 struct WatchedPlate {
-    /// The size and colors the panel was built for.
-    drawn: Option<(Vec2, Swatch)>,
     words: Words,
 }
 
@@ -121,8 +106,6 @@ struct KillerBanner;
 
 #[derive(Component, Default)]
 struct KillerPlate {
-    /// The size and colors the panel was built for.
-    drawn: Option<(Vec2, Swatch)>,
     words: Words,
     /// The killer's name, weapon and language the lines were built for.
     built_for: Option<(String, Option<WeaponId>, u64)>,
@@ -213,26 +196,9 @@ impl Words {
 
 fn plate_lines(font: &Handle<Font>) -> impl Bundle {
     children![
-        (
-            NameTagPanel,
-            // Left at its static position, it would start inside the padding.
-            Node {
-                position_type: PositionType::Absolute,
-                left: Val::Px(0.0),
-                top: Val::Px(0.0),
-                width: Val::Percent(100.0),
-                height: Val::Percent(100.0),
-                ..default()
-            },
-            Pickable::IGNORE,
-        ),
-        (NameTagText, hud_text(font, String::new(), TEXT, Color::WHITE)),
-        (NameTagGoal, hud_text(font, String::new(), GOAL_TEXT, Color::WHITE), Node { display: Display::None, ..default() }),
+        (NameTagText, plate_text(font, String::new(), TEXT)),
+        (NameTagGoal, plate_text(font, String::new(), GOAL_TEXT), Node { display: Display::None, ..default() }),
     ]
-}
-
-fn plate_node() -> Node {
-    Node { padding: PADDING, flex_direction: FlexDirection::Column, align_items: AlignItems::Center, ..default() }
 }
 
 /// Goes when the HUD does: it is the safe zone's child.
@@ -250,7 +216,7 @@ fn watched_banner(font: &Handle<Font>) -> impl Bundle {
         Visibility::Hidden,
         Pickable::IGNORE,
         Name::new("Watched banner"),
-        children![(WatchedPlate::default(), plate_node(), Pickable::IGNORE, plate_lines(font))],
+        children![(WatchedPlate::default(), plate(Swatch::neutral()), plate_lines(font))],
     )
 }
 
@@ -270,34 +236,34 @@ fn killer_banner(font: &Handle<Font>) -> impl Bundle {
         Visibility::Hidden,
         Pickable::IGNORE,
         Name::new("Killer banner"),
-        children![(KillerPlate::default(), plate_node(), Pickable::IGNORE, plate_lines(font))],
+        children![(KillerPlate::default(), plate(Swatch::neutral()), plate_lines(font))],
     )
 }
 
-/// What a tag or the banner writes into its lines and paints its panel with.
+/// What a tag or a banner writes into its lines; [`Plate`] paints the panel and inks them.
 #[derive(SystemParam)]
 struct Plates<'w, 's> {
     commands: Commands<'w, 's>,
-    texts: Query<'w, 's, (&'static mut Text, &'static mut TextColor), (With<NameTagText>, Without<NameTagGoal>)>,
-    goals: Query<'w, 's, (&'static mut Text, &'static mut TextColor, &'static mut Node), (With<NameTagGoal>, Without<NameTagText>, Without<NameTag>)>,
-    panels: Query<'w, 's, Entity, With<NameTagPanel>>,
-    materials: Option<ResMut<'w, Assets<ShapeMaterial>>>,
+    texts: Query<'w, 's, &'static mut Text, (With<NameTagText>, Without<NameTagGoal>)>,
+    goals: Query<'w, 's, (&'static mut Text, &'static mut Node), (With<NameTagGoal>, Without<NameTagText>, Without<NameTag>, Without<Plate>)>,
 }
 
 impl Plates<'_, '_> {
-    /// Writes the lines and repaints the panel for a new size or color. False while layout has
-    /// yet to give what was just written a width, which is when the plate should stay hidden.
-    fn fill(&mut self, children: &Children, name: &str, goal: Option<&str>, swatch: Swatch, size: Vec2, drawn: &mut Option<(Vec2, Swatch)>) -> bool {
+    /// Writes the lines and the color. False while layout has yet to give what was just written a
+    /// width, which is when the plate should stay hidden.
+    fn fill(&mut self, plate: &mut Mut<Plate>, children: &Children, name: &str, goal: Option<&str>, swatch: Swatch, size: Vec2) -> bool {
+        if plate.swatch != swatch {
+            plate.swatch = swatch;
+        }
         let mut rewritten = false;
         for &child in children {
-            if let Ok((mut text, mut ink)) = self.texts.get_mut(child) {
-                if text.0 != name {
-                    text.0 = name.to_owned();
-                    rewritten = true;
-                }
-                ink.set_if_neq(TextColor(swatch.text()));
+            if let Ok(mut text) = self.texts.get_mut(child)
+                && text.0 != name
+            {
+                text.0 = name.to_owned();
+                rewritten = true;
             }
-            if let Ok((mut text, mut ink, mut node)) = self.goals.get_mut(child) {
+            if let Ok((mut text, mut node)) = self.goals.get_mut(child) {
                 let display = if goal.is_some() { Display::Flex } else { Display::None };
                 let words = goal.unwrap_or_default();
                 if text.0 != words || node.display != display {
@@ -305,24 +271,9 @@ impl Plates<'_, '_> {
                     node.display = display;
                     rewritten = true;
                 }
-                ink.set_if_neq(TextColor(swatch.text()));
             }
         }
-        if rewritten || size == Vec2::ZERO {
-            return false;
-        }
-        // Within half a pixel the panel already drawn still fits; layout's sizes jitter by fractions.
-        let fits = drawn.is_some_and(|(drawn_size, drawn_swatch)| drawn_swatch == swatch && (drawn_size - size).abs().max_element() <= 0.5);
-        if !fits
-            && let Some(materials) = self.materials.as_deref_mut()
-            && let Some(panel) = children.iter().find(|child| self.panels.contains(*child))
-        {
-            let outline = leaning_panel(size, true, Corner::squircle(16.0), Corner::squircle(6.0));
-            let material = materials.add(ShapeMaterial::from_path(&outline, size, panel_style(&swatch)));
-            self.commands.entity(panel).insert(MaterialNode(material));
-            *drawn = Some((size, swatch));
-        }
-        true
+        !rewritten && size != Vec2::ZERO
     }
 }
 
@@ -330,9 +281,9 @@ impl Plates<'_, '_> {
 fn name_tag(body: Entity, font: &Handle<Font>) -> impl Bundle {
     (
         NameTag::of(body),
+        Plate::new(Swatch::neutral()),
         Node { position_type: PositionType::Absolute, ..plate_node() },
         Visibility::Hidden,
-        Pickable::IGNORE,
         Name::new("Name tag"),
         plate_lines(font),
     )
@@ -431,21 +382,21 @@ fn place_the_tags(
     standings: Query<&Standing>,
     show: Res<ShowBots>,
     thoughts: Query<&BotThought>,
-    mut tags: Query<(&mut NameTag, &mut Node, &mut Visibility, &ComputedNode, &Children)>,
+    mut tags: Query<(&mut NameTag, &mut Plate, &mut Node, &mut Visibility, &ComputedNode, &Children)>,
     mut plates: Plates,
 ) {
     let (Some(camera), Some(zone)) = (camera, zone) else { return };
     let (camera, eye) = camera.into_inner();
     let zone = zone.size() * zone.inverse_scale_factor();
 
-    for (mut tag, mut node, mut visibility, computed, children) in &mut tags {
+    for (mut tag, mut plate, mut node, mut visibility, computed, children) in &mut tags {
         let Ok((&id, drawn, boxes, physics, team, color)) = people.get(tag.body) else { continue };
 
         let swatch = Swatch::of_body(team.copied(), color.copied());
         let size = computed.size() * computed.inverse_scale_factor();
         let tag = &mut *tag;
         tag.words.refresh(id, &standings, thoughts.get(tag.body).ok().filter(|_| show.0));
-        if !plates.fill(children, &tag.words.name, tag.words.goal.as_deref(), swatch, size, &mut tag.drawn) {
+        if !plates.fill(&mut plate, children, &tag.words.name, tag.words.goal.as_deref(), swatch, size) {
             visibility.set_if_neq(Visibility::Hidden);
             continue;
         }
@@ -481,7 +432,7 @@ fn name_whoever_is_watched(
     thoughts: Query<&BotThought>,
     standings: Query<&Standing>,
     mut banners: Query<(&mut Visibility, &Children), With<WatchedBanner>>,
-    mut plate: Query<(&mut WatchedPlate, &ComputedNode, &Children)>,
+    mut plate: Query<(&mut WatchedPlate, &mut Plate, &ComputedNode, &Children)>,
     mut plates: Plates,
 ) {
     let Some(zone) = zone else { return };
@@ -493,12 +444,12 @@ fn name_whoever_is_watched(
         visibility.set_if_neq(Visibility::Hidden);
         return;
     };
-    let Some((mut drawn, computed, lines)) = children.first().and_then(|inner| plate.get_mut(*inner).ok()) else { return };
+    let Some((mut drawn, mut shape, computed, lines)) = children.first().and_then(|inner| plate.get_mut(*inner).ok()) else { return };
     let size = computed.size() * computed.inverse_scale_factor();
     let swatch = Swatch::of_body(team.copied(), color.copied());
     let plate = &mut *drawn;
     plate.words.refresh(id, &standings, thoughts.get(body).ok());
-    let ready = plates.fill(lines, &plate.words.name, plate.words.goal.as_deref(), swatch, size, &mut plate.drawn);
+    let ready = plates.fill(&mut shape, lines, &plate.words.name, plate.words.goal.as_deref(), swatch, size);
     visibility.set_if_neq(if ready { Visibility::Inherited } else { Visibility::Hidden });
 }
 
@@ -510,7 +461,7 @@ fn name_our_killer(
     catalog: Option<Res<WeaponCatalog>>,
     standings: Query<&Standing>,
     mut banners: Query<(&mut Visibility, &Children), With<KillerBanner>>,
-    mut plate: Query<(&mut KillerPlate, &ComputedNode, &Children)>,
+    mut plate: Query<(&mut KillerPlate, &mut Plate, &ComputedNode, &Children)>,
     mut plates: Plates,
 ) {
     let Some(zone) = zone else { return };
@@ -523,13 +474,13 @@ fn name_our_killer(
         visibility.set_if_neq(Visibility::Hidden);
         return;
     };
-    let Some((mut drawn, computed, lines)) = children.first().and_then(|inner| plate.get_mut(*inner).ok()) else { return };
+    let Some((mut drawn, mut shape, computed, lines)) = children.first().and_then(|inner| plate.get_mut(*inner).ok()) else { return };
     let size = computed.size() * computed.inverse_scale_factor();
     let standing = standings.iter().find(|standing| standing.id == kill_cam.killer);
-    let swatch = Swatch::of_body(standing.and_then(|standing| standing.team), standing.map(|standing| standing.color));
+    let swatch = standing.map_or_else(Swatch::neutral, Standing::hud_swatch);
     let plate = &mut *drawn;
     plate.refresh(kill_cam.killer, kill_cam.weapon, &standings, catalog.as_deref());
-    let ready = plates.fill(lines, &plate.killed_by, plate.using.as_deref(), swatch, size, &mut plate.drawn);
+    let ready = plates.fill(&mut shape, lines, &plate.killed_by, plate.using.as_deref(), swatch, size);
     visibility.set_if_neq(if ready { Visibility::Inherited } else { Visibility::Hidden });
 }
 
