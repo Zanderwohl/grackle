@@ -206,6 +206,9 @@ pub struct Ragdoll {
     /// The bone every kept bone hangs from: 0 for a whole body, and for a
     /// piece the one bone whose parent it lacks. `root_seed` is this bone's.
     root: usize,
+    /// Where the bones a blast took were, in world space. On the first piece
+    /// only, so each body bursts once.
+    torn_at: Option<Vec3>,
     /// The fastest strike in the last [`Ragdoll::step`], for a piece only,
     /// until [`report_gib_impacts`] takes it.
     #[serde(skip)]
@@ -295,13 +298,21 @@ impl Ragdoll {
             };
         }
 
+        let lost: Vec<Vec3> = (0..bones.len())
+            .filter(|&index| !kept[index])
+            .map(|index| (posed[index].head + posed[index].tail) * 0.5)
+            .collect();
+        let torn_at = lost.iter().sum::<Vec3>() / lost.len() as f32;
+
         let whole = Ragdoll::from_posed(&posed, carried);
         (0..bones.len())
             .filter(|&index| piece[index] == index)
-            .map(|root| Ragdoll {
+            .enumerate()
+            .map(|(nth, root)| Ragdoll {
                 root_seed: posed[root].rotation,
                 kept: piece.iter().map(|&of| of == root).collect(),
                 root,
+                torn_at: (nth == 0).then_some(torn_at),
                 ..whole.clone()
             })
             .collect()
@@ -340,6 +351,7 @@ impl Ragdoll {
             asleep: false,
             kept: vec![true; posed.len()],
             root: 0,
+            torn_at: None,
             struck: None,
             grounded: false,
         }
@@ -497,6 +509,43 @@ impl Ragdoll {
 
     pub fn struck(&self) -> Option<GibImpact> {
         self.struck
+    }
+
+    pub fn torn_at(&self) -> Option<Vec3> {
+        self.torn_at
+    }
+
+    pub fn is_grounded(&self) -> bool {
+        self.grounded
+    }
+
+    /// Where a piece was torn off, in world space, with that point's velocity
+    /// in meters per second: the head of its root if the root had a parent, and
+    /// the tail of every bone that lost a child. `dt` is the tick length, since
+    /// velocity is stored per tick.
+    pub fn severed_ends<'a>(&'a self, skeleton: &'a Skeleton, dt: f32) -> impl Iterator<Item = (Vec3, Vec3)> + 'a {
+        let bones = skeleton.bones();
+        let torn_from_parent = bones
+            .get(self.root)
+            .and_then(|bone| bone.parent)
+            .is_some_and(|parent| !self.keeps(parent))
+            .then_some(self.root * 2);
+        let lost_a_child = bones
+            .iter()
+            .enumerate()
+            .filter(|&(_, bone)| bone.parent.is_some_and(|parent| self.keeps(parent)))
+            .filter(|&(index, _)| !self.keeps(index))
+            .filter_map(|(_, bone)| bone.parent)
+            .map(|parent| parent * 2 + 1);
+        let per_second = if dt > 0.0 { 1.0 / dt } else { 0.0 };
+        torn_from_parent
+            .into_iter()
+            .chain(lost_a_child)
+            .filter(|&point| point < self.points.len())
+            .map(move |point| {
+                let point = &self.points[point];
+                (point.at, (point.at - point.previous) * per_second)
+            })
     }
 
     /// Where the body is and what shape it is in, as something the rest of the
@@ -1991,6 +2040,60 @@ mod tests {
         let (pelvis, _) = whole.bone_points(0);
         whole.shove(pelvis, Push::Along(Vec3::NEG_Y * 8.0), 3.0, DT);
         assert_eq!(strikes(&mut whole, &skeleton, &world, 64), vec![]);
+    }
+
+    /// Fails if a piece is not severed at each joint it was torn at, or a whole
+    /// body is severed anywhere.
+    #[test]
+    fn a_piece_is_severed_where_its_neighbors_were_lost() {
+        let skeleton = rig();
+        let posed = skeleton.posed_bones(&Pose::rest(), &Transform::IDENTITY);
+        let index = |name| skeleton.index_of(name).unwrap();
+        let pieces = Ragdoll::blown_apart(&skeleton, &Pose::rest(), &Transform::IDENTITY, Vec3::ZERO, middle_of(&skeleton, bone::CHEST));
+
+        for piece in &pieces {
+            let ends: Vec<Vec3> = piece.severed_ends(&skeleton, DT).map(|(at, _)| at).collect();
+            let names = kept_names(piece, &skeleton);
+            assert_eq!(ends.len(), 1, "{names:?} is severed at {ends:?}");
+            assert!(ends[0].abs_diff_eq(posed[index(names[0])].head, 1.0e-4), "{names:?} is severed at {}", ends[0]);
+        }
+
+        let whole = Ragdoll::from_body(&skeleton, &Pose::rest(), &Transform::IDENTITY, Vec3::ZERO);
+        assert_eq!(whole.severed_ends(&skeleton, DT).count(), 0);
+
+        // A head lost leaves the chest bleeding from where the neck was.
+        let headless = Ragdoll::blown_apart(&skeleton, &Pose::rest(), &Transform::IDENTITY, Vec3::ZERO, middle_of(&skeleton, bone::HEAD) + Vec3::new(0.0, 0.0, -0.3));
+        let body = headless.iter().find(|piece| piece.keeps(index(bone::CHEST))).expect("no body left");
+        let ends: Vec<Vec3> = body.severed_ends(&skeleton, DT).map(|(at, _)| at).collect();
+        assert_eq!(ends, vec![posed[index(bone::CHEST)].tail]);
+    }
+
+    /// Fails if a body blown apart does not report, on exactly one piece, where
+    /// its lost bones were, or a whole body reports being torn.
+    #[test]
+    fn one_piece_says_where_the_body_was_torn() {
+        let skeleton = rig();
+        let at = middle_of(&skeleton, bone::HEAD) + Vec3::new(0.0, 0.0, -0.3);
+        let pieces = Ragdoll::blown_apart(&skeleton, &Pose::rest(), &Transform::IDENTITY, Vec3::ZERO, at);
+        let torn: Vec<Vec3> = pieces.iter().filter_map(Ragdoll::torn_at).collect();
+        let expected = (middle_of(&skeleton, bone::HEAD) + middle_of(&skeleton, bone::NECK)) * 0.5;
+        assert_eq!(torn.len(), 1, "torn at {torn:?}");
+        assert!(torn[0].abs_diff_eq(expected, 1.0e-4), "torn at {}, not {expected}", torn[0]);
+
+        let whole = Ragdoll::from_body(&skeleton, &Pose::rest(), &Transform::IDENTITY, Vec3::ZERO);
+        assert_eq!(whole.torn_at(), None);
+    }
+
+    /// Fails if a severed end does not move with its piece.
+    #[test]
+    fn a_severed_end_moves_with_its_piece() {
+        let skeleton = rig();
+        let mut leg = a_leg(&skeleton, &Transform::from_xyz(0.0, 2.0, 0.0));
+        let carried = Vec3::new(3.0, 0.0, 0.0);
+        let (end, _) = leg.severed_ends(&skeleton, DT).next().expect("a leg is severed");
+        leg.shove(end, Push::Along(carried), 10.0, DT);
+        let (_, velocity) = leg.severed_ends(&skeleton, DT).next().unwrap();
+        assert!(velocity.abs_diff_eq(carried, 1.0e-3), "moves at {velocity}");
     }
 
     /// Fails if a piece does not come off the wire as it went on.

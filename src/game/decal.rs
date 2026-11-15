@@ -499,6 +499,31 @@ fn gib_splat<'a>(faces: impl IntoIterator<Item = &'a world_surface::Face>, impac
     Some((thrown(at, normal, size, impact.velocity.normalize_or(-normal), seed), seed))
 }
 
+/// Whether a hit landed on a body. A killing hit's body is reaped before
+/// anything reads the hit, and on a client its despawn and the hit may arrive
+/// frames apart, so a body counts for [`REAPED_MEMORY`] after it is gone. Call
+/// [`HitBodies::catch_up`] once per run first.
+#[derive(bevy::ecs::system::SystemParam)]
+pub struct HitBodies<'w, 's> {
+    bodies: Query<'w, 's, (), With<Skeleton>>,
+    reaped: RemovedComponents<'w, 's, Skeleton>,
+    lately_reaped: Local<'s, Vec<(Entity, f32)>>,
+    time: Res<'w, Time>,
+}
+
+impl HitBodies<'_, '_> {
+    pub fn catch_up(&mut self) {
+        let now = self.time.elapsed_secs();
+        self.lately_reaped.retain(|(_, when)| now - *when < REAPED_MEMORY);
+        let reaped: Vec<Entity> = self.reaped.read().collect();
+        self.lately_reaped.extend(reaped.into_iter().map(|body| (body, now)));
+    }
+
+    pub fn is_a_body(&self, target: Entity) -> bool {
+        self.bodies.contains(target) || self.lately_reaped.iter().any(|(body, _)| *body == target)
+    }
+}
+
 /// From what every machine already receives, so nothing new is sent and each machine keeps its own.
 #[allow(clippy::too_many_arguments)]
 fn mark_the_world(
@@ -506,9 +531,7 @@ fn mark_the_world(
     mut effects: MessageReader<Effect>,
     mut dealt: MessageReader<DamageDealt>,
     mut gibs: MessageReader<GibImpact>,
-    bodies: Query<(), With<Skeleton>>,
-    mut reaped: RemovedComponents<Skeleton>,
-    mut lately_reaped: Local<Vec<(Entity, f32)>>,
+    mut hit_bodies: HitBodies,
     bakes: Query<&BakedRoomGeometry>,
     art: Res<DecalArt>,
     mut rings: ResMut<TransientDecals>,
@@ -551,14 +574,10 @@ fn mark_the_world(
         }
     }
 
-    // A killing hit's body is reaped inside the tick that dealt it, before this runs, and on a
-    // client its despawn and the relayed hit may arrive frames apart: kept for a second.
     let now = time.elapsed_secs();
-    lately_reaped.retain(|(_, when)| now - *when < REAPED_MEMORY);
-    lately_reaped.extend(reaped.read().map(|body| (body, now)));
+    hit_bodies.catch_up();
     for hit in dealt.read() {
-        let a_body = bodies.contains(hit.target) || lately_reaped.iter().any(|(body, _)| *body == hit.target);
-        if hit.amount == 0 || !a_body {
+        if hit.amount == 0 || !hit_bodies.is_a_body(hit.target) {
             continue;
         }
         if hit.remaining == 0
