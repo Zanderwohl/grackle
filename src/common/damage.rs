@@ -339,14 +339,17 @@ impl DamageLog {
         self.contributors.last().map(|(who, _)| *who)
     }
 
-    /// The most recent other contributor, if still inside the window at `now`.
-    pub fn assist(&self, now: f32) -> Option<DamageSource> {
+    /// The most recent other player to hurt `victim` inside the window at `now`. Neither the
+    /// victim nor the map is passed over for, so somebody who hurt a body that then fell into a
+    /// pit or blew itself up is credited with finishing it off.
+    pub fn assist(&self, now: f32, victim: Option<PlayerId>) -> Option<DamageSource> {
         self.contributors
             .iter()
             .rev()
-            .nth(1)
+            .skip(1)
             .filter(|(_, when)| now - *when <= ASSIST_WINDOW)
             .map(|(who, _)| *who)
+            .find(|who| matches!(who, DamageSource::Player(id) if Some(*id) != victim))
     }
 
     pub fn clear(&mut self) {
@@ -451,7 +454,7 @@ mod tests {
         log.record(B, 1.0);
 
         assert_eq!(log.killer(), Some(B));
-        assert_eq!(log.assist(1.0), Some(A));
+        assert_eq!(log.assist(1.0, None), Some(A));
     }
 
     #[test]
@@ -461,7 +464,7 @@ mod tests {
         log.record(B, ASSIST_WINDOW + 1.0);
 
         assert_eq!(log.killer(), Some(B));
-        assert_eq!(log.assist(ASSIST_WINDOW + 1.0), None);
+        assert_eq!(log.assist(ASSIST_WINDOW + 1.0, None), None);
     }
 
     #[test]
@@ -471,7 +474,7 @@ mod tests {
         log.record(A, 1.0);
 
         assert_eq!(log.killer(), Some(A));
-        assert_eq!(log.assist(1.0), None);
+        assert_eq!(log.assist(1.0, None), None);
     }
 
     #[test]
@@ -482,7 +485,7 @@ mod tests {
         log.record(A, 2.0);
 
         assert_eq!(log.killer(), Some(A));
-        assert_eq!(log.assist(2.0), Some(B));
+        assert_eq!(log.assist(2.0, None), Some(B));
     }
 
     #[test]
@@ -493,13 +496,28 @@ mod tests {
         log.record(B, 2.0);
 
         assert_eq!(log.killer(), Some(B));
-        assert_eq!(log.assist(2.0), Some(A));
+        assert_eq!(log.assist(2.0, None), Some(A));
+    }
+
+    /// Breaks if a body hurt by somebody and then finished by itself or the map credits nobody.
+    #[test]
+    fn whoever_hurt_a_body_before_it_killed_itself_finished_it_off() {
+        let victim = PlayerId(3);
+        let mut log = DamageLog::default();
+        log.record(A, 0.0);
+        log.record(C, 1.0);
+        log.record(DamageSource::World, 2.0);
+        assert_eq!(log.killer(), Some(DamageSource::World));
+        assert_eq!(log.assist(2.0, Some(victim)), Some(A), "passed over the victim's own hit");
+        log.record(B, 3.0);
+        log.record(C, 4.0);
+        assert_eq!(log.assist(4.0, Some(victim)), Some(B), "the map was credited");
     }
 
     #[test]
     fn an_untouched_body_has_no_killer() {
         assert_eq!(DamageLog::default().killer(), None);
-        assert_eq!(DamageLog::default().assist(0.0), None);
+        assert_eq!(DamageLog::default().assist(0.0, None), None);
     }
 
     #[test]

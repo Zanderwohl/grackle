@@ -14,6 +14,7 @@ use crate::editor::mirror::MirrorCopy;
 use crate::editor::spawn_point::SpawnPointMarker;
 use crate::editor::spectator_camera::SpectatorCameraSpec;
 use crate::game::death::Dying;
+use crate::game::kill_cam::KillCam;
 use crate::game::pause_menu::MouseHeld;
 use crate::game::player::{start_the_death_cam, DeathCam, InputLatch, LocalPlayer, OurLastBody, Player, ThroughCamera, Watched};
 use crate::game::respawn::Seat;
@@ -162,7 +163,7 @@ impl Plugin for SpectatePlugin {
 /// [`ThroughCamera`], or [`Watched`] on one body for `place_camera` to look
 /// out of. The clicks are only read here; with no body, nothing fires.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
-fn watch(
+pub(crate) fn watch(
     mut commands: Commands,
     offer: Res<TeamOptions>,
     buttons: Res<ButtonInput<MouseButton>>,
@@ -175,6 +176,7 @@ fn watch(
     watched: Query<Entity, With<Watched>>,
     death_cam: Option<Res<DeathCam>>,
     last: Option<Res<OurLastBody>>,
+    kill_cam: Option<Res<KillCam>>,
     mut latch: ResMut<InputLatch>,
 ) {
     let watching = |target: Option<Entity>, commands: &mut Commands| {
@@ -185,14 +187,16 @@ fn watch(
             commands.entity(target).insert(Watched);
         }
     };
+    // Dead and done being shown our killer, we spectate until the next body.
+    let waiting = kill_cam.is_some_and(|kill_cam| kill_cam.spectating());
     // The body given up for this seat is still ours until its despawn lands.
-    if offer.seat != Seat::Spectating || !ours.is_empty() {
+    if !(offer.seat == Seat::Spectating || waiting) || !ours.is_empty() {
         watching(None, &mut commands);
         view.set_if_neq(SpectatorView::default());
         return;
     }
     // Chosen, not died: nobody wants to watch their own corpse.
-    if last.is_some() {
+    if offer.seat == Seat::Spectating && last.is_some() {
         commands.remove_resource::<OurLastBody>();
     }
 
@@ -244,13 +248,15 @@ pub fn look_through(
     ours: Query<(), With<LocalPlayer>>,
     death_cam: Option<Res<DeathCam>>,
     last: Option<Res<OurLastBody>>,
+    kill_cam: Option<Res<KillCam>>,
     cameras: Cameras,
     current: Option<Res<ThroughCamera>>,
 ) {
     let dead = last.is_some() || death_cam.is_some_and(|cam| cam.whose.is_some());
+    let waiting = kill_cam.is_some_and(|kill_cam| kill_cam.spectating());
     let wanted = match (ours.is_empty(), offer.seat) {
         (false, _) => None,
-        (true, Seat::Spectating) => match view.at {
+        (true, seat) if seat == Seat::Spectating || waiting => match view.at {
             Some(Viewpoint::Camera(camera)) => through(&cameras, camera),
             _ => None,
         },

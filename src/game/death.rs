@@ -87,7 +87,7 @@ pub fn announce_the_dead(
             victim_name: name.map(|name| name.to_string()),
             victim_id: id.copied(),
             killer: log.killer().unwrap_or(DamageSource::World),
-            assist: log.assist(now),
+            assist: log.assist(now, id.copied()),
             at: placed.map(|placed| placed.translation()).unwrap_or_default(),
         });
 

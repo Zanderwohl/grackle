@@ -50,6 +50,8 @@ pub mod recoil;
 pub mod reloading;
 pub mod reset;
 pub mod respawn;
+pub mod kill_cam;
+pub mod replay;
 pub mod weapon;
 pub mod weapon_select;
 pub mod weapon_select_hud;
@@ -91,7 +93,7 @@ impl Plugin for GamePlugin {
             .add_plugins(crate::game::rounds::RoundHistoryPlugin)
             .add_plugins(crate::game::telemetry::TelemetryPlugin)
             .add_plugins(crate::game::tab_board::TabBoardPlugin)
-            .add_plugins((crate::game::team_choice::TeamChoicePlugin, crate::game::team_picker::TeamPickerPlugin, crate::game::spectate::SpectatePlugin))
+            .add_plugins((crate::game::team_choice::TeamChoicePlugin, crate::game::team_picker::TeamPickerPlugin, crate::game::spectate::SpectatePlugin, crate::game::kill_cam::KillCamPlugin))
             .add_plugins(crate::game::damage_direction::DamageDirectionPlugin)
             .add_plugins(crate::game::name_tag::NameTagPlugin)
             .add_plugins(crate::game::trigger::TriggerPlugin)

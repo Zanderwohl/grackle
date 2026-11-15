@@ -568,6 +568,18 @@ mod tests {
         assert_eq!((all[1].kills, all[1].assists), (0, 1));
     }
 
+    /// Breaks if finishing somebody off, by their own hand or the map's, stops scoring a point.
+    #[test]
+    fn a_body_finished_off_by_itself_or_the_map_is_an_assist() {
+        let mut suicide = died(2, DamageSource::Player(PlayerId(2)));
+        suicide.assist = Some(DamageSource::Player(PlayerId(1)));
+        let mut pit = died(2, DamageSource::World);
+        pit.assist = Some(DamageSource::Player(PlayerId(1)));
+        let all = after(&[suicide, pit]);
+        assert_eq!((all[1].kills, all[1].assists, all[1].points()), (0, 2, 2 * POINTS_PER_ASSIST));
+        assert_eq!((all[2].frags, all[2].deaths), (-2, 2));
+    }
+
     #[test]
     fn damage_counts_given_to_others_and_taken_from_anybody() {
         let mut world = World::new();
