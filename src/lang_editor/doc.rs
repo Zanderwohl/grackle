@@ -316,6 +316,8 @@ pub fn placeholders(text: &str) -> BTreeSet<String> {
 pub struct Node {
     pub name: String,
     pub path: KeyPath,
+    /// `path` joined, kept since every visible row asks for it every frame.
+    pub dotted: String,
     pub leaf: bool,
     pub children: Vec<Node>,
 }
@@ -346,6 +348,7 @@ impl Node {
                 self.children.push(Node {
                     name: name.clone(),
                     path: path[..=depth].to_vec(),
+                    dotted: dotted(&path[..=depth]),
                     ..Default::default()
                 });
                 self.children.len() - 1
