@@ -127,9 +127,13 @@ fn broadcast_changes<T: PackTable>(
     server: Option<Single<&Endpoint, With<Server>>>,
     mut last: ResMut<LastSent<T>>,
     mut sender: ServerMultiMessageSender,
+    mut hosting: Local<bool>,
 ) -> Result {
+    let was_hosting = std::mem::replace(&mut *hosting, server.is_some());
     let Some(server) = server else { return Ok(()) };
-    if table.as_ref() == &last.0 {
+    // The deep compare only when it could differ: on a change, or once a server starts, which
+    // covers a change made while there was none.
+    if (was_hosting && !table.is_changed()) || table.as_ref() == &last.0 {
         return Ok(());
     }
 

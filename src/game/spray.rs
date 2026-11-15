@@ -231,9 +231,17 @@ fn paint_our_spray(
     settings: Option<Res<PlayerSettings>>,
     font: Res<SprayFont>,
     mut spray: ResMut<OurSpray>,
+    mut seen: Local<Option<(Option<String>, Swatch)>>,
 ) {
     let Some(id) = ours else { return };
     let Some(standing) = standings.iter().find(|standing| standing.id == **id) else { return };
+    // The name as typed, before cleaning, so a still frame clones nothing.
+    let raw = settings.as_deref().map(|settings| settings.name.as_str());
+    let swatch = Swatch::of_body(standing.team, Some(standing.color));
+    if seen.as_ref().is_some_and(|(seen_name, seen_swatch)| seen_name.as_deref() == raw && *seen_swatch == swatch) {
+        return;
+    }
+    *seen = Some((raw.map(str::to_owned), swatch));
     let name = settings.map(|settings| settings.clone().cleaned().name).unwrap_or_default();
     let wanted = (name_on_the_spray(&name), Swatch::of_body(standing.team, Some(standing.color)));
     if spray.painted_from.as_ref() == Some(&wanted) {

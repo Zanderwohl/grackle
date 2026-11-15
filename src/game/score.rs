@@ -170,7 +170,7 @@ impl Plugin for ScorePlugin {
             .add_systems(Update, record_healing.run_if(in_state(AppMode::Play)).run_if(has_authority))
         .add_systems(
             Update,
-            (keep_standings, end_the_round_at_the_frag_limit)
+            (keep_standings.run_if(standings_may_be_out_of_step), end_the_round_at_the_frag_limit)
                 .chain()
                 .run_if(in_state(AppMode::Play))
                 .run_if(has_authority),
@@ -189,6 +189,34 @@ fn clear_standings(mut commands: Commands, standings: Query<Entity, With<Standin
     for standing in &standings {
         commands.entity(standing).despawn();
     }
+}
+
+/// Whether anything [`keep_standings`] reads has changed: an identity, a name, the hue start,
+/// or a standing gone (the round's clear). A resource's removal shows only as its absence, so
+/// whether each was there is remembered.
+#[allow(clippy::too_many_arguments)]
+fn standings_may_be_out_of_step(
+    us: Option<Res<OurIdentity>>,
+    our_settings: Option<Res<PlayerSettings>>,
+    start: Option<Res<HueStart>>,
+    identities: Query<(), Changed<Identity>>,
+    settings: Query<(), Changed<ClientSettings>>,
+    mut gone_identities: RemovedComponents<Identity>,
+    mut gone_settings: RemovedComponents<ClientSettings>,
+    mut gone_standings: RemovedComponents<Standing>,
+    mut present: Local<(bool, bool, bool)>,
+) -> bool {
+    let now = (us.is_some(), our_settings.is_some(), start.is_some());
+    let toggled = *present != now;
+    *present = now;
+    let gone = gone_identities.read().count() + gone_settings.read().count() + gone_standings.read().count() > 0;
+    toggled
+        || gone
+        || us.is_some_and(|us| us.is_changed())
+        || our_settings.is_some_and(|settings| settings.is_changed())
+        || start.is_some_and(|start| start.is_changed())
+        || !identities.is_empty()
+        || !settings.is_empty()
 }
 
 /// One standing per identity, keyed on absence like the bodies are: a player
@@ -241,6 +269,9 @@ fn keep_standings(
 }
 
 fn record_frags(mut died: MessageReader<Died>, mut standings: Query<&mut Standing>) {
+    if died.is_empty() {
+        return;
+    }
     let mut standings: Vec<Mut<Standing>> = standings.iter_mut().collect();
     for died in died.read() {
         Standing::count(&mut standings, died);
@@ -257,11 +288,21 @@ fn record_damage(
             continue;
         }
         let Ok(&victim) = ids.get(hit.target) else { continue };
+        let dealer = match hit.source {
+            DamageSource::Player(dealer) if dealer != victim => Some(dealer),
+            _ => None,
+        };
+        let mut left = 1 + dealer.is_some() as u8;
         for mut standing in &mut standings {
             if standing.id == victim {
                 standing.damage_taken += hit.amount;
-            } else if hit.source == DamageSource::Player(standing.id) {
+                left -= 1;
+            } else if Some(standing.id) == dealer {
                 standing.damage_dealt += hit.amount;
+                left -= 1;
+            }
+            if left == 0 {
+                break;
             }
         }
     }
@@ -344,8 +385,20 @@ fn spawn_the_scoreboard(mut commands: Commands, existing: Query<(), With<Scorebo
     ));
 }
 
-/// Rebuilt only when a standing changes, comes or goes, or when whose row is
-/// lit does: ours, or the body a spectator watches.
+/// What one row of the top-left board shows, compared so a hit, which changes
+/// only the damage totals, rebuilds nothing.
+#[derive(PartialEq)]
+struct BoardRow {
+    id: PlayerId,
+    name: String,
+    team: Option<Team>,
+    hue: u32,
+    frags: u32,
+    ours: bool,
+}
+
+/// Rebuilt only when what a row shows changes, a standing comes or goes, or
+/// whose row is lit does: ours, or the body a spectator watches.
 #[allow(clippy::too_many_arguments)]
 fn fill_in_the_scoreboard(
     mut commands: Commands,
@@ -356,22 +409,41 @@ fn fill_in_the_scoreboard(
     mut removed: RemovedComponents<Standing>,
     us: Query<&PlayerId, (Viewed, With<Player>)>,
     mut boards: Query<(Entity, &mut Node, Option<&Children>), With<Scoreboard>>,
-    mut drawn_for: Local<Option<PlayerId>>,
+    mut drawn: Local<Option<(Entity, Option<PlayerId>, Vec<BoardRow>)>>,
 ) {
+    let gone = removed.read().count() > 0;
     let Ok((board, mut node, rows)) = boards.single_mut() else { return };
 
     let display = if rules.frag_limit.is_some() { Display::Flex } else { Display::None };
-    if node.display != display {
+    let shown_again = node.display != display;
+    if shown_again {
         node.display = display;
+    }
+    if display == Display::None {
+        return;
     }
 
     let ours = us.single().ok().copied();
-    let fresh = rows.is_none_or(|rows| rows.is_empty()) && !standings.is_empty();
-    let stale = removed.read().count() > 0 || !changed.is_empty() || *drawn_for != ours;
-    if !fresh && !stale {
+    let fresh = drawn.as_ref().is_none_or(|(drawn_on, drawn_for, _)| *drawn_on != board || *drawn_for != ours);
+    if !fresh && !shown_again && !gone && changed.is_empty() {
         return;
     }
-    *drawn_for = ours;
+    let ranked = ranked(standings.iter());
+    let wanted: Vec<BoardRow> = ranked
+        .iter()
+        .map(|standing| BoardRow {
+            id: standing.id,
+            name: standing.name.clone(),
+            team: standing.team,
+            hue: standing.color.hue.to_bits(),
+            frags: standing.shown_frags(),
+            ours: Some(standing.id) == ours,
+        })
+        .collect();
+    if !fresh && drawn.as_ref().is_some_and(|(_, _, rows)| *rows == wanted) {
+        return;
+    }
+    *drawn = Some((board, ours, wanted));
 
     if let Some(rows) = rows {
         for row in rows {
@@ -379,7 +451,7 @@ fn fill_in_the_scoreboard(
         }
     }
     commands.entity(board).with_children(|board| {
-        for standing in ranked(standings.iter()) {
+        for standing in ranked {
             board.spawn(row(standing, Some(standing.id) == ours, &font.0));
         }
     });

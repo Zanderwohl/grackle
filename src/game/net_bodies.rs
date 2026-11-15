@@ -147,7 +147,12 @@ pub(crate) fn give_bodies_to_whoever_needs_one(
     rules: Res<GameRules>,
     catalog: Res<WeaponCatalog>,
     timers: Option<Res<RespawnTimers>>,
-    (seats, driven, round): (Query<(Entity, Option<&RouteCosts>, Option<&BotMind>), With<BotSeat>>, Query<&BotOf, With<Player>>, Option<Res<RoundSettings>>),
+    (seats, driven, round, mut taken): (
+        Query<(Entity, Option<&RouteCosts>, Option<&BotMind>), With<BotSeat>>,
+        Query<&BotOf, With<Player>>,
+        Option<Res<RoundSettings>>,
+        Local<bevy::ecs::entity::EntityHashSet>,
+    ),
     standings: Query<&Standing>,
 ) {
     let waiting = |who: Identity| timers.as_deref().is_some_and(|timers| timers.waiting(who.id));
@@ -155,13 +160,15 @@ pub(crate) fn give_bodies_to_whoever_needs_one(
         return;
     }
     let hosting = matches!(role.as_deref(), Some(NetRole::Listen { .. }));
+    let our_identity = us.as_deref().map(|us| us.0);
 
-    let placed = placed_spawns(&spawns);
+    // Worked out only once somebody needs a body, so a frame with nobody waiting allocates nothing.
+    let placed_once = std::cell::OnceCell::new();
+    let placed = || placed_once.get_or_init(|| placed_spawns(&spawns));
 
     // Decides the next player's color. Counted from existing identities, so
     // somebody leaving frees their hue up. A team is theirs to choose.
-    let mut hues: Vec<usize> =
-        identities.iter().chain(us.as_deref().map(|us| &us.0)).map(|who| who.color).collect();
+    let mut hues: Option<Vec<usize>> = None;
     let start = match hue_start {
         Some(start) => *start,
         None => {
@@ -171,12 +178,11 @@ pub(crate) fn give_bodies_to_whoever_needs_one(
         }
     };
     let mut meet = |ids: &mut NextPlayerId| {
+        let hues = hues.get_or_insert_with(|| identities.iter().copied().chain(our_identity).map(|who| who.color).collect());
         let who = Identity { id: ids.allocate(), seat: Seat::Choosing, color: lowest_free(hues.iter().copied()) };
         hues.push(who.color);
         who
     };
-
-    let our_identity = us.as_deref().map(|us| us.0);
 
     if ours.is_empty() {
         // The identity outlives the body, so a respawn is the same player on
@@ -190,7 +196,7 @@ pub(crate) fn give_bodies_to_whoever_needs_one(
             }
         };
         if !waiting(who) && who.seat.is_playing() {
-            let spawn = choose_spawn(&placed, who.team(), &collision);
+            let spawn = choose_spawn(placed(), who.team(), &collision);
             info!("Standing our own body up as {} on {}", who.id, team_name(who.team()));
             let body = spawn_player(&mut commands, spawn, &who, who.color(&start), &rules, &catalog);
             commands.entity(body).insert(LocalPlayer);
@@ -200,8 +206,13 @@ pub(crate) fn give_bodies_to_whoever_needs_one(
         }
     }
 
+    // Reused across frames, so filling it allocates nothing once it has grown.
+    taken.clear();
+    if !links.is_empty() {
+        taken.extend(owners.iter().map(|owned| owned.owner));
+    }
     for (link, peer) in &links {
-        if owners.iter().any(|owned| owned.owner == link) {
+        if taken.contains(&link) {
             continue;
         }
         // On the link entity, which lives exactly as long as the connection.
@@ -216,15 +227,19 @@ pub(crate) fn give_bodies_to_whoever_needs_one(
         if waiting(who) || !who.seat.is_playing() {
             continue;
         }
-        let spawn = choose_spawn(&placed, who.team(), &collision);
+        let spawn = choose_spawn(placed(), who.team(), &collision);
         info!("Standing a client's body up as {} on {}", who.id, team_name(who.team()));
         spawn_body_for(&mut commands, spawn, (who, start), (link, peer.0), &rules, &catalog);
     }
 
     // Everybody seated, the points and the teams in play, worked out only once a bot needs a seat.
     let mut seating: Option<(Vec<Identity>, std::collections::HashMap<PlayerId, i32>, Vec<Team>)> = None;
+    // Seats and links are different entities, so one set holds both.
+    if !seats.is_empty() {
+        taken.extend(driven.iter().map(|of| of.0));
+    }
     for (seat, temperament, mind) in &seats {
-        if driven.iter().any(|of| of.0 == seat) {
+        if taken.contains(&seat) {
             continue;
         }
         // On the seat, like the identity, so a bot keeps its temperament across lives.
@@ -247,7 +262,7 @@ pub(crate) fn give_bodies_to_whoever_needs_one(
             let (seated, points, teams) = seating.get_or_insert_with(|| {
                 let seated = identities.iter().copied().chain(our_identity).collect();
                 let points = standings.iter().map(|standing| (standing.id, standing.points())).collect();
-                (seated, points, teams_in_play(placed.iter().map(|spawn| spawn.side)))
+                (seated, points, teams_in_play(placed().iter().map(|spawn| spawn.side)))
             });
             let others = seated.iter().copied().filter(|other| other.id != who.id);
             if let Some(taken) = seat_for_a_bot(teams, others, points, !rules.teams) {
@@ -263,7 +278,7 @@ pub(crate) fn give_bodies_to_whoever_needs_one(
         if waiting(who) || who.seat == Seat::Choosing {
             continue;
         }
-        let spawn = choose_spawn(&placed, who.team(), &collision);
+        let spawn = choose_spawn(placed(), who.team(), &collision);
         info!("Standing a bot's body up as {} on {}", who.id, team_name(who.team()));
         let body = spawn_player(&mut commands, spawn, &who, who.color(&start), &rules, &catalog);
         commands.entity(body).insert((BotOf(seat), BotIntent::default(), BotRoute::default(), costs, mind, BotSenses::default(), BotThought::default(), BotAim::default(), Name::new("Bot")));

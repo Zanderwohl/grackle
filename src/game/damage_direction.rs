@@ -210,17 +210,26 @@ fn place_indicators(
         if indicator.drawn != Some((width, opacity))
             && let Some(mut drawn) = materials.get_mut(&material.0)
         {
-            *drawn = trapezoid(width, opacity);
+            // A fade changes only the fill, so the outline is kept.
+            match indicator.drawn {
+                Some((drawn_width, _)) if drawn_width == width => drawn.style.fill = COLOR.with_alpha(opacity),
+                _ => *drawn = trapezoid(width, opacity),
+            }
             indicator.drawn = Some((width, opacity));
         }
 
         // Straight ahead from right underfoot.
         let angle = bearing(origin, right, indicator.from).unwrap_or(0.0);
         let center = half + placement(angle, half);
-        node.left = Val::Px(center.x - width * 0.5);
-        node.top = Val::Px(center.y - DEPTH * 0.5);
-        node.width = Val::Px(width);
-        node.height = Val::Px(DEPTH);
+        let (left, top) = (Val::Px(center.x - width * 0.5), Val::Px(center.y - DEPTH * 0.5));
+        let (wide, high) = (Val::Px(width), Val::Px(DEPTH));
+        // Compared first: a written `Node` is a layout pass.
+        if node.left != left || node.top != top || node.width != wide || node.height != high {
+            node.left = left;
+            node.top = top;
+            node.width = wide;
+            node.height = high;
+        }
         transform.set_if_neq(UiTransform::from_rotation(Rot2::radians(angle)));
     }
 }
