@@ -195,8 +195,11 @@ impl PointDragState {
         let Ok(pos) = feature.object().get_point("") else { return; };
 
         for (arrow, mut tfm) in &mut arrows {
-            tfm.translation = pos;
-            tfm.rotation = axis_rotation(arrow.axis);
+            let rotation = axis_rotation(arrow.axis);
+            if tfm.translation != pos || tfm.rotation != rotation {
+                tfm.translation = pos;
+                tfm.rotation = rotation;
+            }
         }
     }
 

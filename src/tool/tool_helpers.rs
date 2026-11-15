@@ -246,6 +246,7 @@ pub fn find_hovered_point_filtered(
 ) -> Option<(FeatureId, String, Vec3)> {
     let mut best_dist = pick_radius;
     let mut best: Option<(FeatureId, String, Vec3)> = None;
+    let allowed: std::collections::HashSet<FeatureId> = allowed.iter().copied().collect();
 
     for (feature_id, feature) in features.active_features() {
         if !allowed.contains(&feature_id) { continue; }
@@ -272,6 +273,7 @@ pub fn draw_picking_gizmos_filtered(
 ) {
     let dim_color = Color::srgb_u8(200, 200, 200);
     let highlight_color = Color::srgb_u8(0, 230, 0);
+    let allowed: std::collections::HashSet<FeatureId> = allowed.iter().copied().collect();
 
     for (feature_id, feature) in features.active_features() {
         if !allowed.contains(&feature_id) { continue; }
