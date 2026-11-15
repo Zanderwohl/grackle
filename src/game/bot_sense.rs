@@ -21,7 +21,7 @@ use crate::game::collision::CollisionWorld;
 use crate::game::damage::DamageSystems;
 use crate::game::death::Dying;
 use crate::game::hitbox::update_hitboxes;
-use crate::game::nav::NavGraph;
+use crate::game::nav::{CellId, NavGraph};
 use crate::game::player::{PhysicsBody, Player};
 use crate::tool::nav_bake::NavBake;
 
@@ -92,7 +92,10 @@ pub struct Known {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Noise {
     pub at: Vec3,
+    /// Last heard, which it is forgotten from.
     pub when: f32,
+    /// First heard since it was last forgotten, which the reaction runs from.
+    pub since: f32,
 }
 
 #[derive(Component, Clone, Debug, Default, PartialEq)]
@@ -111,7 +114,7 @@ impl BotSenses {
     /// Noises heard long enough ago to act on.
     pub fn heard(&self, now: f32, mind: &BotMind) -> impl Iterator<Item = &Noise> {
         let reaction = mind.reaction;
-        self.noises.iter().filter(move |noise| now - noise.when >= reaction)
+        self.noises.iter().filter(move |noise| now - noise.since >= reaction)
     }
 
     fn notice(&mut self, who: PlayerId, body: Entity, at: Vec3, how: Sense, now: f32) {
@@ -151,12 +154,44 @@ pub fn sees(world: &CollisionWorld, eye: Vec3, yaw: f32, pitch: f32, points: &[V
     points.iter().any(|point| in_view(eye, yaw, pitch, *point) && world.segment_clear(eye, *point))
 }
 
-/// The baked sightlines' quick no, before any ray is cast.
-fn could_see(graph: Option<&NavGraph>, eye_feet: Vec3, body_feet: Vec3) -> bool {
+/// The baked sightlines' quick no, before any ray is cast, from the cells under the eye's and the
+/// body's feet.
+fn could_see(graph: Option<&NavGraph>, eye: Option<CellId>, body: Option<CellId>) -> bool {
     let Some(graph) = graph.filter(|graph| graph.fields().has_sight()) else { return true };
-    match (graph.cell_at(eye_feet), graph.cell_at(body_feet)) {
+    match (eye, body) {
         (Some(eye), Some(body)) => graph.fields().sightlines.could_see(eye, body),
         _ => true,
+    }
+}
+
+/// The cell under `feet`, when the sightlines are there to ask about it.
+fn sight_cell(graph: Option<&NavGraph>, feet: Vec3) -> Option<CellId> {
+    graph.filter(|graph| graph.fields().has_sight()).and_then(|graph| graph.cell_at(feet))
+}
+
+/// Meters within which a noise is heard as one already heard, and how many are kept.
+const SAME_NOISE: f32 = 1.0;
+const MOST_NOISES: usize = 16;
+
+impl BotSenses {
+    /// A noise near one already heard is that one heard again, there and now; the reaction still
+    /// runs from when it was first heard. Past [`MOST_NOISES`] the stalest goes, the farther of
+    /// two as stale.
+    fn hear(&mut self, at: Vec3, now: f32, center: Vec3) {
+        if let Some(noise) = self.noises.iter_mut().find(|noise| noise.at.distance_squared(at) <= SAME_NOISE * SAME_NOISE) {
+            (noise.at, noise.when) = (at, now);
+            return;
+        }
+        if self.noises.len() >= MOST_NOISES {
+            let stalest = (0..self.noises.len()).min_by(|a, b| {
+                let (a, b) = (&self.noises[*a], &self.noises[*b]);
+                a.when.total_cmp(&b.when).then(b.at.distance_squared(center).total_cmp(&a.at.distance_squared(center)))
+            });
+            if let Some(stalest) = stalest {
+                self.noises.swap_remove(stalest);
+            }
+        }
+        self.noises.push(Noise { at, when: now, since: now });
     }
 }
 
@@ -185,24 +220,46 @@ pub fn sense(
         })
         .collect();
     let hits: Vec<DamageDealt> = dealt.read().copied().collect();
+    if bots.is_empty() {
+        return;
+    }
+    // Each body's place, looked up once for every bot that might see it.
+    let targets: Vec<Target> = bodies
+        .iter()
+        .map(|(entity, who, their, their_stance, boxes, team)| {
+            let half = their_stance.half_extents().y;
+            Target {
+                entity,
+                who: *who,
+                center: their.current,
+                cell: sight_cell(graph, their.current - Vec3::Y * half),
+                points: [boxes.head.map_or(their.current + Vec3::Y * half * 0.8, |head| head.center), boxes.body.center],
+                team: team.copied(),
+            }
+        })
+        .collect();
 
     for (bot, body, stance, player, team, id, mut senses) in &mut bots {
         senses.forget(now);
         let center = body.current;
         let feet = center - Vec3::Y * stance.half_extents().y;
         let eye = center + Vec3::Y * player.duck.eye_from_center(*stance);
+        let mut own_cell = None;
 
-        for (other, who, their, their_stance, boxes, their_team) in &bodies {
-            if other == bot || !hostile(team.copied(), their_team.copied()) {
+        for target in &targets {
+            if target.entity == bot || !hostile(team.copied(), target.team) {
                 continue;
             }
-            let their_feet = their.current - Vec3::Y * their_stance.half_extents().y;
-            if !could_see(graph, feet, their_feet) {
+            // Both must hold, so the cheap test goes first.
+            if !target.points.iter().any(|point| in_view(eye, player.yaw, player.pitch, *point)) {
                 continue;
             }
-            let head = boxes.head.map_or(their.current + Vec3::Y * their_stance.half_extents().y * 0.8, |head| head.center);
-            if sees(&world, eye, player.yaw, player.pitch, &[head, boxes.body.center]) {
-                senses.notice(*who, other, their.current, Sense::Seen, now);
+            let eye_cell = *own_cell.get_or_insert_with(|| sight_cell(graph, feet));
+            if !could_see(graph, eye_cell, target.cell) {
+                continue;
+            }
+            if sees(&world, eye, player.yaw, player.pitch, &target.points) {
+                senses.notice(target.who, target.entity, target.center, Sense::Seen, now);
             }
         }
 
@@ -211,7 +268,7 @@ pub fn sense(
                 continue;
             }
             if at.distance(center) <= earshot {
-                senses.noises.push(Noise { at, when: now });
+                senses.hear(at, now, center);
             }
         }
 
@@ -220,16 +277,27 @@ pub fn sense(
             if Some(from) == id.copied() {
                 continue;
             }
-            let Some((attacker, ..)) = bodies.iter().find(|(_, who, ..)| **who == from) else { continue };
+            let Some(attacker) = targets.iter().find(|target| target.who == from) else { continue };
             // Seen, it already knows better than a direction.
             if senses.known.iter().any(|known| known.who == from && known.in_sight) {
                 continue;
             }
             let Ok(toward) = Dir3::new(hit.from.unwrap_or(hit.point) - eye) else { continue };
             let reach = world.ray_distance(&Ray3d::new(eye, toward), HURT_GUESS).unwrap_or(HURT_GUESS);
-            senses.notice(from, attacker, eye + *toward * reach, Sense::Hurt, now);
+            senses.notice(from, attacker.entity, eye + *toward * reach, Sense::Hurt, now);
         }
     }
+}
+
+/// A body some bot may notice, as [`sense`] reads it once a tick.
+struct Target {
+    entity: Entity,
+    who: PlayerId,
+    center: Vec3,
+    cell: Option<CellId>,
+    /// Head, then body.
+    points: [Vec3; 2],
+    team: Option<Team>,
 }
 
 /// Meters out from the eye the view is drawn.
@@ -403,6 +471,24 @@ mod tests {
         assert_eq!(senses.noises.len(), 1);
         assert_eq!(senses.noises[0].at, from);
         assert!(senses.known.is_empty(), "a noise told the bot who made it");
+    }
+
+    /// Breaks if a shotgun blast is heard as nine noises, a repeated shot puts off reacting to it,
+    /// or the list grows without bound.
+    #[test]
+    fn noises_from_one_place_are_one_noise_and_the_list_is_capped() {
+        let mut senses = BotSenses::default();
+        let from = Vec3::new(0.0, 1.5, 12.0);
+        for _ in 0..9 {
+            senses.hear(from, 1.0, Vec3::ZERO);
+        }
+        senses.hear(from + Vec3::X * 0.5, 1.2, Vec3::ZERO);
+        assert_eq!(senses.noises, vec![Noise { at: from + Vec3::X * 0.5, when: 1.2, since: 1.0 }]);
+        for i in 0..40 {
+            senses.hear(Vec3::new(i as f32 * 3.0, 0.0, 0.0), 2.0 + i as f32 * 0.01, Vec3::ZERO);
+        }
+        assert_eq!(senses.noises.len(), MOST_NOISES);
+        assert!(senses.noises.iter().any(|noise| noise.when == 2.0 + 39.0 * 0.01), "the newest noise was dropped");
     }
 
     /// Breaks if the drawn view and the tested one disagree: just inside each corner the debug

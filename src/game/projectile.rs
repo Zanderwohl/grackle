@@ -260,7 +260,7 @@ pub fn step_projectiles(
     time: Res<Time>,
     world: Res<CollisionWorld>,
     rules: Res<MovementRules>,
-    mut projectiles: Query<(Entity, &mut Projectile, &mut PhysicsBody, &mut Transform)>,
+    mut projectiles: Query<(Entity, &mut Projectile, &mut PhysicsBody)>,
     bodies: Query<(Entity, &Hitboxes)>,
     mut blasts: MessageWriter<Explosion>,
 ) {
@@ -269,7 +269,7 @@ pub fn step_projectiles(
         return;
     }
 
-    for (entity, mut projectile, mut body, _transform) in &mut projectiles {
+    for (entity, mut projectile, mut body) in &mut projectiles {
         let shooter = projectile.shooter;
         // The muzzle is inside your own hitbox.
         let others = || bodies.iter().filter(move |(target, _)| Some(*target) != shooter).map(|(target, boxes)| (target, *boxes));
@@ -387,8 +387,10 @@ struct ProjectileAssets {
 /// `interpolate_bodies` owns the translation.
 fn spin_projectiles(mut projectiles: Query<(&Projectile, &mut Transform)>) {
     for (projectile, mut transform) in &mut projectiles {
-        transform.rotation = Quat::from_rotation_x(projectile.spin)
-            * Quat::from_rotation_y(projectile.spin * 0.5);
+        let rotation = Quat::from_rotation_x(projectile.spin) * Quat::from_rotation_y(projectile.spin * 0.5);
+        if transform.rotation != rotation {
+            transform.rotation = rotation;
+        }
     }
 }
 

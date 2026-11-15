@@ -45,6 +45,14 @@ static CACHE: LazyLock<RwLock<HashMap<String, String>>> =
 /// the cache is cleared wholesale when it reaches this size.
 const CACHE_LIMIT: usize = 1024;
 
+static GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Moves on every language change or remerge, so a caller holding strings it built can tell
+/// when to build them again.
+pub fn generation() -> u64 {
+    GENERATION.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// So [`remerge`] can reload the same language over a new pack list.
 static CURRENT_LANG: LazyLock<RwLock<String>> =
     LazyLock::new(|| RwLock::new(FALLBACK_LANG.to_string()));
@@ -61,6 +69,7 @@ pub fn change_lang(lang: &str, packs: &[PathBuf]) -> Result<(), String> {
     if let Ok(mut cache) = CACHE.write() {
         cache.clear();
     }
+    GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     drop(lang_lock);
     if let Ok(mut current) = CURRENT_LANG.write() {
         *current = lang.to_string();
@@ -304,6 +313,23 @@ fn template_pair_path(keys: &[&str], pairs: &[(&str, &str)]) -> String {
     format!("{}|{}", full_path(keys), pair_path(pairs))
 }
 
+/// [`template_pair_path`] of `key` split at its dots, built in one allocation.
+fn template_cache_key(key: &str, pairs: &[(&str, &str)]) -> String {
+    let length = key.len() + 1 + pairs.iter().map(|(name, value)| name.len() + value.len() + 3).sum::<usize>();
+    let mut out = String::with_capacity(length);
+    out.push_str(key);
+    out.push('|');
+    for (index, (name, value)) in pairs.iter().enumerate() {
+        if index > 0 {
+            out.push_str("::");
+        }
+        out.push_str(name);
+        out.push(':');
+        out.push_str(value);
+    }
+    out
+}
+
 pub fn get_template_maybe(keys: &[&str], pairs: &[(&str, &str)]) -> Result<String, String> {
     fill_template(keys, pairs)
 }
@@ -314,8 +340,21 @@ pub fn get_template(keys: &[&str], pairs: &[(&str, &str)]) -> String {
 }
 
 pub fn get_template_parsed(key: &str, pairs: &[(&str, &str)]) -> String {
+    let cache_key = template_cache_key(key, pairs);
+    // Lock ordering: see `fill_template`.
+    if let Some(cached) = CACHE.read().ok().and_then(|cache| cache.get(&cache_key).cloned()) {
+        return cached;
+    }
     let keys = key.split('.').collect::<Vec<&str>>();
-    get_template(&keys, pairs)
+    fill_and_store(cache_key, &keys, pairs).unwrap_or_else(|_| format!("<{}; {:?}>", full_path(&keys), pairs))
+}
+
+/// As `get!` with arguments, but never stored: for strings whose arguments change all the time,
+/// such as scores, which would fill the cache and force it to be cleared.
+pub fn fill_uncached(key: &str, pairs: &[(&str, &str)]) -> String {
+    let keys = key.split('.').collect::<Vec<&str>>();
+    let lang = LANG.read().unwrap();
+    fill_in(&lang, &keys, pairs).unwrap_or_else(|_| format!("<{}; {:?}>", full_path(&keys), pairs))
 }
 
 #[macro_export]
@@ -350,10 +389,26 @@ fn fill_template(keys: &[&str], pairs: &[(&str, &str)]) -> Result<String, String
     if let Some(cached) = CACHE.read().ok().and_then(|cache| cache.get(&cache_key).cloned()) {
         return Ok(cached);
     }
+    fill_and_store(cache_key, keys, pairs)
+}
 
+fn fill_and_store(cache_key: String, keys: &[&str], pairs: &[(&str, &str)]) -> Result<String, String> {
     // Held across the fill and the store; see `CACHE`.
     let lang = LANG.read().unwrap();
-    let template = lookup(&lang, keys)
+    let product = fill_in(&lang, keys, pairs)?;
+
+    if let Ok(mut cache) = CACHE.write() {
+        if cache.len() >= CACHE_LIMIT {
+            cache.clear();
+        }
+        cache.insert(cache_key, product.clone());
+    }
+
+    Ok(product)
+}
+
+fn fill_in(lang: &toml::Value, keys: &[&str], pairs: &[(&str, &str)]) -> Result<String, String> {
+    let template = lookup(lang, keys)
         .ok_or(format!("Failed to find value for key {:?}", keys))?;
 
     // A closure rather than a `&str` replacement: the regex crate expands `$name`
@@ -365,13 +420,6 @@ fn fill_template(keys: &[&str], pairs: &[(&str, &str)]) -> Result<String, String
             .find(|(key, _)| *key == &found[1])
             .map_or_else(|| found[0].to_string(), |(_, replacement)| replacement.to_string())
     }).into_owned();
-
-    if let Ok(mut cache) = CACHE.write() {
-        if cache.len() >= CACHE_LIMIT {
-            cache.clear();
-        }
-        cache.insert(cache_key, product.clone());
-    }
 
     Ok(product)
 }
@@ -432,6 +480,25 @@ mod tests {
             get_template(&["editor", "title_special"], &[("game", "{ game }")]),
             "{ game } Grackle Level Editor"
         );
+    }
+
+    /// Fails if `get!`'s cache key and the one built from split keys come apart, which would
+    /// store one string under two keys.
+    #[test]
+    fn both_cache_keys_agree() {
+        for pairs in [&[][..], &[("game", "Grackle")][..], &[("me", "3"), ("other", "7")][..]] {
+            assert_eq!(template_cache_key("room.messages.ghost", pairs), template_pair_path(&["room", "messages", "ghost"], pairs));
+        }
+    }
+
+    #[test]
+    fn an_uncached_fill_fills_as_get_does_and_stores_nothing() {
+        let _guard = switching_language();
+        let pairs = [("me", "3"), ("other", "7")];
+        assert_eq!(fill_uncached("room.messages.ghost", &pairs), get_template_parsed("room.messages.ghost", &pairs));
+        let key = template_cache_key("editor.title_special", &[("game", "uncached")]);
+        fill_uncached("editor.title_special", &[("game", "uncached")]);
+        assert_eq!(CACHE.read().unwrap().get(&key), None);
     }
 
     /// Fails if the cache is never written, or written but never read.

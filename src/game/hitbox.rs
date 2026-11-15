@@ -16,15 +16,16 @@ use crate::common::class::Stance;
 use crate::common::hitbox::{hitboxes, Box3, Hitboxes};
 use crate::common::skeleton::state::ClipLibrary;
 use crate::common::skeleton::{
-    animator_pose, AnimationClock, AnimationPhase, Gait, PoseInputs, Skeleton, SkeletonAnimator,
+    AnimationClock, AnimationPhase, Gait, PoseInputs, Skeleton, SkeletonAnimator,
 };
 use crate::common::skeleton::clip::Clip;
-use crate::common::skeleton::ik::ducked_pose;
-use crate::common::skeleton::play::{apply_stack, ClipStack, Frames, Layer};
+use crate::common::skeleton::ik::{animator_pose_into, ducked_pose_into};
+use crate::common::skeleton::rig::ScratchPose;
+use crate::common::skeleton::play::{apply_stack_where, ClipStack, Frames, Layer};
 use crate::common::skeleton::state::{AnimationState, BodyRequests};
 use crate::game::player::{step_player, LocalPlayer, PhysicsBody, Player, ViewMode};
 use crate::game::skeleton::{
-    advance_animation_clock, advance_gaits, look, skeleton_root, stand_where_claimed, SkeletonRoot,
+    advance_animation_clock, advance_gaits, look, skeleton_root, stand_where_claimed_into, SkeletonRoot,
 };
 use crate::prop::hold::carry_frame;
 
@@ -44,7 +45,10 @@ impl Plugin for HitboxPlugin {
                 .after(advance_animation_clock)
                 .after(advance_gaits)
                 // So a body is boxed where this tick's step left it.
-                .after(step_player))
+                .after(step_player)
+                // A replay steps only the client's own movement, which reads no
+                // boxes, and the clock it would box against is not rolled back.
+                .run_if(not(lightyear::prelude::is_in_rollback)))
             // A gizmo is not an entity, so the prop editor's hiding cannot
             // reach it. `update_hitboxes` keeps running regardless.
             .add_systems(
@@ -106,7 +110,9 @@ pub fn update_hitboxes(
             travel: gait.travel(),
             feet_free: crate::game::skeleton::feet_free(stack, layer_clips.as_deref()),
         };
-        let mut pose = animator_pose(skeleton, animator, &inputs, &root, clips, crouch);
+        let mut pose = ScratchPose::take();
+        animator_pose_into(skeleton, animator, &inputs, &root, clips, crouch, &mut pose);
+        let pose = &mut *pose;
         // The body box is the hull, wherever a duck draws the feet: blasts and shots are measured
         // from where the body is, not from where it is drawn catching up.
         let hull = physics.zip(stance).map(|(physics, stance)| Box3 { center: physics.current, half_extents: stance.half_extents() });
@@ -116,25 +122,26 @@ pub fn update_hitboxes(
                 airborne: requests.is_some_and(|requests| requests.airborne),
                 ..default()
             });
-            stand_where_claimed(skeleton, &mut pose, stack, || {
-                ducked_pose(skeleton, still, &inputs, &root, clips, crouch)
+            stand_where_claimed_into(skeleton, pose, stack, |still_pose| {
+                ducked_pose_into(skeleton, still, &inputs, &root, clips, crouch, still_pose)
             });
         }
         let pitch = player.map_or(0.0, |player| player.pitch);
-        look(skeleton, &mut pose, pitch * crate::game::skeleton::look_weight(stack, layer_clips.as_deref()));
+        look(skeleton, pose, pitch * crate::game::skeleton::look_weight(stack, layer_clips.as_deref()));
         if let (Some(stack), Some(layer_clips)) = (stack, layer_clips.as_deref()) {
             let floor = root.translation.y;
             let ground = move |_: Vec3| floor;
             let aim = Quat::from_rotation_x(pitch);
             let frames = Frames::standing(
                 root,
-                carry_frame(skeleton, &pose, &root, aim).unwrap_or(root),
+                carry_frame(skeleton, pose, &root, aim).unwrap_or(root),
                 &ground,
             );
             // Not the flinch: started by the last hit and run on frame time, it
             // would move the next shot's target by the server's frame rate.
-            let held = ClipStack(stack.0.iter().filter(|playing| playing.layer != Layer::Flinch).cloned().collect());
-            apply_stack(&held, layer_clips, skeleton, &mut pose, &frames, None);
+            apply_stack_where(stack, layer_clips, skeleton, pose, &frames, None, |playing| {
+                playing.layer != Layer::Flinch
+            });
         }
         // A body shown rather than simulated has no stance; infer it from the
         // animation.
@@ -146,10 +153,11 @@ pub fn update_hitboxes(
             }
         });
 
-        *boxes = hitboxes(skeleton, &pose, &root, stance);
+        let mut fresh = hitboxes(skeleton, pose, &root, stance);
         if let Some(hull) = hull {
-            boxes.body = hull;
+            fresh.body = hull;
         }
+        boxes.set_if_neq(fresh);
     }
 }
 

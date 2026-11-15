@@ -711,7 +711,11 @@ pub fn place_camera(
     let aim = Quat::from_rotation_y(yaw) * Quat::from_rotation_x(pitch);
 
     let first = Transform::from_translation(pivot).with_rotation(aim);
-    let third = Transform::from_translation(third_person_camera(pivot, aim, &world)).with_rotation(aim);
+    // In first person the third-person view has zero weight, so its sweep is skipped.
+    let third = match pull.0 > 0.0 {
+        true => Transform::from_translation(third_person_camera(pivot, aim, &world)).with_rotation(aim),
+        false => first,
+    };
     let placed = pull.place(first, third);
     for mut camera in &mut cameras {
         camera.translation = placed.translation;

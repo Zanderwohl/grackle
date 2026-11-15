@@ -68,11 +68,10 @@ pub type Cameras<'w, 's> = Query<
     (Entity, &'static Transform, &'static SpectatorCameraSpec, Option<&'static FeatureTag>, Option<&'static MirrorCopy>, Option<&'static Side>),
 >;
 
-/// The cameras `seat` may look through, ranked.
-pub fn cameras_for(cameras: &Cameras, seat: Seat) -> Vec<(Entity, CameraRank)> {
-    let mut admitted: Vec<(Entity, CameraRank)> = cameras
+fn admitted<'a>(cameras: &'a Cameras, seat: Seat) -> impl Iterator<Item = (Entity, CameraRank)> + 'a {
+    cameras
         .iter()
-        .filter(|(_, _, spec, _, _, side)| spec.viewers.admits(seat, side.map(|side| side.0)))
+        .filter(move |(_, _, spec, _, _, side)| spec.viewers.admits(seat, side.map(|side| side.0)))
         .map(|(camera, _, spec, tag, copy, _)| {
             let (feature, image) = match (tag, copy) {
                 (_, Some(copy)) => (copy.source._id(), copy.image + 1),
@@ -81,9 +80,18 @@ pub fn cameras_for(cameras: &Cameras, seat: Seat) -> Vec<(Entity, CameraRank)> {
             };
             (camera, (spec.order, feature, image))
         })
-        .collect();
+}
+
+/// The cameras `seat` may look through, ranked.
+pub fn cameras_for(cameras: &Cameras, seat: Seat) -> Vec<(Entity, CameraRank)> {
+    let mut admitted: Vec<(Entity, CameraRank)> = admitted(cameras, seat).collect();
     rank(&mut admitted);
     admitted
+}
+
+/// The first of [`cameras_for`], without listing them all.
+pub fn first_camera_for(cameras: &Cameras, seat: Seat) -> Option<Entity> {
+    admitted(cameras, seat).min_by_key(|(camera, rank)| (*rank, camera.index())).map(|(camera, _)| camera)
 }
 
 pub fn through(cameras: &Cameras, camera: Entity) -> Option<ThroughCamera> {
@@ -247,7 +255,7 @@ pub fn look_through(
             _ => None,
         },
         (true, _) if dead => None,
-        (true, seat) => cameras_for(&cameras, seat).first().and_then(|(camera, _)| through(&cameras, *camera)),
+        (true, seat) => first_camera_for(&cameras, seat).and_then(|camera| through(&cameras, camera)),
     };
     match wanted {
         Some(wanted) if current.as_deref() != Some(&wanted) => commands.insert_resource(wanted),

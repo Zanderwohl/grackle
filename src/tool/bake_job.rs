@@ -218,6 +218,11 @@ impl<J: BakeJob> BackgroundBake<J> {
         self.auto || self.asked
     }
 
+    /// Whether a bake has been asked for and not yet started.
+    pub fn asked(&self) -> bool {
+        self.asked
+    }
+
     /// Bake now, without waiting for the map to settle, whatever auto-bake is doing.
     pub fn ask(&mut self) {
         self.asked = true;

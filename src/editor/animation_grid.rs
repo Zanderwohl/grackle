@@ -199,6 +199,12 @@ pub fn body_depth() -> f32 {
     })
 }
 
+/// [`cells`], built once.
+pub fn cell_table() -> &'static [GridCell] {
+    static TABLE: std::sync::LazyLock<Vec<GridCell>> = std::sync::LazyLock::new(cells);
+    &TABLE
+}
+
 /// One body per class, centered on the grid's point.
 pub fn cells() -> Vec<GridCell> {
     let classes: Vec<Class> = Class::iter().collect();

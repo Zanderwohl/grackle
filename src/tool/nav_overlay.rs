@@ -532,7 +532,7 @@ pub struct NavPanel<'w> {
 impl NavPanel<'_> {
     pub fn commands(&self) -> NavCommands {
         let graph = self.nav.graph();
-        let links = (0..graph.cells().len() as u32).map(|id| graph.links(id).len()).sum();
+        let links = self.nav.link_count();
         NavCommands {
             auto: self.nav.auto(),
             overlay: self.overlay.clone(),

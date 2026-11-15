@@ -30,6 +30,7 @@ use crate::game::respawn::Identity;
 use crate::game::score::{ranked, Standing};
 use crate::game::world_prop::{PickupTaken, PickupWhat};
 use crate::tool::nav_bake::NavBake;
+use crate::get;
 
 /// Game seconds between samples of where everybody is.
 const SAMPLE_EVERY: f32 = 1.0;
@@ -132,12 +133,48 @@ pub enum Event {
 }
 
 /// What was last seen of somebody, kept so a body reaped before `Update` still has a record.
+/// Plain data, refreshed every frame; a [`Party`]'s strings are built only when one is written.
 #[derive(Clone, Debug)]
 struct Last {
     entity: Entity,
-    party: Party,
+    /// The standing's name as set, or `None` with no standing.
+    named: Option<String>,
+    health: u32,
+    armor: u32,
+    at: [f32; 3],
+    /// A bot's chosen want and every want's pull.
+    thought: Option<(Option<Want>, Vec<(Want, f32)>)>,
     spawned: f32,
     damage: Vec<Share>,
+}
+
+impl Last {
+    fn new(entity: Entity, spawned: f32) -> Self {
+        Self { entity, named: None, health: 0, armor: 0, at: [0.0; 3], thought: None, spawned, damage: Vec::new() }
+    }
+
+    fn party(&self, id: PlayerId) -> Party {
+        Party {
+            id: id.0,
+            name: name_of(id, self.named.as_deref()),
+            health: self.health,
+            armor: self.armor,
+            at: self.at,
+            wants: self.thought.as_ref().map(|(chosen, pulls)| Wants {
+                chosen: chosen.map(want_name),
+                pulls: pulls.iter().map(|(want, pull)| (want_name(*want), (pull * 1000.0).round() / 1000.0)).collect(),
+            }),
+        }
+    }
+}
+
+/// [`Standing::display_name`], or "Player {id}" for somebody with no standing.
+fn name_of(id: PlayerId, named: Option<&str>) -> String {
+    match named {
+        None => format!("Player {}", id.0),
+        Some("") => get!("scoreboard.player", "id", id.0),
+        Some(name) => name.to_owned(),
+    }
 }
 
 #[derive(Resource, Default)]
@@ -222,12 +259,18 @@ fn weapon_key(catalog: Option<&WeaponCatalog>, weapon: Option<WeaponId>) -> Opti
     Some(catalog.and_then(|catalog| catalog.get(weapon)).map_or_else(|| format!("{weapon:?}"), |spec| spec.key.clone()))
 }
 
+/// The variant's name in lower case.
 fn want_name(want: Want) -> String {
-    format!("{want:?}").to_lowercase()
-}
-
-fn wants_of(thought: &BotThought) -> Wants {
-    Wants { chosen: thought.chosen.map(|chosen| want_name(chosen.want)), pulls: thought.pulls.iter().map(|(want, pull)| (want_name(*want), (pull * 1000.0).round() / 1000.0)).collect() }
+    match want {
+        Want::Health => "health",
+        Want::Armor => "armor",
+        Want::Arms => "arms",
+        Want::Hunt => "hunt",
+        Want::Cover => "cover",
+        Want::Ambush => "ambush",
+        Want::Roam => "roam",
+    }
+    .to_owned()
 }
 
 /// The map's name as a folder: its display name, else its file's, made safe for a path.
@@ -323,32 +366,39 @@ fn watch_bodies(
 ) {
     let t = time.elapsed_secs() - round.started;
     for (entity, id, body, stance, player, health, armor, _, thought, temperament) in &bodies {
-        let name = standings.iter().find(|standing| standing.id == *id).map_or_else(|| format!("Player {}", id.0), Standing::display_name);
-        let party = Party {
-            id: id.0,
-            name: name.clone(),
-            health: health.map_or(0, Damageable::health),
-            armor: armor.map_or(0, Armor::points),
-            at: point(crate::game::bot::feet_of(body, *stance)),
-            wants: thought.map(wants_of),
-        };
+        let named = standings.iter().find(|standing| standing.id == *id).map(|standing| standing.name.as_str());
+        let at = point(crate::game::bot::feet_of(body, *stance));
         let temperament = temperament.map(|(route, mind)| Temperament { route: *route, mind: *mind });
         // Beliefs are rolled again each life, which is no new temperament.
         let rolled = temperament.map(|temperament| Temperament { route: RouteCosts { beliefs: 0, ..temperament.route }, ..temperament });
         if round.announced.get(id) != Some(&rolled) {
             round.announced.insert(*id, rolled);
-            round.write(&Event::Player { t, id: id.0, name, bot: temperament.is_some(), temperament });
+            round.write(&Event::Player { t, id: id.0, name: name_of(*id, named), bot: temperament.is_some(), temperament });
         }
-        if fresh.contains(entity) {
-            round.write(&Event::Spawn { t, id: id.0, at: party.at, yaw: player.yaw });
-            round.people.insert(*id, Last { entity, party, spawned: t, damage: Vec::new() });
-            continue;
+        let spawned = fresh.contains(entity);
+        if spawned {
+            round.write(&Event::Spawn { t, id: id.0, at, yaw: player.yaw });
         }
-        match round.people.get_mut(id) {
-            Some(last) => (last.entity, last.party) = (entity, party),
-            None => {
-                round.people.insert(*id, Last { entity, party, spawned: t, damage: Vec::new() });
+        let last = round.people.entry(*id).or_insert_with(|| Last::new(entity, t));
+        if spawned {
+            last.spawned = t;
+            last.damage.clear();
+        }
+        last.entity = entity;
+        if last.named.as_deref() != named {
+            last.named = named.map(str::to_owned);
+        }
+        last.health = health.map_or(0, Damageable::health);
+        last.armor = armor.map_or(0, Armor::points);
+        last.at = at;
+        match (thought, &mut last.thought) {
+            (None, kept) => *kept = None,
+            (Some(thought), Some((chosen, pulls))) => {
+                *chosen = thought.chosen.map(|chosen| chosen.want);
+                pulls.clear();
+                pulls.extend_from_slice(&thought.pulls);
             }
+            (Some(thought), kept) => *kept = Some((thought.chosen.map(|chosen| chosen.want), thought.pulls.clone())),
         }
     }
 }
@@ -399,11 +449,11 @@ fn note_kills(mut round: ResMut<Round>, time: Res<Time>, mut died: MessageReader
         let Some(victim_id) = death.victim_id else { continue };
         let Some(victim) = round.people.get_mut(&victim_id) else { continue };
         // Feet, as last seen, like everybody else's; `Died::at` is the body's center.
-        let party = victim.party.clone();
+        let party = victim.party(victim_id);
         let life = Some(t - victim.spawned);
         let damage = std::mem::take(&mut victim.damage);
         let party_of = |round: &Round, source: Option<DamageSource>| match source? {
-            DamageSource::Player(id) => round.people.get(&id).map(|last| last.party.clone()),
+            DamageSource::Player(id) => round.people.get(&id).map(|last| last.party(id)),
             DamageSource::World => None,
         };
         let killer = party_of(&round, Some(death.killer));
@@ -468,9 +518,9 @@ fn note_sightings(mut round: ResMut<Round>, time: Res<Time>, bots: Query<(&Playe
     let t = time.elapsed_secs() - round.started;
     for (id, body, senses) in &bots {
         for known in senses.known.iter().filter(|known| known.in_sight && known.how == Sense::Seen) {
-            let key = (*id, known.who);
-            let found = round.sightings.get(&key).is_none_or(|last| t - *last > SIGHT_GAP);
-            round.sightings.insert(key, t);
+            let last = round.sightings.entry((*id, known.who)).or_insert(f32::NEG_INFINITY);
+            let found = t - *last > SIGHT_GAP;
+            *last = t;
             if found {
                 let distance = (body.current.distance(known.at) * 100.0).round() / 100.0;
                 round.write(&Event::Sight { t, by: id.0, of: known.who.0, distance });

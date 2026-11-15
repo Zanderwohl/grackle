@@ -100,8 +100,18 @@ fn show_the_board(
     }
 }
 
-/// Rebuilt only while up, on coming up, on any change to the standings and
-/// when whose row is lit does.
+/// What one row shows, compared so a hit that moves no shown number rebuilds
+/// nothing.
+#[derive(PartialEq)]
+struct ShownRow {
+    id: PlayerId,
+    name: String,
+    team: Option<Team>,
+    hue: u32,
+    numbers: [u32; 5],
+}
+
+/// While up, rebuilt only when what it shows changes or whose row is lit does.
 #[allow(clippy::too_many_arguments)]
 fn fill_in_the_board(
     mut commands: Commands,
@@ -114,20 +124,38 @@ fn fill_in_the_board(
     roots: Query<Entity, With<TabBoardRoot>>,
     materials: Option<ResMut<Assets<ShapeMaterial>>>,
     mut swatches: Local<HashMap<(Option<Team>, u32), Handle<ShapeMaterial>>>,
-    mut drawn_for: Local<Option<PlayerId>>,
+    mut drawn: Local<Option<(Entity, Option<PlayerId>, Vec<ShownRow>)>>,
 ) {
     let gone = removed.read().count() > 0;
     let Ok(root) = roots.single() else { return };
     let ours = us.single().ok().copied();
-    if !board.up || !(board.is_changed() || gone || !changed.is_empty() || *drawn_for != ours) {
+    if !board.up {
         return;
     }
-    *drawn_for = ours;
+    let fresh = drawn.as_ref().is_none_or(|(drawn_on, drawn_for, _)| *drawn_on != root || *drawn_for != ours);
+    if !fresh && !(board.is_changed() || gone || !changed.is_empty()) {
+        return;
+    }
+    let ranked = ranked_by_points(standings.iter());
+    let wanted: Vec<ShownRow> = ranked
+        .iter()
+        .map(|standing| ShownRow {
+            id: standing.id,
+            name: standing.name.clone(),
+            team: standing.team,
+            hue: standing.color.hue.to_bits(),
+            numbers: [standing.shown_points(), standing.kills, standing.assists, standing.deaths, standing.healing],
+        })
+        .collect();
+    if !fresh && drawn.as_ref().is_some_and(|(_, _, rows)| *rows == wanted) {
+        return;
+    }
+    *drawn = Some((root, ours, wanted));
     let mut materials = materials;
     let font = &font.0;
 
     let mut rows = vec![commands.spawn(header(font)).id()];
-    for standing in ranked_by_points(standings.iter()) {
+    for standing in ranked {
         let swatch = materials.as_deref_mut().map(|materials| {
             swatches
                 .entry((standing.team, standing.color.hue.to_bits()))

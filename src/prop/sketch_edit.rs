@@ -569,7 +569,8 @@ const DOOMED: Color = Color::srgb(1.0, 0.35, 0.3);
 #[derive(Default)]
 struct RegionCache {
     from: Option<Sketch>,
-    arrangement: Arrangement,
+    /// In the plane, so a moved plane needs no re-hatching.
+    hatched: Vec<(Vec2, Vec2)>,
 }
 
 /// Regions are hatched so a closed shape is visibly closed. Drawn from the
@@ -616,14 +617,18 @@ fn draw_the_session(
         );
     }
 
+    // `reach` comes from the sketch, so the sketch is the whole key.
     if cache.from.as_ref() != Some(&placed.sketch) {
-        cache.arrangement = arrange(&placed.sketch);
+        let arrangement = arrange(&placed.sketch);
+        cache.hatched = arrangement
+            .regions
+            .iter()
+            .flat_map(|region| hatch(&region.outer, &region.holes, reach / 12.0))
+            .collect();
         cache.from = Some(placed.sketch.clone());
     }
-    for region in &cache.arrangement.regions {
-        for (a, b) in hatch(&region.outer, &region.holes, reach / 12.0) {
-            gizmos.line(placed.world(a), placed.world(b), REGION);
-        }
+    for (a, b) in &cache.hatched {
+        gizmos.line(placed.world(*a), placed.world(*b), REGION);
     }
 
     let color_of = |pick: SketchPick| {

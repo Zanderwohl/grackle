@@ -193,20 +193,35 @@ pub fn apply_clip(clip: &Clip, time: f32, rig: &PropRig, pose: &mut PropPose) {
 
 /// Masked where a layer above claims the weapon, as the weapon is.
 pub fn apply_stack(stack: &ClipStack, clips: &Assets<Clip>, rig: &PropRig, pose: &mut PropPose) {
-    *pose = PropPose::rest(rig);
+    pose.0.clear();
+    pose.0.resize(rig.bones.len(), Transform::IDENTITY);
     if rig.is_empty() {
         return;
     }
+    let mut before: Option<PropPose> = None;
     for (playing, clip, shown, masked) in shown_layers(stack, clips) {
         if masked.overlaps(Regions::WEAPON) {
             continue;
         }
-        let before = pose.clone();
-        apply_clip(clip, playing.time, rig, pose);
-        if shown < 1.0 {
-            pose.lerp(&before, shown);
+        if shown >= 1.0 {
+            apply_clip(clip, playing.time, rig, pose);
+            continue;
         }
+        let before = before.get_or_insert_with(PropPose::default);
+        before.0.clone_from(&pose.0);
+        apply_clip(clip, playing.time, rig, pose);
+        pose.lerp(before, shown);
     }
+}
+
+/// Whether anything [`apply_stack`] would apply keys a prop bone.
+fn moves_prop_bones(stack: &ClipStack, clips: &Assets<Clip>) -> bool {
+    shown_layers(stack, clips).any(|(_, clip, _, masked)| {
+        !masked.overlaps(Regions::WEAPON)
+            && clip.tracks.iter().any(|track| {
+                track.enabled && matches!(track.channel, Channel::PropBone { .. } | Channel::PropBoneOffset { .. })
+            })
+    })
 }
 
 impl PropRig {
@@ -214,6 +229,10 @@ impl PropRig {
     pub fn deltas_for(&self, stack: &ClipStack, clips: &Assets<Clip>) -> Vec<Transform> {
         if self.is_empty() {
             return vec![];
+        }
+        // An empty pose reads as rest.
+        if !moves_prop_bones(stack, clips) {
+            return self.deltas(&PropPose::default());
         }
         let mut pose = PropPose::default();
         apply_stack(stack, clips, self, &mut pose);

@@ -247,13 +247,20 @@ pub struct Gear<'a> {
     pub self_damage: f32,
     /// Carried with a round to fire.
     pub loaded: &'a [WeaponId],
+    /// What is carried and its ammo, read only when a rocket jump is weighed.
+    pub arms: Option<(&'a Equipped, &'a Ammo)>,
 }
 
 impl Gear<'_> {
     /// A rocket jump needs its launcher loaded, and unless `careless`, a body it would not kill.
     fn can_take(&self, link: &Link, careless: bool) -> bool {
         let Some(leap) = link.leap.filter(|leap| leap.rocket.is_some()) else { return true };
-        leap.rocket.is_some_and(|rocket| self.loaded.contains(&rocket)) && (careless || !self.would_die(&leap))
+        leap.rocket.is_some_and(|rocket| self.has_loaded(rocket)) && (careless || !self.would_die(&leap))
+    }
+
+    fn has_loaded(&self, weapon: WeaponId) -> bool {
+        self.loaded.contains(&weapon)
+            || self.arms.is_some_and(|(equipped, ammo)| equipped.carries(weapon) && ammo.at(weapon).is_some_and(|state| state.clip + state.reserve > 0))
     }
 
     fn would_die(&self, leap: &Leap) -> bool {
@@ -407,9 +414,6 @@ pub fn steer_bots(
     let dt = time.delta_secs();
     for ((body, stance, player, intent, costs, mind), (mut route, mut inputs, arms, health, armor)) in &mut bots {
         let feet = feet_of(body, *stance);
-        let loaded: Vec<WeaponId> = arms.map_or_else(Vec::new, |(equipped, ammo, _)| {
-            equipped.carried().iter().copied().filter(|weapon| ammo.at(*weapon).is_some_and(|state| state.clip + state.reserve > 0)).collect()
-        });
         let gear = Gear {
             speed: player.velocity.xz().length(),
             held: arms.and_then(|(equipped, ..)| equipped.held()),
@@ -420,7 +424,8 @@ pub fn steer_bots(
             health: health.map_or(u32::MAX, Damageable::health),
             armor: armor.map_or(0, Armor::points),
             self_damage: rules.as_deref().map_or(1.0, |rules| rules.0.self_damage),
-            loaded: &loaded,
+            loaded: &[],
+            arms: arms.map(|(equipped, ammo, _)| (equipped, ammo)),
         };
         let walking = nav.as_deref().and_then(|nav| {
             plan(&mut route, nav.graph(), nav.generation(), feet, intent.goal, &costs.copied().unwrap_or_default(), &gear);
@@ -832,7 +837,7 @@ mod tests {
                 return;
             }
             let upright = mover.stance == Stance::Standing && mover.player.duck.amount == 0.0;
-            let gear = Gear { speed: mover.player.velocity.xz().length(), held, ready: held.is_some(), upright, health: 150, armor: 0, self_damage: 1.0, loaded: &loaded };
+            let gear = Gear { speed: mover.player.velocity.xz().length(), held, ready: held.is_some(), upright, health: 150, armor: 0, self_damage: 1.0, loaded: &loaded, arms: None };
             plan(&mut route, &graph, 0, feet, Some(Goal::Pickup(0)), &RouteCosts::default(), &gear);
             let input = follow(&mut route, &graph, feet, &gear, dt).unwrap_or_default();
             held = input.select.or(held);

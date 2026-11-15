@@ -88,15 +88,15 @@ impl LitSurface {
         while start < self.reach {
             let end = (start + CELL).min(self.reach);
             let (a, b) = (origin + direction * start, origin + direction * end);
-            let hit = self
-                .grid
-                .near(a.min(b), a.max(b))
-                .into_iter()
-                .filter_map(|index| {
-                    let t = world_surface::meets(&self.faces[index as usize], origin, direction)?;
-                    (start..=end).contains(&t).then_some((index as usize, t))
-                })
-                .min_by(|x, y| x.1.total_cmp(&y.1));
+            // Ties go to the lowest index.
+            let mut hit: Option<(usize, f32)> = None;
+            self.grid.for_each_near(a.min(b), a.max(b), |index| {
+                let index = index as usize;
+                let Some(t) = world_surface::meets(&self.faces[index], origin, direction) else { return };
+                if (start..=end).contains(&t) && hit.is_none_or(|(at, best)| t.total_cmp(&best).then(index.cmp(&at)).is_lt()) {
+                    hit = Some((index, t));
+                }
+            });
             if hit.is_some() {
                 return hit;
             }

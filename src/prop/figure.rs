@@ -20,7 +20,7 @@ use crate::prop::camera::ViewmodelPreview;
 use crate::prop::document::PropEditor;
 use crate::common::skeleton::play::{apply_stack, grip_offsets, ClipStack, Frames};
 use crate::prop::archetype::{hat_transform, Archetype};
-use crate::prop::hold::{carry_frame, grip_hands, weapon_transform};
+use crate::prop::hold::{carry_frame, grip_hands, weapon_transform, HoldSpec};
 
 /// Which class is standing there, if any. View state, not part of the document.
 #[derive(Resource, Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -148,8 +148,8 @@ pub fn refresh_the_figure(
     existing: Query<Entity, With<ScaleFigureMarker>>,
     mut last: Local<Option<(ScaleFigure, Option<crate::common::skeleton::rig::Build>)>>,
 ) {
-    let instead = rig.and_then(|rig| rig.0.clone());
-    let seen = (*choice, instead.as_ref().map(|rig| rig.build().clone()));
+    let instead = rig.as_deref().and_then(|rig| rig.0.as_ref());
+    let seen = (*choice, instead.map(|rig| rig.build().clone()));
     if last.as_ref() == Some(&seen) && !existing.is_empty() && !builds.is_changed() {
         return;
     }
@@ -171,7 +171,7 @@ pub fn refresh_the_figure(
         BodyTint(FIGURE_TINT),
         Name::new("Scale figure"),
         FigureReach([Reach::Impossible; 2]),
-        instead.unwrap_or_else(|| builds.rig_for(class)),
+        instead.cloned().unwrap_or_else(|| builds.rig_for(class)),
     ));
 }
 
@@ -202,8 +202,12 @@ pub fn pose_the_figure(
         (&Skeleton, &mut Pose, &mut Transform, &mut FigureReach, &mut Visibility),
         With<ScaleFigureMarker>,
     >,
+    mut hold_for: Local<Option<(u64, ScaleFigure, HoldSpec)>>,
 ) {
-    let hold = editor.doc().hold.for_class(choice.0);
+    if hold_for.as_ref().is_none_or(|(generation, class, _)| (*generation, *class) != (editor.generation(), *choice)) {
+        *hold_for = Some((editor.generation(), *choice, editor.doc().hold.for_class(choice.0)));
+    }
+    let Some((_, _, hold)) = hold_for.as_ref() else { return };
     let stage = stage_in_force(stage.as_deref(), mode.as_deref());
     let beneath = beneath.as_deref().copied().unwrap_or_default();
     let holding = stage.holding && !beneath.hides_weapon;
@@ -225,16 +229,14 @@ pub fn pose_the_figure(
             else {
                 continue;
             };
-            *pose = Pose::rest();
-            *transform = Transform::from_matrix(hat.to_matrix().inverse());
+            place(&mut pose, &mut transform, Pose::rest(), Transform::from_matrix(hat.to_matrix().inverse()));
             continue;
         }
 
         // A placed prop stands on the floor at its origin, so the figure stands
         // on the same floor beside it.
         if editor.doc().archetype.is_placed() {
-            *pose = Pose::rest();
-            *transform = Transform::from_translation(Vec3::X * PLACED_PROP_CLEARANCE);
+            place(&mut pose, &mut transform, Pose::rest(), Transform::from_translation(Vec3::X * PLACED_PROP_CLEARANCE));
             continue;
         }
 
@@ -337,12 +339,33 @@ pub fn pose_the_figure(
                 (Some(performance), Some(clips)) => grip_offsets(&performance.0, clips, skeleton),
                 _ => [Vec3::ZERO; 2],
             };
-            reach.0 = grip_hands(skeleton, &mut standing, &root, &hold, &placed, [true; 2], grips);
+            let reached = grip_hands(skeleton, &mut standing, &root, hold, &placed, [true; 2], grips);
+            if reach.0 != reached {
+                reach.0 = reached;
+            }
         }
 
-        *pose = standing;
-        *transform = root;
+        place(&mut pose, &mut transform, standing, root);
     }
+}
+
+/// Written only when they differ: a written pose re-places every one of the figure's meshes, and
+/// an idle figure is posed the same way every frame.
+fn place(pose: &mut Mut<Pose>, transform: &mut Mut<Transform>, standing: Pose, root: Transform) {
+    if !same_pose(pose, &standing) {
+        **pose = standing;
+    }
+    if **transform != root {
+        **transform = root;
+    }
+}
+
+/// By what a pose answers rather than how it stores it: a joint left out and one set to its rest
+/// rotation read alike.
+fn same_pose(a: &Pose, b: &Pose) -> bool {
+    a.root_offset == b.root_offset
+        && a.posed_joints().all(|(name, rotation)| b.joint(name) == rotation)
+        && b.posed_joints().all(|(name, rotation)| a.joint(name) == rotation)
 }
 
 pub fn clear_the_figure(

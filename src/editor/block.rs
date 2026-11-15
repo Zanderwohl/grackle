@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use crate::common::PointResolutionError;
 use crate::common::ray::PickBox;
 use crate::common::world_surface::Volume;
-use crate::editor::editable::{Feature, FeatureId, FeatureTrait, PointRef};
+use crate::editor::editable::{insert_if_changed, Feature, FeatureId, FeatureTrait, PointRef};
 use crate::editor::editor_room::EditorRoom;
 use crate::editor::mirror::Mirroring;
 use crate::get;
@@ -67,11 +67,10 @@ impl FeatureTrait for EditorBlock {
 
     fn apply_to_entity(&mut self, commands: &mut Commands, entity: Entity) {
         let (min, max) = self.volume.bounds();
-        commands.entity(entity).insert((
-            Transform::from_translation((min + max) / 2.0),
-            Block(self.shape()),
-            self.volume.surfaces().clone(),
-        ));
+        let mut entity = commands.entity(entity);
+        insert_if_changed(&mut entity, Transform::from_translation((min + max) / 2.0));
+        insert_if_changed(&mut entity, Block(self.shape()));
+        insert_if_changed(&mut entity, self.volume.surfaces().clone());
     }
 
     fn resolve_references(&mut self, features: &HashMap<FeatureId, Feature>) {

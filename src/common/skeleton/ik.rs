@@ -19,9 +19,9 @@ use std::f32::consts::{FRAC_PI_2, PI};
 use std::f32::consts::FRAC_PI_4;
 
 use crate::common::skeleton::joints::JointLimit;
-use crate::common::skeleton::rig::{bone, Bone, Pose, Skeleton};
+use crate::common::skeleton::rig::{bone, Bone, Pose, Scratch, ScratchPose, Skeleton};
 use crate::common::skeleton::clip::{Clip, StateAnimation};
-use crate::common::skeleton::play::{apply, Frames, Regions};
+use crate::common::skeleton::play::{apply_masked_into, Frames, Regions};
 use crate::common::skeleton::state::{AnimationState, ClipLibrary, PoseInputs, SkeletonAnimator};
 
 /// How far from straight and from folded a limb is kept, since both leave the
@@ -264,15 +264,15 @@ pub fn reach_or_leave(
     target: Vec3,
     pole: Vec3,
 ) -> Reach {
-    let before = chain
-        .bones()
-        .chain(chain.tip)
-        .map(|joint| (joint, pose.joint(joint)))
-        .collect::<Vec<_>>();
+    let joints = chain.bones().chain(chain.tip).count();
+    let mut before = Scratch::<(&'static str, Quat), 8>::new(joints, ("", Quat::IDENTITY));
+    for (slot, joint) in before.iter_mut().zip(chain.bones().chain(chain.tip)) {
+        *slot = (joint, pose.joint(joint));
+    }
 
     let reach = solve(skeleton, pose, root, chain, target, pole);
     if reach != Reach::Reached {
-        for (joint, rotation) in before {
+        for &(joint, rotation) in before.iter() {
             pose.set(joint, rotation);
         }
     }
@@ -387,13 +387,30 @@ pub fn animator_pose(
     clips: Option<&ClipLibrary>,
     crouch: Option<f32>,
 ) -> Pose {
-    let arriving = ducked_pose(skeleton, animator.state(), inputs, root, clips, crouch);
+    let mut pose = Pose::rest();
+    animator_pose_into(skeleton, animator, inputs, root, clips, crouch, &mut pose);
+    pose
+}
+
+/// [`animator_pose`] into `pose`, keeping its storage.
+pub fn animator_pose_into(
+    skeleton: &Skeleton,
+    animator: &SkeletonAnimator,
+    inputs: &PoseInputs,
+    root: &Transform,
+    clips: Option<&ClipLibrary>,
+    crouch: Option<f32>,
+    pose: &mut Pose,
+) {
+    ducked_pose_into(skeleton, animator.state(), inputs, root, clips, crouch, pose);
     if animator.blend() >= 1.0 || animator.previous() == animator.state() {
-        return arriving;
+        return;
     }
 
-    let leaving = ducked_pose(skeleton, animator.previous(), inputs, root, clips, crouch);
-    Pose::lerp(&leaving, &arriving, Interpolation::SmoothStep.ease(animator.blend()))
+    let mut leaving = ScratchPose::take();
+    ducked_pose_into(skeleton, animator.previous(), inputs, root, clips, crouch, &mut leaving);
+    leaving.blend_toward(pose, Interpolation::SmoothStep.ease(animator.blend()));
+    std::mem::swap(pose, &mut *leaving);
 }
 
 /// How much of the way toward where the body is going its legs turn. The rest is a step at an
@@ -445,18 +462,32 @@ pub fn ducked_pose(
     clips: Option<&ClipLibrary>,
     crouch: Option<f32>,
 ) -> Pose {
+    let mut pose = Pose::rest();
+    ducked_pose_into(skeleton, state, inputs, root, clips, crouch, &mut pose);
+    pose
+}
+
+/// [`ducked_pose`] into `pose`, keeping its storage.
+pub fn ducked_pose_into(
+    skeleton: &Skeleton,
+    state: AnimationState,
+    inputs: &PoseInputs,
+    root: &Transform,
+    clips: Option<&ClipLibrary>,
+    crouch: Option<f32>,
+    pose: &mut Pose,
+) {
     let turn = leg_turn(skeleton, state, inputs);
     let (stepped, travel) = stepping(skeleton, state, inputs);
     if turn == 0.0 && stepped == state {
-        return facing_pose(skeleton, state, inputs, root, clips, crouch);
+        return facing_pose(skeleton, state, inputs, root, clips, crouch, pose);
     }
     // Rightward is a negative turn about +Y.
     let legs = Quat::from_rotation_y(-turn);
     let legs_root = Transform { rotation: root.rotation * legs, ..*root };
-    let mut pose = facing_pose(skeleton, stepped, &PoseInputs { travel, ..*inputs }, &legs_root, clips, crouch);
-    unturn_the_root(skeleton, &mut pose, legs);
-    twist_back(skeleton, &mut pose, root, turn);
-    pose
+    facing_pose(skeleton, stepped, &PoseInputs { travel, ..*inputs }, &legs_root, clips, crouch, pose);
+    unturn_the_root(skeleton, pose, legs);
+    twist_back(skeleton, pose, root, turn);
 }
 
 /// Restate a pose built under a root turned by `legs` as the same placement under the unturned
@@ -483,7 +514,7 @@ fn twist_back(skeleton: &Skeleton, pose: &mut Pose, root: &Transform, turn: f32)
     }
 }
 
-/// [`ducked_pose`] with the legs facing the way the body does.
+/// [`ducked_pose`] with the legs facing the way the body does, into `pose`.
 fn facing_pose(
     skeleton: &Skeleton,
     state: AnimationState,
@@ -491,17 +522,21 @@ fn facing_pose(
     root: &Transform,
     clips: Option<&ClipLibrary>,
     crouch: Option<f32>,
-) -> Pose {
-    let finish = |state| finish_pose(skeleton, state, inputs, root, clips);
+    pose: &mut Pose,
+) {
+    let finish = |state, pose: &mut Pose| finish_pose_into(skeleton, state, inputs, root, clips, pose);
     let crouch = match crouch {
-        None => return finish(state),
-        Some(crouch) if crouch <= 0.0 => return finish(state.upright()),
-        Some(crouch) if crouch >= 1.0 => return finish(state.ducked()),
+        None => return finish(state, pose),
+        Some(crouch) if crouch <= 0.0 => return finish(state.upright(), pose),
+        Some(crouch) if crouch >= 1.0 => return finish(state.ducked(), pose),
         Some(crouch) => crouch,
     };
     let (upright, ducked) = (state.upright(), state.ducked());
-    let (standing, crouched) = (finish(upright), finish(ducked));
-    let mut pose = Pose::lerp(&standing, &crouched, crouch);
+    let (mut standing, mut crouched) = (ScratchPose::take(), ScratchPose::take());
+    finish(upright, &mut standing);
+    finish(ducked, &mut crouched);
+    pose.copy_from(&standing);
+    pose.blend_toward(&crouched, crouch);
     // A squat, then a hunch: the hips go down with the duck and the body above them leans in
     // late, so the head drops rather than swinging forward on its way down.
     let lean = crouch * crouch;
@@ -523,9 +558,8 @@ fn facing_pose(
                 pitch: from.pitch.lerp(to.pitch, crouch),
             })
             .collect();
-        plant_by(skeleton, &mut pose, root, &offsets, inputs.feet_free);
+        plant_by(skeleton, pose, root, &offsets, inputs.feet_free);
     }
-    pose
 }
 
 /// A state's pose plus its corrections. Shared by drawing and hitboxes, which
@@ -537,22 +571,35 @@ pub fn finish_pose(
     root: &Transform,
     clips: Option<&ClipLibrary>,
 ) -> Pose {
+    let mut pose = Pose::rest();
+    finish_pose_into(skeleton, state, inputs, root, clips, &mut pose);
+    pose
+}
+
+/// [`finish_pose`] into `pose`, keeping its storage.
+pub fn finish_pose_into(
+    skeleton: &Skeleton,
+    state: AnimationState,
+    inputs: &PoseInputs,
+    root: &Transform,
+    clips: Option<&ClipLibrary>,
+    pose: &mut Pose,
+) {
     // A state without a clip falls back to its function; `None` is the
     // all-function baseline the comparison tests measure against.
-    let mut pose = clips
-        .and_then(|library| library.get_for(skeleton.kind(), state))
-        .map(|animation| animation_pose(animation, state, inputs, skeleton, root))
-        .unwrap_or_else(|| fallback_pose(skeleton, state, inputs));
-    correct_for_state(skeleton, &mut pose, state, inputs, root);
-    pose
+    match clips.and_then(|library| library.get_for(skeleton.kind(), state)) {
+        Some(animation) => animation_pose_into(animation, state, inputs, skeleton, root, pose),
+        None => fallback_pose(skeleton, state, inputs, pose),
+    }
+    correct_for_state(skeleton, pose, state, inputs, root);
 }
 
 /// A state with no clip: the humanoid's pose function, which names the humanoid's bones, or rest
 /// for any other rig.
-fn fallback_pose(skeleton: &Skeleton, state: AnimationState, inputs: &PoseInputs) -> Pose {
+fn fallback_pose(skeleton: &Skeleton, state: AnimationState, inputs: &PoseInputs, pose: &mut Pose) {
     match skeleton.kind() {
-        super::rig::HUMANOID => state.pose(inputs),
-        _ => Pose::rest(),
+        super::rig::HUMANOID => *pose = state.pose(inputs),
+        _ => pose.reset_to_rest(),
     }
 }
 
@@ -584,7 +631,11 @@ fn plant_by(skeleton: &Skeleton, pose: &mut Pose, root: &Transform, offsets: &[F
     if free >= 1.0 {
         return;
     }
-    let loose = (free > 0.0).then(|| pose.clone());
+    let loose = (free > 0.0).then(|| {
+        let mut loose = ScratchPose::take();
+        loose.copy_from(pose);
+        loose
+    });
     plant_feet(skeleton, pose, root, offsets);
     let Some(loose) = loose else { return };
     let anatomy = skeleton.anatomy();
@@ -607,20 +658,34 @@ pub fn animation_pose(
     skeleton: &Skeleton,
     root: &Transform,
 ) -> Pose {
+    let mut pose = Pose::rest();
+    animation_pose_into(animation, state, inputs, skeleton, root, &mut pose);
+    pose
+}
+
+fn animation_pose_into(
+    animation: &StateAnimation,
+    state: AnimationState,
+    inputs: &PoseInputs,
+    skeleton: &Skeleton,
+    root: &Transform,
+    pose: &mut Pose,
+) {
     let Some((first, second)) = animation.at_heading(state.heading(inputs)) else {
-        return fallback_pose(skeleton, state, inputs);
+        return fallback_pose(skeleton, state, inputs, pose);
     };
     let footfalls = state
         .stance(inputs)
         .and_then(|stance| super::gait::footfalls(inputs.stride, stance, skeleton.anatomy()));
-    let pose = clip_pose(first, inputs, footfalls, skeleton, root);
-    match second {
-        Some((other, t)) => Pose::lerp(&pose, &clip_pose(other, inputs, footfalls, skeleton, root), t),
-        None => pose,
+    clip_pose(first, inputs, footfalls, skeleton, root, pose);
+    if let Some((other, t)) = second {
+        let mut other_pose = ScratchPose::take();
+        clip_pose(other, inputs, footfalls, skeleton, root, &mut other_pose);
+        pose.blend_toward(&other_pose, t);
     }
 }
 
-/// One clip on a body. A body clip has no weapon or eye frame; the ground is
+/// One clip on a body, into `pose`. A body clip has no weapon or eye frame; the ground is
 /// flat at the root's height.
 fn clip_pose(
     clip: &Clip,
@@ -628,8 +693,9 @@ fn clip_pose(
     footfalls: Option<PerFoot<f32>>,
     skeleton: &Skeleton,
     root: &Transform,
-) -> Pose {
-    let mut pose = Pose::rest();
+    pose: &mut Pose,
+) {
+    pose.reset_to_rest();
     let floor = root.translation.y;
     let ground = move |_: Vec3| floor;
     let frames = Frames {
@@ -640,8 +706,7 @@ fn clip_pose(
         ground: &ground,
         footfalls,
     };
-    apply(clip, clip.time_from(inputs), skeleton, &mut pose, &frames, None);
-    pose
+    apply_masked_into(clip, clip.time_from(inputs), skeleton, pose, &frames, None, Regions::NONE, None);
 }
 
 /// A thigh, shin and metatarsus at rest, in the plane the leg bends in. The metatarsus keeps its

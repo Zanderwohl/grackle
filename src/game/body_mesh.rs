@@ -314,12 +314,23 @@ fn pose_body_meshes(
 /// watched is shown again.
 pub(crate) fn hide_own_body(
     view: Res<ViewMode>,
-    players: Query<(&Children, Has<LocalPlayer>, Has<Watched>), With<Player>>,
+    players: Query<(Entity, Ref<Children>, Option<Ref<LocalPlayer>>, Option<Ref<Watched>>), With<Player>>,
     mut parts: Query<&mut Visibility, With<FirstPersonHidden>>,
+    mut no_longer_ours: RemovedComponents<LocalPlayer>,
+    mut no_longer_watched: RemovedComponents<Watched>,
 ) {
+    let everybody = view.is_changed();
+    let lost: Vec<Entity> = no_longer_ours.read().chain(no_longer_watched.read()).collect();
     // The body's children rather than `BodyMesh.parts`, so a hat and anything
     // else carrying the marker are covered. Held parts are `show_held_weapons`'s.
-    for (children, ours, watched) in &players {
+    for (body, children, ours, watched) in &players {
+        fn arrived<T: Component>(marker: &Option<Ref<T>>) -> bool {
+            marker.as_ref().is_some_and(|marker| marker.is_added())
+        }
+        if !everybody && !children.is_changed() && !arrived(&ours) && !arrived(&watched) && !lost.contains(&body) {
+            continue;
+        }
+        let (ours, watched) = (ours.is_some(), watched.is_some());
         let wanted = match (ours || watched) && !view.shows_own_body() {
             true => Visibility::Hidden,
             false => Visibility::Inherited,

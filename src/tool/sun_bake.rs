@@ -57,11 +57,15 @@ pub struct SunBake {
     looked_up: Option<u64>,
     /// Off in tests, which would otherwise read each other's bakes back.
     use_disk: bool,
+    /// The last snapshot taken, reused until something it reads changes.
+    snapshot: Option<Snapshot>,
+    /// Bumped whenever `lit` changes, so the systems that read it can skip an unchanged frame.
+    generation: u64,
 }
 
 impl Default for SunBake {
     fn default() -> Self {
-        Self { lit: HashMap::new(), air: AirLight::default(), bake: BackgroundBake::new(true), looked_up: None, use_disk: true }
+        Self { lit: HashMap::new(), air: AirLight::default(), bake: BackgroundBake::new(true), looked_up: None, use_disk: true, snapshot: None, generation: 0 }
     }
 }
 
@@ -91,6 +95,7 @@ impl SunBake {
     /// layout is the one already lit is written into the same image, so its `Lightmap` never
     /// changes: Bevy reads a new handle only by a removal and an insertion, a frame unlit.
     fn land(&mut self, baked: BakedSun, images: &mut Assets<Image>) {
+        self.generation += 1;
         self.air = baked.air;
         for room in baked.rooms {
             let new = lightmap_image(room.atlas.size, &room.light);
@@ -411,14 +416,26 @@ fn lightmap_image(size: UVec2, light: &[Vec3]) -> Image {
 
 /// A room rebuilt since its light was baked keeps that light, laid onto its new layout. No rays,
 /// so it is cheap enough to do the frame the room changes. A room that is gone loses its light.
+#[allow(clippy::too_many_arguments)]
 fn carry_light_over(
     mut state: ResMut<SunBake>,
     bakes: Query<&BakedRoomGeometry>,
     rooms: Query<(), Or<(With<Room>, With<Block>)>>,
     brightness: Res<Brightness>,
     mut images: ResMut<Assets<Image>>,
+    rebaked: Query<(), Changed<BakedRoomGeometry>>,
+    mut gone_rooms: RemovedComponents<Room>,
+    mut gone_blocks: RemovedComponents<Block>,
+    mut seen: Local<Option<u64>>,
 ) {
+    let gone = gone_rooms.read().count() + gone_blocks.read().count() > 0;
+    if !gone && rebaked.is_empty() && *seen == Some(state.generation) {
+        return;
+    }
+    let state = &mut *state;
+    let before = state.lit.len();
     state.lit.retain(|room, _| rooms.contains(*room));
+    let mut changed = state.lit.len() != before;
     for baked in &bakes {
         let Some(old) = state.lit.get(&baked.room) else { continue };
         if old.faces_hash == baked.faces_hash {
@@ -428,7 +445,12 @@ fn carry_light_over(
         let light = atlas.carry_over(&old.atlas, &old.light, brightness.ambient);
         let image = images.add(lightmap_image(atlas.size, &light));
         state.lit.insert(baked.room, RoomLight { faces_hash: baked.faces_hash, atlas, light, image });
+        changed = true;
     }
+    if changed {
+        state.generation += 1;
+    }
+    *seen = Some(state.generation);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -446,18 +468,25 @@ fn auto_bake_sunlight(
     sky: Res<SkyTime>,
     brightness: Res<Brightness>,
     edited: Query<(), Or<(Changed<BakedRoomGeometry>, Changed<RoomSurfaces>, Changed<Side>)>>,
-    mut rebuilt: RemovedComponents<BakedRoomGeometry>,
+    (mut rebuilt, mut unpainted, mut unsided): (
+        RemovedComponents<BakedRoomGeometry>,
+        RemovedComponents<RoomSurfaces>,
+        RemovedComponents<Side>,
+    ),
     mut images: ResMut<Assets<Image>>,
     mut open_sky: ResMut<OpenSky>,
 ) {
     let state = &mut *state;
     let inputs_changed = rebuilt.read().count() > 0
+        || unpainted.read().count() > 0
+        || unsided.read().count() > 0
         || !edited.is_empty()
         || palette.is_changed()
         || sun.is_changed()
         || sky.is_changed()
         || brightness.is_changed();
     if clears.read().count() > 0 {
+        state.generation += 1;
         state.lit.clear();
         state.air = AirLight::default();
         state.bake.forget();
@@ -471,20 +500,29 @@ fn auto_bake_sunlight(
     }
     // Half-rebuilt rooms leave holes for light to come through, so the bake waits for them. The sun
     // on things that move is drawn live and does not wait.
+    if inputs_changed {
+        let snapshot = Snapshot::take(&bakes, &paint, &palette, &sun, *sky, *brightness);
+        open_sky.refresh(&snapshot, &bakes);
+        state.snapshot = Some(snapshot);
+    }
     if !rooms.is_settled() {
-        if inputs_changed {
-            open_sky.refresh(&Snapshot::take(&bakes, &paint, &palette, &sun, *sky, *brightness), &bakes);
-        }
         return;
     }
     // With nothing to bake, a snapshot only says whether the light is stale.
     if !(state.bake.would_bake() || inputs_changed) {
         return;
     }
-    let snapshot = Snapshot::take(&bakes, &paint, &palette, &sun, *sky, *brightness);
-    open_sky.refresh(&snapshot, &bakes);
+    let snapshot = match state.snapshot.take() {
+        Some(snapshot) => snapshot,
+        None => {
+            let snapshot = Snapshot::take(&bakes, &paint, &palette, &sun, *sky, *brightness);
+            open_sky.refresh(&snapshot, &bakes);
+            snapshot
+        }
+    };
     state.take_from_cache(&snapshot, &bakes, &mut images);
     state.bake.update(snapshot.hash, rooms.is_settled(), time.elapsed_secs(), || snapshot.job(&bakes, &labels));
+    state.snapshot = Some(snapshot);
 }
 
 /// A round is never played in stale light. A map unchanged since its last bake needs nothing: its
@@ -517,13 +555,29 @@ fn report_sunlight(state: Res<SunBake>, mut progress: ResMut<BakeProgress>) {
 /// Every frame, as `paint_rooms` is: a slot takes its room's lightmap while it is drawn with a
 /// `StandardMaterial`, which is the only material that reads one, and while that light is for the
 /// layout its `UV_1` is. A sky slot never has one.
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn attach_lightmaps(
     mut commands: Commands,
     state: Res<SunBake>,
-    mut slots: Query<(Entity, &ChildOf, Option<&mut MeshMaterial3d<StandardMaterial>>, Option<&Lightmap>), With<RoomSlotMesh>>,
+    mut slots: Query<(Entity, Ref<ChildOf>, Option<Mut<MeshMaterial3d<StandardMaterial>>>, Option<Ref<Lightmap>>), With<RoomSlotMesh>>,
     bakes: Query<&BakedRoomGeometry>,
+    rebaked: Query<(), Changed<BakedRoomGeometry>>,
+    mut unmaterialed: RemovedComponents<MeshMaterial3d<StandardMaterial>>,
+    mut unlit: RemovedComponents<Lightmap>,
+    mut seen: Local<Option<u64>>,
 ) {
+    // With nothing it reads changed, only a slot whose own components changed needs looking at.
+    let removed = unmaterialed.read().count() + unlit.read().count() > 0;
+    let everything = removed || !rebaked.is_empty() || *seen != Some(state.generation);
+    *seen = Some(state.generation);
     for (entity, parent, material, drawn) in &mut slots {
+        if !everything
+            && !parent.is_changed()
+            && material.as_ref().is_none_or(|material| !material.is_changed())
+            && drawn.as_ref().is_none_or(|drawn| !drawn.is_changed())
+        {
+            continue;
+        }
         let Some(mut material) = material else {
             if drawn.is_some() {
                 commands.entity(entity).remove::<Lightmap>();
@@ -531,7 +585,7 @@ fn attach_lightmaps(
             continue;
         };
         let wanted = bakes.get(parent.parent()).ok().and_then(|baked| state.light_for(baked.room, baked.faces_hash));
-        keep_lightmap(&mut commands, entity, wanted, drawn, &mut material);
+        keep_lightmap(&mut commands, entity, wanted, drawn.as_deref(), &mut material);
     }
 }
 

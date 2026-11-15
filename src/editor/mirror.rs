@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::common::team::{Side, Team};
 use crate::common::PointResolutionError;
-use crate::editor::editable::{Feature, FeatureId, FeatureTag, FeatureTrait, PointRef, BROKEN};
+use crate::editor::editable::{insert_if_changed, Feature, FeatureId, FeatureTag, FeatureTrait, PointRef, BROKEN};
 use crate::get;
 
 /// How the copies are made from the original. Every one keeps a room an axis-aligned box.
@@ -591,30 +591,35 @@ impl FeatureTrait for Mirror {
 
     fn apply_to_entity(&mut self, commands: &mut Commands, entity: Entity) {
         // The identity, so a copy's `Transform` is where it is: spawn choice reads `Transform`.
-        commands
-            .entity(entity)
-            .insert(MirrorSides {
-                map: self.team_map(),
-                sources: self.copies.iter().filter_map(|copy| copy.source_entity).collect(),
-            })
-            .insert_if_new((Transform::IDENTITY, Visibility::Inherited));
+        let mut mirror = commands.entity(entity);
+        insert_if_changed(
+            &mut mirror,
+            MirrorSides { map: self.team_map(), sources: self.copies.iter().filter_map(|copy| copy.source_entity).collect() },
+        );
+        mirror.insert_if_new((Transform::IDENTITY, Visibility::Inherited));
 
-        let copies = &self.copies;
+        let wanted: bevy::platform::collections::HashSet<(FeatureId, usize)> =
+            self.copies.iter().map(|copy| (copy.source, copy.image)).collect();
         self.copy_entities.retain(|(key, child)| {
-            let kept = copies.iter().any(|copy| (copy.source, copy.image) == *key);
+            let kept = wanted.contains(key);
             if !kept {
                 commands.entity(*child).despawn();
             }
             kept
         });
 
+        let mut standing: HashMap<(FeatureId, usize), Entity> = HashMap::new();
+        for (key, child) in &self.copy_entities {
+            standing.entry(*key).or_insert(*child);
+        }
         for copy in &mut self.copies {
             let key = (copy.source, copy.image);
-            let child = match self.copy_entities.iter().find(|(at, _)| *at == key) {
-                Some((_, child)) => *child,
+            let child = match standing.get(&key) {
+                Some(child) => *child,
                 None => {
                     let child = commands.spawn((MirrorCopy { source: copy.source, image: copy.image }, ChildOf(entity))).id();
                     self.copy_entities.push((key, child));
+                    standing.insert(key, child);
                     child
                 }
             };
@@ -761,15 +766,35 @@ impl FeatureTrait for Mirror {
 /// it or dropping a source unsides with nothing to remember. Compares before it writes, since it runs
 /// every frame. Where two Mirrors claim one entity the earlier feature id wins; query order shifts
 /// with archetypes.
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn assign_sides(
     mirrors: Query<(Entity, &MirrorSides, &FeatureTag)>,
     nested: Query<&MirrorSides>,
     children: Query<&Children>,
     copies: Query<&MirrorCopy>,
     sided: Query<(Entity, &Side)>,
+    touched: Query<
+        (),
+        Or<(
+            Changed<MirrorSides>,
+            Changed<Side>,
+            Added<MirrorCopy>,
+            (With<MirrorSides>, Or<(Changed<FeatureTag>, Changed<Children>)>),
+        )>,
+    >,
+    mut unmirrored: RemovedComponents<MirrorSides>,
+    mut uncopied: RemovedComponents<MirrorCopy>,
+    mut unsided: RemovedComponents<Side>,
+    mut childless: RemovedComponents<Children>,
     mut commands: Commands,
 ) {
+    let removed =
+        unmirrored.read().count() + uncopied.read().count() + unsided.read().count() + childless.read().count() > 0;
     if mirrors.is_empty() && sided.is_empty() {
+        return;
+    }
+    // A write lands as a command, so what it wrote is seen as `Changed<Side>` next frame and checked once more.
+    if !removed && touched.is_empty() {
         return;
     }
     let mut ordered: Vec<_> = mirrors.iter().collect();

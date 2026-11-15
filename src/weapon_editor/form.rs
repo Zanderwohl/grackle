@@ -71,10 +71,12 @@ pub fn edit_struct(ui: &mut egui::Ui, value: &mut dyn Struct, path: &str, form: 
     let info = value.get_represented_struct_info();
     let mut changed = false;
     for index in 0..value.field_len() {
-        let Some(name) = value.name_at(index).map(str::to_owned) else { continue };
+        let Some(name) = value.name_at(index) else { continue };
+        // Both made before the field is borrowed mutably, which ends the borrow of `name`.
+        let (label, field_path) = (get!(field_key(name)), format!("{path}.{name}"));
         let unit = info.and_then(|info| info.field_at(index)).and_then(|field| field.get_attribute::<Unit>()).copied();
         let Some(field) = value.field_at_mut(index) else { continue };
-        changed |= edit_field(ui, &get!(field_key(&name)), field, unit, &format!("{path}.{name}"), form);
+        changed |= edit_field(ui, &label, field, unit, &field_path, form);
     }
     changed
 }

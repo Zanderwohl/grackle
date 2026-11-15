@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::common::PointResolutionError;
 use crate::common::cuboid::CuboidPoint;
 use crate::common::ray::ray_intersects_aabb;
-use crate::editor::editable::{AxisRef, Feature, FeatureId, FeatureTrait, OwnBase, PointRef};
+use crate::editor::editable::{insert_if_changed, AxisRef, Feature, FeatureId, FeatureTrait, OwnBase, PointRef};
 use crate::editor::mirror::Mirroring;
 use crate::material::picker::material_button;
 use crate::tool::room::{Room, RoomSlot, RoomSurfaces};
@@ -226,11 +226,10 @@ impl FeatureTrait for EditorRoom {
         let min = self.resolved_min.min(self.resolved_max);
         let max = self.resolved_min.max(self.resolved_max);
         let center = (min + max) / 2.0;
-        commands.entity(entity).insert((
-            Transform::from_translation(center),
-            Room::new(min, max),
-            self.surfaces.clone(),
-        ));
+        let mut entity = commands.entity(entity);
+        insert_if_changed(&mut entity, Transform::from_translation(center));
+        insert_if_changed(&mut entity, Room::new(min, max));
+        insert_if_changed(&mut entity, self.surfaces.clone());
     }
 
     fn resolve_references(&mut self, features: &HashMap<FeatureId, Feature>) {

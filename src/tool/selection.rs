@@ -35,13 +35,23 @@ impl SelectionPlugin {
         room_drag: Res<RoomDragState>,
         footprint_drag: Res<FootprintDragState>,
         rotate_drag: Res<RotateDragState>,
+        mut cache: Local<Option<PickCache>>,
+        mut last: Local<Option<LastPick>>,
     ) {
         state.hovered = None;
 
         if let Some(ray) = mouse_input.world_pos {
-            if let Some((feature_id, hit_pos)) = find_nearest_feature_hit(&ray, &features, &visibility) {
-                state.hovered = Some((feature_id, hit_pos));
-            }
+            let key = PickCache::key(features.last_changed(), &features);
+            let hovered = match &*last {
+                Some(seen) if seen.ray == ray && seen.key == key && seen.visibility == *visibility => seen.hovered,
+                _ => {
+                    let cache = PickCache::refresh(&mut cache, &features, key);
+                    let hovered = find_nearest_feature_hit_in(&ray, &features, &visibility, cache);
+                    *last = Some(LastPick { ray, key, visibility: visibility.clone(), hovered });
+                    hovered
+                }
+            };
+            state.hovered = hovered;
 
             let any_drag = point_drag.is_dragging()
                 || room_drag.is_dragging()
@@ -49,7 +59,8 @@ impl SelectionPlugin {
                 || rotate_drag.is_dragging();
             if mouse_input.released == Some(MouseButton::Left) && !any_drag {
                 let selection = state.hovered.map(|(id, _)| id);
-                features.select(selection);
+                // Not an edit, so not a change to the undo checkpoint or `map_sync`.
+                features.bypass_change_detection().select(selection);
             }
         }
     }
@@ -83,6 +94,14 @@ impl SelectionPlugin {
             }
         }
     }
+}
+
+/// What the pointer was last over, so a still pointer over a still map is not picked again.
+struct LastPick {
+    ray: Ray3d,
+    key: (bevy::ecs::change_detection::Tick, u64),
+    visibility: GizmoVisibility,
+    hovered: Option<(FeatureId, Vec3)>,
 }
 
 #[derive(Component)]

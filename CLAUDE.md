@@ -153,7 +153,9 @@ limits — is planned in [documentation/bot-brain.md](documentation/bot-brain.md
 Its senses are built (`src/game/bot_sense.rs`): **a bot never reads where an
 enemy is**, only its `BotSenses` — who is in its 90° view with a clear ray to
 them, what it heard (`Effect`s) and which way a hit came from — remembered for a few seconds
-and passed on only after its `BotMind`'s reaction time. `think` reads them, and
+and passed on only after its `BotMind`'s reaction time. Noises within a meter
+of each other are one noise, timed for the reaction from when it was first
+heard, and a bot keeps 16. `think` reads them, and
 `fight` ([`src/game/bot_fight.rs`](src/game/bot_fight.rs)) shoots only at what they
 have in sight: aim turning at a rate with an error that settles as it tracks,
 rockets led and put at the feet, fire held without a clear ray, the weapon by
@@ -763,7 +765,8 @@ rather than two named variants at each call site, for the same reason
 `is_authoring` is one: an overlay written later answers it once rather than
 being the next thing to leak. `update_hitboxes` deliberately keeps running —
 the boxes are a fact about a body, and not computing them would leave stale
-ones the moment anybody left the mode.
+ones the moment anybody left the mode. It is skipped on a rollback replay:
+only a client's own movement is replayed, and nothing replayed reads a box.
 
 **Getting around** ([`camera.rs`](src/prop/camera.rs)) reuses the four
 viewports and deliberately *not* the map editor's movement. The gesture is the
@@ -2683,6 +2686,11 @@ everybody's aim.
 arrives at the tick rate, the same rate `PhysicsBody` does, so a filter would
 buy slightly less stepping in exchange for hitboxes that lag where the body is
 aiming — and aim is the one thing that must not lag.
+
+**The pose chain writes `Pose` without change detection**, and `commit_poses`,
+last in it, marks a pose changed only when it differs from the one last shown
+(`ShownPose`). A system added to the chain writes the same way, or a body
+standing still re-places its meshes every frame.
 
 **Poses are never transmitted.** A pose is twenty-odd quaternions per body per
 tick and it is the *output* of a state machine that is deterministic and

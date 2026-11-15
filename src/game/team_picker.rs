@@ -16,7 +16,7 @@ use crate::editor::spawn_point::SpawnPointMarker;
 use crate::game::collision::CollisionWorld;
 use crate::game::pause_menu::MouseHeld;
 use crate::game::player::{fallback_spawn, DeathCam, InputLatch, LocalPlayer, OurLastBody};
-use crate::game::spectate::{cameras_for, Cameras};
+use crate::game::spectate::{first_camera_for, Cameras};
 use crate::game::respawn::{placed_spawns, Seat};
 use crate::game::team_choice::{ChooseTeam, TeamChoice, TeamOptions};
 use crate::get;
@@ -124,7 +124,7 @@ fn overlook_while_choosing(
     if !ours.is_empty() || dead || last.is_some() || offer.seat == Seat::Spectating {
         return;
     }
-    if !cameras_for(&cameras, offer.seat).is_empty() {
+    if first_camera_for(&cameras, offer.seat).is_some() {
         if death_cam.is_some() {
             commands.remove_resource::<DeathCam>();
         }

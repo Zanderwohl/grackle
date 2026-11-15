@@ -199,7 +199,7 @@ fn framing_bounds(build: &PropBuild, figure: &FigureQuery) -> Option<(Vec3, Vec3
                 .into_iter()
                 .flat_map(|bone| [bone.head, bone.tail])
         })
-        .fold(build.evaluated.bounds(), |bounds, point| match bounds {
+        .fold(build.bounds(), |bounds, point| match bounds {
             Some((min, max)) => Some((min.min(point), max.max(point))),
             None => Some((point, point)),
         })
@@ -255,7 +255,7 @@ fn reset_the_hovered_view(
         return;
     };
 
-    let (center, radius) = subject(build.evaluated.bounds());
+    let (center, radius) = subject(build.bounds());
     remember(&mut saved, entity, &transform, &projection);
     frame_one(&mut transform, &mut projection, camera, multicam, center, radius);
     pivot.0 = center;

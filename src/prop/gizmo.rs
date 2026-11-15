@@ -379,12 +379,13 @@ fn pick_in_the_viewport(
             let ray = mouse.world_pos?;
             let (camera, at) = cameras.get(mouse.in_camera?).ok()?;
             let evaluated = &build.evaluated;
+            let hit = evaluated.face_under(ray.origin, *ray.direction);
             let pointer = Pointer {
                 ray,
-                face: evaluated.face_distance(ray),
+                face: hit.map(|(_, _, distance)| distance),
                 project: |p: Vec3| camera.world_to_viewport(at, p).ok(),
             };
-            let mut candidates = candidates_under(evaluated, &pointer);
+            let mut candidates = candidates_under(evaluated, &pointer, hit);
             Some(match tool.0 {
                 None => candidates.next(),
                 Some(task) => candidates.find(|pick| accepts(task, editor.picks(), pick, editor.doc(), evaluated)),
@@ -413,6 +414,7 @@ fn pick_in_the_viewport(
 fn candidates_under<'a, P: Fn(Vec3) -> Option<Vec2>>(
     evaluated: &'a Evaluated,
     pointer: &'a Pointer<P>,
+    hit: Option<(crate::prop::feature::PropFeatureId, &'a crate::prop::solid::Polygon, f32)>,
 ) -> impl Iterator<Item = Pick> + 'a {
     let geom = |pickable: &crate::prop::reference::Pickable| Pick::Geom(pickable.reference.clone());
     let finders: [Box<dyn Fn() -> Option<Pick> + 'a>; 7] = [
@@ -437,13 +439,14 @@ fn candidates_under<'a, P: Fn(Vec3) -> Option<Vec2>>(
         Box::new(move || plane_under(&evaluated.planes, pointer).map(Pick::Plane)),
         Box::new(move || {
             evaluated
-                .region_under(pointer.ray)
+                .region_in_front_of(pointer.ray, pointer.face)
                 .map(|(sketch, region)| Pick::Region { sketch, region: region.name.clone() })
         }),
         // A face a boolean made has no name, so is picked as its body; a named
         // face already stands for its body.
         Box::new(move || {
-            evaluated.surface_under(pointer.ray).map(|(body, face)| face.map_or(Pick::Body(body), Pick::Geom))
+            hit.and_then(|hit| evaluated.surface_of_hit(pointer.ray, hit))
+                .map(|(body, face)| face.map_or(Pick::Body(body), Pick::Geom))
         }),
     ];
     finders.into_iter().filter_map(|find| find())

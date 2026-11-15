@@ -226,16 +226,15 @@ fn keep_a_clip_selected(
     body: Res<body::BodyClips>,
     mut anim: ResMut<AnimEditor>,
 ) {
-    let names = clip_names(&anim, &editor, &body);
-    let still_there = anim
-        .selected
-        .as_deref()
-        .is_some_and(|name| names.iter().any(|had| had == name));
+    let still_there = anim.selected.as_deref().is_some_and(|name| match anim.source {
+        ClipSource::Prop => editor.doc().animations.clips.contains_key(name),
+        ClipSource::Body => body.has_name(name),
+    });
     if still_there {
         return;
     }
 
-    let wanted = names.first().cloned();
+    let wanted = clip_names(&anim, &editor, &body).into_iter().next();
     // Written only when it differs: `AnimEditor` is watched, and writing every frame would re-frame the
     // strip continuously.
     if anim.selected != wanted {
@@ -807,14 +806,22 @@ pub fn preview_rig(
     other_rig(anim, body).unwrap_or_else(|| builds.rig_for(class))
 }
 
-fn other_rig(anim: &AnimEditor, body: &body::BodyClips) -> Option<crate::common::skeleton::Skeleton> {
-    use crate::common::skeleton::rig::{Build, Proportions, HUMANOID};
+/// The rig file [`other_rig`] builds from, if any.
+fn other_rig_name<'a>(anim: &'a AnimEditor, body: &body::BodyClips) -> Option<&'a str> {
+    use crate::common::skeleton::rig::HUMANOID;
     if anim.source != ClipSource::Body {
         return None;
     }
     // Any clip filed under a rig's name: its states and its taunts alike.
     let (rig, _) = body::address(anim.selected.as_deref()?).0.split_once('/')?;
-    let file = body.rigs().get(rig).filter(|_| rig != HUMANOID)?;
+    body.rigs().get(rig).filter(|_| rig != HUMANOID)?;
+    Some(rig)
+}
+
+fn other_rig(anim: &AnimEditor, body: &body::BodyClips) -> Option<crate::common::skeleton::Skeleton> {
+    use crate::common::skeleton::rig::{Build, Proportions};
+    let rig = other_rig_name(anim, body)?;
+    let file = body.rigs().get(rig)?;
     let build = Build {
         rig: Some(rig.to_string()),
         proportions: Proportions { height: file.height, ..default() },
@@ -823,12 +830,68 @@ fn other_rig(anim: &AnimEditor, body: &body::BodyClips) -> Option<crate::common:
     crate::common::skeleton::rig_file::build_rig(file, &build).ok()
 }
 
+pub type SharedRig = std::sync::Arc<crate::common::skeleton::Skeleton>;
+
+/// [`preview_rig`] and [`other_rig`], built again only when what they read changes: building a
+/// rig is too much work to repeat at every call site every frame.
+#[derive(Default)]
+pub struct PreviewRigCache {
+    /// Keyed on the rig file's name and [`body::BodyClips::rigs_read`].
+    other: std::sync::Mutex<Option<((Option<String>, u64), Option<SharedRig>)>>,
+    /// Keyed on the class and when the builds last changed.
+    classed: std::sync::Mutex<Option<((crate::common::class::Class, bevy::ecs::change_detection::Tick), SharedRig)>>,
+}
+
+impl PreviewRigCache {
+    pub fn other(&self, anim: &AnimEditor, body: &body::BodyClips) -> Option<SharedRig> {
+        let key = (other_rig_name(anim, body).map(str::to_owned), body.rigs_read());
+        let mut other = self.other.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        match &*other {
+            Some((known, rig)) if *known == key => rig.clone(),
+            _ => {
+                let rig = other_rig(anim, body).map(std::sync::Arc::new);
+                *other = Some((key, rig.clone()));
+                rig
+            }
+        }
+    }
+
+    /// `builds_changed` is the builds' `last_changed`.
+    pub fn preview(
+        &self,
+        anim: &AnimEditor,
+        body: &body::BodyClips,
+        builds: &crate::common::class::ClassBuilds,
+        builds_changed: bevy::ecs::change_detection::Tick,
+        class: crate::common::class::Class,
+    ) -> SharedRig {
+        if let Some(rig) = self.other(anim, body) {
+            return rig;
+        }
+        let key = (class, builds_changed);
+        let mut classed = self.classed.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        match &*classed {
+            Some((known, rig)) if *known == key => rig.clone(),
+            _ => {
+                let rig = std::sync::Arc::new(builds.rig_for(class));
+                *classed = Some((key, rig.clone()));
+                rig
+            }
+        }
+    }
+}
+
 /// Written only when the rig changes: re-inserting a rig rebuilds the figure's meshes.
-fn stand_the_rig_up(anim: Res<AnimEditor>, body: Res<body::BodyClips>, mut figure: ResMut<crate::prop::figure::FigureRig>) {
-    let wanted = other_rig(&anim, &body);
-    let build = |rig: &Option<crate::common::skeleton::Skeleton>| rig.as_ref().map(|rig| rig.build().clone());
-    if build(&figure.0) != build(&wanted) {
-        figure.0 = wanted;
+fn stand_the_rig_up(
+    anim: Res<AnimEditor>,
+    body: Res<body::BodyClips>,
+    mut figure: ResMut<crate::prop::figure::FigureRig>,
+    rigs: Local<PreviewRigCache>,
+) {
+    let wanted = rigs.other(&anim, &body);
+    let build = |rig: Option<&crate::common::skeleton::Skeleton>| rig.map(|rig| rig.build().clone());
+    if build(figure.0.as_ref()) != build(wanted.as_deref()) {
+        figure.0 = wanted.map(|rig| (*rig).clone());
     }
 }
 
@@ -940,6 +1003,7 @@ fn drive_the_preview(
     mut performance: ResMut<FigurePerformance>,
     mut corrections: ResMut<crate::prop::figure::FigureCorrections>,
     mut beneath: ResMut<crate::prop::figure::FigureBeneath>,
+    rigs: Local<PreviewRigCache>,
 ) {
     performance.0 .0.clear();
     corrections.0 = None;
@@ -955,8 +1019,8 @@ fn drive_the_preview(
     };
 
     let class = figure.and_then(|figure| figure.0).unwrap_or(crate::common::class::Class::Mercenary);
-    let rig = builds.map_or_else(|| crate::common::skeleton::default_humanoid().clone(), |builds| {
-        preview_rig(&anim, &clips, &builds, class)
+    let rig = builds.map_or_else(|| std::sync::Arc::new(crate::common::skeleton::default_humanoid().clone()), |builds| {
+        rigs.preview(&anim, &clips, &builds, builds.last_changed(), class)
     });
     let (layer, claims) = played_as(&anim, &clips, &layer_claims, rig.anatomy());
     if layer != Layer::Locomotion {

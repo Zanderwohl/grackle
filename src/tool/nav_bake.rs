@@ -39,6 +39,17 @@ const STAGE_SHARES: [usize; 6] = [5, 5, 30, 720, 5, 235];
 /// Walks and leaps are separate passes of batches, since a leap is kept only if walking is slower.
 const LINK_BATCH: usize = 256;
 
+/// Seconds the map must go unchanged before a snapshot is taken, so a drag does not clone and
+/// hash every volume each frame. Skipped when a bake is asked for.
+const STILL_SECONDS: f32 = 0.25;
+
+/// What a placed pickup is, compared each frame without building its label.
+#[derive(PartialEq)]
+enum PickupKey {
+    Weapon(crate::common::weapon::WeaponId, Vec3),
+    Prop(String, Vec3),
+}
+
 #[derive(Resource)]
 pub struct NavBake {
     graph: NavGraph,
@@ -54,10 +65,17 @@ pub struct NavBake {
     looked_up: Option<u64>,
     /// What the map was when last looked at; taken again only on a change.
     snapshot: Option<Snapshot>,
+    /// When the map last changed, while `snapshot` is behind it.
+    dirty_since: Option<f32>,
+    /// The props and pickups last seen, which are compared rather than change-detected.
+    seen_props: Vec<RoundedBox>,
+    seen_pickups: Vec<PickupKey>,
     bake: BackgroundBake<Job>,
     sight: BackgroundBake<SightJob>,
     /// Of `graph`, kept rather than worked out each frame the panel is up.
     statistics: MapStatistics,
+    /// Every cell's links counted, for the same reason.
+    link_count: usize,
 }
 
 impl Default for NavBake {
@@ -70,11 +88,15 @@ impl Default for NavBake {
             built_hash: None,
             looked_up: None,
             snapshot: None,
+            dirty_since: None,
+            seen_props: Vec::new(),
+            seen_pickups: Vec::new(),
             // Off: several seconds on Halls in a debug build, too much to redo on every still moment.
             bake: BackgroundBake::new(false),
             // On: it follows the graph rather than the map.
             sight: BackgroundBake::new(true),
             statistics: MapStatistics::default(),
+            link_count: 0,
         }
     }
 }
@@ -92,6 +114,10 @@ impl NavBake {
         &self.statistics
     }
 
+    pub fn link_count(&self) -> usize {
+        self.link_count
+    }
+
     /// Holding `graph`, as if it had just been baked.
     #[cfg(test)]
     pub(crate) fn holding(graph: NavGraph) -> Self {
@@ -107,6 +133,7 @@ impl NavBake {
         self.generation += 1;
         self.built += 1;
         self.statistics = MapStatistics::of(&self.graph);
+        self.link_count = (0..self.graph.cells().len() as u32).map(|id| self.graph.links(id).len()).sum();
     }
 
     /// A bake that just landed, which is also written to the cache.
@@ -232,7 +259,36 @@ impl NavInputs<'_, '_> {
             + self.removed_blocks.read().count()
             + self.removed_triggers.read().count()
             + self.removed_spawns.read().count();
-        removed > 0 || !self.edited.is_empty() || !self.moved_spawns.is_empty() || self.rules.is_changed()
+        removed > 0
+            || !self.edited.is_empty()
+            || !self.moved_spawns.is_empty()
+            || self.rules.is_changed()
+            || self.catalog.as_ref().is_some_and(|catalog| catalog.is_changed())
+    }
+
+    fn pickups_match(&self, seen: &[PickupKey]) -> bool {
+        let mut seen = seen.iter();
+        for (placed, spec) in &self.weapon_pickups {
+            match seen.next() {
+                Some(PickupKey::Weapon(weapon, at)) if *weapon == spec.weapon && *at == placed.translation => {}
+                _ => return false,
+            }
+        }
+        for prop in &self.prop_pickups {
+            match seen.next() {
+                Some(PickupKey::Prop(model, at)) if *model == prop.model && *at == prop.at => {}
+                _ => return false,
+            }
+        }
+        seen.next().is_none()
+    }
+
+    fn pickup_keys(&self) -> Vec<PickupKey> {
+        self.weapon_pickups
+            .iter()
+            .map(|(placed, spec)| PickupKey::Weapon(spec.weapon, placed.translation))
+            .chain(self.prop_pickups.iter().map(|prop| PickupKey::Prop(prop.model.clone(), prop.at)))
+            .collect()
     }
 
     /// Compared rather than change-detected, like props: placed pickups are stood up again by
@@ -475,14 +531,31 @@ fn auto_bake_nav(
         let hash = state.bake.baked();
         state.landed(hash, built);
     }
-    let moved = state.snapshot.as_ref().is_some_and(|seen| seen.props != inputs.collision.props || seen.pickups != inputs.pickups());
-    if inputs.changed_since_last_frame() || moved || state.snapshot.is_none() {
-        state.snapshot = Some(inputs.snapshot());
+    let now = time.elapsed_secs();
+    let mut changed = inputs.changed_since_last_frame();
+    if state.seen_props != inputs.collision.props {
+        state.seen_props.clone_from(&inputs.collision.props);
+        changed = true;
     }
-    let snapshot = state.snapshot.take().expect("taken above");
-    state.take_from_cache(&snapshot);
-    let snapshot = state.snapshot.insert(snapshot);
-    state.bake.update(snapshot.hash, true, time.elapsed_secs(), || snapshot.job());
+    if !inputs.pickups_match(&state.seen_pickups) {
+        state.seen_pickups = inputs.pickup_keys();
+        changed = true;
+    }
+    if changed {
+        state.dirty_since = Some(now);
+    }
+    let due = state.dirty_since.is_some_and(|since| now - since >= STILL_SECONDS);
+    if state.snapshot.is_none() || (state.dirty_since.is_some() && (due || state.bake.asked())) {
+        state.snapshot = Some(inputs.snapshot());
+        state.dirty_since = None;
+    }
+    // While the map is moving the snapshot is stale, and a bake of it must not start.
+    if state.dirty_since.is_none() {
+        let snapshot = state.snapshot.take().expect("taken above");
+        state.take_from_cache(&snapshot);
+        let snapshot = state.snapshot.insert(snapshot);
+        state.bake.update(snapshot.hash, true, now, || snapshot.job());
+    }
 
     if let Some(sight) = state.sight.poll() {
         state.add_sight(sight);
@@ -499,10 +572,16 @@ fn bake_nav_for_the_round(mut state: ResMut<NavBake>, inputs: NavInputs) {
         state.landed(Some(snapshot.hash), built);
     }
     state.snapshot = Some(snapshot);
+    state.dirty_since = None;
 }
 
 fn report_nav(state: Res<NavBake>, mut progress: ResMut<BakeProgress>) {
-    bake_job::report(&mut progress, BakeKind::Nav, state.bake.status());
+    let mut status = state.bake.status();
+    // A change not yet snapshot may or may not be what was baked; say so, so a round asks.
+    if state.dirty_since.is_some() && status.state == bake_job::BakeState::UpToDate {
+        status.state = if state.bake.would_bake() { bake_job::BakeState::Waiting } else { bake_job::BakeState::Stale };
+    }
+    bake_job::report(&mut progress, BakeKind::Nav, status);
     bake_job::report(&mut progress, BakeKind::Sight, state.sight.status());
 }
 

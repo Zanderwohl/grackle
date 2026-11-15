@@ -93,11 +93,12 @@ fn show_the_pulls(
     show: Res<ShowBots>,
     zone: Option<Single<Entity, With<WindowSafeZone>>>,
     watched: Option<Single<&BotThought, With<Watched>>>,
-    mut tables: Query<&mut Visibility, With<PullTable>>,
+    mut tables: Query<(Entity, &mut Visibility), With<PullTable>>,
     mut cells: Query<(&PullCell, &mut Text, &mut TextColor)>,
+    mut shown: Local<Option<(Entity, u64, Option<Want>, Vec<(Want, f32)>)>>,
 ) {
     let Some(zone) = zone else { return };
-    let Some(mut visibility) = tables.iter_mut().next() else {
+    let Some((table, mut visibility)) = tables.iter_mut().next() else {
         commands.entity(*zone).with_child(pull_table(&font.0));
         return;
     };
@@ -106,6 +107,15 @@ fn show_the_pulls(
         return;
     };
     visibility.set_if_neq(Visibility::Inherited);
+    // The cells already say what this thought would write.
+    let language = crate::common::lang::generation();
+    let chosen = thought.chosen.map(|chosen| chosen.want);
+    if shown.as_ref().is_some_and(|(drawn_on, drawn_in, drawn_chosen, drawn_pulls)| {
+        *drawn_on == table && *drawn_in == language && *drawn_chosen == chosen && *drawn_pulls == thought.pulls
+    }) {
+        return;
+    }
+    *shown = Some((table, language, chosen, thought.pulls.clone()));
     let rows = rows(&thought);
     for (cell, mut text, mut ink) in &mut cells {
         let Some((name, pull, chosen)) = rows.get(cell.row) else { continue };
