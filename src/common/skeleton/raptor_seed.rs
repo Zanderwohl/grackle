@@ -1,5 +1,5 @@
-//! The strider's body clips, as poses to sample: a generator, as `new_map_template` is for
-//! blueprints, and with its rig file the only place that names the strider's bones.
+//! The raptor's body clips, as poses to sample: a generator, as `new_map_template` is for
+//! blueprints, and with its rig file the only place that names the raptor's bones.
 //!
 //! Turns are stated about the body's axes and carried into each bone's rest frame
 //! ([`Turn::onto`]), so one sign means one thing on every bone: `yaw` positive to the left,
@@ -7,7 +7,7 @@
 //! right side. A tail points backwards, so it is turned by `swing` (positive, tip to the right)
 //! and `lift` (positive, tip up).
 //!
-//! The motions are the humanoid's ([`super::gait::gait_pose`]) where a strider has the part,
+//! The motions are the humanoid's ([`super::gait::gait_pose`]) where a raptor has the part,
 //! and the tail counterbalances the legs.
 
 use std::f32::consts::TAU;
@@ -83,7 +83,7 @@ const RUN_NECK_DROP: f32 = 15.0 * std::f32::consts::PI / 180.0;
 const CROUCH_NECK_DROP: f32 = 85.0 * std::f32::consts::PI / 180.0;
 const CROUCH_TAIL_LIFT: [f32; 3] = [-0.15, 0.0, 0.05];
 
-/// The taunt: its file name under the strider's clips, and its length in seconds, the humanoid
+/// The taunt: its file name under the raptor's clips, and its length in seconds, the humanoid
 /// wave's.
 pub const TAUNT_WAG: &str = "taunt_wag";
 pub const TAUNT_LENGTH: f32 = 1.2;
@@ -187,7 +187,7 @@ impl Posture {
     }
 }
 
-/// The pose a strider's `state` is in, before corrections. Rest for a state it has no clip for.
+/// The pose a raptor's `state` is in, before corrections. Rest for a state it has no clip for.
 pub fn pose(state: AnimationState, inputs: &PoseInputs, skeleton: &Skeleton) -> Pose {
     match state {
         AnimationState::Idle => idle(inputs.seconds).pose(skeleton),
@@ -207,7 +207,7 @@ pub fn named(name: &str, inputs: &PoseInputs, skeleton: &Skeleton) -> Pose {
     }
 }
 
-/// The strider's wave: the tail curls up to point at the sky and waggles, the head lifts to
+/// The raptor's wave: the tail curls up to point at the sky and waggles, the head lifts to
 /// look up, and it all settles back by the end.
 fn taunt_wag(seconds: f32) -> Posture {
     let smooth = |t: f32| {
@@ -359,26 +359,26 @@ mod tests {
     use super::*;
     use crate::common::skeleton::ik::Reach;
 
-    fn strider() -> Skeleton {
-        crate::common::class::ClassBuilds::shipped().rig_for(crate::common::class::Class::Strider)
+    fn raptor() -> Skeleton {
+        crate::common::class::ClassBuilds::shipped().rig_for(crate::common::class::Class::Raptor)
     }
 
     /// Every bone this names is the rig's: a renamed bone would be a track that does nothing.
     #[test]
-    fn every_bone_named_here_is_the_striders() {
-        let rig = strider();
+    fn every_bone_named_here_is_the_raptors() {
+        let rig = raptor();
         for name in [PELVIS, SPINE, NECK, HEAD].into_iter().chain(TAIL).chain(LEGS.iter().map(|(_, foot, _)| *foot)) {
-            assert!(rig.index_of(name).is_some(), "the strider has no {name}");
+            assert!(rig.index_of(name).is_some(), "the raptor has no {name}");
         }
         for (limb, _, _) in LEGS {
-            assert!(rig.anatomy().limb(limb).is_some(), "the strider has no {limb}");
+            assert!(rig.anatomy().limb(limb).is_some(), "the raptor has no {limb}");
         }
     }
 
     /// A pedal the leg cannot reach straightens it toward the loop and the foot stops drawing one.
     #[test]
     fn every_pedal_is_within_the_legs_reach() {
-        let rig = strider();
+        let rig = raptor();
         for pedal in [AIRBORNE_PEDAL, CROUCH_AIRBORNE_PEDAL] {
             for step in 0..32 {
                 let turn = TAU * step as f32 / 32.0;
@@ -396,7 +396,7 @@ mod tests {
     /// forward.
     #[test]
     fn the_tail_swings_against_the_legs() {
-        let rig = strider();
+        let rig = raptor();
         let tip = |stride: f32| {
             let inputs = PoseInputs { stride, speed: super::super::gait::RUN_SPEED, travel: Vec2::Y, ..default() };
             let pose = pose(AnimationState::RunForward, &inputs, &rig);
@@ -410,11 +410,11 @@ mod tests {
         assert!(reach.1 - reach.0 > 0.08, "the tail tip swings only {:.3} m", reach.1 - reach.0);
     }
 
-    /// The strider's clips, baked as the shipped ones are, as a match holds them.
+    /// The raptor's clips, baked as the shipped ones are, as a match holds them.
     fn library() -> crate::common::skeleton::state::ClipLibrary {
         let mut library = crate::common::skeleton::state::ClipLibrary::default();
-        for seed in super::super::seed::SEEDS.iter().filter(|seed| seed.rig == "strider" && seed.name.is_none()) {
-            library.insert_for("strider", seed.state, super::super::seed::bake(*seed));
+        for seed in super::super::seed::SEEDS.iter().filter(|seed| seed.rig == "raptor" && seed.name.is_none()) {
+            library.insert_for("raptor", seed.state, super::super::seed::bake(*seed));
         }
         library
     }
@@ -428,13 +428,13 @@ mod tests {
         (low, high)
     }
 
-    /// Crouched, the strider fits the short box with its feet on the floor and its hips well
+    /// Crouched, the raptor fits the short box with its feet on the floor and its hips well
     /// down; crouched in the air it stays inside the box's top and bottom.
     #[test]
-    fn a_crouched_strider_fits_its_box_and_sits_down_into_it() {
+    fn a_crouched_raptor_fits_its_box_and_sits_down_into_it() {
         use crate::common::class::CROUCH_HEIGHT;
         use crate::common::skeleton::ik::finish_pose;
-        let rig = strider();
+        let rig = raptor();
         let library = library();
         let root = Transform::IDENTITY;
         let hips = |pose: &Pose| rig.posed_bone(pose, &root, rig.index_of(PELVIS).unwrap()).head.y;

@@ -94,7 +94,7 @@ pub struct Taunt {
     /// nor named here is not offered the taunt: the humanoid's clip names bones it lacks.
     pub rigs: std::collections::BTreeMap<String, String>,
     /// Region names, resolved against each body's rig as it taunts (`Anatomy::claims`), so one
-    /// taunt can claim a strider's tail and a humanoid's arms.
+    /// taunt can claim a raptor's tail and a humanoid's arms.
     pub claims: Vec<String>,
     pub movement: TauntMovement,
     pub turning: TauntTurning,

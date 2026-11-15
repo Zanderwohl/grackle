@@ -365,7 +365,7 @@ fn spray(
             (None, true) => (HOST, None),
             (None, false) => continue,
         };
-        let from = eye(body.current, *stance, player.duck);
+        let from = eye(body.current, *stance, player.duck, player.eye);
         let looking = *aim(player);
         let Some((at, normal)) = surface_hit(&bakes, from, looking, REACH) else { continue };
         let placed = SprayAt { owner, projection: Projection::on(at, normal, SIZE, DEPTH, looking) };

@@ -466,7 +466,7 @@ sniper = "Sniper"
 spy = "Spy"
 civilian = "Civilian"
 mercenary = "Mercenary"
-strider = "Strider"
+raptor = "Raptor"
 
 [team.names]
 red = "Red"

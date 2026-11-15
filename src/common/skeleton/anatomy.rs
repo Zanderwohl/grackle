@@ -31,6 +31,9 @@ pub struct Foot {
     pub phase: f32,
 }
 
+/// Fraction of the way up the head bone the eye sits.
+pub const EYE_UP_THE_HEAD: f32 = 0.55;
+
 #[derive(Clone, Debug, Default)]
 pub struct Anatomy {
     pub limbs: Vec<Limb>,
@@ -62,8 +65,11 @@ pub struct Anatomy {
     pub arm: f32,
     pub hip: f32,
     /// Where a crouched body's crown sits, as a share of the crouched box's height. Under one, a
-    /// rig crouches lower than the box needs: a strider stalking with its head down.
+    /// rig crouches lower than the box needs: a raptor stalking with its head down.
     pub crouched_crown: f32,
+    /// Standing eye height off the floor at rest, meters, for a rig that states one; `None` is
+    /// the shared `TALLEST_CLASS_EYE_HEIGHT`.
+    pub eye: Option<f32>,
 }
 
 impl Anatomy {

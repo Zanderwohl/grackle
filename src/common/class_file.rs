@@ -206,9 +206,9 @@ pub(crate) mod tests {
         assert!(builds.builds.is_empty());
     }
 
-    /// The Mercenary built on the default pack's strider.
-    pub(crate) fn builds_with_a_strider() -> ClassBuilds {
-        let mut builds = parse("[builds.mercenary]\nrig = \"strider\"\nheight = 1.5\n\n[builds.mercenary.scales]\nleg = 1.1\n");
+    /// The Mercenary built on the default pack's raptor.
+    pub(crate) fn builds_with_a_raptor() -> ClassBuilds {
+        let mut builds = parse("[builds.mercenary]\nrig = \"raptor\"\nheight = 1.5\n\n[builds.mercenary.scales]\nleg = 1.1\n");
         load_rigs(&Assets::default(), &crate::common::assets::default_packs(), &mut builds);
         builds
     }
@@ -216,9 +216,9 @@ pub(crate) mod tests {
     /// Fails if a class cannot name a rig file, or a missing one is not put back on the humanoid.
     #[test]
     fn a_class_may_be_built_on_a_rig_file() {
-        let builds = builds_with_a_strider();
+        let builds = builds_with_a_raptor();
         let rig = builds.rig_for(Class::Mercenary);
-        assert_eq!(rig.kind(), "strider");
+        assert_eq!(rig.kind(), "raptor");
         assert_eq!(rig.proportions().height, 1.5);
         assert_eq!(rig.build().scales.get("leg"), Some(&1.1));
 

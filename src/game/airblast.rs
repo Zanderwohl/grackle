@@ -66,7 +66,7 @@ pub fn airblast(
         let WeaponAction::Airblast(spec) = shot.action else { continue };
         let Ok((body, player, stance, id)) = shooters.get(shot.shooter) else { continue };
         let source = id.map_or(DamageSource::World, |id| DamageSource::Player(*id));
-        let from = eye(body.current, *stance, player.duck);
+        let from = eye(body.current, *stance, player.duck, player.eye);
         let toward = aim(player);
         effects.write(Effect::Gust { from, toward: *toward, range: spec.range, spread: spec.spread, by: id.copied() });
 

@@ -1,7 +1,7 @@
 length = 1.2
 clock = "seconds"
 looping = false
-note = "Sampled from `strider_seed::taunt_wag`: the strider's wave. The tail curls up to point at the sky and waggles four times, the head lifts, and all of it settles back. As long as the wave, since a taunt's length is read off its humanoid clip."
+note = "Sampled from `raptor_seed::taunt_wag`: the raptor's wave. The tail curls up to point at the sky and waggles four times, the head lifts, and all of it settles back. As long as the wave, since a taunt's length is read off its humanoid clip."
 
 [[tracks]]
 combine = "replace"

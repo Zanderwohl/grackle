@@ -16,7 +16,7 @@ use bevy::camera::visibility::RenderLayers;
 use bevy::window::PrimaryWindow;
 
 use crate::common::app_mode::AppMode;
-use crate::common::class::{CLASS_HALF_EXTENTS, TALLEST_CLASS_EYE_HEIGHT};
+use crate::common::class::CLASS_HALF_EXTENTS;
 use crate::common::damage::{DamageDealt, DamageSource, Died, PlayerId};
 use crate::common::flame::Burning;
 use crate::common::game_rules::ModeRules;
@@ -367,8 +367,8 @@ fn leave_range(
     }
 }
 
-fn eye_of(center: Vec3) -> Vec3 {
-    center + Vec3::Y * (TALLEST_CLASS_EYE_HEIGHT - CLASS_HALF_EXTENTS.y)
+fn eye_of(center: Vec3, eye: f32) -> Vec3 {
+    center + Vec3::Y * (eye - CLASS_HALF_EXTENTS.y)
 }
 
 fn helpers(catalog: &WeaponCatalog, weapon: WeaponId) -> (Option<WeaponId>, Option<WeaponId>) {
@@ -460,9 +460,9 @@ fn direct(
 
     let t = show.elapsed - LEAD_IN;
     let kind = show.beats[show.current].kind;
-    let shooter = puppets.iter().find(|(_, puppet, ..)| puppet.0 == Role::Shooter).map(|(entity, _, body, ..)| (entity, body.current));
+    let shooter = puppets.iter().find(|(_, puppet, ..)| puppet.0 == Role::Shooter).map(|(entity, _, body, player, ..)| (entity, body.current, player.eye));
     let target = puppets.iter().find(|(_, puppet, ..)| puppet.0 != Role::Shooter).map(|(_, _, body, player, ..)| (body.current, player.velocity));
-    let incoming = shooter.and_then(|(_, at)| {
+    let incoming = shooter.and_then(|(_, at, _)| {
         projectiles.iter().map(|(_, body)| body.current).min_by(|a, b| a.distance(at).total_cmp(&b.distance(at)))
     });
     if let Some((_, velocity)) = target {
@@ -470,7 +470,7 @@ fn direct(
     }
 
     for (_, puppet, body, player, mut inputs, ammo) in &mut puppets {
-        let eye = eye_of(body.current);
+        let eye = eye_of(body.current, player.eye);
         let mut input = PlayerInput { yaw: player.yaw, pitch: player.pitch, ..default() };
         match puppet.0 {
             Role::Shooter => {
@@ -485,8 +485,8 @@ fn direct(
                 shooter_presses(kind, t, &mut input, weapon, ammo, incoming.map(|at| at.distance(eye)));
             }
             Role::Enemy => {
-                if let Some((_, at)) = shooter {
-                    (input.yaw, input.pitch) = aim_at(eye, eye_of(at));
+                if let Some((_, at, its_eye)) = shooter {
+                    (input.yaw, input.pitch) = aim_at(eye, eye_of(at, its_eye));
                 }
                 match kind {
                     BeatKind::Shoot { strafing: true, .. } => {
@@ -672,14 +672,14 @@ fn tally(
     mut show: ResMut<RangeShow>,
     mut dealt: MessageReader<DamageDealt>,
     mut died: MessageReader<Died>,
-    puppets: Query<(&RangePuppet, &PhysicsBody)>,
+    puppets: Query<(&RangePuppet, &PhysicsBody, &Player)>,
 ) {
-    let shooter = puppets.iter().find(|(puppet, _)| puppet.0 == Role::Shooter).map(|(_, body)| eye_of(body.current));
+    let shooter = puppets.iter().find(|(puppet, ..)| puppet.0 == Role::Shooter).map(|(_, body, player)| eye_of(body.current, player.eye));
     let elapsed = show.elapsed - LEAD_IN;
     // The shooter is always the first puppet stood up.
     let ours = DamageSource::Player(PlayerId(FIRST_PUPPET_ID + 1));
     for hit in dealt.read() {
-        let on_the_shooter = puppets.get(hit.target).is_ok_and(|(puppet, _)| puppet.0 == Role::Shooter);
+        let on_the_shooter = puppets.get(hit.target).is_ok_and(|(puppet, ..)| puppet.0 == Role::Shooter);
         if hit.source != ours || on_the_shooter {
             continue;
         }

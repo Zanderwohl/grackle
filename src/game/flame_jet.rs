@@ -515,7 +515,7 @@ fn aim_the_jets(
         }
 
         let first_person = (ours || watched) && view.as_deref().is_some_and(|view| !view.shows_own_body());
-        let eye = eye(body.translation, *stance, player.duck);
+        let eye = eye(body.translation, *stance, player.duck, player.eye);
         let from = nozzle(body, eye, held, first_person, apparent.as_deref().and_then(|apparent| apparent.0));
         let direction = aim(player);
         // From where the flames start, which can be around a corner from the eye.

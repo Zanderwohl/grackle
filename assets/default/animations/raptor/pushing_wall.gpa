@@ -2,7 +2,7 @@ name_key = "animation.states.pushing_wall"
 length = 1.0
 clock = "stride"
 looping = true
-note = "Sampled from `strider_seed::gait` at a run, one stride per clip. Only the body and tail: the legs are the gait's own, planted from the stride. The hips rise, turn, drop and sway as the humanoid's do, the spine turns against them, the neck holds the head steady, and the tail swings against the legs, whipping down its length."
+note = "Sampled from `raptor_seed::gait` at a run, one stride per clip. Only the body and tail: the legs are the gait's own, planted from the stride. The hips rise, turn, drop and sway as the humanoid's do, the spine turns against them, the neck holds the head steady, and the tail swings against the legs, whipping down its length."
 
 [[tracks]]
 combine = "replace"

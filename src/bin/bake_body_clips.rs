@@ -47,7 +47,7 @@ fn main() {
     } else {
         let mut chosen = Vec::new();
         for name in &args.states {
-            // `idle` is every rig's idle; `strider/idle` is one.
+            // `idle` is every rig's idle; `raptor/idle` is one.
             let named = |seed: &&Seed| seed.file_name() == name || format!("{}/{}", seed.rig, seed.file_name()) == *name;
             match SEEDS.iter().filter(named).copied().collect::<Vec<_>>() {
                 found if !found.is_empty() => chosen.extend(found),

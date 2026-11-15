@@ -1,5 +1,5 @@
-//! Where the body clips came from: [`AnimationState::pose`], sampled, and for the strider
-//! [`super::strider_seed`]'s poses. Once seeded, the clip file is the source of truth and this
+//! Where the body clips came from: [`AnimationState::pose`], sampled, and for the raptor
+//! [`super::raptor_seed`]'s poses. Once seeded, the clip file is the source of truth and this
 //! is only the generator, as `new_map_template` is for the new-map blueprint.
 //!
 //! Used by the `bake_body_clips` binary and by [`clip_file`]'s fidelity test,
@@ -17,7 +17,7 @@ use crate::common::skeleton::clip::{
     Channel, Clip, Clock, Combine, Key, Space, StateAnimation, Track, Unit, Variant,
 };
 use crate::common::skeleton::state::{AnimationState, PoseInputs, AIRBORNE_PERIOD, IDLE_PERIOD};
-use crate::common::skeleton::strider_seed::{IDLE_LENGTH, TAUNT_LENGTH, TAUNT_WAG};
+use crate::common::skeleton::raptor_seed::{IDLE_LENGTH, TAUNT_LENGTH, TAUNT_WAG};
 use crate::common::skeleton::rig::{Skeleton, HUMANOID};
 use crate::common::skeleton::{default_humanoid, Interpolation, Pose};
 
@@ -215,48 +215,48 @@ pub const SEEDS: &[Seed] = &[
         headings: &[],
         note: GAIT_NOTE,
     },
-    strider(AnimationState::Idle, IDLE_LENGTH, Clock::Shared, STRIDER_IDLE_NOTE),
-    strider(AnimationState::Crouch, IDLE_LENGTH, Clock::Shared, STRIDER_CROUCH_NOTE),
-    strider(AnimationState::Airborne, AIRBORNE_PERIOD, Clock::Shared, STRIDER_AIRBORNE_NOTE),
-    strider(AnimationState::CrouchAirborne, AIRBORNE_PERIOD, Clock::Shared, STRIDER_AIRBORNE_NOTE),
-    strider(AnimationState::RunForward, 1.0, Clock::Stride, STRIDER_GAIT_NOTE),
-    strider(AnimationState::RunBackward, 1.0, Clock::Stride, STRIDER_GAIT_NOTE),
-    strider(AnimationState::PushingWall, 1.0, Clock::Stride, STRIDER_GAIT_NOTE),
-    strider(AnimationState::CrouchWalk, 1.0, Clock::Stride, STRIDER_GAIT_NOTE),
-    strider(AnimationState::CrouchWalkBackward, 1.0, Clock::Stride, STRIDER_GAIT_NOTE),
+    raptor(AnimationState::Idle, IDLE_LENGTH, Clock::Shared, RAPTOR_IDLE_NOTE),
+    raptor(AnimationState::Crouch, IDLE_LENGTH, Clock::Shared, RAPTOR_CROUCH_NOTE),
+    raptor(AnimationState::Airborne, AIRBORNE_PERIOD, Clock::Shared, RAPTOR_AIRBORNE_NOTE),
+    raptor(AnimationState::CrouchAirborne, AIRBORNE_PERIOD, Clock::Shared, RAPTOR_AIRBORNE_NOTE),
+    raptor(AnimationState::RunForward, 1.0, Clock::Stride, RAPTOR_GAIT_NOTE),
+    raptor(AnimationState::RunBackward, 1.0, Clock::Stride, RAPTOR_GAIT_NOTE),
+    raptor(AnimationState::PushingWall, 1.0, Clock::Stride, RAPTOR_GAIT_NOTE),
+    raptor(AnimationState::CrouchWalk, 1.0, Clock::Stride, RAPTOR_GAIT_NOTE),
+    raptor(AnimationState::CrouchWalkBackward, 1.0, Clock::Stride, RAPTOR_GAIT_NOTE),
     Seed {
-        rig: STRIDER,
+        rig: RAPTOR,
         name: Some(TAUNT_WAG),
         state: AnimationState::Idle,
         length: TAUNT_LENGTH,
         clock: Clock::Seconds,
         looping: false,
         headings: &[],
-        note: "Sampled from `strider_seed::taunt_wag`: the strider's wave. The tail curls up to \
+        note: "Sampled from `raptor_seed::taunt_wag`: the raptor's wave. The tail curls up to \
                point at the sky and waggles four times, the head lifts, and all of it settles \
                back. As long as the wave, since a taunt's length is read off its humanoid clip.",
     },
 ];
 
-const STRIDER: &str = "strider";
+const RAPTOR: &str = "raptor";
 
-/// A strider state's seed, looping, from [`super::strider_seed::pose`].
-const fn strider(state: AnimationState, length: f32, clock: Clock, note: &'static str) -> Seed {
-    Seed { rig: STRIDER, name: None, state, length, clock, looping: true, headings: &[], note }
+/// A raptor state's seed, looping, from [`super::raptor_seed::pose`].
+const fn raptor(state: AnimationState, length: f32, clock: Clock, note: &'static str) -> Seed {
+    Seed { rig: RAPTOR, name: None, state, length, clock, looping: true, headings: &[], note }
 }
 
-const STRIDER_IDLE_NOTE: &str = "Sampled from `strider_seed::idle`: a slow breath the body tips \
+const RAPTOR_IDLE_NOTE: &str = "Sampled from `raptor_seed::idle`: a slow breath the body tips \
     into, the neck taking the tip back, and the tail swaying twice in it, each bone a little \
     behind the one before.";
-const STRIDER_CROUCH_NOTE: &str = "Sampled from `strider_seed::idle` and `crouched`: a stalk, \
+const RAPTOR_CROUCH_NOTE: &str = "Sampled from `raptor_seed::idle` and `crouched`: a stalk, \
     the front raised and the neck reaching forward and down with the head kept level. \
     `duck_under` drops the hips until the crown is at the rig's `crouched_crown`. Breathing as \
     standing does.";
-const STRIDER_AIRBORNE_NOTE: &str = "Sampled from `strider_seed::airborne`: each ankle pedals a \
+const RAPTOR_AIRBORNE_NOTE: &str = "Sampled from `raptor_seed::airborne`: each ankle pedals a \
     loop half a turn behind the other, solved on the reference rig, the toes hanging and the tail \
     lifted and swinging against the legs. Crouched, the pedal is tucked and `tuck_into_the_box` \
     lifts what still hangs below the short box.";
-const STRIDER_GAIT_NOTE: &str = "Sampled from `strider_seed::gait` at a run, one stride per clip. \
+const RAPTOR_GAIT_NOTE: &str = "Sampled from `raptor_seed::gait` at a run, one stride per clip. \
     Only the body and tail: the legs are the gait's own, planted from the stride. The hips rise, \
     turn, drop and sway as the humanoid's do, the spine turns against them, the neck holds the \
     head steady, and the tail swings against the legs, whipping down its length.";
@@ -278,9 +278,9 @@ pub fn rig_of(seed: &Seed) -> Skeleton {
 /// The pose a seed's clip is sampled from.
 pub fn sample(seed: &Seed, skeleton: &Skeleton, inputs: &PoseInputs) -> Pose {
     match (seed.rig, seed.name) {
-        (_, Some(name)) => super::strider_seed::named(name, inputs, skeleton),
+        (_, Some(name)) => super::raptor_seed::named(name, inputs, skeleton),
         (HUMANOID, None) => seed.state.pose(inputs),
-        (_, None) => super::strider_seed::pose(seed.state, inputs, skeleton),
+        (_, None) => super::raptor_seed::pose(seed.state, inputs, skeleton),
     }
 }
 

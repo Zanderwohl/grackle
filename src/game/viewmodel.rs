@@ -32,7 +32,8 @@ use crate::common::skeleton::play::{apply_stack, grip_offsets, ClipStack, Frames
 use crate::prop::rig::{place_part, OnPropBone};
 use crate::game::held::{perform, HeldModel, HeldPart, Performance, SharedWeaponClips};
 use crate::game::player::{place_camera, PlayerCamera, ViewMode, Viewed, PLAY_CAMERA_ORDER};
-use crate::prop::hold::grip_hands;
+use crate::common::skeleton::anatomy::EYE_UP_THE_HEAD;
+use crate::prop::hold::{grip_hands, HoldSpec};
 
 pub const VIEWMODEL_LAYER: usize = crate::common::render_layers::VIEWMODEL;
 
@@ -61,9 +62,6 @@ pub struct ViewmodelArm {
     hand: usize,
 }
 
-/// Fraction of the way up the head bone the eye sits. Taken off the rig rather
-/// than the movement hull, whose 1.8 m is the same for every class.
-const EYE_UP_THE_HEAD: f32 = 0.55;
 
 /// What the viewmodel is showing, so it can tell when to rebuild.
 #[derive(Component, Default)]
@@ -466,11 +464,7 @@ fn place_the_viewmodel_arms(
         viewmodel.arms_placed_for = Some(key);
 
         let skeleton: &Skeleton = &skeleton;
-        let root = eye_space(skeleton);
-
-        // From rest: a camera that does not bob must not have arms that do.
-        let mut pose = Pose::rest();
-        let reached = grip_hands(skeleton, &mut pose, &root, held.hold(), &weapon, [true; 2], viewmodel.grips);
+        let (root, pose, reached) = stand_and_grip(skeleton, held.hold(), &weapon, viewmodel.grips);
         let posed = skeleton.posed_bones(&pose, &root);
 
         for child in children.iter() {
@@ -490,6 +484,29 @@ fn place_the_viewmodel_arms(
             });
         }
     }
+}
+
+/// Stands the rig by its eye, or by its carry when the trigger hand cannot reach from the eye
+/// (the raptor's eye is half a meter above its shoulders). From rest, because the camera does
+/// not bob.
+fn stand_and_grip(skeleton: &Skeleton, hold: &HoldSpec, weapon: &Transform, grips: [Vec3; 2]) -> (Transform, Pose, [Reach; 2]) {
+    let grip = |root: Transform| {
+        let mut pose = Pose::rest();
+        let reached = grip_hands(skeleton, &mut pose, &root, hold, weapon, [true; 2], grips);
+        (root, pose, reached)
+    };
+    let by_eye = grip(eye_space(skeleton));
+    match carry_space(skeleton, hold, weapon) {
+        Some(root) if by_eye.2[0] != Reach::Reached => grip(root),
+        _ => by_eye,
+    }
+}
+
+/// The root that puts the carry point where a match's hold would, for this weapon placement.
+fn carry_space(skeleton: &Skeleton, hold: &HoldSpec, weapon: &Transform) -> Option<Transform> {
+    let carry = skeleton.anatomy().carry?;
+    let pivot = skeleton.posed_bone(&Pose::rest(), &Transform::IDENTITY, carry).tail;
+    Some(Transform::from_translation(weapon.translation - hold.carry(skeleton.anatomy().arm) - pivot))
 }
 
 /// Where the rig's root goes for its eye to sit at the camera. No rotation:
@@ -565,6 +582,44 @@ mod tests {
                 Reach::Reached,
                 "{class:?} cannot get its trigger hand to its own viewmodel",
             );
+        }
+    }
+
+    /// Fails if a rig whose eye is far from its shoulders, as the raptor's is, cannot get its
+    /// hands onto a shipped weapon in first person: they would be hidden.
+    #[test]
+    fn the_raptor_holds_every_shipped_weapon_in_first_person() {
+        let skeleton = crate::common::class::ClassBuilds::shipped().rig_for(Class::Raptor);
+        for path in std::fs::read_dir("assets/default/props").unwrap().flatten().map(|entry| entry.path()) {
+            if path.extension().and_then(|e| e.to_str()) != Some("gpp") {
+                continue;
+            }
+            let doc = document::parse(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            if doc.archetype != crate::prop::archetype::Archetype::Held {
+                continue;
+            }
+            let hold = doc.hold.for_class(Some(Class::Raptor));
+            let weapon = doc.viewmodel.transform(VIEWMODEL_FOV, 16.0 / 9.0);
+            let (_, _, reached) = stand_and_grip(&skeleton, &hold, &weapon, [Vec3::ZERO; 2]);
+            assert_eq!(reached[0], Reach::Reached, "the raptor's trigger hand misses {}", path.display());
+            assert_eq!(
+                reached[1] == Reach::Reached,
+                hold.support_frame().is_some(),
+                "the raptor's support hand on {}",
+                path.display(),
+            );
+        }
+    }
+
+    /// A humanoid still stands by its eye: its arms reach from there.
+    #[test]
+    fn a_humanoid_stands_by_its_eye() {
+        let hold = HoldSpec::default();
+        let weapon = ViewmodelSpec::default().transform(VIEWMODEL_FOV, 16.0 / 9.0);
+        for class in crate::common::class::ClassBuilds::shipped().humanoids() {
+            let skeleton = humanoid(crate::common::class::ClassBuilds::shipped().of(class));
+            let (root, _, _) = stand_and_grip(&skeleton, &hold, &weapon, [Vec3::ZERO; 2]);
+            assert_eq!(root, eye_space(&skeleton), "{class:?} was stood by its carry");
         }
     }
 

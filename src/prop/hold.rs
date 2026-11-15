@@ -345,18 +345,49 @@ mod tests {
     /// carry says; nothing grips.
     #[test]
     fn a_body_without_hands_wears_its_weapon_on_its_mount() {
-        let builds = crate::common::class::ClassBuilds::shipped();
-        let strider = builds.rig_for(Class::Strider);
-        let (bone, offset) = strider.anatomy().mount.expect("the strider has a mount");
+        use crate::common::assets::{default_packs, Assets};
+        use crate::common::skeleton::rig_file::{build_rig, MountEntry};
+        let mut file = crate::common::class_file::load_rig(&Assets::default(), &default_packs(), "raptor").unwrap();
+        file.hands.clear();
+        file.mount = Some(MountEntry { bone: "spine".into(), offset: [0.0, 0.14, -0.1] });
+        let rig = build_rig(&file, &crate::common::skeleton::rig::Build { rig: Some("raptor".into()), ..default() }).unwrap();
+        let (bone, offset) = rig.anatomy().mount.expect("the rig has a mount");
         let root = Transform::IDENTITY;
         let aim = Quat::from_rotation_y(0.4) * Quat::from_rotation_x(0.2);
         let hold = HoldSpec { carry: [0.3, -0.2, -0.5], ..HoldSpec::default() };
-        let placed = weapon_transform(&strider, &Pose::rest(), &root, &hold, aim).unwrap();
-        let mount = strider.posed_bone(&Pose::rest(), &root, bone).tail + aim * offset;
+        let placed = weapon_transform(&rig, &Pose::rest(), &root, &hold, aim).unwrap();
+        let mount = rig.posed_bone(&Pose::rest(), &root, bone).tail + aim * offset;
         assert!(placed.translation.distance(mount) < 1e-5, "the weapon is {} m off the mount", placed.translation.distance(mount));
 
         let mut pose = Pose::rest();
-        assert_eq!(grip_with(&strider, &mut pose, &root, &hold, &placed), [Reach::Impossible; 2]);
+        assert_eq!(grip_with(&rig, &mut pose, &root, &hold, &placed), [Reach::Impossible; 2]);
+    }
+
+    /// Fails if the raptor's arms cannot reach a shipped weapon's grips where its hold carries
+    /// it, level or aimed up or down: in game that is an arm swinging past the weapon.
+    #[test]
+    fn the_raptor_grips_every_shipped_weapon() {
+        let raptor = crate::common::class::ClassBuilds::shipped().rig_for(Class::Raptor);
+        let root = Transform::IDENTITY;
+        let Ok(entries) = std::fs::read_dir("assets/default/props") else { return };
+        for path in entries.flatten().map(|entry| entry.path()) {
+            if path.extension().and_then(|e| e.to_str()) != Some("gpp") {
+                continue;
+            }
+            let doc = crate::prop::document::parse(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            if doc.archetype != crate::prop::archetype::Archetype::Held {
+                continue;
+            }
+            let hold = doc.hold.for_class(Some(Class::Raptor));
+            for pitch in [-0.8f32, 0.0, 0.8] {
+                let aim = Quat::from_rotation_x(pitch);
+                let placed = weapon_transform(&raptor, &Pose::rest(), &root, &hold, aim).unwrap();
+                let mut pose = Pose::rest();
+                let reached = grip_with(&raptor, &mut pose, &root, &hold, &placed);
+                let wanted = if hold.two_handed { [Reach::Reached; 2] } else { [Reach::Reached, Reach::Impossible] };
+                assert_eq!(reached, wanted, "the raptor's hands at pitch {pitch} on {}", path.display());
+            }
+        }
     }
     use crate::common::skeleton::rig::bone;
     use crate::common::skeleton::ik::{LEFT_ARM, RIGHT_ARM};
