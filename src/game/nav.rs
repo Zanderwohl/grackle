@@ -177,7 +177,65 @@ pub struct NavGraph {
     cells: Vec<Cell>,
     links: Vec<Vec<Link>>,
     columns: HashMap<IVec2, Vec<CellId>>,
+    lattice: Lattice,
     fields: Fields,
+}
+
+/// The columns again as a dense array over their bounding rectangle, for [`NavGraph::cell_at`],
+/// which bots call many times a tick. Each column's cells are in id order, as in `columns`.
+#[derive(Clone, Debug, Default)]
+struct Lattice {
+    origin: IVec2,
+    size: IVec2,
+    /// Per column, row-major in `x`, where its cells start in `ids`; one longer than the columns.
+    starts: Vec<u32>,
+    ids: Vec<CellId>,
+}
+
+/// Columns past which a map's rectangle is left to the hash map rather than an array.
+const MOST_LATTICE_COLUMNS: i64 = 1 << 22;
+
+impl Lattice {
+    fn of(cells: &[Cell]) -> Lattice {
+        let Some((low, high)) = cells.iter().fold(None, |bounds: Option<(IVec2, IVec2)>, cell| {
+            Some(bounds.map_or((cell.column, cell.column), |(low, high)| (low.min(cell.column), high.max(cell.column))))
+        }) else {
+            return Lattice::default();
+        };
+        let size = high - low + IVec2::ONE;
+        if size.x as i64 * size.y as i64 > MOST_LATTICE_COLUMNS {
+            return Lattice::default();
+        }
+        let slot = |column: IVec2| ((column.y - low.y) * size.x + (column.x - low.x)) as usize;
+        let mut starts = vec![0u32; (size.x * size.y) as usize + 1];
+        for cell in cells {
+            starts[slot(cell.column) + 1] += 1;
+        }
+        for i in 1..starts.len() {
+            starts[i] += starts[i - 1];
+        }
+        let mut filled = starts.clone();
+        let mut ids = vec![0; cells.len()];
+        for (id, cell) in cells.iter().enumerate() {
+            let at = &mut filled[slot(cell.column)];
+            ids[*at as usize] = id as CellId;
+            *at += 1;
+        }
+        Lattice { origin: low, size, starts, ids }
+    }
+
+    fn is_built(&self) -> bool {
+        !self.starts.is_empty()
+    }
+
+    fn get(&self, column: IVec2) -> Option<&[CellId]> {
+        let at = column - self.origin;
+        if at.x < 0 || at.y < 0 || at.x >= self.size.x || at.y >= self.size.y {
+            return None;
+        }
+        let slot = (at.y * self.size.x + at.x) as usize;
+        Some(&self.ids[self.starts[slot] as usize..self.starts[slot + 1] as usize])
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -189,7 +247,7 @@ struct Stored {
 
 impl From<Stored> for NavGraph {
     fn from(Stored { cells, links, fields }: Stored) -> Self {
-        NavGraph { columns: columns(&cells), cells, links, fields }
+        NavGraph { columns: columns(&cells), lattice: Lattice::of(&cells), cells, links, fields }
     }
 }
 
@@ -341,10 +399,14 @@ pub fn walk_links(world: &CollisionWorld, cells: &[Cell], columns: &HashMap<IVec
 }
 
 pub(crate) fn cell_near(cells: &[Cell], columns: &HashMap<IVec2, Vec<CellId>>, feet: Vec3) -> Option<CellId> {
+    nearest(cells, |column| columns.get(&column).map(Vec::as_slice), feet)
+}
+
+fn nearest<'a>(cells: &[Cell], column_cells: impl Fn(IVec2) -> Option<&'a [CellId]>, feet: Vec3) -> Option<CellId> {
     let column = column_of(feet.x, feet.z);
     let nearby = (-1..=1).flat_map(|dx| (-1..=1).map(move |dz| column + IVec2::new(dx, dz)));
     nearby
-        .filter_map(|column| columns.get(&column))
+        .filter_map(column_cells)
         .flatten()
         .copied()
         .filter(|id| (cells[*id as usize].feet.y - feet.y).abs() <= STEP_HEIGHT)
@@ -608,7 +670,7 @@ impl NavGraph {
     /// Keeps only what can be reached from a cell under one of `starts`; with no starts, keeps
     /// everything. Cell ids are renumbered.
     pub fn reachable(cells: Vec<Cell>, links: Vec<Vec<Link>>, starts: &[Vec3]) -> NavGraph {
-        let everything = NavGraph { columns: columns(&cells), cells, links, fields: Fields::default() };
+        let everything = NavGraph { columns: columns(&cells), lattice: Lattice::of(&cells), cells, links, fields: Fields::default() };
         if starts.is_empty() {
             return everything;
         }
@@ -642,7 +704,7 @@ impl NavGraph {
             .filter(|(_, kept)| **kept)
             .map(|(links, _)| links.into_iter().filter_map(|link| Some(Link { to: renumbered[link.to as usize]?, ..link })).collect())
             .collect();
-        NavGraph { columns: columns(&cells), cells, links, fields: Fields::default() }
+        NavGraph { columns: columns(&cells), lattice: Lattice::of(&cells), cells, links, fields: Fields::default() }
     }
 
     pub fn cells(&self) -> &[Cell] {
@@ -676,7 +738,11 @@ impl NavGraph {
     /// The cell whose floor is nearest under `feet`, in its own column or a neighbor's, within a
     /// step's height.
     pub fn cell_at(&self, feet: Vec3) -> Option<CellId> {
-        cell_near(&self.cells, &self.columns, feet)
+        if self.lattice.is_built() {
+            nearest(&self.cells, |column| self.lattice.get(column), feet)
+        } else {
+            cell_near(&self.cells, &self.columns, feet)
+        }
     }
 
     /// The cheapest way from `from` to `to` along the links, or `None` if there is none. Each link
@@ -705,14 +771,21 @@ impl NavGraph {
         if from as usize >= count {
             return None;
         }
-        let mut seconds = vec![f32::INFINITY; count];
-        let mut came_by: Vec<Option<(CellId, usize)>> = vec![None; count];
+        SEARCH_SCRATCH.with(|scratch| match scratch.try_borrow_mut() {
+            Ok(mut scratch) => self.search_with(&mut scratch, from, ends, grabs, extra),
+            Err(_) => self.search_with(&mut Scratch::default(), from, ends, grabs, extra),
+        })
+    }
+
+    fn search_with(&self, scratch: &mut Scratch, from: CellId, ends: impl Fn(CellId) -> bool, grabs: Option<u16>, extra: impl Fn(CellId, &Link) -> f32) -> Option<Vec<Link>> {
+        scratch.begin(self.cells.len());
         // The cheapest end found, with the grabbing link it ends with, if one.
         let mut best: Option<(f32, CellId, Option<usize>)> = None;
-        seconds[from as usize] = 0.0;
-        let mut queue = BinaryHeap::from([Reverse((0u32, from))]);
+        scratch.reach(from, 0.0, NO_LINK);
+        let mut queue = BinaryHeap::from(std::mem::take(&mut scratch.queue));
+        queue.push(Reverse((0u32, from)));
         while let Some(Reverse((_, at))) = queue.pop() {
-            let cost = seconds[at as usize];
+            let cost = scratch.seconds(at);
             if best.is_some_and(|(least, ..)| least <= cost) {
                 break;
             }
@@ -728,23 +801,73 @@ impl NavGraph {
                     }
                     continue;
                 }
-                if next < seconds[link.to as usize] {
-                    seconds[link.to as usize] = next;
-                    came_by[link.to as usize] = Some((at, index));
+                if next < scratch.seconds(link.to) {
+                    scratch.reach(link.to, next, (at, index as u32));
                     queue.push(Reverse(((next * 1000.0) as u32, link.to)));
                 }
             }
         }
+        let mut spare = queue.into_vec();
+        spare.clear();
+        scratch.queue = spare;
         let (_, end, grab) = best?;
         let mut path: Vec<Link> = grab.map(|index| self.links(end)[index]).into_iter().collect();
         let mut at = end;
-        while let Some((before, index)) = came_by[at as usize] {
-            path.push(self.links(before)[index]);
+        while let Some((before, index)) = scratch.came_by(at) {
+            path.push(self.links(before)[index as usize]);
             at = before;
         }
         path.reverse();
         Some(path)
     }
+}
+
+/// The link a cell was reached by: the cell before and the link's place among its links.
+type CameBy = (CellId, u32);
+const NO_LINK: CameBy = (CellId::MAX, u32::MAX);
+
+/// What [`NavGraph::search`] keeps per cell, reused across searches. An entry belongs to the
+/// current search only where its stamp is the search's, so nothing is cleared between them.
+#[derive(Default)]
+struct Scratch {
+    search: u32,
+    stamps: Vec<u32>,
+    seconds: Vec<f32>,
+    came_by: Vec<CameBy>,
+    queue: Vec<Reverse<(u32, CellId)>>,
+}
+
+impl Scratch {
+    fn begin(&mut self, count: usize) {
+        if self.stamps.len() < count {
+            self.stamps.resize(count, 0);
+            self.seconds.resize(count, f32::INFINITY);
+            self.came_by.resize(count, NO_LINK);
+        }
+        self.search = self.search.wrapping_add(1);
+        if self.search == 0 {
+            self.stamps.fill(0);
+            self.search = 1;
+        }
+    }
+
+    fn seconds(&self, cell: CellId) -> f32 {
+        if self.stamps[cell as usize] == self.search { self.seconds[cell as usize] } else { f32::INFINITY }
+    }
+
+    fn reach(&mut self, cell: CellId, seconds: f32, by: CameBy) {
+        let at = cell as usize;
+        (self.stamps[at], self.seconds[at], self.came_by[at]) = (self.search, seconds, by);
+    }
+
+    fn came_by(&self, cell: CellId) -> Option<CameBy> {
+        let at = cell as usize;
+        (self.stamps[at] == self.search && self.came_by[at] != NO_LINK).then_some(self.came_by[at])
+    }
+}
+
+thread_local! {
+    static SEARCH_SCRATCH: std::cell::RefCell<Scratch> = std::cell::RefCell::new(Scratch::default());
 }
 
 #[cfg(test)]
@@ -892,6 +1015,29 @@ mod tests {
         assert_eq!(at, to);
         let sealed = graph.cell_at(Vec3::new(21.25, 0.0, 1.25)).unwrap();
         assert!(graph.path(from, sealed, |_, _| 0.0).is_none(), "a path into a sealed room");
+    }
+
+    /// Breaks if a search reads what an earlier one left in the reused buffers: the same search
+    /// gives the same path before and after searches on a larger and a smaller graph, and the
+    /// lattice finds the cell the hash map does.
+    #[test]
+    fn a_search_is_the_same_whatever_was_searched_before() {
+        let big = bake(&[room(Vec3::ZERO, Vec3::new(12.0, 3.0, 9.0)), Volume::solid(Room::new(Vec3::new(4.0, 0.0, 3.0), Vec3::new(8.0, 3.0, 6.0)))], &[], &[]);
+        let small = bake(&[room(Vec3::ZERO, Vec3::new(3.0, 3.0, 3.0))], &[], &[]);
+        let (from, to) = (big.cell_at(Vec3::new(0.75, 0.0, 4.25)).unwrap(), big.cell_at(Vec3::new(11.25, 0.0, 4.25)).unwrap());
+        let first = big.path(from, to, |_, _| 0.0).unwrap();
+        small.path(0, small.cells().len() as CellId - 1, |_, _| 0.0).unwrap();
+        for start in 0..big.cells().len() as CellId {
+            big.path(start, to, |_, _| 0.0);
+        }
+        small.path(0, small.cells().len() as CellId - 1, |_, _| 0.0).unwrap();
+        assert_eq!(big.path(from, to, |_, _| 0.0).unwrap(), first);
+        for x in -4..30 {
+            for z in -4..24 {
+                let feet = Vec3::new(x as f32 * 0.43, 0.0, z as f32 * 0.43);
+                assert_eq!(big.cell_at(feet), cell_near(big.cells(), big.columns(), feet), "at {feet}");
+            }
+        }
     }
 
     /// Breaks if the caller's cost is ignored: a pillar splits a room, and making one side dear
