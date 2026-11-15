@@ -10,6 +10,7 @@
 //! an animation grid are ten meshes.
 
 use bevy::platform::collections::HashMap;
+use bevy::camera::visibility::RenderLayers;
 use bevy::prelude::*;
 use bevy::transform::TransformSystems;
 
@@ -313,9 +314,10 @@ fn pose_body_meshes(
 /// [`Watched`] — and nobody else's. Every body is visited, so one no longer
 /// watched is shown again.
 pub(crate) fn hide_own_body(
+    mut commands: Commands,
     view: Res<ViewMode>,
     players: Query<(Entity, Ref<Children>, Option<Ref<LocalPlayer>>, Option<Ref<Watched>>), With<Player>>,
-    mut parts: Query<&mut Visibility, With<FirstPersonHidden>>,
+    parts: Query<Option<&RenderLayers>, With<FirstPersonHidden>>,
     mut no_longer_ours: RemovedComponents<LocalPlayer>,
     mut no_longer_watched: RemovedComponents<Watched>,
 ) {
@@ -331,15 +333,12 @@ pub(crate) fn hide_own_body(
             continue;
         }
         let (ours, watched) = (ours.is_some(), watched.is_some());
-        let wanted = match (ours || watched) && !view.shows_own_body() {
-            true => Visibility::Hidden,
-            false => Visibility::Inherited,
-        };
+        let wanted = crate::common::render_layers::body_layers((ours || watched) && !view.shows_own_body());
         for child in children.iter() {
-            let Ok(mut visibility) = parts.get_mut(child) else { continue };
+            let Ok(layers) = parts.get(child) else { continue };
             // Assigned only on change, so parts are not dirtied every frame.
-            if *visibility != wanted {
-                *visibility = wanted;
+            if layers.cloned().unwrap_or_default() != wanted {
+                commands.entity(child).insert(wanted.clone());
             }
         }
     }
@@ -390,20 +389,14 @@ mod tests {
         let theirs = body_with_parts(&mut world, false);
 
         world.run_system_once(hide_own_body).unwrap();
+        world.flush();
 
+        let layers = |world: &World, part: Entity| world.get::<RenderLayers>(part).cloned().unwrap_or_default();
         for part in &mine {
-            assert_eq!(
-                *world.get::<Visibility>(*part).unwrap(),
-                Visibility::Hidden,
-                "our own body was left across the lens"
-            );
+            assert_eq!(layers(&world, *part), RenderLayers::layer(crate::common::render_layers::INSIDE_HEAD), "our own body was left across the lens");
         }
         for part in &theirs {
-            assert_eq!(
-                *world.get::<Visibility>(*part).unwrap(),
-                Visibility::Inherited,
-                "somebody else's body was hidden with ours"
-            );
+            assert_eq!(layers(&world, *part), RenderLayers::layer(crate::common::render_layers::WORLD), "somebody else's body was hidden with ours");
         }
     }
 

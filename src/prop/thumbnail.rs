@@ -84,7 +84,12 @@ pub struct Framing {
 /// Exact rather than a bounding sphere: for a fixed direction, keeping a point
 /// in frame is a pair of linear bounds on the camera's position.
 pub fn frame(points: impl IntoIterator<Item = Vec3>, rotation: Quat, fov: f32, padding: f32) -> Option<Framing> {
-    let slope = (fov / 2.0).tan() * (1.0 - padding);
+    frame_wide(points, rotation, fov, 1.0, padding)
+}
+
+/// [`frame`] for a frame `aspect` times as wide as it is tall, `fov` being the vertical field.
+pub fn frame_wide(points: impl IntoIterator<Item = Vec3>, rotation: Quat, fov: f32, aspect: f32, padding: f32) -> Option<Framing> {
+    let slope = Vec2::new(aspect, 1.0) * (fov / 2.0).tan() * (1.0 - padding);
     let to_view = rotation.inverse();
 
     // In view space, with the camera at (c, d), a point (p, z) is in frame

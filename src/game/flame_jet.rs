@@ -1,7 +1,7 @@
 //! The flamethrower's flames: a `bevy_hanabi` effect per body that is firing
 //! one, drawn from its muzzle along its aim. Drawing only — the puff was
 //! resolved on the tick by [`crate::game::flame`], whose traced cone is drawn
-//! on `F4`.
+//! on `F6`.
 //!
 //! Each flame flies straight down the middle of the cone, spread a little at
 //! random, for the first three quarters of the range (or until a quarter of
@@ -265,7 +265,7 @@ fn flame_effect(name: &'static str, rate: f32, capacity: u32, rise: (f32, f32)) 
 }
 
 /// 0 to 1, the same on every machine.
-fn noise(n: u32) -> f32 {
+pub(crate) fn noise(n: u32) -> f32 {
     let mut x = n.wrapping_mul(0x9E37_79B9) ^ 0x85EB_CA6B;
     x ^= x >> 15;
     x = x.wrapping_mul(0x2C1B_3C6D);
@@ -274,7 +274,7 @@ fn noise(n: u32) -> f32 {
 }
 
 /// Smooth value noise on a lattice of `cells` per unit, 0 to 1.
-fn value_noise(p: Vec2, cells: f32, seed: u32) -> f32 {
+pub(crate) fn value_noise(p: Vec2, cells: f32, seed: u32) -> f32 {
     let q = p * cells;
     let cell = q.floor();
     let f = q - cell;
@@ -386,7 +386,7 @@ pub fn flame_sheet(texels: u32) -> Vec<u8> {
     rgba
 }
 
-fn sheet_image(rgba: Vec<u8>, width: u32, height: u32) -> Image {
+pub(crate) fn sheet_image(rgba: Vec<u8>, width: u32, height: u32) -> Image {
     use bevy::asset::RenderAssetUsages;
     use bevy::image::ImageSampler;
     use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
@@ -457,7 +457,7 @@ fn light_the_jets(
 
 /// Where a body's flames leave: for the body we view in first person, the
 /// viewmodel's muzzle; otherwise the held model's; failing either, the eye.
-fn nozzle(
+pub(crate) fn nozzle(
     body: &Transform,
     eye: Vec3,
     held: Option<(&HeldModel, &WeaponInHand)>,
