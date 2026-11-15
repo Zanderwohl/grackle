@@ -99,10 +99,11 @@ start with the launcher drawn. A `Goal` is a place or a pickup. The
 map's, so neither saved nor sent: **slots**, the host and bots included, which
 caps the clients a server takes from when it starts listening, and **fill empty
 slots with bots**, which `fill_empty_slots` keeps true through a round as
-people come and go, with seats marked `FillsASlot`. **Bot skill** — Easy, Normal or Hard
-(`BotSkill`) — narrows the rolls of the traits that went with a high score:
-aim settle, ambush patience, roam and cover; every other trait rolls its whole
-range, and changing it rolls every bot's mind again at once. **A bot never keeps
+people come and go, with seats marked `FillsASlot`. **Bot skill** — Easy, Normal, Hard or Varied
+(`BotSkill`) — narrows the rolls of the traits that went with a high score over
+295 Varied rounds: aim error (by far), settle, ease, reaction, turn rate,
+tracking, airblast attempt, standoff comfort, drift and the health drive; every other trait
+rolls its whole range, as every trait does at **Varied**, and changing it rolls every bot's mind again at once. **A bot never keeps
 anybody out**: the cap counts people only, so a slot a bot fills is open, and
 somebody joining takes a filler's seat and body in the same frame, before
 `give_bodies_to_whoever_needs_one` stands theirs up. A spectator takes no
@@ -160,8 +161,14 @@ heard, and a bot keeps 16. `think` reads them, and
 have in sight: aim turning at a rate with an error that settles as it tracks,
 rockets led and put at the feet, fire held without a clear ray, the weapon by
 range, a strafe onto floor the graph has, and an airblast at a rocket it sees
-coming, tried for and timed by its rolled `Reflexes`, so it often misses. `steer_bots` adds the strafe across
-the look.
+coming, tried for and timed by its rolled `Reflexes`, so it often misses. **A
+bot keeps its distance**: it hunts from a place at its weapon's
+`comfortable_range` with a clear line to the quarry, walks in or backs off to
+hold that range once its route is done, and routes round the floor beside
+enemies it knows of (`BotIntent::crowd`). `steer_bots` adds the strafe across
+the look, and eases the route's speed, the strafe and the walk in or out over
+the bot's `Footwork::ramp` (`BotStride`), so it neither stops dead nor flips
+a strafe in a tick.
 
 There is a prop editor, which models the things a map and a class refer to.
 It is a third `AppMode` and the frontier next to it: the geometry it builds is

@@ -21,7 +21,7 @@ use crate::common::weapon::WeaponCatalog;
 use crate::editor::spawn_point::SpawnPointMarker;
 use crate::game::collision::CollisionWorld;
 use crate::game::player::{spawn_player, LocalPlayer, Player, Simulated, Spawn};
-use crate::game::bot::{BotIntent, BotOf, BotRoute, BotSeat, RouteCosts};
+use crate::game::bot::{BotIntent, BotOf, BotRoute, BotSeat, BotStride, RouteCosts};
 use crate::game::bot_sense::{BotMind, BotSenses};
 use crate::game::bot_fight::BotAim;
 use crate::game::bot_think::BotThought;
@@ -281,7 +281,7 @@ pub(crate) fn give_bodies_to_whoever_needs_one(
         let spawn = choose_spawn(placed(), who.team(), &collision);
         info!("Standing a bot's body up as {} on {}", who.id, team_name(who.team()));
         let body = spawn_player(&mut commands, spawn, &who, who.color(&start), &rules, &catalog);
-        commands.entity(body).insert((BotOf(seat), BotIntent::default(), BotRoute::default(), costs, mind, BotSenses::default(), BotThought::default(), BotAim::default(), Name::new("Bot")));
+        commands.entity(body).insert((BotOf(seat), BotIntent::default(), BotRoute::default(), BotStride::default(), costs, mind, BotSenses::default(), BotThought::default(), BotAim::default(), Name::new("Bot")));
         if hosting {
             commands.entity(body).insert(Replicate::to_clients(NetworkTarget::All));
         }

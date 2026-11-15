@@ -733,6 +733,7 @@ fn round_panel_ui(ui: &mut egui::Ui, settings: &mut RoundSettings) {
         BotSkill::Easy => get!("editor.round.skill.easy"),
         BotSkill::Normal => get!("editor.round.skill.normal"),
         BotSkill::Hard => get!("editor.round.skill.hard"),
+        BotSkill::Varied => get!("editor.round.skill.varied"),
     };
     egui::ComboBox::from_label(get!("editor.round.skill.title")).selected_text(skill_name(settings.bot_skill)).show_ui(ui, |ui| {
         for skill in BotSkill::ALL {

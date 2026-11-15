@@ -15,6 +15,7 @@ use crate::common::weapon::{Ammo, Equipped, WeaponCatalog, WeaponId};
 use crate::game::bot::{BotIntent, BotOf, BotRoute, Goal};
 use crate::game::bot_sense::{sense, BotMind, BotSenses, Sense, REMEMBERS, REMEMBERS_NOISES};
 use crate::game::nav::{CellId, NavGraph};
+use crate::game::collision::CollisionWorld;
 use crate::game::nav_rating::Rating;
 use crate::game::player::{running_speed, PhysicsBody};
 use crate::get;
@@ -50,6 +51,18 @@ const NOISE_WORTH: f32 = 0.5;
 const ROAM_SCORE: f32 = 0.1;
 /// Random cells tried for somewhere to roam that is not one just given up on.
 const ROAM_ROLLS: usize = 8;
+/// Meters off its standoff a place to hunt from may be, at least and as a share of the standoff.
+const STANDOFF_BAND: f32 = 1.5;
+const STANDOFF_BAND_SHARE: f32 = 0.2;
+/// Of a place to hunt from, the meters off the standoff that count against it, per meter of walk.
+const STANDOFF_PER_WALK: f32 = 0.5;
+/// Lines tried from places to hunt from, best first, before giving up and going to the quarry;
+/// a place within [`BLOCKED_NEAR`] meters of one found blocked is passed over, since a wall that
+/// hides one hides its neighbors.
+const STANDOFF_TRIES: usize = 24;
+const BLOCKED_NEAR: f32 = 2.0;
+/// Meters above a cell's floor and a quarry's feet the line between them is checked at.
+const SIGHT_HEIGHT: f32 = 1.4;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Want {
@@ -111,15 +124,15 @@ impl Drives {
         let roll = |drive: f32| drive * rand::random_range(DRIVE_SCALE);
         let lean = |drive: f32, better| drive * rand::random_range(skill.within(DRIVE_SCALE, better));
         Drives {
-            health: roll(base.health),
+            health: lean(base.health, Better::Higher),
             armor: roll(base.armor),
             arms: roll(base.arms),
             hunt: roll(base.hunt),
-            cover: lean(base.cover, Better::Higher),
+            cover: roll(base.cover),
             ambush: roll(base.ambush),
-            roam: lean(base.roam, Better::Lower),
+            roam: roll(base.roam),
             stubbornness: roll(base.stubbornness),
-            patience: rand::random_range(skill.within(PATIENCE, Better::Higher)),
+            patience: rand::random_range(PATIENCE),
         }
     }
 }
@@ -247,6 +260,9 @@ pub struct BotThought {
     /// The ambush held, and for how many seconds.
     held: Option<(Goal, f32)>,
     roam: Option<Vec3>,
+    /// Where the enemy it hunts was believed to stand, as feet: the hunt's goal is a place to see
+    /// it from, so looking there and finding nothing rests this.
+    quarry: Option<Vec3>,
     /// The route was done last tick, so an arrival is news once rather than for as long as it lasts.
     was_done: bool,
 }
@@ -370,6 +386,7 @@ pub fn think(
     catalog: Option<Res<WeaponCatalog>>,
     cache: Option<Res<PropCache>>,
     rules: Option<Res<MovementRules>>,
+    world: Option<Res<CollisionWorld>>,
     standing: Standing,
     moved: Query<(), Or<(Added<Pickup>, Changed<WorldProp>)>>,
     mut index: Local<MapIndex>,
@@ -410,6 +427,10 @@ pub fn think(
         if let Some((want, goal)) = current {
             if route.is_lost() {
                 thought.rest(goal, now + UNREACHABLE_REST);
+                // Every place to hunt it from may be as far out of reach as this one.
+                if let Some(quarry) = thought.quarry.filter(|_| want == Want::Hunt) {
+                    thought.rest(Goal::Place(quarry), now + UNREACHABLE_REST);
+                }
             } else if arrived && want == Want::Ambush {
                 let held = match thought.held {
                     Some((held, seconds)) if same_goal(held, goal) => seconds + dt,
@@ -421,8 +442,11 @@ pub fn think(
                 }
             } else if arrived && (want == Want::Roam || (want == Want::Hunt && !senses.known.iter().any(|known| known.in_sight))) {
                 // Looked there and found nothing: not again until the memory is gone. A hunt
-                // standing over somebody it can see has found them.
+                // in sight of somebody has found them.
                 thought.rest(goal, now + REMEMBERS);
+                if let Some(quarry) = thought.quarry.filter(|_| want == Want::Hunt) {
+                    thought.rest(Goal::Place(quarry), now + REMEMBERS);
+                }
             }
         }
 
@@ -499,6 +523,25 @@ pub fn think(
             .filter(|(at, _)| !thought.resting(Goal::Place(*at)))
             .collect();
         enemies.retain(|(_, freshness)| *freshness > 0.0);
+        let crowd: Vec<Vec3> = senses.noticed(now, mind).filter_map(|known| place_of(known.at)).collect();
+        if intent.crowd != crowd {
+            intent.crowd = crowd;
+        }
+        // Only the freshest can win, since every hunt is weighed alike.
+        let quarry = enemies.iter().copied().max_by(|a, b| a.1.total_cmp(&b.1));
+        let standoff = intent.standoff;
+        let hunting_from = match current {
+            Some((Want::Hunt, Goal::Place(at))) => Some(at),
+            _ => None,
+        };
+        thought.quarry = quarry.map(|(at, _)| at);
+        let enemies: Vec<(Vec3, f32)> = quarry
+            .map(|(at, freshness)| {
+                let from = standoff.and_then(|range| hunt_from(graph, &index, world.as_deref(), feet, at, range, hunting_from));
+                (from.unwrap_or(at), freshness)
+            })
+            .into_iter()
+            .collect();
 
         let threatened = senses.known.iter().any(|known| known.in_sight || (known.how == Sense::Hurt && now - known.last <= UNDER_FIRE));
         let exposure = |cell: CellId| graph.field(cell, crate::game::nav_field::Field::Exposure);
@@ -564,6 +607,37 @@ pub fn think(
     }
 }
 
+/// A place `range` meters from a quarry standing at `quarry` with a clear line to it, as feet: the
+/// one `keep` names if it still is one, else the nearest to `feet` and to the range.
+fn hunt_from(graph: &NavGraph, index: &MapIndex, world: Option<&CollisionWorld>, feet: Vec3, quarry: Vec3, range: f32, keep: Option<Vec3>) -> Option<Vec3> {
+    let band = STANDOFF_BAND.max(range * STANDOFF_BAND_SHARE);
+    let mut places: Vec<(Vec3, f32)> = index
+        .near(graph, quarry, range + band)
+        .map(|cell| graph.cells()[cell as usize].feet)
+        .filter_map(|at| {
+            let off = (at.distance(quarry) - range).abs();
+            let kept = keep.is_some_and(|keep| keep.distance(at) <= SAME_PLACE);
+            (off <= band).then_some((at, if kept { f32::NEG_INFINITY } else { off + STANDOFF_PER_WALK * at.distance(feet) }))
+        })
+        .collect();
+    places.sort_by(|a, b| a.1.total_cmp(&b.1));
+    let Some(world) = world else { return places.first().map(|(at, _)| *at) };
+    let mut blocked: Vec<Vec3> = Vec::new();
+    for (at, _) in places {
+        if blocked.len() >= STANDOFF_TRIES {
+            break;
+        }
+        if blocked.iter().any(|other| other.distance(at) <= BLOCKED_NEAR) {
+            continue;
+        }
+        if world.segment_clear(at + Vec3::Y * SIGHT_HEIGHT, quarry + Vec3::Y * SIGHT_HEIGHT) {
+            return Some(at);
+        }
+        blocked.push(at);
+    }
+    None
+}
+
 /// The best score each want had in `ranked`, which is best first, in [`Want::ALL`]'s order.
 fn pulls(ranked: &[Candidate]) -> Vec<(Want, f32)> {
     let mut best = [None; Want::ALL.len()];
@@ -621,6 +695,43 @@ mod tests {
         let situation = Situation { enemies: vec![(at, 1.0)], ..calm() };
         let chosen = picked(&situation, None);
         assert_eq!((chosen.want, chosen.goal), (Want::Hunt, Goal::Place(at)));
+    }
+
+    /// Breaks if a hunt walks onto its quarry, goes round to the far side for a place it could
+    /// have had on its own, hunts from behind a wall, or swaps a place it holds for one as good.
+    #[test]
+    fn a_bot_hunts_from_its_standoff_with_a_clear_line() {
+        use crate::common::movement_rules::MovementRules;
+        use crate::common::world_surface::Volume;
+        use crate::game::nav;
+        use crate::tool::room::Room;
+        let mut collision = CollisionWorld::default();
+        // A hall with a wall across its west end but for a gap at its low-Z side.
+        let faces = collision.rebuild_volumes(&[
+            Volume::air(Room::new(Vec3::ZERO, Vec3::new(40.0, 3.0, 20.0))),
+            Volume::solid(Room::new(Vec3::new(9.0, 0.0, 4.0), Vec3::new(10.0, 3.0, 20.0))),
+        ]);
+        let graph = nav::graph(&collision, &faces, &[], &MovementRules::default(), &[]);
+        let mut index = MapIndex::default();
+        index.keep(&graph, 0);
+        let quarry = Vec3::new(22.25, 0.0, 10.25);
+        let range = 10.0;
+
+        let east = Vec3::new(24.25, 0.0, 10.25);
+        let from = hunt_from(&graph, &index, Some(&collision), east, quarry, range, None).expect("nowhere to hunt from");
+        assert!((from.distance(quarry) - range).abs() <= STANDOFF_BAND, "hunts from {} m off", from.distance(quarry));
+        assert!(from.x > quarry.x, "went round the far side to {from}");
+        assert!(collision.segment_clear(from + Vec3::Y * SIGHT_HEIGHT, quarry + Vec3::Y * SIGHT_HEIGHT));
+
+        // From behind the wall, the nearest places at range are on its far side, with no line.
+        let behind = Vec3::new(5.25, 0.0, 12.25);
+        let from = hunt_from(&graph, &index, Some(&collision), behind, quarry, 14.0, None).expect("nowhere to hunt from");
+        assert!(from.x > 10.0 || from.z < 4.0, "hunts from behind the wall at {from}");
+
+        let held = hunt_from(&graph, &index, Some(&collision), east, quarry, range, None).unwrap();
+        let elsewhere = Vec3::new(quarry.x, 0.0, quarry.z - range + 0.25);
+        let held_on = hunt_from(&graph, &index, Some(&collision), east, quarry, range, graph.cell_at(elsewhere).map(|cell| graph.cells()[cell as usize].feet));
+        assert_ne!(held_on, Some(held), "gave up the place it holds for {held}");
     }
 
     /// Breaks if a badly hurt bot under fire stands and fights rather than getting out of sight.

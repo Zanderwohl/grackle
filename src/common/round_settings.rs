@@ -26,9 +26,9 @@ impl Default for RoundSettings {
     }
 }
 
-/// Which part of each temperament range a bot rolls in, for the traits that went with a high
-/// score over 72 bot-rounds: how fast the aim settles, how long an ambush is held, and how little
-/// it roams and how much it keeps to cover. Every other trait rolls its whole range at any skill.
+/// Which part of each skill trait's range a bot rolls in: the aim, reaction, airblast attempt,
+/// standoff comfort, drift and health drive, which went with a high score over 295 `Varied` rounds
+/// (documentation/bot-brain.md). `Varied` rolls every range whole.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BotSkill {
@@ -36,15 +36,18 @@ pub enum BotSkill {
     #[default]
     Normal,
     Hard,
+    Varied,
 }
 
 impl BotSkill {
-    pub const ALL: [BotSkill; 3] = [BotSkill::Easy, BotSkill::Normal, BotSkill::Hard];
+    pub const ALL: [BotSkill; 4] = [BotSkill::Easy, BotSkill::Normal, BotSkill::Hard, BotSkill::Varied];
 
     /// The part of `range` this skill rolls in, `better` saying which end plays well: the
-    /// bottom, middle or top 40%, overlapping so neighboring tiers are not cleanly apart.
+    /// bottom, middle or top 40%, overlapping so neighboring tiers are not cleanly apart, or all
+    /// of it.
     pub fn within(self, range: std::ops::Range<f32>, better: Better) -> std::ops::Range<f32> {
         let (low, high) = match (self, better) {
+            (BotSkill::Varied, _) => (0.0, 1.0),
             (BotSkill::Normal, _) => (0.3, 0.7),
             (BotSkill::Easy, Better::Higher) | (BotSkill::Hard, Better::Lower) => (0.0, 0.4),
             (BotSkill::Easy, Better::Lower) | (BotSkill::Hard, Better::Higher) => (0.6, 1.0),
@@ -170,9 +173,11 @@ mod tests {
             assert!(part.start >= range.start && part.end <= range.end && part.start < part.end, "{skill:?} strays from the range");
             (part.start + part.end) / 2.0
         };
-        let [easy, normal, hard] = BotSkill::ALL.map(|skill| mid(skill, Better::Lower));
+        let tiers = [BotSkill::Easy, BotSkill::Normal, BotSkill::Hard];
+        let [easy, normal, hard] = tiers.map(|skill| mid(skill, Better::Lower));
         assert!(hard < normal && normal < easy, "lower is better: {hard} {normal} {easy}");
-        let [easy, normal, hard] = BotSkill::ALL.map(|skill| mid(skill, Better::Higher));
+        let [easy, normal, hard] = tiers.map(|skill| mid(skill, Better::Higher));
         assert!(easy < normal && normal < hard, "higher is better: {easy} {normal} {hard}");
+        assert_eq!(BotSkill::Varied.within(range.clone(), Better::Lower), range);
     }
 }

@@ -230,6 +230,7 @@ title = "Bot skill"
 easy = "Easy"
 normal = "Normal"
 hard = "Hard"
+varied = "Varied"
 
 [editor.rounds]
 title = "Rounds"

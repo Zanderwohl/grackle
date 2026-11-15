@@ -154,7 +154,9 @@ static GATE: (Mutex<GateState>, Condvar) =
     (Mutex::new(GateState { configuring: false, submitting: 0 }), Condvar::new());
 
 /// Runs `f`, which submits on Bevy's queue, outside any surface configuration. Blocks for at most
-/// the render world's window preparation.
+/// the render world's window preparation. Call it only from a system pinned to the main thread (a
+/// `NonSend` or `NonSendMarker` parameter): a render system waiting on a task scope while the gate is
+/// shut can run any other main-world system on its own thread, and that one waiting here deadlocks.
 pub fn submitting<R>(f: impl FnOnce() -> R) -> R {
     let (lock, signal) = &GATE;
     {
@@ -272,7 +274,9 @@ impl Plugin for MaterialGpuPlugin {
             render_app.add_systems(
                 Render,
                 (
-                    shut_the_gate.before(create_surfaces).before(prepare_windows),
+                    // Shut as late as possible: a render system waiting on a task scope while the
+                    // gate is shut may run a main-world system that waits for it to open.
+                    shut_the_gate.after(RenderSystems::Specialize).before(create_surfaces).before(prepare_windows),
                     open_the_gate.after(prepare_windows),
                 ),
             );

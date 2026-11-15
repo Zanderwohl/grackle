@@ -53,6 +53,8 @@ pub(super) fn publish_choices(
     palette: Res<Palette>,
     sky: Res<Sky>,
     pit: Res<Pit>,
+    // Baking waits on the GPU gate; see `gpu::submitting`.
+    _main_thread: bevy::ecs::system::NonSendMarker,
 ) {
     let Ok(ctx) = contexts.ctx_mut() else { return };
     // Both taken every frame, so a flag left by one does not outlive its frame.

@@ -24,7 +24,7 @@ use crate::common::swatch::Swatch;
 use crate::common::team::Team;
 use crate::game::respawn::{Identity, OurIdentity, Seat};
 use std::collections::HashMap;
-use crate::game::bot_fight::Aim;
+use crate::game::bot_fight::{Aim, Footwork};
 use crate::game::bot_sense::BotMind;
 use crate::game::nav::{CellId, Leap, Link, LinkKind, NavGraph};
 use crate::game::nav_field::Field;
@@ -77,6 +77,41 @@ pub struct BotIntent {
     pub select: Option<WeaponId>,
     /// `-1` to `1`: sideways, across where it is looking, on top of the route.
     pub strafe: f32,
+    /// `-1` to `1`: forward along where it is looking, taken only once the route has nothing
+    /// left to walk.
+    pub advance: f32,
+    /// Where enemies it knows of stand, as feet: a route keeps its distance from them.
+    pub crowd: Vec<Vec3>,
+    /// Meters feet to feet it means to fight from, for the weapon it means to fight with. Written
+    /// by `fight`; `think` reads it a tick later.
+    pub standoff: Option<f32>,
+}
+
+/// What [`steer_bots`] last put on a bot's legs, so the next move eases from it instead of
+/// stopping dead at a goal or flipping a strafe in one tick.
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct BotStride {
+    /// The way the route last led, across the floor, as a unit vector or zero.
+    heading: Vec2,
+    /// How hard along `heading`, 0 to 1.
+    speed: f32,
+    strafe: f32,
+    advance: f32,
+    /// Last tick was a leap or its run-up.
+    leapt: bool,
+}
+
+/// Meters from the end of a route within which a bot eases off, and the least of its speed it
+/// eases to, so the last step is still a step.
+const EASE_IN: f32 = 1.5;
+const SLOWEST_ARRIVAL: f32 = 0.35;
+/// Meters from an enemy a route avoids, and the seconds per second spent right beside one it
+/// counts on top, falling to nothing at that distance.
+const PERSONAL_SPACE: f32 = 3.0;
+const CROWDING: f32 = 3.0;
+
+fn approach(from: f32, to: f32, step: f32) -> f32 {
+    from + (to - from).clamp(-step, step)
 }
 
 /// How a bot weighs a route beyond the time it takes. Each link costs its seconds, and on top its
@@ -271,7 +306,7 @@ impl Gear<'_> {
 
 /// Plans `route` to `goal` from `feet` if what it was planned for has changed. A rocket jump the
 /// bot has nothing to fire for is a link it cannot take.
-fn plan(route: &mut BotRoute, graph: &NavGraph, generation: u64, feet: Vec3, goal: Option<Goal>, costs: &RouteCosts, gear: &Gear) {
+fn plan(route: &mut BotRoute, graph: &NavGraph, generation: u64, feet: Vec3, goal: Option<Goal>, costs: &RouteCosts, gear: &Gear, crowd: &[Vec3]) {
     let Some(goal) = goal else {
         route.forget();
         return;
@@ -284,7 +319,11 @@ fn plan(route: &mut BotRoute, graph: &NavGraph, generation: u64, feet: Vec3, goa
     route.careless = rand::random::<f32>() < costs.shortsightedness;
     let Some(from) = graph.cell_at(feet) else { return };
     let careless = route.careless;
-    let extra = |cell, link: &Link| if gear.can_take(link, careless) { costs.extra(graph, cell, link) } else { f32::INFINITY };
+    let crowded = |cell: CellId, link: &Link| {
+        let at = graph.cells()[cell as usize].feet;
+        crowd.iter().map(|enemy| (1.0 - enemy.distance(at) / PERSONAL_SPACE).max(0.0)).sum::<f32>() * CROWDING * link.seconds
+    };
+    let extra = |cell, link: &Link| if gear.can_take(link, careless) { costs.extra(graph, cell, link) + crowded(cell, link) } else { f32::INFINITY };
     let path = match goal {
         Goal::Place(place) => graph.cell_at(place).and_then(|to| graph.path(from, to, extra)),
         Goal::Pickup(pickup) => graph.path_to_pickup(from, pickup, extra),
@@ -296,7 +335,7 @@ fn plan(route: &mut BotRoute, graph: &NavGraph, generation: u64, feet: Vec3, goa
 
 #[cfg(test)]
 pub(crate) fn plan_for_test(route: &mut BotRoute, graph: &NavGraph, feet: Vec3, goal: Goal) {
-    plan(route, graph, 0, feet, Some(goal), &RouteCosts::default(), &Gear::default());
+    plan(route, graph, 0, feet, Some(goal), &RouteCosts::default(), &Gear::default(), &[]);
 }
 
 /// Meters per second under which a bot counts as standing still, to set off a rocket jump from.
@@ -406,13 +445,13 @@ pub fn steer_bots(
     mut bots: Query<
         (
             (&PhysicsBody, &Stance, &Player, &BotIntent, Option<&RouteCosts>, Option<&BotMind>),
-            (&mut BotRoute, &mut Inputs, Option<(&Equipped, &Ammo, &Trigger)>, Option<&Damageable>, Option<&Armor>),
+            (&mut BotRoute, &mut Inputs, Option<(&Equipped, &Ammo, &Trigger)>, Option<&Damageable>, Option<&Armor>, Option<&mut BotStride>),
         ),
         With<BotOf>,
     >,
 ) {
     let dt = time.delta_secs();
-    for ((body, stance, player, intent, costs, mind), (mut route, mut inputs, arms, health, armor)) in &mut bots {
+    for ((body, stance, player, intent, costs, mind), (mut route, mut inputs, arms, health, armor, stride)) in &mut bots {
         let feet = feet_of(body, *stance);
         let gear = Gear {
             speed: player.velocity.xz().length(),
@@ -428,24 +467,63 @@ pub fn steer_bots(
             arms: arms.map(|(equipped, ammo, _)| (equipped, ammo)),
         };
         let walking = nav.as_deref().and_then(|nav| {
-            plan(&mut route, nav.graph(), nav.generation(), feet, intent.goal, &costs.copied().unwrap_or_default(), &gear);
+            plan(&mut route, nav.graph(), nav.generation(), feet, intent.goal, &costs.copied().unwrap_or_default(), &gear, &intent.crowd);
             follow(&mut route, nav.graph(), feet, &gear, dt)
         });
         let mut input = walking.unwrap_or(PlayerInput { yaw: player.yaw, pitch: player.pitch, ..default() });
         let leaping = route.leaping.is_some();
+        // A leap is replayed from where the bake started it, so its run-up stays on line.
+        let leap_next = route.ahead().first().is_some_and(|link| link.leap.is_some());
+        let mut world = Vec2::new(-input.yaw.sin(), -input.yaw.cos()) * input.movement.length();
+        let footwork = mind.map_or(Footwork::default(), |mind| mind.footwork);
+        let step = dt / footwork.ramp.max(1e-3);
+        let mut stride = stride.map(Mut::into_inner);
+        if let Some(stride) = stride.as_deref_mut() {
+            let wanted = world.length();
+            if wanted > 0.0 {
+                stride.heading = world / wanted;
+            }
+            if leaping || leap_next {
+                stride.speed = wanted;
+            } else {
+                // The baked leap ends where it lands; carrying on can walk off a narrow landing.
+                if stride.leapt && walking.is_none() {
+                    stride.speed = 0.0;
+                }
+                // Along the route: a goal above or behind a wall is near in a line but far by path.
+                let arriving = match (intent.goal, nav.as_deref()) {
+                    (Some(Goal::Place(_)), Some(nav)) if route.ahead().iter().all(|link| link.leap.is_none()) => {
+                        let cells = nav.graph().cells();
+                        let left = route
+                            .ahead()
+                            .iter()
+                            .scan(feet, |at, link| {
+                                let to = cells[link.to as usize].feet;
+                                Some(std::mem::replace(at, to).distance(to))
+                            })
+                            .sum::<f32>();
+                        if route.ahead().is_empty() { 1.0 } else { (left / EASE_IN).clamp(SLOWEST_ARRIVAL, 1.0) }
+                    }
+                    _ => 1.0,
+                };
+                // Between plans or after the route ends, it keeps its heading while it slows.
+                stride.speed = approach(stride.speed, wanted * arriving, step);
+                world = stride.heading * stride.speed;
+            }
+            stride.leapt = leaping || leap_next;
+        }
         // A leap's own facing is part of what makes it land, so looking elsewhere waits for it.
         if let Some(target) = intent.look_at.filter(|_| !leaping) {
             let eye = body.current + Vec3::Y * player.duck.eye_from_center(*stance);
             let (yaw, pitch) = aim_at(eye, target);
-            let world = Vec2::new(-input.yaw.sin(), -input.yaw.cos()) * input.movement.length();
             input.movement = movement_toward(world, yaw);
             (input.yaw, input.pitch) = (yaw, pitch);
         } else if !leaping {
             // Eased onto each link rather than snapped; the route's direction is kept. Fighting,
             // the aim already turns at a rate.
-            let world = Vec2::new(-input.yaw.sin(), -input.yaw.cos()) * input.movement.length();
             let aim = mind.map_or(Aim::default(), |mind| mind.aim);
-            (input.yaw, input.pitch) = aim.ease_toward((player.yaw, player.pitch), (input.yaw, input.pitch), dt);
+            let facing = if walking.is_some() { (input.yaw, input.pitch) } else { (player.yaw, player.pitch) };
+            (input.yaw, input.pitch) = aim.ease_toward((player.yaw, player.pitch), facing, dt);
             input.movement = movement_toward(world, input.yaw);
         }
         // A leap's own buttons are part of what makes it land, a rocket jump's crouch and shot
@@ -458,9 +536,17 @@ pub fn steer_bots(
             input.alt_attack = intent.alt_fire;
             input.alt_attack_held = intent.alt_fire;
             input.reload = intent.reload;
-            // A leap is replayed from where the bake started it, so its run-up stays on line.
-            if route.ahead().first().is_none_or(|link| link.leap.is_none()) {
-                input.movement = (input.movement + Vec2::X * intent.strafe).clamp_length_max(1.0);
+            if !leap_next {
+                let advance = if route.ahead().is_empty() { intent.advance } else { 0.0 };
+                let (strafe, advance) = match stride.as_deref_mut() {
+                    Some(stride) => {
+                        stride.strafe = approach(stride.strafe, intent.strafe, step);
+                        stride.advance = approach(stride.advance, advance, step);
+                        (stride.strafe, stride.advance)
+                    }
+                    None => (intent.strafe, advance),
+                };
+                input.movement = (input.movement + Vec2::new(strafe, advance)).clamp_length_max(1.0);
             }
             // The route's draw first: a rocket jump waits at its start for that launcher.
             input.select = input.select.or(intent.select);
@@ -809,17 +895,17 @@ mod tests {
 
         let unarmed = Gear::default();
         let mut route = BotRoute::default();
-        plan(&mut route, &graph, 0, start, Some(Goal::Pickup(0)), &RouteCosts::default(), &unarmed);
+        plan(&mut route, &graph, 0, start, Some(Goal::Pickup(0)), &RouteCosts::default(), &unarmed, &[]);
         assert!(route.ahead().is_empty(), "a bot with no launcher was routed by a rocket jump");
 
         let loaded = [launcher.weapon];
         // Hurt enough that the jump would kill: careful, no route; shortsighted every time, the jump.
         let hurt = Gear { health: 20, self_damage: 1.0, loaded: &loaded, ..default() };
         let mut route = BotRoute::default();
-        plan(&mut route, &graph, 0, start, Some(Goal::Pickup(0)), &RouteCosts::default(), &hurt);
+        plan(&mut route, &graph, 0, start, Some(Goal::Pickup(0)), &RouteCosts::default(), &hurt, &[]);
         assert!(route.ahead().is_empty(), "a bot the jump would kill was routed by it");
         let mut route = BotRoute::default();
-        plan(&mut route, &graph, 0, start, Some(Goal::Pickup(0)), &RouteCosts { shortsightedness: 1.0, ..default() }, &hurt);
+        plan(&mut route, &graph, 0, start, Some(Goal::Pickup(0)), &RouteCosts { shortsightedness: 1.0, ..default() }, &hurt, &[]);
         assert!(!route.ahead().is_empty(), "a bot that forgot to look did not take the jump");
 
         let mut mover = Mover { player: Player { ground: Some(Vec3::Y), ..default() }, body: PhysicsBody::at(crate::common::class::body_center_from_feet(start)), stance: Stance::Standing };
@@ -838,7 +924,7 @@ mod tests {
             }
             let upright = mover.stance == Stance::Standing && mover.player.duck.amount == 0.0;
             let gear = Gear { speed: mover.player.velocity.xz().length(), held, ready: held.is_some(), upright, health: 150, armor: 0, self_damage: 1.0, loaded: &loaded, arms: None };
-            plan(&mut route, &graph, 0, feet, Some(Goal::Pickup(0)), &RouteCosts::default(), &gear);
+            plan(&mut route, &graph, 0, feet, Some(Goal::Pickup(0)), &RouteCosts::default(), &gear, &[]);
             let input = follow(&mut route, &graph, feet, &gear, dt).unwrap_or_default();
             held = input.select.or(held);
             step(&mut mover, std::mem::take(&mut kick), &input, &Condition::default(), None, &world, &rules, dt);
@@ -875,7 +961,7 @@ mod tests {
         let loaded = [launcher.weapon];
         let gear = Gear { health: 150, self_damage: 1.0, loaded: &loaded, ..default() };
         let mut route = BotRoute::default();
-        plan(&mut route, &graph, 0, Vec3::new(0.25, 0.0, -9.25), Some(Goal::Place(island)), &RouteCosts::default(), &gear);
+        plan(&mut route, &graph, 0, Vec3::new(0.25, 0.0, -9.25), Some(Goal::Place(island)), &RouteCosts::default(), &gear, &[]);
         let jump = route.links.iter().position(|link| link.kind == LinkKind::RocketJump).expect("the route to the island has no rocket jump");
         let start = match jump.checked_sub(1) {
             Some(before) => graph.cells()[route.links[before].to as usize].feet,
@@ -933,7 +1019,7 @@ mod tests {
                 assert!(crouched, "the bot came through the vent without ever crouching");
                 return;
             }
-            plan(&mut route, &graph, 0, feet, Some(Goal::Place(goal)), &RouteCosts::default(), &Gear::default());
+            plan(&mut route, &graph, 0, feet, Some(Goal::Place(goal)), &RouteCosts::default(), &Gear::default(), &[]);
             let input = follow(&mut route, &graph, feet, &Gear::default(), dt).unwrap_or_default();
             crouched |= mover.stance == Stance::Crouched;
             step(&mut mover, Vec3::ZERO, &input, &Condition::default(), None, &world, &rules, dt);
@@ -987,10 +1073,76 @@ mod tests {
             if reached(feet, graph.cells()[graph.cell_at(goal).unwrap() as usize].feet) {
                 return;
             }
-            plan(&mut route, &graph, 0, feet, Some(Goal::Place(goal)), &RouteCosts::default(), &Gear::default());
+            plan(&mut route, &graph, 0, feet, Some(Goal::Place(goal)), &RouteCosts::default(), &Gear::default(), &[]);
             let input = follow(&mut route, &graph, feet, &Gear::default(), dt).unwrap_or_default();
             step(&mut mover, Vec3::ZERO, &input, &Condition::default(), None, &world, &rules, dt);
         }
         panic!("the bot never reached the ledge; it is at {}", feet_of(&mover.body, mover.stance));
+    }
+
+    /// Breaks if a route walks through somebody it knows is there rather than round them, or one
+    /// with nobody about bends for nothing.
+    #[test]
+    fn a_route_keeps_its_distance_from_an_enemy() {
+        let mut world = CollisionWorld::default();
+        let faces = world.rebuild_volumes(&[Volume::air(Room::new(Vec3::ZERO, Vec3::new(16.0, 3.0, 10.0)))]);
+        let graph = nav::graph(&world, &faces, &[], &MovementRules::default(), &[]);
+        let (start, goal, enemy) = (Vec3::new(1.25, 0.0, 5.25), Vec3::new(15.25, 0.0, 5.25), Vec3::new(8.25, 0.0, 5.25));
+        let closest = |crowd: &[Vec3]| {
+            let mut route = BotRoute::default();
+            plan(&mut route, &graph, 0, start, Some(Goal::Place(goal)), &RouteCosts::default(), &Gear::default(), crowd);
+            assert!(!route.is_lost());
+            route.links.iter().map(|link| (graph.cells()[link.to as usize].feet - enemy).xz().length()).fold(f32::INFINITY, f32::min)
+        };
+        assert!(closest(&[]) <= 1.0, "an empty room's route bends");
+        assert!(closest(&[enemy]) >= PERSONAL_SPACE * 0.5, "the route passes {} m from the enemy", closest(&[enemy]));
+    }
+
+    /// Breaks if a bot's legs jump from still to a run, stop dead when the route runs out, or flip a
+    /// strafe in one tick: each eases over its footwork's ramp, and settles once it has had it.
+    #[test]
+    fn a_bot_eases_into_and_out_of_its_moves() {
+        use bevy::ecs::system::RunSystemOnce;
+        use std::time::Duration;
+        let mut collision = CollisionWorld::default();
+        let faces = collision.rebuild_volumes(&[Volume::air(Room::new(Vec3::ZERO, Vec3::new(30.0, 3.0, 6.0)))]);
+        let graph = nav::graph(&collision, &faces, &[], &MovementRules::default(), &[]);
+        let start = Vec3::new(1.25, 0.0, 3.25);
+        let mut world = World::new();
+        world.insert_resource(NavBake::holding(graph));
+        world.init_resource::<Time>();
+        let mind = BotMind::default();
+        let ramp = mind.footwork.ramp;
+        let bot = world
+            .spawn((
+                BotOf(Entity::PLACEHOLDER),
+                Player { ground: Some(Vec3::Y), ..default() },
+                PhysicsBody::at(crate::common::class::body_center_from_feet(start)),
+                Stance::Standing,
+                BotIntent { goal: Some(Goal::Place(Vec3::new(28.25, 0.0, 3.25))), ..default() },
+                BotRoute::default(),
+                BotStride::default(),
+                Inputs::default(),
+                mind,
+            ))
+            .id();
+        let tick = |world: &mut World, seconds: f32| {
+            world.resource_mut::<Time>().advance_by(Duration::from_secs_f32(seconds));
+            world.run_system_once(steer_bots).unwrap();
+            world.get::<Inputs>(bot).unwrap().0.movement
+        };
+        let dt = nav::TICK;
+        assert!(tick(&mut world, dt).length() < 0.5, "a bot sets off at a run");
+        assert!((tick(&mut world, ramp).length() - 1.0).abs() < 1e-4, "a bot is not running once it has had its ramp");
+
+        world.get_mut::<BotIntent>(bot).unwrap().goal = None;
+        assert!(tick(&mut world, dt).length() > 0.5, "a bot stops dead when its goal goes");
+        assert!(tick(&mut world, ramp).length() < 1e-4, "a bot is still walking once it has had its ramp to stop");
+
+        world.get_mut::<BotIntent>(bot).unwrap().strafe = 1.0;
+        tick(&mut world, ramp);
+        world.get_mut::<BotIntent>(bot).unwrap().strafe = -1.0;
+        assert!(tick(&mut world, dt).x > 0.5, "a strafe flips in a tick");
+        assert!((tick(&mut world, 2.0 * ramp).x + 1.0).abs() < 1e-4, "a strafe has not turned round after twice its ramp");
     }
 }

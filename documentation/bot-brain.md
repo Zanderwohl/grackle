@@ -63,7 +63,7 @@ being visible in one place.
   forgotten after a few seconds unseen. A bot that loses sight of somebody
   goes to where they were, not to where they are.
 - **Reaction time**: what is sensed reaches the think and fight layers after
-  a delay, a fifth to two fifths of a second by temperament. A bot that fires
+  a delay, a quarter to 0.45 of a second by temperament. A bot that fires
   the frame an enemy rounds a corner reads as a cheat whatever its aim.
 
 What the bot knows without sensing: the map, the bake, and its own state.
@@ -110,6 +110,69 @@ arriving.
   the rocket launcher when splash will reach.
 - **Moving while fighting** is the think layer's goal, plus strafing from the
   fight layer within the route's next link, so a duel is not two statues.
+- **Keeping its distance.** A hunt goes to a place at the range its weapon
+  is comfortable at with a clear line to the quarry, never onto the quarry,
+  and once there the fight layer walks in or backs off to hold that range.
+  A route avoids the floor right beside any enemy it knows of.
+
+### What a temperament is worth (November 2026)
+
+The data, method and full tables are in
+[bot-study-2026-11.md](bot-study-2026-11.md). In short, 295 rounds at `Varied` skill (148 1v1s, 98 of four bots and 49 of eight, on
+the arena and the cloister; 1,080 bots, each with its own temperament) were
+scored by kills minus deaths per minute against the round's mean, with every
+trait standardized and the round as a fixed effect:
+
+- **Aim error decides most of it**: −0.52 per standard deviation (p < 10⁻⁴),
+  more than every other trait together. The best fifth beat the worst fifth by
+  0.94 kills minus deaths a minute and placed 0.60 against 0.34 (1 first, 0
+  last). The effect falls off between 0.09 and 0.11 rad and grows with the
+  round: −0.20 per deviation in a 1v1, −0.73 with eight. It works through
+  damage dealt (ρ −0.34) and, less, damage taken.
+- Smaller and real: a slower aim settle (−0.21), a slower reaction (−0.13),
+  a wider ease (−0.11), a faster turn (+0.11), a farther standoff
+  (`comfort`, +0.11), a stronger health drive (+0.11, through health packs
+  taken) and more drift (−0.10).
+- No effect found: the hunt, ambush, roam, patience, armor and stubbornness
+  drives, airblast timing, footwork `ramp`, `stride` and `reversal`, and every
+  route weight but self-damage (+0.18 in 1v1s only). A stronger arms drive
+  picks up more weapons and hunts less, and places a little lower.
+- The cover drive leans negative (−0.08, p 0.06), though an earlier 72-round
+  study had more cover going with a high score. `BotSkill` no longer narrows
+  cover, roam, patience or airblast timing.
+- Time on the pistol tracks deaths per minute (ρ 0.89), since every life
+  starts on it, so it measures dying rather than causing it.
+- Temperament explains about a tenth of a round's outcome out of sample
+  (boosted trees, R² 0.11); the rest is the opponents, the spawns and chance.
+- The ten traits `BotSkill` narrowed during the study, averaged with the
+  better end up, sort bots cleanly: the top fifth placed 0.61, the bottom
+  0.41.
+
+What changed because of it:
+
+- `BotSkill` narrows the traits with an effect (aim error, settle, ease,
+  reaction, turn rate, tracking, airblast attempt, `comfort`, `drift` and the
+  health drive) and no longer narrows cover, roam, patience or airblast
+  timing.
+- Every aim range moved one tier worse (error 0.06–0.17 rad, settle
+  0.5–1.1 s, tracking 45–80 %, turn rate 3–8 rad/s, reaction 0.25–0.45 s),
+  since the study's bots aimed too well to play against. Hard now rolls aim
+  error at or just under the 0.09–0.11 rad drop-off.
+
+For the next study:
+
+- Run it again at the new ranges before reading the aim numbers above as
+  today's.
+- A stronger arms drive cut time on the pistol but did not win more, and
+  the hunt drive raised placing overall (+0.04, p 0.009) but lowered kills
+  minus deaths with eight bots (−0.19, p 0.009). Both are worth a targeted
+  run, varying one drive with the rest fixed.
+- The 1 Hz samples smear a running body over 6 m, so place-level questions
+  (where fights are won) wait for the 4 Hz tracks in
+  [round-recording.md](round-recording.md).
+- Run each study with `--server-config` files like the study's, one round per
+  launch, so every round rolls new temperaments; the scripts in
+  `data/bot-study-2026-11/` read the round files directly.
 
 ### Temperament
 
@@ -124,8 +187,13 @@ campers and brawlers come out of one system with different numbers.
   respawns.
 - **Teamwork.** Nothing here coordinates bots on a team. Spreading out and
   focusing fire are later work.
-- **Difficulty.** A preset that scales the temperament ranges, so a server
-  can ask for easy or hard bots.
+- **Difficulty.** Decided: `BotSkill` (Easy, Normal, Hard) rolls each skill
+  trait from the worse 40 %, the middle or the better 40 % of its range —
+  aim error, settle, ease, reaction, turn rate, tracking, airblast attempt,
+  footwork `comfort` and `drift`, and the health drive, the traits that went with a high
+  score in the study above. Everything else rolls its whole range at every
+  skill, and `Varied` rolls every trait across its whole range, for studying
+  which traits win.
 
 ## Checklist
 
@@ -173,21 +241,38 @@ Built as `src/game/bot_fight.rs`, after `think` in the tick. A bot shoots
 only what its senses have in sight, preferring the nearest, its last
 attacker or whoever faces it by temperament (`Aim`, in `BotMind`), and keeps
 a target until another is half as wanted again. Its aim (`BotAim`) turns at
-3.5 to 9 rad/s while far and eases the last of the way over 0.06 to 0.16 s,
-following 55 to 90 % of the target's motion across the view by itself and
-catching up on the rest, so it trails a runner a little. It is off by 0.03 to
-0.14 rad when it finds somebody, starting past them along the flick and
-settling to a third of that over 0.3 to 0.9 s, the error drifting round at
+3 to 8 rad/s while far and eases the last of the way over 0.06 to 0.16 s,
+following 45 to 80 % of the target's motion across the view by itself and
+catching up on the rest, so it trails a runner a little. It is off by 0.06 to
+0.17 rad when it finds somebody, starting past them along the flick and
+settling to a third of that over 0.5 to 1.1 s, the error drifting round at
 0.5 rad/s and growing with how fast the target crosses the view. A weapon is worth its damage per second at the range,
 hitscan scaled by its ramp-up and falloff and halved by 40 m of it, a projectile by its flight time squared
 against 0.8 s, and nothing inside 1.2 times its own blast; it is switched
 to only when 1.3 times better than the one held. A rocket is led, lifted for
 its fall and put at the feet it can see, and never fired with a wall inside
 its blast. While fighting a bot moves in legs (`Footwork`):
-a strafe one way or standing to aim, each about 0.9 to 2 s, strafing 30 to
+a strafe one way or a drift at 15 to 45 % of a strafe while it aims, each about 0.9 to 2 s, strafing 30 to
 85 % of them and going back the way it came 40 to 80 % of the time, starting
 0.35 s after it finds a target, onto floor the graph has and that does not
 hurt — a reversal takes a fifth of a second, so shorter legs read as jitter.
+It holds a **standoff**: the furthest the weapon it means to use still does
+its `comfort` (55 to 90 %) of its best damage per second from, kept between
+3 and 25 m (`comfortable_range`). Every weapon's worth is greatest close in,
+so the best range alone walked bots onto their targets. With nothing left on
+its route it walks in or backs off along its aim to hold it, at full speed
+half the standoff off it and not at all within a fifth of that, onto floor
+that does not hurt. A hunt's goal is the place nearest the bot and the
+standoff, within 1.5 m or a fifth of it, that has a clear line to where the
+quarry stands (`hunt_from`), keeping the place it holds while that still
+qualifies; arriving with nobody in sight rests the quarry's spot as well. A
+route pays 3 s per second spent beside an enemy it knows of, falling to
+nothing at 3 m. **Its legs ease** (`BotStride`, in `steer_bots`): the route's
+speed, the strafe and the walk in or out each move toward what is asked over
+the footwork's `ramp` (0.12 to 0.3 s from still to a run), the route's speed
+easing off over the last 1.5 m to a place, and with the route done or
+between plans it carries on the way it was going while it slows. Leaps and
+their run-ups are not eased, since they replay the bake's input.
 Out of a fight it turns onto each link the way its aim does rather than
 snapping onto it. Holding an airblast that reflects, it meets a
 hostile projectile it sees coming within its blast radius (`Reflexes`): it
