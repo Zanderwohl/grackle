@@ -190,8 +190,6 @@ struct Round {
     bot_skill: BotSkill,
     wanted: HashMap<PlayerId, Want>,
     sightings: HashMap<(PlayerId, PlayerId), f32>,
-    /// The hit that emptied each body, from `note_damage` to `note_kills`.
-    fatal: HashMap<Entity, crate::common::damage::Cause>,
     #[cfg(not(target_arch = "wasm32"))]
     file: Option<std::io::BufWriter<std::fs::File>>,
     #[cfg(test)]
@@ -436,10 +434,6 @@ fn note_damage(mut round: ResMut<Round>, time: Res<Time>, mut dealt: MessageRead
             at: point(hit.point),
         };
         round.write(&event);
-        // Only a person's: nothing else leaves a `Died` to take it back out.
-        if hit.remaining == 0 && target.is_some() {
-            round.fatal.insert(hit.target, hit.cause);
-        }
     }
 }
 
@@ -458,7 +452,7 @@ fn note_kills(mut round: ResMut<Round>, time: Res<Time>, mut died: MessageReader
         };
         let killer = party_of(&round, Some(death.killer));
         let assist = party_of(&round, death.assist);
-        let cause = round.fatal.remove(&death.victim).unwrap_or_default();
+        let cause = death.cause;
         let distance = killer.as_ref().filter(|killer| killer.id != victim_id.0).map(|killer| {
             let (a, b) = (Vec3::from_array(killer.at), Vec3::from_array(party.at));
             (a.distance(b) * 100.0).round() / 100.0
@@ -625,6 +619,7 @@ mod tests {
             killer: DamageSource::Player(PlayerId(2)),
             assist: Some(DamageSource::Player(PlayerId(3))),
             at: Vec3::new(0.0, 1.0, 0.0),
+            cause: Cause::of(rocket, How::Splash),
         });
         app.update();
 

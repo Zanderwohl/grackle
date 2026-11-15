@@ -1240,6 +1240,7 @@ mod tests {
             killer: crate::common::damage::DamageSource::World,
             assist: None,
             at: Vec3::ZERO,
+            cause: Default::default(),
         }
     }
 

@@ -527,6 +527,7 @@ mod tests {
             killer,
             assist: None,
             at: Vec3::ZERO,
+            cause: Default::default(),
         }
     }
 

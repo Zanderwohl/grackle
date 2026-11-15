@@ -48,6 +48,14 @@ All times are real seconds from the moment the kill cam starts.
   On a client `Died` and the despawn arrive in either order, so a `Died` read up to
   `KILL_CAM_GRACE` after the death cam started still starts it, from the death cam's start.
 
+## Who and with what
+
+- `Died` carries the killing hit's `Cause` (the `DamageLog` keeps the latest), so the kill cam
+  knows the weapon as well as the killer.
+- Until the kill cam hands over to spectating, a leaning panel at the middle of the right edge of the
+  `WindowSafeZone` says "You were killed by {name}" and, when a weapon fired, "Using {weapon}",
+  in the killer's color (`name_our_killer` in [`src/game/name_tag.rs`](../src/game/name_tag.rs)).
+
 ## Framing the killer
 
 - The killer's body is a vertical segment from its feet to its crown (the hull's bottom and top).
@@ -103,3 +111,4 @@ records drawn `GlobalTransform`s and puts old ones back for the render.
 - [x] Respawn cuts the kill cam short at any phase
 - [x] Tests: framing, the rate curve, replay restore leaves live transforms untouched, respawn cut
 - [x] Watched in a round against bots: the swing, the glide, ghosts of rockets, the hand-off
+- [x] Killer and weapon on a panel at the right middle of the window safe zone

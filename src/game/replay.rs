@@ -54,7 +54,6 @@ struct Track {
     ghost: Option<Entity>,
 }
 
-/// What a ghost needs to draw a mesh that has been despawned.
 #[derive(Clone)]
 struct Look {
     mesh: Handle<Mesh>,
@@ -101,7 +100,6 @@ impl Track {
         Some((lerp(&frame.placed, &next.placed, t), frame.shown))
     }
 
-    /// Frames before the view are never sampled again, except the last of them.
     fn prune(&mut self, view: f64) {
         while self.frames.len() > 1 && self.frames[1].at <= view {
             self.frames.pop_front();
@@ -202,8 +200,8 @@ fn record(
                     tag: tag.cloned(),
                     no_shadow,
                 });
-                // On the first frame everything already stood there. A mesh may be put on an entity
-                // a frame after its transform, as a replicated one is dressed.
+                // On the first frame everything already stood there. A replicated entity may get
+                // its mesh a frame after its transform.
                 let born = (!first && (placed.is_added() || mesh.is_added())).then_some(now);
                 history.tracks.insert(entity, Track { frames: VecDeque::from([frame]), born, look, ghost: None });
             }

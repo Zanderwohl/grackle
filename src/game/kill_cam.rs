@@ -9,6 +9,7 @@ use bevy::prelude::*;
 use crate::common::app_mode::AppMode;
 use crate::common::class::Stance;
 use crate::common::damage::{DamageSource, Died, PlayerId};
+use crate::common::weapon::WeaponId;
 use crate::game::collision::CollisionWorld;
 use crate::game::death::Dying;
 use crate::game::player::{start_the_death_cam, DeathCam, LocalPlayer, OurLastBody, Player, PlayerCamera, CAMERA_RADIUS};
@@ -33,6 +34,8 @@ pub const FRAME_FILL: f32 = 0.6;
 #[derive(Resource, Clone, Copy, Debug, PartialEq)]
 pub struct OurKiller {
     pub killer: PlayerId,
+    /// What they killed us with; `None` for a kill nothing fired.
+    pub weapon: Option<WeaponId>,
     /// Seconds of `Time`, when it was read.
     pub at: f64,
 }
@@ -55,6 +58,7 @@ struct Glide {
 #[derive(Resource, Clone, Debug)]
 pub struct KillCam {
     pub killer: PlayerId,
+    pub weapon: Option<WeaponId>,
     /// Seconds of `Time`.
     started: f64,
     /// Real seconds since it started.
@@ -67,8 +71,8 @@ pub struct KillCam {
 }
 
 impl KillCam {
-    pub fn new(killer: PlayerId, started: f64, died_at: Vec3) -> Self {
-        Self { killer, started, elapsed: 0.0, glide: None, died_at, corpse: VecDeque::new() }
+    pub fn new(killer: PlayerId, weapon: Option<WeaponId>, started: f64, died_at: Vec3) -> Self {
+        Self { killer, weapon, started, elapsed: 0.0, glide: None, died_at, corpse: VecDeque::new() }
     }
 
     pub fn phase(&self) -> Phase {
@@ -109,7 +113,6 @@ impl KillCam {
         }
     }
 
-    /// Our corpse's pelvis at the view time, tweened.
     pub fn corpse_at(&self, view: f64) -> Option<Vec3> {
         let after = self.corpse.partition_point(|(at, _)| *at <= view);
         let (at, pelvis) = match after {
@@ -180,7 +183,7 @@ fn learn_our_killer(
         if let DamageSource::Player(killer) = death.killer
             && killer != us
         {
-            commands.insert_resource(OurKiller { killer, at: time.elapsed_secs_f64() });
+            commands.insert_resource(OurKiller { killer, weapon: death.cause.weapon, at: time.elapsed_secs_f64() });
         }
     }
 }
@@ -219,7 +222,7 @@ fn run_the_kill_cam(
         let dead = death_cam.as_ref().is_some_and(|cam| cam.whose.is_some());
         if let Some(killer) = killer.filter(|killer| dead && now - killer.at <= KILL_CAM_GRACE as f64) {
             let died_at = death_cam.as_ref().map_or(Vec3::ZERO, |cam| cam.pivot);
-            commands.insert_resource(KillCam::new(killer.killer, now, died_at));
+            commands.insert_resource(KillCam::new(killer.killer, killer.weapon, now, died_at));
             commands.insert_resource(Replay { view: now, frozen: false });
             commands.remove_resource::<OurKiller>();
         }
@@ -333,7 +336,7 @@ mod tests {
     }
 
     fn death(victim: u64, killer: DamageSource) -> Died {
-        Died { victim: Entity::PLACEHOLDER, victim_name: None, victim_id: Some(PlayerId(victim)), killer, assist: None, at: Vec3::ZERO }
+        Died { victim: Entity::PLACEHOLDER, victim_name: None, victim_id: Some(PlayerId(victim)), killer, assist: None, at: Vec3::ZERO, cause: Default::default() }
     }
 
     /// Breaks if a kill by somebody else does not run the replay through to spectating their
@@ -382,7 +385,7 @@ mod tests {
     /// Breaks if the phases do not come in order, or the glide does not arrive.
     #[test]
     fn the_glide_arrives_and_holds_before_spectating() {
-        let mut cam = KillCam::new(PlayerId(1), 0.0, Vec3::ZERO);
+        let mut cam = KillCam::new(PlayerId(1), None, 0.0, Vec3::ZERO);
         assert_eq!(cam.phase(), Phase::Swing);
         let to = Transform::from_xyz(5.0, 1.0, 0.0);
         cam.glide = Some(Glide { from: Transform::IDENTITY, to });

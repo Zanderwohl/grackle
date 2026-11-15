@@ -324,9 +324,19 @@ impl MapEntities for Died {
 #[derive(Component, Clone, Debug, Default, PartialEq)]
 pub struct DamageLog {
     contributors: Vec<(DamageSource, f32)>,
+    /// What dealt the latest hit, so a death can say what killed it.
+    last_cause: Cause,
 }
 
 impl DamageLog {
+    pub fn caused(&mut self, cause: Cause) {
+        self.last_cause = cause;
+    }
+
+    pub fn cause(&self) -> Cause {
+        self.last_cause
+    }
+
     /// `at` is seconds of game time.
     pub fn record(&mut self, source: DamageSource, at: f32) {
         // A contributor is held at their latest hit.
@@ -339,9 +349,8 @@ impl DamageLog {
         self.contributors.last().map(|(who, _)| *who)
     }
 
-    /// The most recent other player to hurt `victim` inside the window at `now`. Neither the
-    /// victim nor the map is passed over for, so somebody who hurt a body that then fell into a
-    /// pit or blew itself up is credited with finishing it off.
+    /// The most recent other player to hurt `victim` inside the window at `now`, skipping the
+    /// victim and the map, so a body that dies to a pit or its own rocket credits whoever hurt it.
     pub fn assist(&self, now: f32, victim: Option<PlayerId>) -> Option<DamageSource> {
         self.contributors
             .iter()
@@ -354,6 +363,7 @@ impl DamageLog {
 
     pub fn clear(&mut self) {
         self.contributors.clear();
+        self.last_cause = Cause::default();
     }
 }
 
@@ -379,6 +389,8 @@ pub struct Died {
     pub killer: DamageSource,
     pub assist: Option<DamageSource>,
     pub at: Vec3,
+    /// What dealt the killing hit.
+    pub cause: Cause,
 }
 
 #[cfg(test)]
@@ -437,6 +449,7 @@ mod tests {
             killer: A,
             assist: None,
             at: Vec3::ZERO,
+            cause: Default::default(),
         };
         death.map_entities(&mut Shift);
         assert_eq!(death.victim, Entity::from_raw_u32(107).unwrap());

@@ -2192,7 +2192,9 @@ again, and cuts back in rather than swinging from the corpse.
 stop over a second while the view swings out over our corpse and glides to a
 framing of the killer, head to feet and never further than we died, holds a
 second, then spectates (from their eye) until the next body, which cuts it
-short at any point. The killer is `Died`'s, the last hit; a death at our own
+short at any point. Until it spectates, a panel at the middle of the window
+safe zone's right edge names the killer and the weapon (`Died` carries the killing `Cause`).
+The killer is `Died`'s, the last hit; a death at our own
 hand or the map's keeps the orbit. Somebody who hurt a body inside the window
 before it killed itself is its assist (`DamageLog::assist` passes over the
 victim and the map). **The slow motion is drawn, not simulated**
