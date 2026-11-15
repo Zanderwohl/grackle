@@ -5,7 +5,7 @@ use bevy_egui::egui;
 use crate::editor::editable::FeatureTimeline;
 use crate::editor::multicam::MulticamState;
 
-#[derive(Resource)]
+#[derive(Resource, Clone, PartialEq)]
 pub struct GizmoVisibility {
     pub points: bool,
     pub rooms: bool,
