@@ -101,7 +101,7 @@ struct Kitted {
 
 /// What is drawn for an instance, and for which bake.
 #[derive(Component)]
-#[require(PropPerformance)]
+#[require(PropPerformance, PartsPlacedAt)]
 struct DrawnProp {
     model: String,
     generation: u64,
@@ -122,6 +122,11 @@ pub const HIT_CLIP: &str = "hit";
 
 #[derive(Component)]
 struct WorldPropPart;
+
+/// Where [`place_world_prop_parts`] last put a still prop's parts, so a prop that has not moved
+/// is not placed again. `None` after any frame they were animated.
+#[derive(Component, Default)]
+struct PartsPlacedAt(Option<Transform>);
 
 /// How far a weapon's parts are lifted so its lowest point is where it
 /// stands: a held prop's origin is its grip, not its base. Measured when it is
@@ -268,33 +273,28 @@ pub fn sync_weapon_pickups(
     mut instances: Query<(Entity, &mut WorldProp, &mut GivesWeapon, &OfPropFeature)>,
 ) {
     for (feature, spec, placed, stands) in &features {
-        let wanted = catalog.get(spec.weapon).map(|weapon| {
-            (
-                WorldProp {
-                    model: weapon.model.clone().unwrap_or_default(),
-                    at: placed.translation,
-                    rotation: placed.rotation,
-                },
-                GivesWeapon { weapon: spec.weapon, ammo: spec.ammo, respawn: spec.respawn, style: spec.style },
-            )
-        });
+        let weapon = catalog.get(spec.weapon);
+        let model = || weapon.and_then(|weapon| weapon.model.as_deref()).unwrap_or_default();
+        // Built only when spawning or changing, not to compare every frame.
+        let wanted_prop = || WorldProp { model: model().to_owned(), at: placed.translation, rotation: placed.rotation };
+        let gives = GivesWeapon { weapon: spec.weapon, ammo: spec.ammo, respawn: spec.respawn, style: spec.style };
         let existing = stands.and_then(|stands| instances.get_mut(stands.0).ok());
 
-        match (wanted, stands, existing) {
+        match (weapon.map(|_| gives), stands, existing) {
             (None, Some(stands), _) => {
                 commands.entity(stands.0).try_despawn();
                 commands.entity(feature).remove::<StandsFor>();
             }
             (None, None, _) => {}
-            (Some(wanted), None, _) => {
-                let instance = commands.spawn((wanted, Pickup::default(), OfPropFeature(feature))).id();
+            (Some(gives), None, _) => {
+                let instance = commands.spawn((wanted_prop(), gives, Pickup::default(), OfPropFeature(feature))).id();
                 commands.entity(feature).insert(StandsFor(instance));
             }
             // Gone without the feature going: put back on the round's edge.
             (Some(_), Some(_), None) => {}
-            (Some((prop, gives)), Some(_), Some((_, mut was_prop, mut was_gives, _))) => {
-                if *was_prop != prop {
-                    *was_prop = prop;
+            (Some(gives), Some(_), Some((_, mut was_prop, mut was_gives, _))) => {
+                if was_prop.model != model() || was_prop.at != placed.translation || was_prop.rotation != placed.rotation {
+                    *was_prop = wanted_prop();
                 }
                 if *was_gives != gives {
                     *was_gives = gives;
@@ -375,10 +375,16 @@ fn dress_world_props(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<LitMaterial>>,
     mut clips: ResMut<Assets<Clip>>,
-    instances: Query<(Entity, &WorldProp, Option<&DrawnProp>, Option<&Pickup>, Has<GivesWeapon>)>,
+    instances: Query<(Entity, &WorldProp, Option<Ref<DrawnProp>>, Option<Ref<Pickup>>, Has<GivesWeapon>)>,
     mut parts: Query<&mut Visibility, With<WorldPropPart>>,
+    mut unpicked: RemovedComponents<Pickup>,
 ) {
+    let unpicked: Vec<Entity> = unpicked.read().collect();
     for (entity, prop, drawn, pickup, weapon) in &instances {
+        let pickup_changed = pickup.as_ref().is_some_and(Ref::is_changed) || unpicked.contains(&entity);
+        let pickup = pickup.as_deref();
+        let drawn_changed = drawn.as_ref().is_some_and(Ref::is_changed);
+        let drawn = drawn.as_deref();
         let visibility = match pickup.is_some_and(|pickup| pickup.taken) {
             true => Visibility::Hidden,
             false => Visibility::Inherited,
@@ -388,6 +394,10 @@ fn dress_world_props(
             drawn.model == prop.model && drawn.generation == cache.generation()
         });
         if let Some(drawn) = current {
+            // Parts are spawned shown as the pickup stood then.
+            if !pickup_changed && !drawn_changed {
+                continue;
+            }
             // The parts, not the root: the prop editor hides roots, and
             // restores what it found.
             for part in &drawn.parts {
@@ -460,7 +470,14 @@ fn place_world_prop_parts(
     mode: Res<State<AppMode>>,
     cache: Res<PropCache>,
     clips: Res<Assets<Clip>>,
-    mut instances: Query<(&WorldProp, &DrawnProp, &mut PropPerformance, Option<&GivesWeapon>, Option<&RestsOn>)>,
+    mut instances: Query<(
+        &WorldProp,
+        Ref<DrawnProp>,
+        &mut PropPerformance,
+        &mut PartsPlacedAt,
+        Option<&GivesWeapon>,
+        Option<&RestsOn>,
+    )>,
     mut parts: Query<(&mut Transform, Option<&OnPropBone>), With<WorldPropPart>>,
 ) {
     // Wrapped, or an `f32` of seconds steps visibly after a day. The wrap
@@ -474,7 +491,7 @@ fn place_world_prop_parts(
     // In `f64`: an idle's length has nothing to do with the wrap period above.
     let idle_clock = time.elapsed_secs_f64();
     let mut pose = PropPose::default();
-    for (prop, drawn, mut performance, gives, rests) in &mut instances {
+    for (prop, drawn, mut performance, mut placed_at, gives, rests) in &mut instances {
         let lift = match (gives, rests) {
             (Some(_), Some(rests)) => rests.0 + WEAPON_HOVER,
             (Some(_), None) => WEAPON_HOVER,
@@ -489,18 +506,23 @@ fn place_world_prop_parts(
             Some(PickupStyle::Tf2) => Transform::from_xyz(0.0, lift + HOVER, 0.0).with_rotation(spin),
             _ => Transform::from_xyz(0.0, lift, 0.0),
         };
-        let deltas = match baked {
-            Some(baked) if !baked.rig.is_empty() => {
+        let rigged = baked.filter(|baked| !baked.rig.is_empty());
+        // No bones, so a started clip has nothing to play on.
+        if rigged.is_none() && performance.playing.is_some() {
+            performance.playing = None;
+        }
+        // With no idle and nothing playing a rig stands in rest, where every delta is the identity.
+        let animated = rigged.filter(|baked| performance.playing.is_some() || baked.clips.contains_key(IDLE_CLIP));
+        if animated.is_none() && !drawn.is_changed() && placed_at.0 == Some(wanted) {
+            continue;
+        }
+        placed_at.0 = animated.is_none().then_some(wanted);
+        let deltas = match animated {
+            Some(baked) => {
                 pose_placed(baked, &clips, idle_clock, time.delta_secs(), &mut performance, &mut pose);
                 baked.rig.deltas(&pose)
             }
-            // No bones, so a started clip has nothing to play on.
-            _ => {
-                if performance.playing.is_some() {
-                    performance.playing = None;
-                }
-                vec![]
-            }
+            None => vec![],
         };
         for part in &drawn.parts {
             let Ok((mut transform, bone)) = parts.get_mut(*part) else { continue };
@@ -549,15 +571,27 @@ pub fn placed_colliders<'a>(
 
 /// What a pickup is taken through: its colliders, or a small sphere when it
 /// has none, so a pack modeled without one can still be walked into.
-fn triggers(baked: &BakedProp, at: &Transform) -> Vec<RoundedBox> {
-    if baked.colliders.is_empty() {
-        let fallback = Collider {
-            origin: [0.0; 3],
-            shape: ColliderShape::Sphere { radius: DEFAULT_PICKUP_RADIUS },
-        };
-        return vec![fallback.rounded().placed(at)];
-    }
-    placed_colliders(baked, at).collect()
+fn triggers<'a>(baked: &'a BakedProp, at: &Transform) -> impl Iterator<Item = RoundedBox> + 'a {
+    let fallback = baked.colliders.is_empty().then(|| {
+        Collider { origin: [0.0; 3], shape: ColliderShape::Sphere { radius: DEFAULT_PICKUP_RADIUS } }
+            .rounded()
+            .placed(at)
+    });
+    placed_colliders(baked, at).chain(fallback)
+}
+
+/// A weapon pickup's trigger, or a prop pickup's.
+fn pickup_triggers<'a>(
+    gives: Option<&GivesWeapon>,
+    baked: Option<&'a BakedProp>,
+    at: &Transform,
+) -> impl Iterator<Item = RoundedBox> + 'a {
+    let weapon = gives.map(|_| weapon_trigger(at));
+    let prop = match gives {
+        Some(_) => None,
+        None => baked.map(|baked| triggers(baked, at)),
+    };
+    weapon.into_iter().chain(prop.into_iter().flatten())
 }
 
 /// A breakable is shot as the box around its colliders, and has no head.
@@ -566,13 +600,20 @@ fn triggers(baked: &BakedProp, at: &Transform) -> Vec<RoundedBox> {
 fn box_breakables(
     mut commands: Commands,
     cache: Res<PropCache>,
-    instances: Query<(Entity, &WorldProp, Option<&Hitboxes>, Has<Damageable>)>,
+    mut boxed_for: Local<Option<u64>>,
+    instances: Query<(Entity, Ref<WorldProp>, Option<&Hitboxes>, Option<Ref<Damageable>>)>,
 ) {
+    let rebaked = *boxed_for != Some(cache.bakes());
+    *boxed_for = Some(cache.bakes());
     for (entity, prop, boxes, breakable) in &instances {
-        if !breakable {
+        let Some(breakable) = breakable else {
             if boxes.is_some() {
                 commands.entity(entity).remove::<Hitboxes>();
             }
+            continue;
+        };
+        // Nothing the box is worked out from has changed.
+        if !rebaked && !prop.is_changed() && !breakable.is_added() && boxes.is_some() {
             continue;
         }
         let Some(baked) = cache.get(&prop.model) else { continue };
@@ -597,13 +638,20 @@ fn bounding(shapes: impl Iterator<Item = RoundedBox>) -> Option<Box3> {
 
 /// Build the solid props into the collision world. On every machine, so a
 /// client predicting its movement walks into the same crate the server does.
-/// Run each tick before the step; there are few enough props that rebuilding
-/// is cheaper than knowing when not to.
+/// Run each tick before the step, rebuilding only when an instance came, went
+/// or moved, a model was baked, or something else wrote the collision world.
 pub fn collide_with_props(
     mut collision: ResMut<CollisionWorld>,
     cache: Res<PropCache>,
     instances: Query<&WorldProp>,
+    changed: Query<(), Changed<WorldProp>>,
+    mut built: Local<Option<(u64, usize)>>,
 ) {
+    let seen = (cache.bakes(), instances.iter().len());
+    if *built == Some(seen) && changed.is_empty() && !collision.is_changed() {
+        return;
+    }
+    *built = Some(seen);
     let collision = collision.bypass_change_detection();
     collision.props.clear();
     for prop in &instances {
@@ -657,16 +705,21 @@ fn take_pickups(
             continue;
         }
 
-        let (triggers, respawn) = match gives {
-            Some(gives) => (vec![weapon_trigger(&prop.transform())], gives.respawn),
-            None => {
-                let Some(baked) = cache.get(&prop.model) else { continue };
-                (triggers(baked, &prop.transform()), baked.pickup.respawn)
-            }
+        let at = prop.transform();
+        let baked = cache.get(&prop.model);
+        let respawn = match (gives, baked) {
+            (Some(gives), _) => gives.respawn,
+            (None, Some(baked)) => baked.pickup.respawn,
+            (None, None) => continue,
         };
+        let Some(reach) = bounding(pickup_triggers(gives, baked, &at)) else { continue };
         for (body_entity, body, stance, health, armor, ammo, equipped, trigger, id) in &mut bodies {
             let half = stance.half_extents();
-            if !triggers.iter().any(|trigger| trigger.overlaps(body.current, half)) {
+            // Overlapping a trigger needs overlapping the box around all of them.
+            if ((body.current - reach.center).abs() - half - reach.half_extents).max_element() > 1.0e-4 {
+                continue;
+            }
+            if !pickup_triggers(gives, baked, &at).any(|trigger| trigger.overlaps(body.current, half)) {
                 continue;
             }
             let gained = match gives {
@@ -768,13 +821,11 @@ fn draw_pickup_triggers(
         return;
     }
     for (prop, pickup, gives) in &pickups {
-        let triggers = match gives {
-            Some(_) => vec![weapon_trigger(&prop.transform())],
-            None => match cache.get(&prop.model) {
-                Some(baked) => triggers(baked, &prop.transform()),
-                None => continue,
-            },
-        };
+        let baked = cache.get(&prop.model);
+        if gives.is_none() && baked.is_none() {
+            continue;
+        }
+        let triggers = pickup_triggers(gives, baked, &prop.transform());
         let color = if pickup.taken { Color::srgba(0.4, 0.9, 0.5, 0.25) } else { Color::srgb(0.4, 0.9, 0.5) };
         for trigger in triggers {
             if trigger.core == Vec3::ZERO {

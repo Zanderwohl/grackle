@@ -5,6 +5,8 @@ mod contact;
 pub mod hull;
 mod rounded;
 
+use std::ops::ControlFlow;
+
 use bevy::prelude::*;
 
 use crate::common::world_surface::{self, Face, Volume};
@@ -22,6 +24,9 @@ const WALL_THICKNESS: f32 = 0.5;
 /// does not find it touching again.
 const SKIN: f32 = 0.001;
 
+/// Meters each hull's bounds are widened by in the grid.
+const FILING_SLACK: f32 = 1.0e-3;
+
 /// Built from the rooms' surface directly rather than from the baked meshes,
 /// so an edit lands without waiting for a re-bake. Same faces either way.
 #[derive(Resource, Default)]
@@ -35,6 +40,14 @@ pub struct CollisionWorld {
     /// are rebuilt on a different trigger: rooms change with the map, props
     /// with what the authority has standing.
     pub props: Vec<RoundedBox>,
+}
+
+/// Whether a prop's bounds touch `min..=max`. A sweep's hit lies inside the prop grown by the box,
+/// so a prop whose bounds miss the swept box by more than rounding cannot be hit.
+fn boxes_touch(prop: &RoundedBox, min: Vec3, max: Vec3) -> bool {
+    const SLACK: f32 = 1.0e-3;
+    let reach = prop.half_extents() + SLACK;
+    (prop.center - reach).cmple(max).all() && (prop.center + reach).cmpge(min).all()
 }
 
 fn face_bounds(face: &Face) -> (Vec3, Vec3) {
@@ -130,7 +143,12 @@ impl CollisionWorld {
 
     /// Replace the static world, leaving the room interiors as they were.
     pub fn set_hulls(&mut self, hulls: Vec<Hull>) {
-        self.grid = Grid::build(hulls.iter().map(Hull::bounds));
+        // Filed a little wide, so a hit point that rounding puts just outside a hull's bounds is
+        // still in a cell the hull is filed in. Only adds candidates; every test on them is exact.
+        self.grid = Grid::build(hulls.iter().map(|hull| {
+            let (min, max) = hull.bounds();
+            (min - FILING_SLACK, max + FILING_SLACK)
+        }));
         self.hulls = hulls;
     }
 
@@ -141,22 +159,27 @@ impl CollisionWorld {
         self.set_hulls(hulls);
     }
 
-    fn hulls_near(&self, min: Vec3, max: Vec3) -> impl Iterator<Item = &Hull> {
-        self.grid.near(min, max).into_iter().map(|index| &self.hulls[index as usize])
-    }
-
-    /// The first thing a box moving by `delta` touches: a wall or a solid prop.
+    /// The first thing a box moving by `delta` touches: a wall or a solid prop. Of walls touched
+    /// at once, the lowest index; any wall before a prop.
     pub fn sweep(&self, center: Vec3, half: Vec3, delta: Vec3) -> Option<Hit> {
         let (min, max) = ((center - half).min(center + delta - half), (center + half).max(center + delta + half));
-        let walls = self.hulls_near(min, max).filter_map(|hull| hull.sweep(center, half, delta));
-        let props = self.props.iter().filter_map(|prop| rounded::sweep(prop, center, half, delta));
-        walls.chain(props).fold(None, |best: Option<Hit>, hit| match best {
-            Some(best) if best.t <= hit.t => Some(best),
-            _ => Some(hit),
-        })
+        let mut best: Option<(Hit, u32)> = None;
+        self.grid.for_each_near(min, max, |index| {
+            let Some(hit) = self.hulls[index as usize].sweep(center, half, delta) else { return };
+            if best.is_none_or(|(best, at)| hit.t < best.t || (hit.t == best.t && index < at)) {
+                best = Some((hit, index));
+            }
+        });
+        let mut best = best.map(|(hit, _)| hit);
+        for prop in self.props.iter().filter(|prop| boxes_touch(prop, min, max)) {
+            let Some(hit) = rounded::sweep(prop, center, half, delta) else { continue };
+            if best.is_none_or(|best| hit.t < best.t) {
+                best = Some(hit);
+            }
+        }
+        best
     }
 
-    /// Move a box by `delta`, one axis at a time so a diagonal run into a wall
     /// Move a box by `delta`, sliding along whatever it meets: sweep, stop
     /// `SKIN` short, take the part of the rest that goes into what was hit out,
     /// and go again. Returns where it ended and what it touched.
@@ -238,7 +261,13 @@ impl CollisionWorld {
     /// ceiling is a slab the body overlaps, so this covers headroom too.
     pub fn fits(&self, center: Vec3, half: Vec3) -> bool {
         self.inside_map(center)
-            && !self.hulls_near(center - half, center + half).any(|hull| hull.overlaps(center, half))
+            && self
+                .grid
+                .try_for_each_near(center - half, center + half, |index| match self.hulls[index as usize].overlaps(center, half) {
+                    true => ControlFlow::Break(()),
+                    false => ControlFlow::Continue(()),
+                })
+                .is_continue()
             && !self.props.iter().any(|prop| prop.overlaps(center, half))
     }
 
@@ -256,14 +285,34 @@ impl CollisionWorld {
         !self.grid.any_along(from, to, |index| self.hulls[index as usize].ray(&ray, length).is_some())
     }
 
+    /// Whether no wall is within `range` along the ray, as [`CollisionWorld::ray_distance`] would
+    /// answer it; stops at the first wall met rather than finding the nearest.
+    pub fn ray_clear(&self, ray: &Ray3d, range: f32) -> bool {
+        let end = ray.origin + *ray.direction * (range + FILING_SLACK);
+        !self.grid.any_along(ray.origin, end, |index| self.hulls[index as usize].ray(ray, range).is_some())
+    }
+
     /// The first wall along the ray, as a distance and the normal of the face
     /// crossed. The crossed face, not the nearest: a bounce off the wrong
     /// normal goes through the floor.
     pub fn ray_hit(&self, ray: &Ray3d, range: f32) -> Option<(f32, Vec3)> {
-        let end = ray.origin + *ray.direction * range;
-        self.hulls_near(ray.origin.min(end), ray.origin.max(end))
-            .filter_map(|hull| hull.ray(ray, range))
-            .min_by(|a, b| a.0.total_cmp(&b.0))
+        // Walked a little past the range and the best hit, for the same rounding as `FILING_SLACK`.
+        let walked = range + FILING_SLACK;
+        let end = ray.origin + *ray.direction * walked;
+        let mut best: Option<(f32, Vec3, u32)> = None;
+        self.grid.along(ray.origin, end, |entered, shapes| {
+            if best.is_some_and(|(distance, _, _)| entered * walked > distance + FILING_SLACK) {
+                return true;
+            }
+            for &index in shapes {
+                let Some((distance, normal)) = self.hulls[index as usize].ray(ray, range) else { continue };
+                if best.is_none_or(|(best, _, at)| distance.total_cmp(&best).then(index.cmp(&at)).is_lt()) {
+                    best = Some((distance, normal, index));
+                }
+            }
+            false
+        });
+        best.map(|(distance, normal, _)| (distance, normal))
     }
 
     /// Shove a body that is already inside a wall or a solid prop back out of
@@ -307,8 +356,14 @@ impl CollisionWorld {
     /// rounded prop is escaped along the axes, by its extent on each as the
     /// body would meet it moving along that axis from where it is.
     fn escapes(&self, center: Vec3, half: Vec3) -> Option<Vec<Vec3>> {
-        if let Some(hull) = self.hulls_near(center - half, center + half).find(|hull| hull.overlaps(center, half)) {
-            return Some(hull.escapes(center, half, SKIN).collect());
+        let mut first: Option<u32> = None;
+        self.grid.for_each_near(center - half, center + half, |index| {
+            if first.is_none_or(|first| index < first) && self.hulls[index as usize].overlaps(center, half) {
+                first = Some(index);
+            }
+        });
+        if let Some(index) = first {
+            return Some(self.hulls[index as usize].escapes(center, half, SKIN).collect());
         }
         let prop = self.props.iter().find(|prop| prop.overlaps(center, half))?;
         let mut escapes = Vec::with_capacity(6);
@@ -359,6 +414,84 @@ mod tests {
             }
         }
         assert!(clear > 100, "too few clear segments to have tested anything: {clear}");
+    }
+
+    fn scatter(seed: &mut u32) -> f32 {
+        *seed ^= *seed << 13;
+        *seed ^= *seed >> 17;
+        *seed ^= *seed << 5;
+        *seed as f32 / u32::MAX as f32
+    }
+
+    /// A map of rooms, blocks and a ramp spread over many cells, with walls on cell boundaries.
+    fn a_sprawl() -> CollisionWorld {
+        let mut world = CollisionWorld::default();
+        world.rebuild_volumes(&[
+            Volume::air(Room::new(Vec3::new(-40.0, 0.0, -40.0), Vec3::new(0.0, 8.0, 40.0))),
+            Volume::air(Room::new(Vec3::new(0.0, 1.0, -3.0), Vec3::new(12.0, 4.0, 3.0))),
+            Volume::air(Room::new(Vec3::new(12.0, -4.0, -40.0), Vec3::new(44.0, 12.0, 40.0))),
+            Volume::solid(Room::new(Vec3::new(-20.0, 0.0, -6.5), Vec3::new(-16.0, 3.3, 7.1))),
+            Volume::solid(Room::new(Vec3::new(20.0, -4.0, 4.0), Vec3::new(24.0, 6.0, 8.0))),
+            Volume::air(Room::prism(vec![Vec2::new(-30.0, -30.0), Vec2::new(-10.0, -30.0), Vec2::new(-30.0, -10.0)], 8.0, 11.0)),
+        ]);
+        let mut hulls = world.hulls.clone();
+        hulls.push(Hull::triangle(Vec3::new(14.0, -4.0, -20.0), Vec3::new(14.0, -4.0, -10.0), Vec3::new(30.0, 2.0, -10.0)));
+        world.set_hulls(hulls);
+        world
+    }
+
+    /// Breaks if walking the ray along the grid finds a different wall, distance or normal from
+    /// testing every wall, ties to the lowest index as before.
+    #[test]
+    fn a_ray_walked_along_the_grid_meets_what_testing_every_wall_meets() {
+        let world = a_sprawl();
+        let brute = |ray: &Ray3d, range: f32| world.hulls.iter().filter_map(|hull| hull.ray(ray, range)).min_by(|a, b| a.0.total_cmp(&b.0));
+        let mut seed = 0x2545_f491;
+        let mut checked = 0;
+        for i in 0..4000 {
+            let mut random = || scatter(&mut seed);
+            let origin = Vec3::new(random() * 96.0 - 44.0, random() * 18.0 - 5.0, random() * 88.0 - 44.0);
+            let origin = if i % 4 == 0 { (origin / 4.0).round() * 4.0 } else { origin };
+            let direction = match i % 3 {
+                0 => Vec3::new(random() - 0.5, random() - 0.5, random() - 0.5),
+                1 => [Vec3::X, Vec3::NEG_X, Vec3::Y, Vec3::NEG_Y, Vec3::Z, Vec3::NEG_Z][(random() * 5.99) as usize],
+                _ => Vec3::new(random() - 0.5, 0.0, random() - 0.5),
+            };
+            let Ok(direction) = Dir3::new(direction) else { continue };
+            let range = if i % 5 == 0 { random() * 4.0 } else { random() * 150.0 };
+            let ray = Ray3d::new(origin, direction);
+            let expected = brute(&ray, range);
+            assert_eq!(world.ray_hit(&ray, range), expected, "from {origin} along {direction:?} for {range}");
+            assert_eq!(world.ray_clear(&ray, range), expected.is_none(), "from {origin} along {direction:?} for {range}");
+            checked += usize::from(expected.is_some());
+        }
+        assert!(checked > 1000, "too few hits to have tested anything: {checked}");
+    }
+
+    /// Breaks if a sweep or an overlap test stops finding the wall testing every wall finds.
+    #[test]
+    fn a_box_meets_what_testing_every_wall_meets() {
+        let mut world = a_sprawl();
+        world.props.push(RoundedBox { center: Vec3::new(-8.0, 1.0, 2.0), core: Vec3::splat(0.5), radius: 0.2 });
+        let mut seed = 0x1357_9bdf;
+        for i in 0..3000 {
+            let mut random = || scatter(&mut seed);
+            let center = Vec3::new(random() * 96.0 - 44.0, random() * 18.0 - 5.0, random() * 88.0 - 44.0);
+            let delta = Vec3::new(random() - 0.5, random() - 0.5, random() - 0.5) * if i % 2 == 0 { 3.0 } else { 40.0 };
+            let walls = world.hulls.iter().filter_map(|hull| hull.sweep(center, HALF, delta));
+            let props = world.props.iter().filter_map(|prop| rounded::sweep(prop, center, HALF, delta));
+            let expected = walls.chain(props).fold(None, |best: Option<Hit>, hit| match best {
+                Some(best) if best.t <= hit.t => Some(best),
+                _ => Some(hit),
+            });
+            assert_eq!(world.sweep(center, HALF, delta), expected, "from {center} by {delta}");
+            let overlapping = world.hulls.iter().any(|hull| hull.overlaps(center, HALF)) || world.props.iter().any(|prop| prop.overlaps(center, HALF));
+            assert_eq!(world.fits(center, HALF), world.inside_map(center) && !overlapping);
+            let first = world.hulls.iter().find(|hull| hull.overlaps(center, HALF)).map(|hull| hull.escapes(center, HALF, SKIN).collect::<Vec<_>>());
+            if first.is_some() {
+                assert_eq!(world.escapes(center, HALF), first);
+            }
+        }
     }
 
     /// Whether something facing along `axis`, either way, was touched.
