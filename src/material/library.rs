@@ -187,7 +187,12 @@ pub fn paint_rooms(
             }
             continue;
         }
-        let mut material = |name| {
+        // Read first: a mutable borrow marks the resources changed, and `BakedTextures` is
+        // extracted to the render world on every change.
+        let mut material = |name: &str| {
+            if let Some(entry) = library.entries.get(name) {
+                return entry.as_ref().map(|entry| entry.material.clone());
+            }
             library.ensure(name, &packs, &device, &mut baked, &mut standard).map(|entry| entry.material.clone())
         };
         let wanted = if named == Some(PIT) {
@@ -195,7 +200,10 @@ pub fn paint_rooms(
         } else {
             match named.and_then(&mut material).or_else(|| material(default_material(part.slot))) {
                 Some(material) => material,
-                None => bake.material(&mut standard),
+                None => match bake.existing_material() {
+                    Some(material) => material.clone(),
+                    None => bake.material(&mut standard),
+                },
             }
         };
         if drawn_as_sky {

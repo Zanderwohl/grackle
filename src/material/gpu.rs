@@ -196,6 +196,9 @@ fn swap_in_baked_textures(
     mut inserted: Local<HashSet<AssetId<Image>>>,
     mut samplers: Local<Option<(Sampler, Sampler)>>,
 ) {
+    if !baked.is_changed() {
+        return;
+    }
     inserted.retain(|asset| {
         let keep = baked.textures.contains_key(asset);
         if !keep {

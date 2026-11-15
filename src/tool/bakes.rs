@@ -13,7 +13,7 @@ use crate::common::world_surface::Volume;
 use crate::tool::nav_overlay::{self, NavCommands};
 use crate::tool::bake_progress;
 use crate::tool::bake_job::{self, BakeKind, BakeProgress, BakeState, BakeStatus, VolumeLabels};
-use crate::tool::room::{CalculateRoomGeometry, ClearRoomGeometry, MapVolumes, Room, RoomSlot, VolumeOrder};
+use crate::tool::room::{Block, CalculateRoomGeometry, ClearRoomGeometry, MapVolumes, Room, RoomSlot, VolumeOrder};
 
 #[derive(Message)]
 pub struct LogECS;
@@ -67,6 +67,8 @@ pub struct RoomBake {
     /// Auto-bake is off and a volume has changed since the last bake.
     stale: bool,
     seen: HashMap<Entity, (Volume, VolumeOrder)>,
+    /// Bumped whenever `seen` is replaced or cleared, so an idle frame can skip comparing it.
+    seen_version: u64,
     material: Option<Handle<StandardMaterial>>,
 }
 
@@ -78,6 +80,7 @@ impl Default for RoomBake {
             batch_done: 0,
             stale: false,
             seen: HashMap::new(),
+            seen_version: 0,
             material: None,
         }
     }
@@ -97,6 +100,7 @@ impl RoomBake {
         if auto && !self.auto {
             // Rooms changed while it was off; every room reads as new.
             self.seen.clear();
+            self.seen_version += 1;
         }
         self.auto = auto;
     }
@@ -118,6 +122,10 @@ impl RoomBake {
             scheduled: self.batch_done + self.queue.len(),
             doing: self.queue.front().map(|room| labels.label(*room)).unwrap_or_default(),
         }
+    }
+
+    pub fn existing_material(&self) -> Option<&Handle<StandardMaterial>> {
+        self.material.as_ref()
     }
 
     /// What a slot is drawn with when not even the default material can be baked.
@@ -214,6 +222,7 @@ impl BakePlugin {
         bake_rooms(&mut bake, &rooms, &existing_bakes, &mut commands, &mut meshes, &mut materials);
     }
 
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
     pub(crate) fn auto_bake_rooms(
         mut bake: ResMut<RoomBake>,
         volumes: MapVolumes,
@@ -221,21 +230,44 @@ impl BakePlugin {
         mut commands: Commands,
         mut meshes: ResMut<Assets<Mesh>>,
         mut materials: ResMut<Assets<StandardMaterial>>,
+        edited: Query<(), Or<(Changed<Room>, Changed<Block>, Changed<VolumeOrder>)>>,
+        new_bakes: Query<(), Added<BakedRoomGeometry>>,
+        mut removed_rooms: RemovedComponents<Room>,
+        mut removed_blocks: RemovedComponents<Block>,
+        mut removed_orders: RemovedComponents<VolumeOrder>,
+        // The last answer and the `seen_version` it was against.
+        mut known: Local<Option<(u64, bool)>>,
     ) {
-        let unchanged = bake.seen.len() == volumes.entities().count()
-            && volumes.each().all(|(entity, shape, fill, order)| {
-                bake.seen.get(&entity).is_some_and(|(seen, seen_order)| seen.fill == fill && seen.shape == *shape && seen_order == order)
-            });
+        let removed = removed_rooms.read().count() + removed_blocks.read().count() + removed_orders.read().count() > 0;
+        let touched = removed || !edited.is_empty();
+        let version_moved = known.is_none_or(|(version, _)| version != bake.seen_version);
+        let unchanged = match *known {
+            Some((version, unchanged)) if !touched && version == bake.seen_version => unchanged,
+            _ => {
+                let unchanged = bake.seen.len() == volumes.entities().count()
+                    && volumes.each().all(|(entity, shape, fill, order)| {
+                        bake.seen.get(&entity).is_some_and(|(seen, seen_order)| seen.fill == fill && seen.shape == *shape && seen_order == order)
+                    });
+                *known = Some((bake.seen_version, unchanged));
+                unchanged
+            }
+        };
         if !bake.auto {
-            bake.stale = !unchanged;
+            if bake.stale != !unchanged {
+                bake.stale = !unchanged;
+            }
             return;
         }
-        bake.stale = false;
+        if bake.stale {
+            bake.stale = false;
+        }
 
         // Cheap, and outside the budget: a deleted room's walls vanish at once.
-        for (entity, baked) in &bakes {
-            if !volumes.contains(baked.room) {
-                commands.entity(entity).despawn();
+        if removed || version_moved || !new_bakes.is_empty() {
+            for (entity, baked) in &bakes {
+                if !volumes.contains(baked.room) {
+                    commands.entity(entity).despawn();
+                }
             }
         }
 
@@ -267,6 +299,7 @@ impl BakePlugin {
         if !urgent.is_empty() || !gone.is_empty() {
             bake.jump_the_queue(urgent);
             bake.seen = placed.iter().map(|(order, volume, entity)| (*entity, (volume.clone(), order.clone()))).collect();
+            bake.seen_version += 1;
         }
 
         if bake.queue.is_empty() { return; }
@@ -317,6 +350,7 @@ impl BakePlugin {
         bake.queue.clear();
         bake.batch_done = 0;
         bake.seen.clear();
+        bake.seen_version += 1;
         let count = existing_bakes.iter().count();
         for entity in &existing_bakes {
             commands.entity(entity).despawn();
@@ -372,6 +406,7 @@ fn bake_rooms(
     bake.batch_done = placed.len();
     bake.stale = false;
     bake.seen = placed.iter().map(|(order, volume, entity)| (*entity, (volume.clone(), order.clone()))).collect();
+    bake.seen_version += 1;
     let (entities, volumes): (Vec<Entity>, Vec<Volume>) = placed.into_iter().map(|(_, volume, entity)| (entity, volume)).unzip();
 
     for index in 0..entities.len() {
