@@ -8,24 +8,22 @@
 //!    press in the frame it arrived.
 //! 3. Systems read [`Actions`], never a `KeyCode`.
 //!
-//! egui only draws: menu hints through [`hint`], and the Shortcuts page of
-//! the Settings window. Capturing a new binding reads Bevy's input too.
+//! egui only draws bindings: menu hints through [`hint`], and the Shortcuts
+//! page.
 //!
-//! **Escape and Enter are fixed** ([`Action::FIXED`]): Escape is the pause menu
-//! and the editors' cancel, Enter their confirm. Nothing can be bound to them,
-//! so the key that gets the mouse back is always the same key.
+//! Escape and Enter are fixed ([`Action::FIXED`]), so the key that gives the
+//! mouse back cannot be rebound away.
 //!
-//! **While egui wants the keyboard, no key fires** (mouse buttons and bare
-//! modifiers still do):
-//! `Ctrl+Z` in a text field means undo the text. Read from the previous
-//! frame's [`EguiWantsInput`], since egui drops a text field's focus on
-//! Escape in the frame the key arrives.
+//! While egui wants the keyboard, no key fires except bare modifiers; mouse
+//! buttons still do. That is read from the previous frame's
+//! [`EguiWantsInput`], because egui drops a text field's focus in the frame
+//! the Escape arrives.
 //!
-//! Two matching rules ([`Action::exact`]): an editor command wants exactly its
-//! modifiers, so `Ctrl+Shift+S` is not also `Ctrl+S`; a game action wants at
-//! least them, so `R` reloads while crouched on Ctrl. When several loose
-//! actions match one press, those whose chord another's chord extends are
-//! dropped, so `Shift+B` does not also fire `B`.
+//! An editor command matches exactly its modifiers, so `Ctrl+Shift+S` is not
+//! also `Ctrl+S`. A game action matches at least them, so `R` reloads while
+//! crouched on Ctrl ([`Action::exact`]). When two loose actions match one
+//! press, the one whose chord the other extends is dropped, so `Shift+B` does
+//! not also fire `B`.
 
 pub mod chord;
 pub mod keymap;
@@ -99,7 +97,7 @@ macro_rules! actions {
             }
 
             /// Whether the chord's modifiers must be exactly those held,
-            /// rather than at least those. See the module documentation.
+            /// rather than at least those.
             pub fn exact(self) -> bool {
                 match self { $(Action::$variant => $exact),* }
             }
@@ -182,11 +180,9 @@ actions! {
 }
 
 impl Action {
-    /// The actions on Escape and Enter. They read from the table like any
-    /// other action but cannot be rebound, and are not saved.
+    /// On Escape and Enter. Never rebound and never saved.
     pub const FIXED: [Action; 3] = [Action::Pause, Action::Cancel, Action::Confirm];
 
-    /// The weapon buckets, `1` first.
     pub const BUCKETS: [Action; 9] = [
         Action::Bucket1,
         Action::Bucket2,
@@ -219,8 +215,7 @@ impl Action {
 
 const COUNT: usize = Action::ALL.len();
 
-/// What each action is doing this frame. Written by [`resolve_actions`] only,
-/// and only when it differs, so change detection means something changed.
+/// Written by [`resolve_actions`] only, and only when it differs.
 #[derive(Resource, Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Actions {
     pressed: [bool; COUNT],
@@ -247,19 +242,18 @@ impl Actions {
         self.just_released[action.index()]
     }
 
-    /// `positive` minus `negative`, each pressed counting one.
     pub fn axis(&self, negative: Action, positive: Action) -> f32 {
         self.pressed(positive) as i8 as f32 - self.pressed(negative) as i8 as f32
     }
 
-    /// The action as pressed, for a test that does not run [`resolve_actions`].
+    /// For a test that does not run [`resolve_actions`].
     #[cfg(test)]
     pub fn press(&mut self, action: Action) {
         self.pressed[action.index()] = true;
         self.just_pressed[action.index()] = true;
     }
 
-    /// What `keymap` makes of these inputs. Needs no world, for the tests.
+    /// Needs no world, for the tests.
     pub fn read(
         keymap: &Keymap,
         keys: Option<&ButtonInput<KeyCode>>,
@@ -323,13 +317,13 @@ impl Actions {
     }
 }
 
-/// Set while the Settings window is open, so a key being bound, or one pressed
-/// over the window, does nothing else.
+/// Set while the Settings window is open, so a key being bound does nothing
+/// else.
 #[derive(Resource, Default, PartialEq)]
 pub struct Quiet(pub bool);
 
-/// Reads the inputs into [`Actions`]. Every input resource is optional, so a
-/// test world with only a keyboard still resolves.
+/// Every input resource is optional, so a test world with only a keyboard
+/// still resolves.
 pub fn resolve_actions(
     keymap: Res<Keymap>,
     keys: Option<Res<ButtonInput<KeyCode>>>,
@@ -346,8 +340,7 @@ pub fn resolve_actions(
     actions.set_if_neq(Actions::read(&keymap, keys.as_deref(), buttons.as_deref(), quiet));
 }
 
-/// Runs [`resolve_actions`] on `world` now, for tests that run systems one at
-/// a time rather than through `PreUpdate`.
+/// For tests that run systems one at a time rather than through `PreUpdate`.
 pub fn resolve_now(world: &mut World) {
     ensure_resources(world);
     world.run_system_cached(resolve_actions).expect("resolve_actions failed");
@@ -371,8 +364,8 @@ impl Plugin for KeybindPlugin {
     }
 }
 
-/// Adds [`KeybindPlugin`] unless something already has. Every plugin that
-/// reads [`Actions`] calls it, since those plugins also stand alone in tests.
+/// Every plugin that reads [`Actions`] calls this, since those plugins also
+/// stand alone in tests.
 pub fn ensure(app: &mut App) {
     if !app.is_plugin_added::<KeybindPlugin>() {
         app.add_plugins(KeybindPlugin);
@@ -383,19 +376,17 @@ fn hints_id() -> egui::Id {
     egui::Id::new("grackle_keymap")
 }
 
-/// Copies the keymap into egui's memory for [`hint`], since a menu gets only
-/// a `Ui`. Called by the Settings plugin each frame the keymap changes.
+/// For [`hint`], since a menu gets only a `Ui`.
 pub fn publish(ctx: &egui::Context, keymap: &Keymap) {
     ctx.data_mut(|data| data.insert_temp(hints_id(), Arc::new(keymap.clone())));
 }
 
-/// The first chord of `action`, for a menu entry, or `None` with no binding.
+/// The first chord, for a menu entry.
 pub fn hint(ctx: &egui::Context, action: Action) -> Option<String> {
     let keymap = ctx.data(|data| data.get_temp::<Arc<Keymap>>(hints_id()))?;
     keymap.chords(action).first().map(|chord| chord.label())
 }
 
-/// The heading over an action's context on the Shortcuts page.
 pub fn context_name(context: Context) -> String {
     get!(context.name_key())
 }
@@ -430,7 +421,6 @@ mod tests {
         }
     }
 
-    /// The editor commands among what `held` then `hit` fires.
     fn commands(held: &[KeyCode], hit: KeyCode) -> Vec<Action> {
         fired(held, hit).into_iter().filter(|a| a.context() == Context::Editing).collect()
     }
@@ -456,7 +446,7 @@ mod tests {
         }
     }
 
-    /// Fails if a crouched player cannot reload, as an exact rule would have it.
+    /// Fails if a crouched player cannot reload.
     #[test]
     fn a_game_key_fires_with_a_modifier_held() {
         let fired = fired(&[KeyCode::ControlLeft], KeyCode::KeyR);

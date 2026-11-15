@@ -1,10 +1,7 @@
-//! What the person at this machine chooses about the program, in
-//! `assets/user/settings.toml`, and the Settings window that edits it.
-//!
-//! Distinct from [`PlayerSettings`](crate::common::player_settings), which is
-//! how somebody plays and is sent to the server. Nothing here leaves this
-//! machine. The shortcuts are the window's too, in their own file
-//! ([`Keymap`](crate::common::keybind::Keymap)).
+//! This machine's program settings, in `assets/user/settings.toml`, and the
+//! Settings window that edits them and the [`Keymap`](crate::common::keybind::Keymap).
+//! Unlike [`PlayerSettings`](crate::common::player_settings), nothing here is
+//! sent to the server.
 
 pub mod window;
 
@@ -18,7 +15,7 @@ pub use window::{request_settings, SettingsPlugin, SettingsWindow};
 #[derive(Resource, Serialize, Deserialize, Clone, PartialEq, Debug, Default)]
 #[serde(default)]
 pub struct Settings {
-    /// A lang file's code, such as `de-DE`. `None` is the fallback language.
+    /// A lang file's code, such as `de-DE`; `None` is the fallback language.
     /// `--lang` overrides it for one run.
     pub language: Option<String>,
 }
@@ -41,8 +38,8 @@ impl Settings {
         }
     }
 
-    /// The failure is returned, because the Settings window must not claim a
-    /// save it did not make.
+    /// Returns the failure, so the Settings window does not claim a save it did
+    /// not make.
     pub fn save(&self) -> Result<(), String> {
         let path = path();
         let text = toml::to_string_pretty(self).map_err(|e| format!("Could not write the settings: {e}"))?;

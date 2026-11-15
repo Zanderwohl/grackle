@@ -1,8 +1,5 @@
 //! The document commands every authoring mode answers to, read from
-//! [`Actions`] so they mean the same in every editor. Which keys they are is
-//! the [`Keymap`](crate::common::keybind::Keymap)'s; nothing fires while egui
-//! wants the keyboard, which [`resolve_actions`](crate::common::keybind::resolve_actions)
-//! decides.
+//! [`Actions`] so they mean the same in every editor.
 
 use crate::common::keybind::{Action, Actions};
 
@@ -28,7 +25,7 @@ pub fn chords(actions: &Actions) -> EditorChords {
     }
 }
 
-/// What `action` reads as pressed. For the menus' tests.
+/// For the menus' tests.
 #[cfg(test)]
 pub fn press(action: Action) -> EditorChords {
     let mut actions = Actions::default();

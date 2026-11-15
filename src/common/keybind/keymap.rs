@@ -8,8 +8,8 @@
 //! taunt = []
 //! ```
 //!
-//! An action the file does not name gets its default, so a binding added
-//! later reaches people who already have a file. An empty list stays unbound.
+//! An action the file does not name gets its default, so a new action reaches
+//! existing files. An empty list stays unbound.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -50,7 +50,7 @@ fn defaults(action: Action) -> Vec<Chord> {
         Action::SaveAs => vec![command(K::KeyS).with_shift()],
         Action::Undo => vec![command(K::KeyZ)],
         Action::Redo => vec![command(K::KeyZ).with_shift(), command(K::KeyY)],
-        // Both, because the key labelled Delete on a Mac sends Backspace.
+        // The key labeled Delete on a Mac sends Backspace.
         Action::Delete => vec![key(K::Delete), key(K::Backspace)],
         Action::Modify => vec![key(K::ShiftLeft), key(K::ShiftRight)],
         Action::Alternate => vec![key(K::AltLeft), key(K::AltRight)],
@@ -119,8 +119,7 @@ pub fn path() -> PathBuf {
 }
 
 impl Keymap {
-    /// A missing file gives the defaults. A bad file or entry is logged and
-    /// dropped, never a reason not to start.
+    /// A bad file or entry is logged and dropped, never a reason not to start.
     pub fn load() -> Self {
         let path = path();
         let text = match std::fs::read_to_string(&path) {
@@ -145,8 +144,8 @@ impl Keymap {
         }
     }
 
-    /// The failure is returned, because the Settings window must not claim a
-    /// save it did not make.
+    /// Returns the failure, so the Settings window does not claim a save it did
+    /// not make.
     pub fn save(&self) -> Result<(), String> {
         let path = path();
         let text = toml::to_string_pretty(&self.to_file()).map_err(|e| format!("Could not write the shortcuts: {e}"))?;
@@ -185,7 +184,7 @@ impl Keymap {
         keymap
     }
 
-    /// Fixed actions are left out: their keys are not the file's to say.
+    /// Fixed actions are left out.
     fn to_file(&self) -> KeymapFile {
         let bindings = self
             .bindings
@@ -196,7 +195,7 @@ impl Keymap {
         KeymapFile { bindings }
     }
 
-    /// The defaults, built once, to compare against without building them.
+    /// Built once.
     pub fn shipped() -> &'static Keymap {
         &SHIPPED
     }
@@ -215,9 +214,8 @@ impl Keymap {
             .collect()
     }
 
-    /// Replaces the chord at `slot`, or adds one past the end. Refuses a fixed
-    /// action, Escape, Enter and a chord the action already has, and returns
-    /// whether anything changed.
+    /// A `slot` past the end adds a chord. Refuses a fixed action, Escape,
+    /// Enter and a duplicate.
     pub fn bind(&mut self, action: Action, slot: usize, chord: Chord) -> bool {
         if chord.is_reserved() || action.is_fixed() {
             return false;
@@ -305,8 +303,7 @@ mod tests {
         assert_eq!(keymap.chords(Action::Jump).len(), 2);
     }
 
-    /// Fails if `F` in Play is reported against `F` in the prop editor, which
-    /// are never live at once.
+    /// Fails if `F` in Play clashes with `F` in the prop editor.
     #[test]
     fn a_clash_is_only_where_both_are_live() {
         let mut keymap = Keymap::default();

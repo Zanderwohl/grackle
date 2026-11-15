@@ -1,14 +1,9 @@
 //! The Settings window, opened from every authoring mode's Edit menu or the
-//! [`Action::Settings`] chord.
+//! [`Action::Settings`] chord. It edits a draft: nothing is saved until Apply,
+//! and Close with changes asks first.
 //!
-//! It edits a draft. Nothing goes to disk or into force until Apply. Close with
-//! an unchanged draft closes the window; with a changed one it asks first.
-//! Pages are listed down the left third, the chosen page fills the rest.
-//!
-//! A floating window rather than a dock tab: it is a dialog every mode opens,
-//! and the dock belongs to the map editor. While it is open no action fires
-//! ([`Quiet`]), so the key being bound, or one pressed over the window, does
-//! nothing else.
+//! A floating window, because every mode opens it and the dock belongs to the
+//! map editor. While it is open no action fires ([`Quiet`]).
 
 use bevy::input::keyboard::KeyboardInput;
 use bevy::input::InputSystems;
@@ -26,7 +21,7 @@ use crate::get;
 
 const WINDOW_ID: &str = "settings_window";
 
-/// Its smallest size, and its size on a first open. egui remembers a resize.
+/// Also its size on a first open; egui remembers a resize.
 const MIN_SIZE: egui::Vec2 = egui::vec2(520.0, 560.0);
 
 /// The space on each side of a line between two panels.
@@ -51,26 +46,21 @@ impl Page {
     }
 }
 
-/// The window and its draft. A resource rather than egui memory: the draft
-/// is a half-made decision, and a frame that does not draw the window must not
-/// lose it.
+/// A resource rather than egui memory, so a frame that does not draw the
+/// window cannot lose the draft.
 #[derive(Resource)]
 pub struct SettingsWindow {
     open: bool,
     draft: Settings,
     keys_draft: Keymap,
-    /// Whether the unsaved-changes question shows.
     asking: bool,
-    /// A failed save, kept until the user has seen it.
     problem: Option<String>,
-    /// Kept between opens.
     page: Page,
     sheet: Sheet,
     /// Read on opening, because reading parses every lang file.
     languages: Vec<Language>,
-    /// Every icon name in every pack, read on opening.
     icons: Vec<String>,
-    /// Apply wrote the keymap this frame, so the resource is marked changed.
+    /// Apply wrote the keymap this frame.
     keys_applied: bool,
 }
 
@@ -96,8 +86,8 @@ impl SettingsWindow {
         self.open
     }
 
-    /// Opens it from what is in force, or raises it if it is open: a draft
-    /// abandoned by an earlier Close does not come back.
+    /// Starts from what is in force, so a draft abandoned by Close does not
+    /// come back.
     fn open(&mut self, ctx: &egui::Context, settings: &Settings, keymap: &Keymap) {
         if self.open {
             ctx.move_to_top(egui::LayerId::new(egui::Order::Middle, Id::new(WINDOW_ID)));
@@ -117,8 +107,8 @@ impl SettingsWindow {
         self.draft != *settings || self.keys_draft != *keymap
     }
 
-    /// Saves the draft and puts it in force. A failed save keeps the draft so
-    /// Apply can be pressed again; the two files save independently.
+    /// A failed save keeps the draft, so Apply can be pressed again. The two
+    /// files save independently.
     fn apply(&mut self, settings: &mut Settings, keymap: &mut Keymap) {
         self.problem = None;
         if self.draft != *settings {
@@ -150,7 +140,6 @@ impl SettingsWindow {
         }
     }
 
-    /// Closes without asking, dropping the draft.
     fn dismiss(&mut self) {
         if self.open {
             info!("Leaving the editors closed the Settings window; changes not applied were dropped");
@@ -182,9 +171,9 @@ impl SettingsWindow {
             .resizable(true)
             .min_size(MIN_SIZE)
             .default_size(MIN_SIZE)
-            // No `.open()`: the window's X goes the way of Close, so it asks too.
+            // No `.open()`, so the window's X asks about changes as Close does.
             .show(ctx, |ui| {
-                // The footer first, so the pages get only the space above it.
+                // First, so the pages get only the space above it.
                 egui::Panel::bottom("settings_footer")
                     .frame(egui::Frame::NONE.inner_margin(egui::Margin { top: GAP, ..Default::default() }))
                     .show(ui, |ui| {
@@ -221,7 +210,6 @@ impl SettingsWindow {
                 egui::CentralPanel::default()
                     .frame(egui::Frame::NONE.inner_margin(egui::Margin { left: GAP, ..Default::default() }))
                     .show(ui, |ui| {
-                        // One scroll offset per page.
                         egui::ScrollArea::vertical().id_salt(self.page).auto_shrink(false).show(ui, |ui| {
                             match self.page {
                                 Page::General => self.general(ui),
@@ -265,7 +253,7 @@ impl SettingsWindow {
         icon_grid(ui, &self.icons);
     }
 
-    /// A modal, so the draft it is about cannot be edited while it shows.
+    /// A modal, so the draft cannot be edited while it shows.
     fn ask_about_unsaved(&mut self, ctx: &egui::Context, settings: &mut Settings, keymap: &mut Keymap) {
         if !self.asking {
             return;
@@ -295,17 +283,15 @@ impl SettingsWindow {
     }
 }
 
-/// The width of one cell of the icon grid, and the size of the icon in it.
 const ICON_CELL: f32 = 84.0;
 const ICON_SIZE: f32 = 32.0;
 
-/// Every icon, each with its name under it. A name too long for its cell is
-/// cut short; egui shows the whole name on hover.
+/// A name too long for its cell is cut short; egui shows it whole on hover.
 fn icon_grid(ui: &mut Ui, names: &[String]) {
-    let colour = ui.visuals().text_color();
-    // Every cell exactly its full size, aligned to the top: a wrapped row
-    // centers each item on the row's height so far, so a taller cell would
-    // push the next one down.
+    let color = ui.visuals().text_color();
+    // Every cell its full size and aligned to the top: a wrapped row centers
+    // each item on the row's height so far, so a taller cell pushes the next
+    // one down.
     let label = ui.text_style_height(&egui::TextStyle::Small);
     let cell = egui::vec2(ICON_CELL, ICON_SIZE + ui.spacing().item_spacing.y + label);
     let row = egui::Layout::left_to_right(egui::Align::Min).with_main_wrap(true);
@@ -316,7 +302,7 @@ fn icon_grid(ui: &mut Ui, names: &[String]) {
                 ui.set_min_size(cell);
                 match icons::image(ui.ctx(), name) {
                     Some(image) => {
-                        ui.add(image.fit_to_exact_size(egui::Vec2::splat(ICON_SIZE)).tint(colour));
+                        ui.add(image.fit_to_exact_size(egui::Vec2::splat(ICON_SIZE)).tint(color));
                     }
                     None => {
                         ui.add_sized(egui::Vec2::splat(ICON_SIZE), egui::Label::new(icons::PLACEHOLDER));
@@ -328,8 +314,8 @@ fn icon_grid(ui: &mut Ui, names: &[String]) {
     });
 }
 
-/// Every `icons/*.svg` stem in every pack, sorted, each once. Reads the
-/// directories, so native only; a browser build would read a manifest.
+/// Reads the directories, so native only; a browser build would read a
+/// manifest.
 fn icon_names() -> Vec<String> {
     let mut names: Vec<String> = lang::default_packs()
         .iter()
@@ -348,7 +334,7 @@ fn request_id() -> Id {
     Id::new("grackle_open_settings")
 }
 
-/// Asks for the window, from a menu that has only a `Ui`.
+/// For a menu that has only a `Ui`.
 pub fn request_settings(ctx: &egui::Context) {
     ctx.data_mut(|data| data.insert_temp(request_id(), true));
 }
@@ -402,7 +388,7 @@ fn draw_settings(
     mut published: Local<bool>,
 ) {
     let Ok(ctx) = contexts.ctx_mut() else {
-        // No window can be drawn, so nothing may stay quiet on its account.
+        // No window can be drawn, so nothing may stay quiet for it.
         quiet.set_if_neq(Quiet(false));
         return;
     };
@@ -437,7 +423,7 @@ mod tests {
     use super::*;
     use bevy_egui::egui::{Pos2, RawInput, Rect};
 
-    /// Draws the window headless and returns each text it painted, with its rect.
+    /// Each text painted, with its rect.
     fn frame(ctx: &egui::Context, window: &mut SettingsWindow) -> Vec<(String, Rect)> {
         let input = RawInput {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(1200.0, 900.0))),

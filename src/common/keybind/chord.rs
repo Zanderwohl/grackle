@@ -1,15 +1,13 @@
 //! One key or mouse button with its modifiers.
 //!
 //! Keys are Bevy's `KeyCode`s, which name a position on the keyboard rather
-//! than the letter printed on it, so WASD stays under the left hand on any
-//! layout. `command` is Ctrl or Super, whichever is held, as both editors have
-//! always read it; Alt is its own modifier.
+//! than the letter printed on it, so WASD stays in place on any layout.
+//! `command` is Ctrl or Super, whichever is held.
 
 use bevy::prelude::*;
 
 use crate::get;
 
-/// A key or a mouse button: what a [`Chord`] presses.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Input {
     Key(KeyCode),
@@ -25,7 +23,6 @@ pub struct Chord {
     pub alt: bool,
 }
 
-/// The modifiers held this frame.
 #[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
 pub struct Held {
     pub command: bool,
@@ -34,7 +31,6 @@ pub struct Held {
 }
 
 impl Held {
-    /// From [`modifier_of`], so which keys are modifiers is said once.
     pub fn of(keys: &ButtonInput<KeyCode>) -> Self {
         keys.get_pressed().filter_map(|key| modifier_of(*key)).fold(Self::default(), |mut held, modifier| {
             match modifier {
@@ -51,7 +47,6 @@ impl Held {
     }
 }
 
-/// Which modifier a key is, if it is one.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Modifier {
     Command,
@@ -93,8 +88,8 @@ impl Chord {
         Held { command: self.command, shift: self.shift, alt: self.alt }
     }
 
-    /// Held modifiers with this chord's own key taken out: a bare Shift
-    /// binding is pressed with Shift held, which is not an extra modifier.
+    /// Takes out this chord's own key: a bare Shift binding is pressed with
+    /// Shift held, which is not an extra modifier.
     fn others(self, held: Held) -> Held {
         let Input::Key(key) = self.input else { return held };
         match modifier_of(key) {
@@ -116,13 +111,12 @@ impl Chord {
         }
     }
 
-    /// Escape and Enter, with or without modifiers: they belong to the fixed
-    /// actions. See [`super::Action::FIXED`].
+    /// Escape and Enter belong to [`super::Action::FIXED`], with any modifiers.
     pub fn is_reserved(self) -> bool {
         matches!(self.input, Input::Key(KeyCode::Escape | KeyCode::Enter | KeyCode::NumpadEnter))
     }
 
-    /// For example `Ctrl+Shift+S`. `Ctrl` stands for Super too.
+    /// `Ctrl` stands for Super too.
     pub fn label(self) -> String {
         let mut parts = Vec::with_capacity(4);
         if self.command {
@@ -138,15 +132,14 @@ impl Chord {
         parts.join("+")
     }
 
-    /// The modifiers held, as a prefix such as `Ctrl+Shift+`.
+    /// For example `Ctrl+Shift+`.
     pub fn held_prefix(held: Held) -> String {
         let probe = Chord { command: held.command, shift: held.shift, alt: held.alt, ..Chord::key(KeyCode::KeyA) };
         let label = probe.label();
         label.strip_suffix(&input_label(probe.input)).unwrap_or_default().to_owned()
     }
 
-    /// For `shortcuts.toml`, for example `command+shift+KeyS` or `MouseLeft`.
-    /// Not [`Chord::label`], which is translated.
+    /// For `shortcuts.toml`, untranslated, unlike [`Chord::label`].
     pub fn to_key(self) -> String {
         let mut text = String::new();
         for (held, name) in [(self.command, "command"), (self.alt, "alt"), (self.shift, "shift")] {
@@ -159,7 +152,6 @@ impl Chord {
         text
     }
 
-    /// Reads [`Chord::to_key`].
     pub fn from_key(text: &str) -> Option<Self> {
         let mut parts: Vec<&str> = text.split('+').map(str::trim).collect();
         let input = input_from_name(parts.pop()?)?;
@@ -176,8 +168,8 @@ impl Chord {
     }
 }
 
-/// Every key that can be bound, by its name in `shortcuts.toml`. A key off
-/// this list (media keys, IME keys) is refused when captured.
+/// Every bindable key, by its name in `shortcuts.toml`. A key off this list
+/// (media keys, IME keys) is refused when captured.
 const KEYS: &[(KeyCode, &str)] = &[
     (KeyCode::KeyA, "KeyA"), (KeyCode::KeyB, "KeyB"), (KeyCode::KeyC, "KeyC"), (KeyCode::KeyD, "KeyD"),
     (KeyCode::KeyE, "KeyE"), (KeyCode::KeyF, "KeyF"), (KeyCode::KeyG, "KeyG"), (KeyCode::KeyH, "KeyH"),
@@ -221,7 +213,6 @@ const BUTTONS: &[(MouseButton, &str)] = &[
     (MouseButton::Forward, "MouseForward"),
 ];
 
-/// Whether `input` is on the list a file can name.
 pub fn is_bindable(input: Input) -> bool {
     match input {
         Input::Key(key) => KEYS.iter().any(|(k, _)| *k == key),
@@ -243,7 +234,6 @@ fn input_from_name(name: &str) -> Option<Input> {
         .or_else(|| BUTTONS.iter().find(|(_, n)| *n == name).map(|(button, _)| Input::Mouse(*button)))
 }
 
-/// What a key or button is called on screen.
 pub fn input_label(input: Input) -> String {
     let name = input_name(input);
     if let Some(letter) = name.strip_prefix("Key") {
@@ -312,8 +302,7 @@ mod tests {
         assert_eq!(names.len(), count);
     }
 
-    /// Fails if Shift+B reads as B for a command, or B fails to read as B
-    /// while sprinting for a game action.
+    /// Fails if Shift+B fires a command bound to B, or B fails while sprinting.
     #[test]
     fn exact_and_loose_matching() {
         let b = Chord::key(KeyCode::KeyB);
@@ -331,9 +320,8 @@ mod tests {
         assert!(sprint.modifiers_match(Held { shift: true, ..default() }, true));
     }
 
-    /// Fails if a menu hint or the Shortcuts page names a key by its code or
-    /// shows a missing lang key. de-DE falls back to en-US for these, so the
-    /// language another test sets does not change them.
+    /// Fails if a label shows a key code or a missing lang key. de-DE falls
+    /// back to en-US for these, so another test's language does not matter.
     #[test]
     fn labels_read_as_the_keys_do() {
         assert_eq!(Chord::command(KeyCode::KeyS).with_shift().label(), "Ctrl+Shift+S");

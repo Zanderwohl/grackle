@@ -1,13 +1,11 @@
 //! The Shortcuts page of the Settings window.
 //!
-//! A click on a chord waits for an input, and the next press replaces it. A
-//! key is read from Bevy's input by [`Sheet::capture`], not from egui, so
-//! nothing else acts on it. A mouse button is bound only when pressed on the
-//! waiting prompt; pressed anywhere else it stops the wait, so a click on Close
-//! closes. Escape stops the wait; Enter is refused. A modifier pressed and let
-//! go alone, with no other modifier held, is bound by itself (Shift to
-//! sprint); pressed with another key, it modifies that key.
-//! The page edits the window's draft, so a change applies on Apply.
+//! A click on a chord waits, and the next press replaces it. Keys come from
+//! Bevy's input, not egui's. A mouse button is bound only when pressed on the
+//! waiting prompt; pressed elsewhere it stops the wait, so a click on Close
+//! closes. Escape stops the wait; Enter is refused. A modifier pressed and
+//! released with no other modifier held is bound alone (Shift to sprint).
+//! The page edits the window's draft.
 
 use bevy::input::keyboard::KeyboardInput;
 use bevy::input::ButtonState;
@@ -20,9 +18,7 @@ use crate::get;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Refusal {
-    /// Escape or Enter, which belong to the fixed actions.
     Reserved,
-    /// A key off the bindable list.
     Unbindable,
 }
 
@@ -30,7 +26,7 @@ pub enum Refusal {
 pub struct Sheet {
     /// A slot past the end adds a chord.
     capturing: Option<(Action, usize)>,
-    /// A modifier pressed while waiting, bound alone if let go with nothing else.
+    /// Bound alone if released with nothing else pressed.
     lone_modifier: Option<KeyCode>,
     refused: Option<Refusal>,
 }
@@ -51,9 +47,6 @@ impl Sheet {
         self.refused = None;
     }
 
-    /// Reads this frame's presses into `keymap`. `held` is the modifiers down
-    /// this frame; `presses` the keyboard messages; `clicked` the mouse
-    /// buttons pressed this frame.
     pub fn capture(
         &mut self,
         keymap: &mut Keymap,
@@ -103,8 +96,7 @@ impl Sheet {
         keymap.bind(action, slot, chord);
     }
 
-    /// The keyboard half of [`Sheet::capture`], from Bevy. The mouse half is
-    /// in [`Sheet::waiting`], which knows where the prompt is.
+    /// The mouse half is in [`Sheet::waiting`], which knows where the prompt is.
     pub fn capture_from(
         &mut self,
         keymap: &mut Keymap,
@@ -150,7 +142,6 @@ impl Sheet {
         self.section(ui, keymap, held, &get!("keybind.sheet.debug"), ("settings_shortcuts", "debug"), &debug);
     }
 
-    /// A heading and a grid of `actions`, or nothing when there are none.
     fn section(
         &mut self,
         ui: &mut Ui,
@@ -170,7 +161,6 @@ impl Sheet {
             for &action in actions {
                 ui.label(action.name());
                 if action.is_fixed() {
-                    // Plain text, because they cannot be changed.
                     let labels: Vec<String> = keymap.chords(action).iter().map(|c| c.label()).collect();
                     ui.label(RichText::new(labels.join(", ")).monospace().weak());
                 } else {
@@ -203,7 +193,7 @@ impl Sheet {
                 response = response.on_hover_text(get!("keybind.sheet.clash", "actions", names.join(", ")));
             }
             if response.clicked() {
-                // Given up, so the press being captured cannot also click it.
+                // So the key being captured cannot also click it.
                 response.surrender_focus();
                 self.begin(action, slot);
             }
@@ -228,8 +218,6 @@ impl Sheet {
         }
     }
 
-    /// A mouse button pressed on the prompt is bound; pressed anywhere else it
-    /// stops the wait.
     fn waiting(&mut self, ui: &mut Ui, keymap: &mut Keymap, held: Held) {
         let prefix = Chord::held_prefix(held);
         let prompt = match prefix.is_empty() {
@@ -258,7 +246,7 @@ impl Sheet {
     }
 }
 
-/// A chord and its ×, joined along one seam so they read as one control.
+/// Joined along one seam so they read as one control.
 fn joined(ui: &mut Ui, chord: RichText) -> (egui::Response, egui::Response) {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 0.0;
