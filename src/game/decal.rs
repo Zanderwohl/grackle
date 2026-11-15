@@ -27,6 +27,7 @@ use crate::common::player_settings::{DebrisDecals, PlayerSettings};
 use crate::common::skeleton::Skeleton;
 use crate::editor::decal::MapDecalSpec;
 use crate::game::ragdoll::{GibImpact, GIB_SPLAT_SPEED};
+use crate::game::warm_up::{warm_up_camera, WarmUp, WarmUpPlugin};
 use crate::tool::bakes::BakedRoomGeometry;
 use crate::tool::sun_bake::{keep_lightmap, SunBake};
 
@@ -484,6 +485,31 @@ fn gib_splat<'a>(faces: impl IntoIterator<Item = &'a world_surface::Face>, impac
     Some((thrown(at, normal, size, impact.velocity.normalize_or(-normal), seed), seed))
 }
 
+/// Whether a hit landed on a body. A killing hit's body is reaped before
+/// anything reads the hit, and on a client its despawn and the hit may arrive
+/// frames apart, so a body counts for [`REAPED_MEMORY`] after it is gone. Call
+/// [`HitBodies::catch_up`] once per run first.
+#[derive(bevy::ecs::system::SystemParam)]
+pub struct HitBodies<'w, 's> {
+    bodies: Query<'w, 's, (), With<Skeleton>>,
+    reaped: RemovedComponents<'w, 's, Skeleton>,
+    lately_reaped: Local<'s, Vec<(Entity, f32)>>,
+    time: Res<'w, Time>,
+}
+
+impl HitBodies<'_, '_> {
+    pub fn catch_up(&mut self) {
+        let now = self.time.elapsed_secs();
+        self.lately_reaped.retain(|(_, when)| now - *when < REAPED_MEMORY);
+        let reaped: Vec<Entity> = self.reaped.read().collect();
+        self.lately_reaped.extend(reaped.into_iter().map(|body| (body, now)));
+    }
+
+    pub fn is_a_body(&self, target: Entity) -> bool {
+        self.bodies.contains(target) || self.lately_reaped.iter().any(|(body, _)| *body == target)
+    }
+}
+
 /// From what every machine already receives, so nothing new is sent and each machine keeps its own.
 #[allow(clippy::too_many_arguments)]
 fn mark_the_world(
@@ -491,9 +517,7 @@ fn mark_the_world(
     mut effects: MessageReader<Effect>,
     mut dealt: MessageReader<DamageDealt>,
     mut gibs: MessageReader<GibImpact>,
-    bodies: Query<(), With<Skeleton>>,
-    mut reaped: RemovedComponents<Skeleton>,
-    mut lately_reaped: Local<Vec<(Entity, f32)>>,
+    mut hit_bodies: HitBodies,
     bakes: Query<&BakedRoomGeometry>,
     art: Res<DecalArt>,
     mut rings: ResMut<TransientDecals>,
@@ -536,14 +560,10 @@ fn mark_the_world(
         }
     }
 
-    // A killing hit's body is reaped inside the tick that dealt it, before this runs, and on a
-    // client its despawn and the relayed hit may arrive frames apart: kept for a second.
     let now = time.elapsed_secs();
-    lately_reaped.retain(|(_, when)| now - *when < REAPED_MEMORY);
-    lately_reaped.extend(reaped.read().map(|body| (body, now)));
+    hit_bodies.catch_up();
     for hit in dealt.read() {
-        let a_body = bodies.contains(hit.target) || lately_reaped.iter().any(|(body, _)| *body == hit.target);
-        if hit.amount == 0 || !a_body {
+        if hit.amount == 0 || !hit_bodies.is_a_body(hit.target) {
             continue;
         }
         if hit.remaining == 0
@@ -625,11 +645,6 @@ fn age_transients(
     }
 }
 
-const WARM_UP_FRAMES: u32 = 10;
-
-#[derive(Component)]
-struct DecalWarmUp;
-
 /// Draws every decal material once, with and without a lightmap, through a camera set up as the
 /// play camera is. Bevy compiles a pipeline on the frame something is first drawn with it,
 /// synchronously on macOS and wasm. Follows the lens warm-up in [`crate::game::forward_camera`].
@@ -641,22 +656,9 @@ fn warm_up_decals(
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     use bevy::camera::visibility::{NoFrustumCulling, RenderLayers};
-    use bevy::camera::{Hdr, RenderTarget};
-    use bevy::core_pipeline::tonemapping::Tonemapping;
-    use bevy::render::render_resource::TextureFormat;
 
     let layer = RenderLayers::layer(crate::common::render_layers::WARM_UP);
-    let target = images.add(Image::new_target_texture(4, 4, TextureFormat::Rgba16Float, None));
-    commands.spawn((
-        DecalWarmUp,
-        Camera3d::default(),
-        RenderTarget::Image(target.into()),
-        Hdr,
-        Tonemapping::TonyMcMapface,
-        bevy::camera::Projection::Perspective(PerspectiveProjection::default()),
-        layer.clone(),
-        Name::new("Decal warm-up camera"),
-    ));
+    commands.spawn(warm_up_camera(&mut images, "Decal warm-up camera"));
     // Laid out as a cut piece is, with all three corners in one place so nothing is rasterized.
     let point = decal::Piece {
         positions: vec![[0.0, 0.0, -1.0]; 3],
@@ -672,7 +674,7 @@ fn warm_up_decals(
     let multiplied = art.transient.iter().flatten().cloned();
     for (material, lit) in multiplied.map(|m| (m, false)).chain([(blended.clone(), false), (blended, true)]) {
         let mut piece = commands.spawn((
-            DecalWarmUp,
+            WarmUp::default(),
             Mesh3d(mesh.clone()),
             MeshMaterial3d(material),
             layer.clone(),
@@ -684,19 +686,6 @@ fn warm_up_decals(
         if lit {
             piece.insert(Lightmap { image: lightmap.clone(), uv_rect: Rect::new(0.0, 0.0, 1.0, 1.0), bicubic_sampling: false });
         }
-    }
-}
-
-fn end_the_warm_up(mut commands: Commands, mut frames: Local<u32>, drawn: Query<Entity, With<DecalWarmUp>>) {
-    if drawn.is_empty() {
-        return;
-    }
-    *frames += 1;
-    if *frames < WARM_UP_FRAMES {
-        return;
-    }
-    for entity in &drawn {
-        commands.entity(entity).despawn();
     }
 }
 
@@ -714,13 +703,13 @@ pub struct DecalPlugin;
 
 impl Plugin for DecalPlugin {
     fn build(&self, app: &mut App) {
+        WarmUpPlugin::add_once(app);
         app.init_resource::<DecalArt>()
             .init_resource::<TransientDecals>()
             .init_resource::<MapDecalArt>()
             // Also registered by `RagdollPlugin`; here so decals work without it.
             .add_message::<GibImpact>()
             .add_systems(Startup, (load_decal_art, warm_up_decals).chain())
-            .add_systems(Update, end_the_warm_up)
             // Ungated: the map's decals and sprays stand in the editor too, and the map can
             // change during a round.
             .add_systems(

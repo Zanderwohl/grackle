@@ -32,6 +32,7 @@ pub mod damage;
 pub mod damage_direction;
 pub mod death;
 pub mod decal;
+pub mod gib_blood;
 pub mod hat;
 pub mod held;
 pub mod hitbox;
@@ -71,6 +72,7 @@ pub mod trigger;
 pub mod ragdoll;
 pub mod skeleton;
 pub mod viewmodel;
+pub mod warm_up;
 pub mod world_prop;
 
 /// Playing the map that is currently open in the editor.
