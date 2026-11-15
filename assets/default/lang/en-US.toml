@@ -453,6 +453,7 @@ healing = "Healing"
 [hud]
 reloading = "Reloading"
 armor = "armor"
+taunt_default = "G for default"
 
 [class.names]
 scout = "Scout"
@@ -651,6 +652,7 @@ movement = "Movement"
 turning = "Turning"
 taunt_weapon = "Weapon"
 taunt_length = "Lasts"
+taunt_icon = "Icon"
 taunt_rig_clip = "On a { rig }"
 
 [anim.panels]
@@ -683,6 +685,7 @@ unmatched_variants = "The variants at { from } and { to } drive different joints
 
 [anim.taunt]
 no_clip = "In no pack"
+no_icon = "No icons/{ icon }.svg in any pack"
 not_offered = "Not offered"
 clip_loops = "Loops, and the taunt ends"
 free = "Free"
@@ -764,6 +767,7 @@ remove = "Remove"
 deploy = "Deploy"
 humiliated = "Humiliated"
 taunt_wave = "Wave"
+taunt_shadowbox = "Shadow-box"
 recoil = "Recoil"
 fire = "Fire"
 reload = "Reload"

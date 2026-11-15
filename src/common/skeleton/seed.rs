@@ -17,7 +17,8 @@ use crate::common::skeleton::clip::{
     Channel, Clip, Clock, Combine, Key, Space, StateAnimation, Track, Unit, Variant,
 };
 use crate::common::skeleton::state::{AnimationState, PoseInputs, AIRBORNE_PERIOD, IDLE_PERIOD};
-use crate::common::skeleton::raptor_seed::{IDLE_LENGTH, TAUNT_LENGTH, TAUNT_WAG};
+use crate::common::skeleton::humanoid_seed::{SHADOWBOX_LENGTH, TAUNT_SHADOWBOX};
+use crate::common::skeleton::raptor_seed::{IDLE_LENGTH, LUNGE_LENGTH, TAUNT_LENGTH, TAUNT_LUNGE, TAUNT_WAG};
 use crate::common::skeleton::rig::{Skeleton, HUMANOID};
 use crate::common::skeleton::{default_humanoid, Interpolation, Pose};
 
@@ -27,6 +28,9 @@ use crate::common::skeleton::{default_humanoid, Interpolation, Pose};
 /// hit. So each track keeps only the samples a spline through them needs to stay within
 /// [`STRIDE_ANGLE`] or [`STRIDE_ROOT`].
 const STRIDE_SAMPLES: usize = 960;
+/// A clip played by name is sampled more finely: a taunt's fast moves turn a limb several degrees
+/// between strides' worth of samples, and the spline can stray between them.
+const NAMED_SAMPLES: usize = 3840;
 
 /// Worst-case error of a stride's keys: half the fidelity test's tolerance, for margin.
 const STRIDE_ANGLE: f32 = 0.1 * std::f32::consts::PI / 180.0;
@@ -215,6 +219,20 @@ pub const SEEDS: &[Seed] = &[
         headings: &[],
         note: GAIT_NOTE,
     },
+    Seed {
+        rig: HUMANOID,
+        name: Some(TAUNT_SHADOWBOX),
+        state: AnimationState::Idle,
+        length: SHADOWBOX_LENGTH,
+        clock: Clock::Seconds,
+        looping: false,
+        headings: &[],
+        note: "Sampled from `humanoid_seed::shadowbox` on the reference build: a hop into a boxer's \
+               stance, left foot leading and the body side-on, the hands coming up to guard; a \
+               left, a right and two quick lefts, the hips, chest and shoulder driving in behind \
+               each and the rear heel pivoting on the right; and a hop back out. The feet are solved onto \
+               the floor and the fists onto a point ahead of the chin, so retune it there.",
+    },
     raptor(AnimationState::Idle, IDLE_LENGTH, Clock::Shared, RAPTOR_IDLE_NOTE),
     raptor(AnimationState::Crouch, IDLE_LENGTH, Clock::Shared, RAPTOR_CROUCH_NOTE),
     raptor(AnimationState::Airborne, AIRBORNE_PERIOD, Clock::Shared, RAPTOR_AIRBORNE_NOTE),
@@ -235,6 +253,21 @@ pub const SEEDS: &[Seed] = &[
         note: "Sampled from `raptor_seed::taunt_wag`: the raptor's wave. The tail curls up to \
                point at the sky and waggles four times, the head lifts, and all of it settles \
                back. As long as the wave, since a taunt's length is read off its humanoid clip.",
+    },
+    Seed {
+        rig: RAPTOR,
+        name: Some(TAUNT_LUNGE),
+        state: AnimationState::Idle,
+        length: LUNGE_LENGTH,
+        clock: Clock::Seconds,
+        looping: false,
+        headings: &[],
+        note: "Sampled from `raptor_seed::taunt_lunge`: the raptor sinks back into a crouch with \
+               the neck coiled and the tail lashing, draws back further, and lunges forward over \
+               its planted feet with the neck thrown out and the claws reaching, snapping twice \
+               and shaking its head before it settles. The feet are solved onto the floor on the \
+               reference rig. As long as the humanoid's shadow-box, since a taunt's length is read \
+               off its humanoid clip.",
     },
 ];
 
@@ -278,6 +311,7 @@ pub fn rig_of(seed: &Seed) -> Skeleton {
 /// The pose a seed's clip is sampled from.
 pub fn sample(seed: &Seed, skeleton: &Skeleton, inputs: &PoseInputs) -> Pose {
     match (seed.rig, seed.name) {
+        (HUMANOID, Some(name)) => super::humanoid_seed::named(name, inputs),
         (_, Some(name)) => super::raptor_seed::named(name, inputs, skeleton),
         (HUMANOID, None) => seed.state.pose(inputs),
         (_, None) => super::raptor_seed::pose(seed.state, inputs, skeleton),
@@ -406,10 +440,11 @@ fn bake_a_loop(seed: Seed, skeleton: &Skeleton, heading: f32) -> Clip {
     let stance = state.stance(&inputs(0.0)).unwrap_or(0.5);
 
     // A one-shot's last sample is its end, not the loop's return to its start.
-    let last = if looping { STRIDE_SAMPLES - 1 } else { STRIDE_SAMPLES };
+    let samples = if seed.name.is_some() { NAMED_SAMPLES } else { STRIDE_SAMPLES };
+    let last = if looping { samples - 1 } else { samples };
     let taken: Vec<(f32, Pose)> = (0..=last)
         .map(|step| {
-            let at = length * step as f32 / STRIDE_SAMPLES as f32;
+            let at = length * step as f32 / samples as f32;
             (at, sample(&seed, skeleton, &inputs(at)))
         })
         .collect();
@@ -551,6 +586,42 @@ fn fit(times: &[f32], values: &[Vec3], length: f32, looping: bool, tolerance: f3
         kept.extend(added);
         kept.sort_unstable();
     }
+}
+
+/// A value through `keys` of (seconds, value) at `seconds`, held before the first and after the
+/// last. Monotone cubic (Fritsch–Butland): the speed carries through each key without overshooting
+/// it, so a key that is a turning point is where the motion turns, and a run of equal keys holds
+/// still. The first and last keys are left at rest, as a one-shot starts and ends.
+pub(super) fn keyed(keys: &[(f32, f32)], seconds: f32) -> f32 {
+    let last = keys.len() - 1;
+    if seconds <= keys[0].0 {
+        return keys[0].1;
+    }
+    if seconds >= keys[last].0 {
+        return keys[last].1;
+    }
+    let slope = |at: usize| (keys[at + 1].1 - keys[at].1) / (keys[at + 1].0 - keys[at].0);
+    let tangent = |at: usize| {
+        if at == 0 || at == last {
+            return 0.0;
+        }
+        let (before, after) = (slope(at - 1), slope(at));
+        if before * after <= 0.0 {
+            return 0.0;
+        }
+        let (gap_before, gap_after) = (keys[at].0 - keys[at - 1].0, keys[at + 1].0 - keys[at].0);
+        3.0 * (gap_before + gap_after)
+            / ((2.0 * gap_after + gap_before) / before + (gap_after + 2.0 * gap_before) / after)
+    };
+    let at = keys.windows(2).position(|pair| seconds < pair[1].0).unwrap_or(last - 1);
+    let ((from, start), (to, end)) = (keys[at], keys[at + 1]);
+    let gap = to - from;
+    let s = (seconds - from) / gap;
+    let (s2, s3) = (s * s, s * s * s);
+    (2.0 * s3 - 3.0 * s2 + 1.0) * start
+        + (s3 - 2.0 * s2 + s) * tangent(at) * gap
+        + (3.0 * s2 - 2.0 * s3) * end
+        + (s3 - s2) * tangent(at + 1) * gap
 }
 
 /// Euler angles made continuous, so a line between two goes the short way.

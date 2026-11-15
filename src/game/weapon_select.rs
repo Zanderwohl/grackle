@@ -28,7 +28,7 @@ pub const SETTLE_SECONDS: f32 = 0.35;
 /// For a trackpad, which reports pixels rather than lines.
 const PIXELS_PER_NOTCH: f32 = 40.0;
 
-const DIGITS: [Action; BUCKETS as usize] = Action::BUCKETS;
+pub(crate) const DIGITS: [Action; BUCKETS as usize] = Action::BUCKETS;
 
 /// What this machine has chosen. A second press moves on from here, not from
 /// `Equipped`, which is a round trip behind.
@@ -112,6 +112,7 @@ pub fn choose_weapons(
     actions: Res<Actions>,
     mut wheel: MessageReader<MouseWheel>,
     paused: Option<Res<MouseHeld>>,
+    taunt_menu: Option<Res<crate::game::taunt_menu::TauntMenu>>,
     catalog: Res<WeaponCatalog>,
     ours: Option<Single<(Entity, &Equipped), With<LocalPlayer>>>,
     mut selection: ResMut<WeaponSelection>,
@@ -149,8 +150,11 @@ pub fn choose_weapons(
         };
     }
 
-    let pressed: Vec<u8> =
-        (1..=BUCKETS).zip(DIGITS).filter(|(_, action)| actions.just_pressed(*action)).map(|(b, _)| b).collect();
+    // The taunt menu's while it is up.
+    let pressed: Vec<u8> = match taunt_menu.is_some_and(|menu| menu.holds_the_digits()) {
+        true => Vec::new(),
+        false => (1..=BUCKETS).zip(DIGITS).filter(|(_, action)| actions.just_pressed(*action)).map(|(b, _)| b).collect(),
+    };
     let notches = travel.trunc();
     *travel -= notches;
 

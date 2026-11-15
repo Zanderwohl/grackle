@@ -25,6 +25,7 @@ pub mod anatomy;
 pub mod clip;
 pub mod draw;
 pub mod gait;
+pub mod humanoid_seed;
 pub mod ik;
 pub mod interpolation;
 pub mod joints;
