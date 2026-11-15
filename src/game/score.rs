@@ -242,20 +242,26 @@ fn keep_standings(
     // Made in the same command flush as the first identity.
     let Some(start) = start else { return };
     let unset = PlayerSettings::default();
-    // Somebody who gave no name, every bot included, is dealt one from the packs.
-    let named = |who: &Identity, given: &'_ str| -> String {
-        match is_blank(given) {
-            false => given.to_owned(),
-            true => bot_names.as_deref().and_then(|names| names.for_player(who.id)).unwrap_or_default().to_owned(),
-        }
-    };
     // Nobody choosing a team or watching is in the round.
-    let here: Vec<(Identity, String)> = links
+    let given: Vec<(Identity, &str)> = links
         .iter()
-        .map(|(who, link)| (*who, named(who, &settings_of(false, link, None, &unset).name)))
-        .chain(us.map(|us| (us.0, named(&us.0, &settings_of(true, None, our_settings.as_deref(), &unset).name))))
+        .map(|(who, link)| (*who, settings_of(false, link, None, &unset).name.as_str()))
+        .chain(us.map(|us| (us.0, settings_of(true, None, our_settings.as_deref(), &unset).name.as_str())))
         .filter(|(who, _)| who.seat.is_playing())
         .collect();
+    // A blank name is dealt one nobody here has; a name already dealt is kept while it stays free.
+    let mut taken: Vec<&str> = given.iter().map(|(_, name)| *name).filter(|name| !is_blank(name)).collect();
+    let mut here: Vec<(Identity, String)> = Vec::with_capacity(given.len());
+    for (who, name) in &given {
+        if !is_blank(name) {
+            here.push((*who, (*name).to_owned()));
+            continue;
+        }
+        let held = standings.iter().find(|(_, standing)| standing.id == who.id).map(|(_, standing)| standing.name.as_str());
+        let dealt = bot_names.as_deref().and_then(|names| names.deal(who.id, held, &taken));
+        taken.extend(dealt);
+        here.push((*who, dealt.unwrap_or_default().to_owned()));
+    }
 
     for (entity, mut standing) in &mut standings {
         match here.iter().find(|(who, _)| who.id == standing.id) {
@@ -373,6 +379,7 @@ fn end_the_round_at_the_time_limit(
 
 const ROW_TEXT: f32 = 20.0;
 const SWATCH: f32 = 14.0;
+const FRAGS_WIDTH: f32 = 28.0;
 const MARGIN: f32 = 16.0;
 
 #[derive(Component)]
@@ -497,12 +504,17 @@ fn row(standing: &Standing, ours: bool, font: &Handle<Font>) -> impl Bundle {
                 BackgroundColor(standing.swatch()),
                 Pickable::IGNORE,
             ),
+            // Rows stretch to the widest, so a growing name puts every row's frags at the right edge.
             (
-                Node { min_width: Val::Px(120.0), ..default() },
+                Node { min_width: Val::Px(120.0), flex_grow: 1.0, ..default() },
                 Pickable::IGNORE,
                 children![text(standing.display_name())],
             ),
-            text(standing.shown_frags().to_string()),
+            (
+                Node { min_width: Val::Px(FRAGS_WIDTH), justify_content: JustifyContent::FlexEnd, ..default() },
+                Pickable::IGNORE,
+                children![text(standing.shown_frags().to_string())],
+            ),
         ],
     )
 }
