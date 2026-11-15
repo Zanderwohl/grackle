@@ -44,6 +44,9 @@ pub struct WeaponEditor {
     checkpoint: Snapshot,
     /// As last read or saved, which dirty is measured from.
     clean: Snapshot,
+    /// `clean != checkpoint`, kept by [`WeaponEditor::compare_with_clean`] whenever either moves,
+    /// since the panels ask every frame and the comparison walks every weapon.
+    dirty: bool,
     unsettled: bool,
     /// Read from disk the first time the mode opens; an unsaved draft survives leaving it.
     loaded: bool,
@@ -58,11 +61,16 @@ pub struct WeaponEditor {
 
 impl WeaponEditor {
     pub fn dirty(&self) -> bool {
-        self.clean != self.checkpoint
+        self.dirty
+    }
+
+    fn compare_with_clean(&mut self) {
+        self.dirty = self.clean != self.checkpoint;
     }
 
     pub fn can_undo(&self) -> bool {
-        !self.undo.is_empty() || (self.unsettled && self.snapshot() != self.checkpoint)
+        !self.undo.is_empty()
+            || (self.unsettled && (self.weapons != self.checkpoint.0 || self.renames != self.checkpoint.1))
     }
 
     fn snapshot(&self) -> Snapshot {
@@ -100,6 +108,7 @@ impl WeaponEditor {
             return;
         }
         let before = std::mem::replace(&mut self.checkpoint, now);
+        self.compare_with_clean();
         self.undo.push(before);
         if self.undo.len() > UNDO_DEPTH {
             self.undo.remove(0);
@@ -126,6 +135,7 @@ impl WeaponEditor {
 
     fn settle(&mut self) {
         self.checkpoint = self.snapshot();
+        self.compare_with_clean();
         self.unsettled = false;
         self.generation += 1;
         if self.selected.is_some_and(|index| index >= self.weapons.len()) {
@@ -142,6 +152,7 @@ impl WeaponEditor {
         self.loaded = true;
         self.settle();
         self.clean = self.checkpoint.clone();
+        self.compare_with_clean();
     }
 
     /// Back to what is on disk, as one undo step.
@@ -152,6 +163,7 @@ impl WeaponEditor {
         self.redo.clear();
         self.settle();
         self.clean = self.checkpoint.clone();
+        self.compare_with_clean();
     }
 
     /// `pack` now holds what the checkpoint says it does. Per pack, so a save that wrote one pack
@@ -165,6 +177,7 @@ impl WeaponEditor {
                 from.iter().filter(move |weapon| &weapon.pack == of).cloned()
             })
             .collect();
+        self.compare_with_clean();
     }
 
     /// The renames are on disk now, so nothing should carry them again; a rename undone after this
@@ -173,6 +186,7 @@ impl WeaponEditor {
         self.renames.clear();
         self.checkpoint.1.clear();
         self.clean.1.clear();
+        self.compare_with_clean();
         for snapshot in self.undo.iter_mut().chain(self.redo.iter_mut()) {
             snapshot.1.clear();
         }
