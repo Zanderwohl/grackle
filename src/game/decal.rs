@@ -69,6 +69,9 @@ pub struct DecalPiece {
     faces_hash: u64,
     /// Each vertex's alpha as cut, before any fading.
     alphas: Vec<f32>,
+    /// The fade step last written to the mesh, out of [`FADE_STEPS`]; writing every frame would
+    /// upload the vertex buffer every frame.
+    faded: u8,
 }
 
 #[derive(Component)]
@@ -146,6 +149,7 @@ impl TransientKind {
 }
 
 const FADE_SECONDS: f32 = 3.0;
+const FADE_STEPS: u8 = 32;
 /// Seconds a reaped body still counts as one for the hits that killed it.
 const REAPED_MEMORY: f32 = 1.0;
 /// Meters across the picture, most of it soot.
@@ -321,12 +325,16 @@ fn dress_map_decals(
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     for (entity, spec, drawn, material_drawn) in &decals {
-        let material = art
-            .0
-            .entry(spec.picture.clone())
-            .or_insert_with(|| Some(materials.add(blended_material(load_picture(&assets, &spec.picture, &mut images)?))));
+        let material = match art.0.get(&spec.picture) {
+            Some(material) => material.clone(),
+            None => {
+                let material = load_picture(&assets, &spec.picture, &mut images).map(|picture| materials.add(blended_material(picture)));
+                art.0.insert(spec.picture.clone(), material.clone());
+                material
+            }
+        };
         // A picture no pack has draws nothing, rather than whatever it showed before.
-        let Some(material) = material.clone() else {
+        let Some(material) = material else {
             if drawn.is_some() {
                 commands.entity(entity).despawn_related::<DecalPieces>().remove::<(Decal, DecalMaterial, Uncut)>();
             }
@@ -379,7 +387,7 @@ fn cut_decals(
             }
             any = true;
             let mut spawned = commands.spawn((
-                DecalPiece { faces_hash: *faces_hash, alphas: piece.colors.iter().map(|c| c[3]).collect() },
+                DecalPiece { faces_hash: *faces_hash, alphas: piece.colors.iter().map(|c| c[3]).collect(), faded: FADE_STEPS },
                 DecalPieceOf(root),
                 PaintedOn(room),
                 Mesh3d(meshes.add(piece.mesh())),
@@ -539,11 +547,6 @@ fn mark_the_world(
     alive: Query<(), With<Transient>>,
     time: Res<Time>,
 ) {
-    // Before this frame's marks are spawned, since the query cannot see them yet. Dead entries
-    // would count against the cap.
-    for ring in &mut rings.rings {
-        ring.retain(|root| alive.contains(*root));
-    }
     let limits = settings.map(|settings| settings.debris).unwrap_or_default();
     let mut marks: Vec<(TransientKind, Projection, u32)> = Vec::new();
 
@@ -610,6 +613,14 @@ fn mark_the_world(
         }
     }
 
+    // Dead entries would count against the cap, so they go before a push or a trim. The query
+    // cannot see this frame's marks, so before those are pushed.
+    let over = TransientKind::ALL.iter().any(|kind| rings.rings[kind.index()].len() > kind.cap(&limits));
+    if !marks.is_empty() || over {
+        for ring in &mut rings.rings {
+            ring.retain(|root| alive.contains(*root));
+        }
+    }
     for (kind, projection, seed) in marks {
         if kind.cap(&limits) == 0 {
             continue;
@@ -633,7 +644,7 @@ fn age_transients(
     mut commands: Commands,
     time: Res<Time>,
     decals: Query<(Entity, &Transient, Option<&DecalPieces>)>,
-    pieces: Query<(&DecalPiece, &Mesh3d)>,
+    mut pieces: Query<(&mut DecalPiece, &Mesh3d)>,
     mut meshes: ResMut<Assets<Mesh>>,
 ) {
     let now = time.elapsed_secs();
@@ -646,9 +657,14 @@ fn age_transients(
         if left >= FADE_SECONDS {
             continue;
         }
-        let strength = left / FADE_SECONDS;
+        let step = ((left / FADE_SECONDS) * FADE_STEPS as f32).ceil().clamp(1.0, FADE_STEPS as f32) as u8;
+        let strength = step as f32 / FADE_STEPS as f32;
         for piece in owned.into_iter().flat_map(|owned| owned.iter()) {
-            let Ok((piece, mesh)) = pieces.get(piece) else { continue };
+            let Ok((mut piece, mesh)) = pieces.get_mut(piece) else { continue };
+            if piece.faded == step {
+                continue;
+            }
+            piece.faded = step;
             let Some(mut mesh) = meshes.get_mut(&mesh.0) else { continue };
             if let Some(VertexAttributeValues::Float32x4(colors)) = mesh.attribute_mut(Mesh::ATTRIBUTE_COLOR) {
                 for (color, alpha) in colors.iter_mut().zip(&piece.alphas) {
