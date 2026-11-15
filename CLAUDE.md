@@ -409,7 +409,7 @@ stand alone in tests. A test that runs a system directly calls
   read from the table like any action, never rebindable, never saved, so the
   key that gives the mouse back is always the same key.
 - **Nothing on a key fires while egui wants the keyboard**, mouse buttons
-  still do — `Ctrl+Z` in a text field means undo the text. Read from the
+  and bare modifiers (Shift-click) still do — `Ctrl+Z` in a text field means undo the text. Read from the
   previous frame's `EguiWantsInput`, since egui drops a text field's focus on
   the frame the Escape arrives. **Nothing at all fires while the Settings
   window is open** (`Quiet`), so a key being bound does nothing else.
@@ -427,10 +427,13 @@ edits a draft — nothing is saved or in force until Apply, and Close with
 changes asks. Pages: **General** (the language, in
 `assets/user/settings.toml`; `--lang` overrides it for one run),
 **Shortcuts** (`keybind/sheet.rs`: click a binding, press a key, mouse button
-or chord; a modifier let go alone is bound alone; Escape stops the wait;
-captured from Bevy's input, not egui's) and **Developer** (every pack's
+or chord; a modifier let go alone is bound alone; a mouse button is bound
+only when pressed on the prompt, and a press elsewhere stops the wait; Escape
+stops it too; keys are captured from Bevy's input, not egui's) and **Developer** (every pack's
 `icons/*.svg` in a grid with its name). Not reachable in Play yet, where the
-cursor is grabbed.
+cursor is grabbed; leaving the editors closes it, dropping an unapplied
+draft, since an open window there could not be closed and would keep every
+action quiet.
 
 **Every authoring mode has the same Edit menu**, just right of File:
 [`src/common/edit_menu.rs`](src/common/edit_menu.rs), with Undo, Redo and

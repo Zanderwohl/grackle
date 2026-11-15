@@ -1500,7 +1500,7 @@ change_hover = "Click, then press a key or mouse button to replace this binding.
 remove_hover = "Remove this binding."
 add_hover = "Add a binding."
 clash = "Also bound to: { actions }"
-press = "Press a key or button… (Escape to cancel)"
+press = "Press a key, or a mouse button here (Escape to cancel)"
 press_held = "{ held }…"
 
 [keybind.action]

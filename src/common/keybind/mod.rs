@@ -15,7 +15,8 @@
 //! and the editors' cancel, Enter their confirm. Nothing can be bound to them,
 //! so the key that gets the mouse back is always the same key.
 //!
-//! **While egui wants the keyboard, no key fires** (mouse buttons still do):
+//! **While egui wants the keyboard, no key fires** (mouse buttons and bare
+//! modifiers still do):
 //! `Ctrl+Z` in a text field means undo the text. Read from the previous
 //! frame's [`EguiWantsInput`], since egui drops a text field's focus on
 //! Escape in the frame the key arrives.
@@ -260,8 +261,12 @@ impl Actions {
         let held = keys.map(Held::of).unwrap_or_default();
         let state = |input: Input| -> (bool, bool, bool) {
             match input {
+                // A bare modifier types nothing, so a Shift-click still adds to
+                // a selection while a text field has the keyboard.
                 Input::Key(key) => match keys {
-                    Some(keys) if !quiet_keys => (keys.pressed(key), keys.just_pressed(key), keys.just_released(key)),
+                    Some(keys) if !quiet_keys || chord::modifier_of(key).is_some() => {
+                        (keys.pressed(key), keys.just_pressed(key), keys.just_released(key))
+                    }
                     _ => (false, false, false),
                 },
                 Input::Mouse(button) => match buttons {
@@ -474,12 +479,14 @@ mod tests {
 
     /// Fails if typing into a text field fires a key, or stops the mouse.
     #[test]
-    fn while_egui_has_the_keyboard_only_the_mouse_fires() {
+    fn while_egui_has_the_keyboard_only_the_mouse_and_modifiers_fire() {
         let mut buttons = ButtonInput::<MouseButton>::default();
         buttons.press(MouseButton::Left);
-        let actions = Actions::read(&Keymap::default(), Some(&keys(&[KeyCode::ControlLeft], KeyCode::KeyS)), Some(&buttons), true);
-        assert!(!actions.just_pressed(Action::Save));
+        let held = [KeyCode::ControlLeft, KeyCode::ShiftLeft];
+        let actions = Actions::read(&Keymap::default(), Some(&keys(&held, KeyCode::KeyS)), Some(&buttons), true);
+        assert!(!actions.just_pressed(Action::SaveAs));
         assert!(actions.just_pressed(Action::Fire));
+        assert!(actions.pressed(Action::Modify), "a Shift-click stopped adding to a selection");
     }
 
     #[test]

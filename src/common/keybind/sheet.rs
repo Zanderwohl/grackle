@@ -1,10 +1,12 @@
 //! The Shortcuts page of the Settings window.
 //!
-//! A click on a chord waits for an input, and the next press replaces it. The
-//! press is read from Bevy's input by [`Sheet::capture`], not from egui, so a
-//! mouse button can be bound and nothing else acts on the press. Escape stops
-//! the wait; Enter is refused. A modifier pressed and let go alone is bound by
-//! itself (Shift to sprint); pressed with another key, it modifies that key.
+//! A click on a chord waits for an input, and the next press replaces it. A
+//! key is read from Bevy's input by [`Sheet::capture`], not from egui, so
+//! nothing else acts on it. A mouse button is bound only when pressed on the
+//! waiting prompt; pressed anywhere else it stops the wait, so a click on Close
+//! closes. Escape stops the wait; Enter is refused. A modifier pressed and let
+//! go alone, with no other modifier held, is bound by itself (Shift to
+//! sprint); pressed with another key, it modifies that key.
 //! The page edits the window's draft, so a change applies on Apply.
 
 use bevy::input::keyboard::KeyboardInput;
@@ -64,7 +66,10 @@ impl Sheet {
 
         for (key, state) in presses {
             match (state, modifier_of(key)) {
-                (ButtonState::Pressed, Some(_)) => self.lone_modifier = Some(key),
+                // With another modifier already down it is part of a chord.
+                (ButtonState::Pressed, Some(_)) => {
+                    self.lone_modifier = Chord::key(key).modifiers_match(held, true).then_some(key);
+                }
                 (ButtonState::Released, Some(_)) if self.lone_modifier == Some(key) => {
                     caught = Some(Chord::key(key));
                     break;
@@ -98,19 +103,19 @@ impl Sheet {
         keymap.bind(action, slot, chord);
     }
 
-    /// The Bevy side of [`Sheet::capture`].
+    /// The keyboard half of [`Sheet::capture`], from Bevy. The mouse half is
+    /// in [`Sheet::waiting`], which knows where the prompt is.
     pub fn capture_from(
         &mut self,
         keymap: &mut Keymap,
         keys: &ButtonInput<KeyCode>,
         messages: &mut MessageReader<KeyboardInput>,
-        buttons: &ButtonInput<MouseButton>,
     ) {
         let presses: Vec<_> = messages.read().filter(|m| !m.repeat).map(|m| (m.key_code, m.state)).collect();
         if !self.is_capturing() {
             return;
         }
-        self.capture(keymap, Held::of(keys), presses, buttons.get_just_pressed().copied());
+        self.capture(keymap, Held::of(keys), presses, []);
     }
 
     pub fn show(&mut self, ui: &mut Ui, keymap: &mut Keymap, held: Held) {
@@ -167,7 +172,7 @@ impl Sheet {
         for slot in 0..count {
             let chord = keymap.chords(action)[slot];
             if self.capturing == Some((action, slot)) {
-                self.waiting(ui, held);
+                self.waiting(ui, keymap, held);
                 continue;
             }
             let clashes = keymap.clashes(action, chord);
@@ -192,7 +197,7 @@ impl Sheet {
         }
 
         if self.capturing == Some((action, count)) {
-            self.waiting(ui, held);
+            self.waiting(ui, keymap, held);
         } else {
             let add = ui.small_button("+").on_hover_text(get!("keybind.sheet.add_hover"));
             if add.clicked() {
@@ -207,14 +212,33 @@ impl Sheet {
         }
     }
 
-    /// No click stops the wait: a click is a mouse button to bind. Escape does.
-    fn waiting(&mut self, ui: &mut Ui, held: Held) {
+    /// A mouse button pressed on the prompt is bound; pressed anywhere else it
+    /// stops the wait.
+    fn waiting(&mut self, ui: &mut Ui, keymap: &mut Keymap, held: Held) {
         let prefix = Chord::held_prefix(held);
         let prompt = match prefix.is_empty() {
             true => get!("keybind.sheet.press"),
             false => get!("keybind.sheet.press_held", "held", prefix),
         };
-        ui.label(RichText::new(prompt).monospace().color(ui.visuals().selection.stroke.color));
+        let text = RichText::new(prompt).monospace().color(ui.visuals().selection.stroke.color);
+        let response = ui.add(egui::Button::new(text));
+        let pressed = ui.input(|input| {
+            [
+                (egui::PointerButton::Primary, MouseButton::Left),
+                (egui::PointerButton::Secondary, MouseButton::Right),
+                (egui::PointerButton::Middle, MouseButton::Middle),
+                (egui::PointerButton::Extra1, MouseButton::Back),
+                (egui::PointerButton::Extra2, MouseButton::Forward),
+            ]
+            .into_iter()
+            .find(|(button, _)| input.pointer.button_pressed(*button))
+            .map(|(_, mouse)| mouse)
+        });
+        match pressed {
+            Some(button) if response.contains_pointer() => self.capture(keymap, held, [], [button]),
+            Some(_) => self.stop(),
+            None => {}
+        }
     }
 }
 
@@ -268,6 +292,18 @@ mod tests {
         assert!(sheet.is_capturing(), "a held modifier ended the wait");
         sheet.capture(&mut keymap, Held::default(), [release(KeyCode::ShiftLeft)], []);
         assert_eq!(keymap.chords(Action::Sprint)[0], Chord::key(KeyCode::ShiftLeft));
+    }
+
+    /// Fails if Shift pressed and let go while Ctrl is held binds bare Shift.
+    #[test]
+    fn a_modifier_with_another_held_is_not_bound_alone() {
+        let (mut sheet, mut keymap) = waiting(Action::Sprint, 0);
+        let both = Held { command: true, shift: true, ..default() };
+        sheet.capture(&mut keymap, both, [press(KeyCode::ShiftLeft)], []);
+        sheet.capture(&mut keymap, Held { command: true, ..default() }, [release(KeyCode::ShiftLeft)], []);
+        assert!(sheet.is_capturing(), "a modifier chord was bound as one key");
+        sheet.capture(&mut keymap, both, [press(KeyCode::KeyS)], []);
+        assert_eq!(keymap.chords(Action::Sprint)[0], Chord::command(KeyCode::KeyS).with_shift());
     }
 
     #[test]

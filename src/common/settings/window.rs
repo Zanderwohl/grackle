@@ -17,7 +17,7 @@ use bevy_egui::egui::{self, Id, Ui};
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass};
 
 use super::Settings;
-use crate::common::app_mode::authoring;
+use crate::common::app_mode::{authoring, AppMode};
 use crate::common::icons;
 use crate::common::keybind::sheet::Sheet;
 use crate::common::keybind::{self, Action, Actions, Held, Keymap, Quiet, ResolveActions};
@@ -142,6 +142,16 @@ impl SettingsWindow {
                 }
             }
         }
+    }
+
+    /// Closes without asking, dropping the draft.
+    fn dismiss(&mut self) {
+        if self.open {
+            info!("Leaving the editors closed the Settings window; changes not applied were dropped");
+        }
+        self.sheet.stop();
+        self.asking = false;
+        self.open = false;
     }
 
     fn close(&mut self, settings: &Settings, keymap: &Keymap) {
@@ -357,11 +367,10 @@ impl Plugin for SettingsPlugin {
 fn capture_binding(
     mut window: ResMut<SettingsWindow>,
     keys: Res<ButtonInput<KeyCode>>,
-    buttons: Res<ButtonInput<MouseButton>>,
     mut messages: MessageReader<KeyboardInput>,
 ) {
     let window = &mut *window;
-    window.sheet.capture_from(&mut window.keys_draft, &keys, &mut messages, &buttons);
+    window.sheet.capture_from(&mut window.keys_draft, &keys, &mut messages);
 }
 
 #[derive(Resource, Default)]
@@ -383,16 +392,29 @@ fn draw_settings(
     mut quiet: ResMut<Quiet>,
     keys: Res<ButtonInput<KeyCode>>,
     requested: Option<Res<OpenRequested>>,
+    mode: Option<Res<State<AppMode>>>,
     mut published: Local<bool>,
 ) {
-    let Ok(ctx) = contexts.ctx_mut() else { return };
+    let Ok(ctx) = contexts.ctx_mut() else {
+        // No window can be drawn, so nothing may stay quiet on its account.
+        quiet.set_if_neq(Quiet(false));
+        return;
+    };
     if keymap.is_changed() || !*published {
         keybind::publish(ctx, &keymap);
         *published = true;
     }
+    let authoring = mode.is_none_or(|mode| mode.get().is_authoring());
     if take_request(ctx) || requested.is_some() {
         commands.remove_resource::<OpenRequested>();
-        window.open(ctx, &settings, &keymap);
+        if authoring {
+            window.open(ctx, &settings, &keymap);
+        }
+    }
+    // Play grabs the cursor, so a window left open there could not be closed
+    // and would keep every action quiet.
+    if !authoring {
+        window.dismiss();
     }
     if window.is_open() {
         // Compared rather than written through, so drawing is not an edit.
