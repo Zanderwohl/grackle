@@ -643,8 +643,8 @@ Four more keys while playing: **`.`** brings the team picker back (see "Teams"),
 condition can override; `ViewMode` is what is drawn, and the camera swings
 between the two over `CAMERA_PULL_SECONDS` rather than cutting — your own body and
 its hitboxes are hidden from inside your own head, nobody else's are),
-**`F4`** toggles the hitbox gizmos, the debug laser aimed at them and each shot's line and the flame's traced cone, and
-**`F6`** toggles the bone gizmos and the pickups' trigger volumes
+**`F4`** toggles the hitbox gizmos, the debug laser aimed at them and each shot's line, and
+**`F6`** toggles the bone gizmos, the pickups' trigger volumes and the flame's and airblast's cones
 (green, dim while one restocks), **`F7`** shows the nav overlay picked in
 the Bakes panel, and **`F8`** draws each bot's route over the floor, its view
 and what it senses, in its color, and puts its name tag up with its goal. All four are off by default: they are debug
@@ -1333,6 +1333,12 @@ The plan and what is left is
   scoring, respawning, telemetry, bots and the map's collision rebuild still
   ask for Play. A new system the range should show joins by asking it, and
   one that seats or scores must not.
+- **The views are stacked**: first person on the top half of the middle, the stage camera
+  under it, eased onto the closest place from the shooter's right that frames every puppet within
+  8 m and the floor under the spawn (`frame_the_stage`, `thumbnail::frame_wide`).
+  A body is kept out of its own eye by `render_layers::INSIDE_HEAD`, a layer the play camera
+  does not draw, rather than by `Visibility::Hidden`, so the stage camera, which draws it, still
+  shows the shooter, its hat and its weapon.
 - **The stage is 2 km under the map** (`RANGE_ORIGIN`), on its own
   `CollisionWorld`, swapped in on entry and back on exit, so the map's
   triggers and pickups never touch a puppet. The map's roots are hidden as
@@ -2721,7 +2727,7 @@ round its kept bones (`Ragdoll::bounds`). Each flame is a billboard from a gener
 shapes (`flame_sheet`), stood upright on screen rather than along its flight,
 since a flame flying away from the eye would be a sliver. They are unlit and
 brighter than one, so they glow and light nothing. The traced cone is drawn
-only on `F4`. The flamethrower's `fire` and `recoil` clips are a flat pull back that
+only on `F6`. The flamethrower's `fire` and `recoil` clips are a flat pull back that
 outlasts its shot interval, so each shot restarts the same pose and the clip's
 `blend_out` takes the weapon home after the trigger is let go.
 
@@ -2735,7 +2741,10 @@ out. A projectile's blast is measured from its shooter, or from where it was
 fired once they are gone. Each part is a field, so a
 weapon can push without reflecting. It runs in `Deal` before
 `step_projectiles`, so a rocket turned this tick flies back this tick, and its
-cone is an `Effect::Gust`, which bots hear like a shot.
+cone is an `Effect::Gust`, which bots hear like a shot. What a player sees is a smoke ring
+([`src/game/gust_ring.rs`](src/game/gust_ring.rs)): a burst of puffs from a generated sheet,
+started on a circle round the muzzle and flown down the aim, widening with the cone and coming to
+rest at its end; the cone itself is drawn on `F6`.
 
 `ProjectileEmitter` fires a spec along its own forward on an interval.
 Nothing places one: the player's key for it is gone, and it is meant to come

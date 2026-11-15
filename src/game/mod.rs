@@ -34,6 +34,7 @@ pub mod death;
 pub mod decal;
 pub mod flame_jet;
 pub mod gib_blood;
+pub mod gust_ring;
 pub mod hat;
 pub mod held;
 pub mod hitbox;

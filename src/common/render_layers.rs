@@ -31,8 +31,17 @@ pub const GIZMOS: usize = 4;
 /// needed. See [`crate::game::forward_camera`].
 pub const WARM_UP: usize = 5;
 
+/// A body's parts, hat and held weapon while the view is inside its head. The play camera skips
+/// it and the weapon editor's stage camera draws it; `Visibility::Hidden` would hide it from both.
+pub const INSIDE_HEAD: usize = 6;
+
 /// The editor's 2D shape painter and the egui camera.
 pub const PAINTER: usize = 31;
+
+/// [`INSIDE_HEAD`] when the view is inside the body these are drawn for, else [`WORLD`].
+pub fn body_layers(inside_head: bool) -> bevy::camera::visibility::RenderLayers {
+    bevy::camera::visibility::RenderLayers::layer(if inside_head { INSIDE_HEAD } else { WORLD })
+}
 
 #[cfg(test)]
 mod tests {
@@ -40,7 +49,7 @@ mod tests {
 
     #[test]
     fn no_two_features_share_a_layer() {
-        let all = [WORLD, VIEWMODEL, EDITOR_ONLY, THUMBNAIL, GIZMOS, WARM_UP, PAINTER];
+        let all = [WORLD, VIEWMODEL, EDITOR_ONLY, THUMBNAIL, GIZMOS, WARM_UP, INSIDE_HEAD, PAINTER];
         for (i, a) in all.iter().enumerate() {
             for b in &all[i + 1..] {
                 assert_ne!(a, b, "two features claim layer {a}");

@@ -2,8 +2,9 @@
 //! hostile projectiles back as the airblaster's, and puts out burning teammates — whichever its
 //! spec asks for. Nothing is hurt, so `apply_damage` is never asked and each part checks
 //! [`Allegiances`] itself. A body or projectile is caught when it is ahead of the eye, within the
-//! range, inside the cone widened by its own size, and in sight. Its cone is drawn with the
-//! blasts' marks, in [`crate::game::explosion`].
+//! range, inside the cone widened by its own size, and in sight. A player sees a smoke ring
+//! ([`crate::game::gust_ring`]); the cone is drawn on `F6` with the blasts' marks, in
+//! [`crate::game::explosion`].
 
 use bevy::prelude::*;
 

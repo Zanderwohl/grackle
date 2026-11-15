@@ -6,6 +6,7 @@
 //! arrive on their own schedule, so what is drawn is compared with what is
 //! held every frame and redrawn when they differ.
 
+use bevy::camera::visibility::RenderLayers;
 use bevy::prelude::*;
 
 use crate::common::air_lit::LitMaterial;
@@ -343,13 +344,15 @@ fn dress_held_weapons(
             &Equipped,
             Option<&Class>,
             Has<LocalPlayer>,
+            Has<crate::game::player::Watched>,
             Option<&HeldModel>,
             Option<&Condition>,
         ),
         With<Skeleton>,
     >,
 ) {
-    for (body, equipped, class, ours, drawn, condition) in &bodies {
+    for (body, equipped, class, ours, watched, drawn, condition) in &bodies {
+        let ours = ours || watched;
         let held = equipped.held();
         if let Some(drawn) = drawn
             && drawn.weapon == held
@@ -727,23 +730,21 @@ pub(crate) fn grip_the_weapon(
     }
 }
 
-/// The only writer of a held part's visibility; `hide_own_body` leaves held
-/// parts to this.
+/// The only writer of a held part's visibility and layers; `hide_own_body` leaves held parts to
+/// this.
 fn held_visibility(
     ours: bool,
     view: ViewMode,
     condition: Option<Condition>,
     taunts: Option<&Taunts>,
-) -> Visibility {
-    let inside_our_head = ours && !view.shows_own_body();
+) -> (Visibility, RenderLayers) {
     let taken_away = condition.is_some_and(|condition| !condition.shows_weapon(taunts));
-    match inside_our_head || taken_away {
-        true => Visibility::Hidden,
-        false => Visibility::Inherited,
-    }
+    let visibility = if taken_away { Visibility::Hidden } else { Visibility::Inherited };
+    (visibility, crate::common::render_layers::body_layers(ours && !view.shows_own_body()))
 }
 
 fn show_held_weapons(
+    mut commands: Commands,
     view: Res<ViewMode>,
     taunts: Option<Res<Taunts>>,
     bodies: Query<(
@@ -753,7 +754,7 @@ fn show_held_weapons(
         Option<Ref<crate::game::player::Watched>>,
         Option<Ref<Condition>>,
     )>,
-    mut parts: Query<&mut Visibility, With<HeldPart>>,
+    mut parts: Query<(&mut Visibility, Option<&RenderLayers>), With<HeldPart>>,
     mut no_longer_ours: RemovedComponents<LocalPlayer>,
     mut no_longer_watched: RemovedComponents<crate::game::player::Watched>,
     mut no_longer_conditioned: RemovedComponents<Condition>,
@@ -775,12 +776,15 @@ fn show_held_weapons(
             continue;
         }
         let (ours, watched, condition) = (ours.is_some(), watched.is_some(), condition.as_deref());
-        let wanted = held_visibility(ours || watched, *view, condition.copied(), taunts.as_deref());
+        let (wanted, layers) = held_visibility(ours || watched, *view, condition.copied(), taunts.as_deref());
         for part in &held.parts {
-            let Ok(mut visibility) = parts.get_mut(*part) else { continue };
+            let Ok((mut visibility, had)) = parts.get_mut(*part) else { continue };
             // Assigned only on change, so parts are not dirtied every frame.
             if *visibility != wanted {
                 *visibility = wanted;
+            }
+            if had.cloned().unwrap_or_default() != layers {
+                commands.entity(*part).insert(layers.clone());
             }
         }
     }
