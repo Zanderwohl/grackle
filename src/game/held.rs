@@ -18,6 +18,7 @@ use crate::common::skeleton::clip::Clip;
 use crate::common::skeleton::play::{
     apply_stack, grip_offsets, ClipAssetsPlugin, ClipStack, Frames, Layer, LayerBlends, Regions,
 };
+use crate::common::skeleton::rig::ScratchPose;
 use crate::common::skeleton::{Pose, Skeleton};
 use crate::common::weapon::{Equipped, WeaponCatalog, WeaponId};
 use crate::common::taunt::Taunts;
@@ -615,7 +616,8 @@ pub(crate) fn play_the_clips(
         };
 
         let mut moving = placed.unwrap_or_default();
-        apply_stack(stack, &clips, skeleton, &mut pose, &frames, Some(&mut moving));
+        // `commit_poses` says whether it changed.
+        apply_stack(stack, &clips, skeleton, pose.bypass_change_detection(), &frames, Some(&mut moving));
         if let Some(weapon) = weapon.as_deref_mut() {
             weapon.0 = moving;
         }
@@ -646,6 +648,8 @@ pub(crate) fn grip_the_weapon(
         if !held.resolved || held.weapon.is_none() {
             continue;
         }
+        // `commit_poses` says whether it changed.
+        let pose = pose.bypass_change_detection();
         let anatomy = skeleton.anatomy();
         let arms = [0, 1].map(|hand| anatomy.hand(hand).map_or(Regions::NONE, |limb| limb.region));
         // A clip's `Weight` on `Controller::Hold` lets go as a layer covering the arm would.
@@ -658,12 +662,18 @@ pub(crate) fn grip_the_weapon(
         }
 
         let root = Transform::from_translation(offset.map_or(Vec3::ZERO, |offset| offset.0));
-        let clipped = pose.clone();
+        let partly = |cover: f32| cover > 0.0 && cover < 1.0;
+        let clipped = cover.iter().any(|cover| partly(*cover)).then(|| {
+            let mut clipped = ScratchPose::take();
+            clipped.copy_from(pose);
+            clipped
+        });
         let grips = stack.map_or([Vec3::ZERO; 2], |stack| grip_offsets(stack, &clips, skeleton));
-        grip_hands(skeleton, &mut pose, &root, &held.hold, &weapon.0, cover.map(|cover| cover < 1.0), grips);
+        grip_hands(skeleton, pose, &root, &held.hold, &weapon.0, cover.map(|cover| cover < 1.0), grips);
 
+        let Some(clipped) = clipped else { continue };
         for (arm, cover) in arms.into_iter().zip(cover) {
-            if cover <= 0.0 || cover >= 1.0 {
+            if !partly(cover) {
                 continue;
             }
             for (index, bone) in skeleton.bones().iter().enumerate() {
@@ -695,10 +705,35 @@ fn held_visibility(
 fn show_held_weapons(
     view: Res<ViewMode>,
     taunts: Option<Res<Taunts>>,
-    bodies: Query<(&HeldModel, Has<LocalPlayer>, Has<crate::game::player::Watched>, Option<&Condition>)>,
+    bodies: Query<(
+        Entity,
+        Ref<HeldModel>,
+        Option<Ref<LocalPlayer>>,
+        Option<Ref<crate::game::player::Watched>>,
+        Option<Ref<Condition>>,
+    )>,
     mut parts: Query<&mut Visibility, With<HeldPart>>,
+    mut no_longer_ours: RemovedComponents<LocalPlayer>,
+    mut no_longer_watched: RemovedComponents<crate::game::player::Watched>,
+    mut no_longer_conditioned: RemovedComponents<Condition>,
 ) {
-    for (held, ours, watched, condition) in &bodies {
+    fn changed<T: Component>(marker: &Option<Ref<T>>) -> bool {
+        marker.as_ref().is_some_and(|marker| marker.is_changed())
+    }
+    let everybody = view.is_changed() || taunts.as_ref().is_some_and(|taunts| taunts.is_changed());
+    let lost: Vec<Entity> =
+        no_longer_ours.read().chain(no_longer_watched.read()).chain(no_longer_conditioned.read()).collect();
+    for (body, held, ours, watched, condition) in &bodies {
+        if !everybody
+            && !held.is_changed()
+            && !changed(&ours)
+            && !changed(&watched)
+            && !changed(&condition)
+            && !lost.contains(&body)
+        {
+            continue;
+        }
+        let (ours, watched, condition) = (ours.is_some(), watched.is_some(), condition.as_deref());
         let wanted = held_visibility(ours || watched, *view, condition.copied(), taunts.as_deref());
         for part in &held.parts {
             let Ok(mut visibility) = parts.get_mut(*part) else { continue };
@@ -720,7 +755,7 @@ fn place_held_weapons(
         let deltas = held.rig.deltas_for(stack, &clips);
         for part in &held.parts {
             let Ok((mut transform, bone)) = parts.get_mut(*part) else { continue };
-            *transform = place_part(weapon.0, &deltas, bone);
+            transform.set_if_neq(place_part(weapon.0, &deltas, bone));
         }
     }
 }

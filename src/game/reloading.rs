@@ -54,6 +54,11 @@ pub(crate) fn perform_reloads(
         if was != left {
             seen.0 = left;
         }
+        let starts = left > was + STARTED;
+        let ends = left <= 0.0 && was > 0.0;
+        if !starts && !ends {
+            continue;
+        }
         // A reload rising from nothing is its first round; the next round of one goes round again
         // from just above zero.
         let whole = catalog.held_by(equipped).map(|weapon| weapon.magazine.first_reload.filter(|_| was <= 0.0).unwrap_or(weapon.magazine.reload));
@@ -65,20 +70,21 @@ pub(crate) fn perform_reloads(
             true => WeaponClip::Prop(name.to_string()),
             false => WeaponClip::Reload,
         };
-        let (body, view) = (own_or_shared("body_reload"), own_or_shared("reload"));
 
-        if left > was + STARTED && whole > 0.0 {
+        if starts && whole > 0.0 {
             let from = 1.0 - left / whole;
-            performance.start_fitted(body, from, whole);
+            performance.start_fitted(own_or_shared("body_reload"), from, whole);
             if ours {
+                let view = own_or_shared("reload");
                 for mut viewmodel in &mut views {
                     viewmodel.start_fitted(view.clone(), from, whole);
                 }
             }
-        } else if left <= 0.0 && was > 0.0 {
+        } else if ends {
             // Cut short by a shot or a switch.
-            performance.stop(&body);
+            performance.stop(&own_or_shared("body_reload"));
             if ours {
+                let view = own_or_shared("reload");
                 for mut viewmodel in &mut views {
                     viewmodel.stop(&view);
                 }

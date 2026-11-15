@@ -21,11 +21,12 @@ use crate::common::app_mode::showing_the_world;
 use crate::common::class::Stance;
 use crate::common::damage::PlayerId;
 use crate::common::class::{Class, ClassBuilds};
-use crate::common::skeleton::ik::ducked_pose;
+use crate::common::skeleton::ik::{animator_pose_into, ducked_pose_into};
+use crate::common::skeleton::rig::ScratchPose;
 use crate::common::skeleton::play::{ClipStack, Layer, Regions};
 use crate::common::skeleton::state::{AnimationState, ClipLibrary};
 use crate::common::skeleton::{
-    draw_skeleton, animator_pose, leg_length, AnimationClock, AnimationPhase, BodyRequests,
+    draw_skeleton, leg_length, AnimationClock, AnimationPhase, BodyRequests,
     direction_of, DisplaySpeed, ForcedAnimation, Gait, Pose, PoseInputs, Skeleton,
     SkeletonAnimator,
     SkeletonPalette,
@@ -113,6 +114,7 @@ impl Plugin for SkeletonPlugin {
                 crate::game::held::fade_the_layers,
                 crate::game::held::play_the_clips,
                 crate::game::held::grip_the_weapon,
+                commit_poses,
             ).chain())
             // After propagation, so a rig is drawn where its body is now,
             // after `interpolate_bodies`. Gated because a gizmo is not an
@@ -359,10 +361,10 @@ fn look_with_the_head(
             pose.joint(skeleton.bones()[*bone].name) == Quat::IDENTITY
         });
         if pitch == 0.0 && unturned {
-            // Skipping keeps a still body from dirtying its pose every frame.
             continue;
         }
-        look(skeleton, &mut pose, pitch);
+        // `commit_poses` says whether it changed.
+        look(skeleton, pose.bypass_change_detection(), pitch);
     }
 }
 
@@ -517,7 +519,9 @@ fn advance_animators(
             feet_free: feet_free(stack, layer_clips.as_deref()),
         };
         let root = skeleton_root(global, offset);
-        *pose = animator_pose(skeleton, &animator, &inputs, &root, clips, crouch);
+        // `commit_poses` says whether it changed, once the chain has finished with it.
+        let pose = pose.bypass_change_detection();
+        animator_pose_into(skeleton, &animator, &inputs, &root, clips, crouch, pose);
 
         if let Some(stack) = stack {
             let still = AnimationState::from_requests(&BodyRequests {
@@ -525,9 +529,39 @@ fn advance_animators(
                 airborne: requests.is_some_and(|requests| requests.airborne),
                 ..default()
             });
-            stand_where_claimed(skeleton, &mut pose, stack, || {
-                ducked_pose(skeleton, still, &inputs, &root, clips, crouch)
+            stand_where_claimed_into(skeleton, pose, stack, |still_pose| {
+                ducked_pose_into(skeleton, still, &inputs, &root, clips, crouch, still_pose)
             });
+        }
+    }
+}
+
+/// The pose a body was last drawn in, so a pose rebuilt the same is not reported as changed.
+#[derive(Component, Default)]
+pub struct ShownPose(Pose);
+
+/// Marks a body's [`Pose`] changed only when the chain left it different from what was last
+/// drawn. The chain writes it without change detection, so a still body (an animation grid with
+/// the clock frozen) does not re-place every part each frame.
+fn commit_poses(
+    mut commands: Commands,
+    mut bodies: Query<
+        (Entity, &mut Pose, Option<&mut ShownPose>),
+        Or<(With<SkeletonAnimator>, With<ClipStack>, With<Player>)>,
+    >,
+) {
+    for (body, mut pose, shown) in &mut bodies {
+        match shown {
+            Some(mut shown) => {
+                if shown.0 != *pose {
+                    shown.0.copy_from(&pose);
+                    pose.set_changed();
+                }
+            }
+            None => {
+                commands.entity(body).try_insert(ShownPose(pose.clone()));
+                pose.set_changed();
+            }
         }
     }
 }
@@ -545,12 +579,27 @@ pub(crate) fn stand_where_claimed(
     stack: &ClipStack,
     still: impl FnOnce() -> Pose,
 ) {
+    stand_where_claimed_into(skeleton, pose, stack, |standing| *standing = still());
+}
+
+/// [`stand_where_claimed`], building the still pose into the storage it is handed.
+pub(crate) fn stand_where_claimed_into(
+    skeleton: &Skeleton,
+    pose: &mut Pose,
+    stack: &ClipStack,
+    still: impl FnOnce(&mut Pose),
+) {
+    if !stack.0.iter().any(|playing| playing.layer > Layer::Weapon) {
+        return;
+    }
     let anatomy = skeleton.anatomy();
     let cover_of = |region: Regions| stack.cover(region, Layer::Weapon);
     if anatomy.bone_regions().all(|region| cover_of(region) <= 0.0) {
         return;
     }
-    let still = still();
+    let mut still_pose = ScratchPose::take();
+    still(&mut still_pose);
+    let still = &*still_pose;
     for region in anatomy.bone_regions() {
         let cover = cover_of(region);
         if cover <= 0.0 {
