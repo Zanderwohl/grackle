@@ -12,7 +12,7 @@ use crate::anim::body::{BodyClipDialog, BodyClips};
 use crate::anim::{edit_selected, selected_clip, AnimEditor, ClipSource};
 use crate::common::skeleton::clip::{
     Axis, ChainRef, Channel, Clip, ClipProblem, Clock, Combine, Controller, Key, Space, StateAnimation, Timing, Track,
-    Unit, Variant,
+    Unit,
 };
 use crate::common::skeleton::play::Layer;
 use crate::common::skeleton::state::AnimationState;
@@ -96,7 +96,7 @@ impl Plugin for AnimUiPlugin {
 
 /// Bundled because `panels` is near Bevy's parameter limit.
 #[derive(bevy::ecs::system::SystemParam)]
-struct AnimFiles<'w> {
+struct AnimFiles<'w, 's> {
     /// A prop's clips are in its `.gpp`, so this is the prop editor's own dialog.
     prop: Res<'w, PropFileDialog>,
     body: Res<'w, BodyClipDialog>,
@@ -105,6 +105,7 @@ struct AnimFiles<'w> {
     layer_claims: Res<'w, crate::common::skeleton::play::LayerClaims>,
     layer_blends: Res<'w, crate::common::skeleton::play::LayerBlends>,
     exit: MessageWriter<'w, AppExit>,
+    rigs: Local<'s, crate::anim::PreviewRigCache>,
 }
 
 struct AnimTabs<'a> {
@@ -113,6 +114,8 @@ struct AnimTabs<'a> {
     anim: &'a mut AnimEditor,
     figure: &'a mut ScaleFigure,
     builds: &'a crate::common::class::ClassBuilds,
+    builds_changed: bevy::ecs::change_detection::Tick,
+    rigs: &'a crate::anim::PreviewRigCache,
     layer_claims: &'a crate::common::skeleton::play::LayerClaims,
     layer_blends: &'a crate::common::skeleton::play::LayerBlends,
     stage: &'a mut FigureStage,
@@ -163,8 +166,9 @@ impl AnimTabs<'_> {
     }
 
     /// The rig on screen: the one whose clip is picked, or the figure's class's.
-    fn rig(&self) -> crate::common::skeleton::Skeleton {
-        crate::anim::preview_rig(self.anim, self.body, self.builds, self.figure.0.unwrap_or(Class::Mercenary))
+    fn rig(&self) -> crate::anim::SharedRig {
+        let class = self.figure.0.unwrap_or(Class::Mercenary);
+        self.rigs.preview(self.anim, self.body, self.builds, self.builds_changed, class)
     }
 
     fn edit(&mut self, change: impl FnOnce(&mut Clip)) {
@@ -206,9 +210,7 @@ impl AnimTabs<'_> {
             .default_open(true)
             .show(ui, |ui| {
                 // Every state, with or without a clip, since a state with none still plays its built-in pose.
-                // Cloned because the rows edit the document they are drawn from.
-                let animations = self.body.animations().clone();
-                self.state_rows(ui, None, &animations, &body_names);
+                self.state_rows(ui, None, &body_names);
             });
 
         // Each other rig's states, filed as `<rig>/<state>`, so it can be animated before a class
@@ -218,10 +220,7 @@ impl AnimTabs<'_> {
             egui::CollapsingHeader::new(get!("anim.library.rig", "rig", &rig))
                 .id_salt(("anim_library_rig", &rig))
                 .default_open(false)
-                .show(ui, |ui| {
-                    let animations = self.body.animations().clone();
-                    self.state_rows(ui, Some(&rig), &animations, &body_names);
-                });
+                .show(ui, |ui| self.state_rows(ui, Some(&rig), &body_names));
         }
 
         egui::CollapsingHeader::new(get!("anim.library.taunts"))
@@ -251,11 +250,17 @@ impl AnimTabs<'_> {
     }
 
     fn taunt_rows(&mut self, ui: &mut Ui) {
-        let taunts = self.body.taunts().to_vec();
+        // Read up front because the rows edit the document they are drawn from.
+        let taunts: Vec<(String, bool)> = self
+            .body
+            .taunts()
+            .iter()
+            .map(|(key, spec)| (key.clone(), self.body.get(&spec.clip).is_none()))
+            .collect();
         let keys: Vec<String> = taunts.iter().map(|(key, _)| key.clone()).collect();
-        for (key, spec) in &taunts {
+        for (key, missing) in &taunts {
+            let missing = *missing;
             let picked = self.anim.taunt.as_deref() == Some(key.as_str());
-            let missing = self.body.get(&spec.clip).is_none();
             let mut label = egui::RichText::new(key);
             if missing {
                 label = label.color(PROBLEM_COLOR);
@@ -423,7 +428,6 @@ impl AnimTabs<'_> {
         &mut self,
         ui: &mut Ui,
         rig: Option<&str>,
-        animations: &std::collections::BTreeMap<String, StateAnimation>,
         siblings: &[String],
     ) {
         for state in AnimationState::iter() {
@@ -431,15 +435,23 @@ impl AnimTabs<'_> {
                 Some(rig) => format!("{rig}/{}", state.clip_name()),
                 None => state.clip_name().to_string(),
             };
-            match animations.get(&name) {
+            // Only the headings are copied out, because the rows edit the document they are drawn from.
+            let headings = match self.body.animations().get(&name) {
+                None => None,
+                Some(StateAnimation::Single(_)) => Some(None),
+                Some(StateAnimation::Blend(variants)) => {
+                    Some(Some(variants.iter().map(|variant| variant.heading).collect::<Vec<f32>>()))
+                }
+            };
+            match headings {
                 None => self.unmade_row(ui, ClipSource::Body, &name, format!("animation.states.{}", state.clip_name())),
-                Some(StateAnimation::Single(_)) => self.library_row(ui, ClipSource::Body, &name, siblings),
-                Some(StateAnimation::Blend(variants)) => self.blend_rows(ui, &name, state, variants),
+                Some(None) => self.library_row(ui, ClipSource::Body, &name, siblings),
+                Some(Some(headings)) => self.blend_rows(ui, &name, state, &headings),
             }
         }
     }
 
-    fn blend_rows(&mut self, ui: &mut Ui, name: &str, state: AnimationState, variants: &[Variant]) {
+    fn blend_rows(&mut self, ui: &mut Ui, name: &str, state: AnimationState, headings: &[f32]) {
         let header = ui.add(egui::Label::new(state.name()).selectable(false).sense(egui::Sense::click()));
         header.context_menu(|ui| {
             if ui.button(get!("anim.library.revert")).clicked() {
@@ -450,14 +462,14 @@ impl AnimTabs<'_> {
         });
 
         ui.indent(("anim_variants", name), |ui| {
-            for (index, variant) in variants.iter().enumerate() {
+            for (index, heading) in headings.iter().enumerate() {
                 let address = crate::anim::body::variant_name(name, index);
                 let picked = self.anim.source == ClipSource::Body
                     && self.anim.selected.as_deref() == Some(address.as_str());
                 let label = get!(
                     "anim.library.variant",
                     "heading",
-                    format!("{:+.0}°", variant.heading.to_degrees())
+                    format!("{:+.0}°", heading.to_degrees())
                 );
                 let row = ui.selectable_label(picked, label);
                 if row.clicked() && !picked {
@@ -478,7 +490,7 @@ impl AnimTabs<'_> {
                     }
                     // Removing the last variant is reverting the state, which the state's own menu offers.
                     if ui
-                        .add_enabled(variants.len() > 1, egui::Button::new(get!("anim.library.remove_variant")))
+                        .add_enabled(headings.len() > 1, egui::Button::new(get!("anim.library.remove_variant")))
                         .clicked()
                     {
                         self.body.edit(|clips| {
@@ -1612,6 +1624,8 @@ fn panels(
         anim: &mut anim,
         figure: &mut figure,
         builds: &files.builds,
+        builds_changed: files.builds.last_changed(),
+        rigs: &files.rigs,
         layer_claims: &files.layer_claims,
         layer_blends: &files.layer_blends,
         stage: &mut stage,

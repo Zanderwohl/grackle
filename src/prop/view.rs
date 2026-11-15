@@ -71,9 +71,22 @@ pub struct PropBuild {
     /// The features a deferred rebuild waits on, and since when, so a hold
     /// dragged while a prop settles does not restart the clock.
     waiting: Option<(Vec<PropFeature>, Duration)>,
+    /// Of `evaluated`, taken once per evaluation since both walk every vertex.
+    bounds: Option<(Vec3, Vec3)>,
+    triangles: usize,
 }
 
 impl PropBuild {
+    /// [`Evaluated::bounds`] of `evaluated`.
+    pub fn bounds(&self) -> Option<(Vec3, Vec3)> {
+        self.bounds
+    }
+
+    /// [`Evaluated::triangle_count`] of `evaluated`.
+    pub fn triangle_count(&self) -> usize {
+        self.triangles
+    }
+
     /// Whether the geometry on screen is behind the document.
     pub fn settling(&self) -> bool {
         self.waiting.is_some()
@@ -325,6 +338,8 @@ fn rebuild_the_prop(
     // Bevy's `Instant`, not the standard library's, which panics on wasm.
     let started = Instant::now();
     build.evaluated = crate::prop::feature::evaluate(shown);
+    build.bounds = build.evaluated.bounds();
+    build.triangles = build.evaluated.triangle_count();
     build.cost = started.elapsed();
     build.input = Some(shown.to_vec());
 
@@ -355,6 +370,8 @@ fn draw_the_bench(
     hovered: Res<HoveredPick>,
     session: Res<SketchSession>,
     tool: Res<ActiveTool>,
+    mut rig: Local<Option<(u64, crate::prop::rig::PropRig)>>,
+    mut regions: Local<RegionHatching>,
 ) {
     gizmos.grid(
         Quat::from_rotation_x(std::f32::consts::FRAC_PI_2),
@@ -363,7 +380,7 @@ fn draw_the_bench(
         Color::srgba(1.0, 1.0, 1.0, 0.08),
     );
     let primary = editor.primary();
-    let marker = build.evaluated.bounds().map_or(MIN_MARKER, |(min, max)| (max - min).length() * MARKER_SIZE).max(MIN_MARKER);
+    let marker = build.bounds().map_or(MIN_MARKER, |(min, max)| (max - min).length() * MARKER_SIZE).max(MIN_MARKER);
     let picked_color = |pick: &Pick| match Some(pick) == primary {
         true => PICKED,
         false => PICKED.with_alpha(0.5),
@@ -386,7 +403,10 @@ fn draw_the_bench(
         gizmos.line(Vec3::ZERO, b, positive);
         gizmos.line(a, Vec3::ZERO, negative);
     }
-    let rig = crate::prop::rig::PropRig::of(&editor.doc().bones);
+    if rig.as_ref().is_none_or(|(generation, _)| *generation != editor.generation()) {
+        *rig = Some((editor.generation(), crate::prop::rig::PropRig::of(&editor.doc().bones)));
+    }
+    let Some((_, rig)) = rig.as_ref() else { return };
     for bone in &rig.bones {
         for axis in [Vec3::X, Vec3::Y, Vec3::Z] {
             gizmos.line(bone.pivot - axis * marker, bone.pivot + axis * marker, BONE);
@@ -410,7 +430,9 @@ fn draw_the_bench(
                     draw_located(&mut gizmos, Located::Edge(a, b), marker, picked_color(pick));
                 }
             }
-            Pick::Region { sketch, region } => draw_region(&mut gizmos, &build, *sketch, region, picked_color(pick)),
+            Pick::Region { sketch, region } => {
+                draw_region(&mut gizmos, &build, &mut regions, *sketch, region, picked_color(pick))
+            }
         }
     }
     match &hovered.0 {
@@ -419,7 +441,7 @@ fn draw_the_bench(
                 draw_located(&mut gizmos, at, marker * 0.8, HOVERED);
             }
         }
-        Some(Pick::Region { sketch, region }) => draw_region(&mut gizmos, &build, *sketch, region, HOVERED),
+        Some(Pick::Region { sketch, region }) => draw_region(&mut gizmos, &build, &mut regions, *sketch, region, HOVERED),
         Some(pick @ Pick::SketchLine { .. }) => {
             if let Some((a, b)) = pick.line().and_then(|line| build.evaluated.locate_line(&line)) {
                 draw_located(&mut gizmos, Located::Edge(a, b), marker * 0.8, HOVERED);
@@ -489,13 +511,40 @@ fn draw_body_box(gizmos: &mut Gizmos, build: &PropBuild, body: PropFeatureId, co
     }
 }
 
-fn draw_region(gizmos: &mut Gizmos, build: &PropBuild, sketch: PropFeatureId, region: &RegionRef, color: Color) {
+/// Region hatching in its sketch's plane, kept while the build it came from stands.
+#[derive(Default)]
+struct RegionHatching {
+    built: Option<u64>,
+    hatched: Vec<((PropFeatureId, RegionRef), Vec<(Vec2, Vec2)>)>,
+}
+
+fn draw_region(
+    gizmos: &mut Gizmos,
+    build: &PropBuild,
+    cache: &mut RegionHatching,
+    sketch: PropFeatureId,
+    region: &RegionRef,
+    color: Color,
+) {
     let Some(placed) = build.evaluated.sketch(sketch) else { return };
-    let Some(found) = placed.arrangement.find(region) else { return };
-    // Meters; a floor so a speck of a region is not hatched a thousand times.
-    let spacing = (crate::prop::region::reach_of(&found.outer) / 10.0).max(1e-4);
-    for (a, b) in crate::prop::sketch_edit::hatch(&found.outer, &found.holes, spacing) {
-        gizmos.line(placed.world(a), placed.world(b), color);
+    if cache.built != build.built() {
+        cache.built = build.built();
+        cache.hatched.clear();
+    }
+    let at = match cache.hatched.iter().position(|((id, named), _)| *id == sketch && named == region) {
+        Some(at) => at,
+        None => {
+            let lines = placed.arrangement.find(region).map_or_else(Vec::new, |found| {
+                // Meters; a floor so a speck of a region is not hatched a thousand times.
+                let spacing = (crate::prop::region::reach_of(&found.outer) / 10.0).max(1e-4);
+                crate::prop::sketch_edit::hatch(&found.outer, &found.holes, spacing)
+            });
+            cache.hatched.push(((sketch, region.clone()), lines));
+            cache.hatched.len() - 1
+        }
+    };
+    for (a, b) in &cache.hatched[at].1 {
+        gizmos.line(placed.world(*a), placed.world(*b), color);
     }
 }
 
@@ -528,14 +577,16 @@ fn draw_located(gizmos: &mut Gizmos, at: Located, size: f32, color: Color) {
 struct GhostCache {
     /// The generation and selection last looked at: the cue to compare.
     key: Option<(u64, crate::prop::feature::PropFeatureId)>,
-    /// What the edges were drawn from, which decides, as in [`PropBuild`].
-    input: Option<(crate::prop::feature::PropFeatureId, Vec<PropFeature>)>,
+    /// What the edges were drawn from: the features before the selected one and
+    /// the operands it consumes. Not the selected feature itself, so dragging
+    /// one of its numbers does not re-evaluate an unchanged prefix.
+    input: Option<(Vec<PropFeature>, Vec<crate::prop::feature::PropFeatureId>)>,
     edges: Vec<(Vec3, Vec3)>,
 }
 
 /// Wireframe of the selected feature's operands as they stood before it ran.
-/// Cached on the selection and the features up to it, since it re-evaluates
-/// the list up to that feature.
+/// Cached on the features before it and what it consumes, since it
+/// re-evaluates the list up to that feature.
 fn ghost_the_operands(
     mut gizmos: Gizmos,
     editor: Res<PropEditor>,
@@ -553,20 +604,19 @@ fn ghost_the_operands(
         cache.key = Some(key);
         let features = editor.shown();
         let at = features.iter().position(|feature| feature.id == selected);
-        let upto = at.map_or(&[][..], |at| &features[..=at]);
+        let (before, operands) = match at {
+            Some(at) => (&features[..at], features[at].op.consumes()),
+            None => (&[][..], Vec::new()),
+        };
         let unchanged = cache
             .input
             .as_ref()
-            .is_some_and(|(was, built_from)| *was == selected && built_from.as_slice() == upto);
+            .is_some_and(|(built_from, consumed)| built_from.as_slice() == before && *consumed == operands);
         if !unchanged {
-            cache.input = Some((selected, upto.to_vec()));
             cache.edges.clear();
-        }
-        if let Some(at) = at.filter(|_| !unchanged) {
-            let operands = features[at].op.consumes();
             if !operands.is_empty() {
-                let before = crate::prop::feature::evaluate(&features[..at]);
-                for (_, solid) in before.bodies.iter().filter(|(id, _)| operands.contains(id)) {
+                let evaluated = crate::prop::feature::evaluate(before);
+                for (_, solid) in evaluated.bodies.iter().filter(|(id, _)| operands.contains(id)) {
                     for polygon in solid.polygons() {
                         let v = &polygon.vertices;
                         for i in 0..v.len() {
@@ -575,6 +625,7 @@ fn ghost_the_operands(
                     }
                 }
             }
+            cache.input = Some((before.to_vec(), operands));
         }
     }
     for (a, b) in &cache.edges {

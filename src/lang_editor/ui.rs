@@ -109,7 +109,7 @@ impl Tree {
             }
             let value = editor.doc.leaf(&node.path);
             let wanted = reference.and_then(|reference| reference.get(&node.path));
-            [Some(dotted(&node.path).as_str()), value.as_ref().map(Leaf::as_text), wanted]
+            [Some(node.dotted.as_str()), value.as_ref().map(Leaf::as_text), wanted]
                 .into_iter()
                 .flatten()
                 .any(|text| text.to_lowercase().contains(filter))
@@ -254,11 +254,11 @@ fn panels(
 
 fn browser(ui: &mut Ui, editor: &LangEditor, state: &mut LangUi, requests: &mut Requests) {
     let open = editor.path.clone();
-    let files = state.files().to_vec();
+    let files = state.files();
     let mut dialog = None;
     egui::ScrollArea::vertical().show(ui, |ui| {
         let mut pack: Option<&Path> = None;
-        for file in &files {
+        for file in files {
             if pack != Some(file.pack.as_path()) {
                 pack = Some(file.pack.as_path());
                 ui.add_space(4.0);
@@ -385,7 +385,7 @@ impl View<'_> {
             title = RichText::new(format!("{}  ({problems})", node.name)).monospace().color(STUB);
         }
         let header = egui::CollapsingHeader::new(title)
-            .id_salt(("lang_table", dotted(&node.path)))
+            .id_salt(("lang_table", &node.dotted))
             .open(self.filtering.then_some(true))
             .show(ui, |ui| self.children(ui, node));
         let in_file = self.editor.doc.contains(&node.path);
@@ -405,13 +405,14 @@ impl View<'_> {
     fn leaf(&mut self, ui: &mut Ui, node: &Node) {
         let marks = self.tree.marks.get(&node.path).copied().unwrap_or_default();
         let value = self.editor.doc.leaf(&node.path);
-        let reference = self.editor.reference().and_then(|r| r.get(&node.path)).map(str::to_string);
+        // `comparing` is `reference().is_some()`, asked once a frame rather than per row.
+        let reference = self.comparing.then(|| self.editor.reference.get(&node.path)).flatten().map(str::to_string);
         ui.horizontal(|ui| {
             let color = if marks.missing { MISSING } else if marks.stub { STUB } else if marks.placeholders { PLACEHOLDERS } else if marks.extra { EXTRA } else { ui.visuals().text_color() };
             let name = ui.add_sized(
                 [KEY_WIDTH, ui.spacing().interact_size.y],
                 egui::Label::new(RichText::new(&node.name).monospace().color(color)).truncate().sense(egui::Sense::click()),
-            ).on_hover_text(dotted(&node.path));
+            ).on_hover_text(&node.dotted);
             name.context_menu(|ui| {
                 if ui.add_enabled(value.is_some(), egui::Button::new(get!("lang_editor.rename"))).clicked() {
                     self.dialog = Some(Dialog::Rename { path: node.path.clone(), name: node.name.clone(), error: None });
@@ -433,7 +434,7 @@ impl View<'_> {
                         true => egui::TextEdit::multiline(&mut text),
                         false => egui::TextEdit::singleline(&mut text),
                     };
-                    if ui.add(edit.desired_width(width).id_salt(("lang_value", dotted(&node.path)))).changed() {
+                    if ui.add(edit.desired_width(width).id_salt(("lang_value", &node.dotted))).changed() {
                         let _ = self.editor.edit(|doc| doc.set(&node.path, &text));
                     }
                 }

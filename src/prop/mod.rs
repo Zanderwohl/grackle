@@ -94,7 +94,7 @@ impl Plugin for PropEditorPlugin {
             .add_systems(Startup, load_the_example_prop)
             // Ungated: the save happens here but what must notice it is a
             // body in a round.
-            .add_systems(Update, (start_in_the_prop_editor, publish_the_saved_prop))
+            .add_systems(Update, (start_in_the_prop_editor, publish_the_saved_prop.run_if(a_prop_was_saved)))
             .add_systems(Update, picker::publish_prop_choices.run_if(|mode: Res<State<AppMode>>| matches!(mode.get(), AppMode::Editor | AppMode::Weapon)));
     }
 }
@@ -122,9 +122,17 @@ fn load_the_example_prop(assets: Res<Assets>, mut editor: ResMut<PropEditor>) {
     }
 }
 
+/// Watches a save counter because `Res::is_changed` fires on every frame of a
+/// drag. A run condition, so the idle frame holds none of the asset stores.
+fn a_prop_was_saved(editor: Res<PropEditor>, mut seen: Local<u64>) -> bool {
+    let saves = editor.saves();
+    let saved = saves != *seen;
+    *seen = saves;
+    saved
+}
+
 /// The cache bakes once per name, so without this a held weapon keeps its
-/// pre-save shape for the rest of the process. Watches a save counter because
-/// `Res::is_changed` fires on every frame of a drag.
+/// pre-save shape for the rest of the process.
 fn publish_the_saved_prop(
     editor: Res<PropEditor>,
     mut cache: ResMut<baked::PropCache>,
@@ -132,13 +140,7 @@ fn publish_the_saved_prop(
     mut meshes: ResMut<bevy::asset::Assets<Mesh>>,
     mut materials: ResMut<bevy::asset::Assets<LitMaterial>>,
     mut clips: ResMut<bevy::asset::Assets<crate::common::skeleton::clip::Clip>>,
-    mut seen: Local<u64>,
 ) {
-    if editor.saves() == *seen {
-        return;
-    }
-    *seen = editor.saves();
-
     let Some(name) = editor.saved_name() else { return };
     info!("Saved {name}; handing it to anything holding one");
     cache.adopt(
@@ -184,7 +186,7 @@ mod tests {
         app.init_resource::<baked::PropCache>()
             .init_resource::<baked::SurfaceMaterials>()
             .init_resource::<PropEditor>()
-            .add_systems(Update, publish_the_saved_prop);
+            .add_systems(Update, publish_the_saved_prop.run_if(a_prop_was_saved));
         app
     }
 
