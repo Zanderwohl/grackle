@@ -82,8 +82,8 @@ fn looking(player: &Player) -> Quat {
 
 /// Where the eye is, given a body's center. Takes a center because the laser
 /// passes the interpolated transform and the shot the fixed step's position.
-pub(crate) fn eye(center: Vec3, stance: Stance, duck: Duck) -> Vec3 {
-    center + Vec3::Y * duck.eye_from_center(stance)
+pub(crate) fn eye(center: Vec3, stance: Stance, duck: Duck, standing_eye: f32) -> Vec3 {
+    center + Vec3::Y * duck.eye_from_center(stance, standing_eye)
 }
 
 /// The nearest body `ray` reaches other than `shooter`, whose own boxes
@@ -127,7 +127,7 @@ pub fn fire_hitscan(
 
         // The step's position, not `Transform`, which is interpolated at
         // frame rate and differs per machine.
-        let origin = eye(body.current, *stance, player.duck);
+        let origin = eye(body.current, *stance, player.duck, player.eye);
         let looking = looking(player);
         let offsets = spec.pellets.map_or_else(|| vec![Vec2::ZERO], |grid| grid.offsets());
         let source = id.map_or(DamageSource::World, |id| DamageSource::Player(*id));
@@ -291,7 +291,7 @@ fn draw_debug_laser(
     let head_color = Color::srgb(1.0, 0.15, 0.15);
 
     for (shooter, transform, player, stance) in &shooters {
-        let ray = Ray3d::new(eye(transform.translation, *stance, player.drawn_duck(fixed.overstep_fraction())), aim(player));
+        let ray = Ray3d::new(eye(transform.translation, *stance, player.drawn_duck(fixed.overstep_fraction()), player.eye), aim(player));
 
         let range = world.ray_distance(&ray, LASER_RANGE).unwrap_or(LASER_RANGE);
 
@@ -675,7 +675,7 @@ mod tests {
         use crate::common::class::body_center_from_feet;
 
         let feet = Vec3::new(2.0, 3.0, -1.0);
-        let origin = eye(body_center_from_feet(feet), Stance::Standing, Duck::default());
+        let origin = eye(body_center_from_feet(feet), Stance::Standing, Duck::default(), TALLEST_CLASS_EYE_HEIGHT);
 
         assert!((origin.y - feet.y - TALLEST_CLASS_EYE_HEIGHT).abs() < 1e-5, "at {origin:?}");
         assert!((origin.xz() - feet.xz()).length() < 1e-5);

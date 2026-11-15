@@ -13,7 +13,7 @@ use crate::game::pause_menu::PauseMenuPlugin;
 use crate::game::reset::reset_for_play;
 use crate::game::respawn::OurIdentity;
 use crate::game::player::{
-    aim_the_view_at_our_body, despawn_the_view, face_bodies, follow_our_corpse, gather_aim,
+    aim_the_view_at_our_body, measure_eyes, despawn_the_view, face_bodies, follow_our_corpse, gather_aim,
     gather_input, interpolate_bodies, place_camera, spawn_the_view, start_the_death_cam, step_player, toggle_view, write_client_inputs, InputLatch, Player, ViewMode,
     ViewPreference,
 };
@@ -34,6 +34,7 @@ pub mod death;
 pub mod decal;
 pub mod flame_jet;
 pub mod gib_blood;
+pub mod gust_ring;
 pub mod hat;
 pub mod held;
 pub mod hitbox;
@@ -62,6 +63,9 @@ pub mod pause_menu;
 pub mod hud;
 pub mod name_tag;
 pub mod kill_feed;
+pub mod taunt_menu;
+pub mod taunt_view;
+pub mod kill_icon;
 pub mod plate;
 pub mod pickup_beam;
 pub mod rounds;
@@ -86,6 +90,7 @@ pub struct GamePlugin;
 
 impl Plugin for GamePlugin {
     fn build(&self, app: &mut App) {
+        crate::common::keybind::ensure(app);
         app
             // Here rather than beside the damage layer: it is physics, on the
             // same fixed steps and `CollisionWorld` as the player step.
@@ -99,7 +104,7 @@ impl Plugin for GamePlugin {
             .add_plugins((crate::game::team_choice::TeamChoicePlugin, crate::game::team_picker::TeamPickerPlugin, crate::game::spectate::SpectatePlugin, crate::game::kill_cam::KillCamPlugin))
             .add_plugins(crate::game::damage_direction::DamageDirectionPlugin)
             .add_plugins(crate::game::name_tag::NameTagPlugin)
-            .add_plugins((crate::game::plate::PlatePlugin, crate::game::kill_feed::KillFeedPlugin))
+            .add_plugins((crate::game::plate::PlatePlugin, crate::game::kill_feed::KillFeedPlugin, crate::game::taunt_menu::TauntMenuPlugin))
             .add_plugins(crate::game::trigger::TriggerPlugin)
             .init_state::<AppMode>()
             .init_resource::<StartInPlay>()
@@ -162,7 +167,10 @@ impl Plugin for GamePlugin {
             // the next frame's fixed loop before `Update` does. Any later and
             // the latch's zero overwrites the spawn point's facing.
             .add_systems(PreUpdate, aim_the_view_at_our_body.run_if(in_state(AppMode::Play)))
+            .add_systems(PreUpdate, measure_eyes.run_if(crate::common::net::has_authority))
             .add_systems(RunFixedMainLoop, (
+                // Owns `G`, and the digits while it is up, so it reads them first.
+                crate::game::taunt_menu::answer_the_taunt_keys,
                 // A released cursor must not walk the body.
                 gather_input.run_if(pause_menu::not_paused),
                 // Ungated: it drains the wheel, like `gather_aim`.
@@ -170,6 +178,7 @@ impl Plugin for GamePlugin {
                 // Ungated: it drains motion made while paused rather than
                 // applying all of it on the frame the menu closes.
                 gather_aim,
+                crate::game::taunt_view::swing_for_taunts,
             ).chain().in_set(RunFixedMainLoopSystems::BeforeFixedMainLoop)
                 .run_if(in_state(AppMode::Play)))
             // Rollback replays this tick's input, so nothing downstream may
@@ -192,6 +201,7 @@ impl Plugin for GamePlugin {
             .add_systems(RunFixedMainLoop, (interpolate_bodies, crate::game::skeleton::follow_ducks)
                 .chain()
                 .in_set(RunFixedMainLoopSystems::AfterFixedMainLoop))
+            .init_resource::<crate::game::taunt_view::TauntView>()
             .add_systems(RunFixedMainLoop, (face_bodies, follow_our_corpse, place_camera, crate::game::player::widen_the_view)
                 .chain()
                 .after(interpolate_bodies)
@@ -205,14 +215,14 @@ impl Plugin for GamePlugin {
 /// authority. A client's press is logged rather than swallowed, because a key
 /// that silently does nothing reads as a bug.
 fn toggle_mode(
-    keys: Res<ButtonInput<KeyCode>>,
+    actions: Res<crate::common::keybind::Actions>,
     // Optional: a build or test without `NetPlugin` is a closed game, which is
     // its own authority.
     role: Option<Res<NetRole>>,
     mode: Res<State<AppMode>>,
     mut next: ResMut<NextState<AppMode>>,
 ) {
-    if !keys.just_pressed(KeyCode::F5) {
+    if !actions.just_pressed(crate::common::keybind::Action::ToggleMode) {
         return;
     }
     if !role.is_none_or(|role| role.is_authority()) {
@@ -423,6 +433,7 @@ mod tests {
         app.add_plugins((MinimalPlugins, bevy::state::app::StatesPlugin))
             .init_state::<AppMode>()
             .init_resource::<ButtonInput<KeyCode>>()
+            .add_plugins(crate::common::keybind::KeybindPlugin)
             .add_systems(Update, toggle_mode);
 
         press(&mut app);
@@ -669,10 +680,12 @@ mod tests {
         app.world_mut()
             .resource_mut::<ButtonInput<KeyCode>>()
             .press(KeyCode::Space);
+        crate::common::keybind::resolve_now(app.world_mut());
         app.world_mut().run_system_once(gather_input).unwrap();
         app.world_mut()
             .resource_mut::<ButtonInput<KeyCode>>()
             .release(KeyCode::Space);
+        crate::common::keybind::resolve_now(app.world_mut());
         app.world_mut().run_system_once(gather_input).unwrap();
 
         assert!(latch(&mut app).0.jump, "the press was dropped");
@@ -760,16 +773,18 @@ mod tests {
             tick(app, 40);
             (player_position(app) - from).with_y(0.0).length()
         };
-        let toggle = |app: &mut App| {
-            latch(app).0.taunt = true;
+        let wave = Some(crate::common::taunt::TauntRequest::Start(crate::common::taunt::TauntId::of("wave")));
+        let stop = Some(crate::common::taunt::TauntRequest::Stop);
+        let ask = |app: &mut App, request| {
+            latch(app).0.taunt = request;
             tick(app, 1);
         };
 
         assert!(walked(&mut app) > 0.5, "the body would not walk before taunting");
 
-        toggle(&mut app);
+        ask(&mut app, wave);
         let taunting = condition(&mut app);
-        assert!(taunting.taunt.is_some(), "G started no taunt");
+        assert!(taunting.taunt.is_some(), "asking for the wave started no taunt");
         assert!(!taunting.may_fire());
         assert!(walked(&mut app) < 1e-4, "the wave did not stop the body");
 
@@ -786,18 +801,100 @@ mod tests {
         tick(&mut app, 4);
         assert_eq!(body_yaw(&mut app), facing, "the wave let the body turn");
 
-        toggle(&mut app);
-        assert_eq!(condition(&mut app).taunt, None, "G again did not end the taunt");
+        ask(&mut app, stop);
+        assert_eq!(condition(&mut app).taunt, None, "asking to stop did not end the taunt");
         assert_ne!(body_yaw(&mut app), latch(&mut app).0.yaw, "the body snapped to the aim in one tick");
         tick(&mut app, 8);
         assert_eq!(body_yaw(&mut app), latch(&mut app).0.yaw, "the body did not turn back to the aim");
         assert!(walked(&mut app) > 0.5, "the body stayed stopped after the taunt");
 
         // Left alone, it ends by itself after its length.
-        toggle(&mut app);
+        ask(&mut app, wave);
         assert!(condition(&mut app).taunt.is_some());
         tick(&mut app, 2 * crate::constants::TICK_HZ as usize);
         assert_eq!(condition(&mut app).taunt, None, "the wave never ended by itself");
+    }
+
+    /// The taunt menu as a player meets it: `G` puts it up and the plate offers a square per
+    /// taunt, a digit plays the taunt over it rather than choosing a weapon, `G` while taunting
+    /// ends the taunt, and the pause menu takes the menu down.
+    #[test]
+    fn the_taunt_menu_opens_on_g_and_a_digit_plays_the_taunt_over_it() {
+        use crate::common::taunt::{TauntId, TauntRequest};
+        use crate::game::taunt_menu::{answer_the_taunt_keys, TauntMenu};
+        use crate::game::weapon_select::choose_weapons;
+
+        let mut app = headless(&[room(Vec3::new(-10.0, 0.0, -10.0), Vec3::new(10.0, 4.0, 10.0))]);
+        enter(&mut app);
+        tick(&mut app, 30);
+        let press = |app: &mut App, key: KeyCode| {
+            app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(key);
+            crate::common::keybind::resolve_now(app.world_mut());
+            app.world_mut().run_system_once(answer_the_taunt_keys).unwrap();
+            app.world_mut().run_system_once(choose_weapons).unwrap();
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            keys.release(key);
+            keys.clear();
+        };
+        let open = |app: &mut App| app.world().resource::<TauntMenu>().is_open();
+
+        // Closed by the picker in `Update` once the seat is left, which these ticks do not run.
+        app.world_mut().resource_mut::<crate::game::pause_menu::MouseHeld>().team_picker = false;
+        press(&mut app, KeyCode::KeyG);
+        assert!(open(&mut app), "G did not put the menu up");
+        assert_eq!(latch(&mut app).0.taunt, None, "putting the menu up played a taunt");
+
+        // Drawn: a plate under the safe zone saying how to play the default, a digit per taunt.
+        for _ in 0..3 {
+            app.update();
+        }
+        let shown = app
+            .world_mut()
+            .run_system_once(
+                |roots: Query<(Entity, &Node), With<crate::game::plate::Plate>>,
+                 children: Query<&Children>,
+                 texts: Query<&Text>| {
+                    roots
+                        .iter()
+                        .flat_map(|(plate, _)| children.iter_descendants(plate).collect::<Vec<_>>())
+                        .filter_map(|entity| texts.get(entity).ok().map(|text| text.0.clone()))
+                        .collect::<Vec<String>>()
+                },
+            )
+            .unwrap();
+        assert!(shown.contains(&crate::get!("hud.taunt_default")), "the plate does not say G for default: {shown:?}");
+        assert!(shown.contains(&"1".to_string()) && shown.contains(&"2".to_string()), "no square per taunt: {shown:?}");
+
+        let held_before = app
+            .world_mut()
+            .query_filtered::<&crate::common::weapon::Equipped, With<LocalPlayer>>()
+            .single(app.world())
+            .unwrap()
+            .held();
+        press(&mut app, KeyCode::Digit2);
+        assert!(!open(&mut app), "the menu stayed up after a choice");
+        assert_eq!(latch(&mut app).0.taunt, Some(TauntRequest::Start(TauntId::of("spar"))));
+        assert_eq!(latch(&mut app).0.select, None, "the digit also chose a weapon");
+        tick(&mut app, 1);
+        let taunting = |app: &mut App| {
+            app.world_mut().query_filtered::<&crate::game::condition::Condition, With<LocalPlayer>>().single(app.world()).unwrap().taunt
+        };
+        assert_eq!(taunting(&mut app), Some(TauntId::of("spar")), "the second taunt did not start");
+        let held_after =
+            app.world_mut().query_filtered::<&crate::common::weapon::Equipped, With<LocalPlayer>>().single(app.world()).unwrap().held();
+        assert_eq!(held_before, held_after, "the weapon changed under the taunt menu");
+
+        press(&mut app, KeyCode::KeyG);
+        assert!(!open(&mut app), "G while taunting put the menu up");
+        tick(&mut app, 1);
+        assert_eq!(taunting(&mut app), None, "G while taunting did not end it");
+
+        press(&mut app, KeyCode::KeyG);
+        assert!(open(&mut app));
+        app.world_mut().resource_mut::<crate::game::pause_menu::MouseHeld>().pause = true;
+        crate::common::keybind::resolve_now(app.world_mut());
+        app.world_mut().run_system_once(answer_the_taunt_keys).unwrap();
+        assert!(!open(&mut app), "the menu stayed up under the pause menu");
     }
 
     /// Rises until it stops, and returns how far above `from` it peaked.
@@ -960,9 +1057,9 @@ mod tests {
     }
 
     /// A class built on a rig file plays a round as anybody does: it spawns as that rig, walks,
-    /// shoots from its mount, taunts with its own clip, and dies into a corpse of its own rig.
+    /// shoots, taunts with its own clip, and dies into a corpse of its own rig.
     #[test]
-    fn a_strider_plays_a_round() {
+    fn a_raptor_plays_a_round() {
         use crate::common::class::Class;
         use crate::common::weapon::Ammo;
         use crate::game::condition::Condition;
@@ -980,7 +1077,7 @@ mod tests {
             );
         }
         app.insert_resource(crate::common::game_rules::GameRules(crate::common::game_rules::ModeRules {
-            classes: vec![Class::Strider],
+            classes: vec![Class::Raptor],
             ..default()
         }));
         enter(&mut app);
@@ -995,16 +1092,20 @@ mod tests {
 
         let (kind, class) = {
             let mut bodies = app.world_mut().query_filtered::<(&crate::common::skeleton::Skeleton, &Class), With<LocalPlayer>>();
-            let (rig, class) = bodies.single(app.world()).expect("no strider body");
+            let (rig, class) = bodies.single(app.world()).expect("no raptor body");
             (rig.kind().to_string(), *class)
         };
-        assert_eq!((kind.as_str(), class), ("strider", Class::Strider));
+        assert_eq!((kind.as_str(), class), ("raptor", Class::Raptor));
+        let eye = app.world_mut().query_filtered::<&Player, With<LocalPlayer>>().single(app.world()).unwrap().eye;
+        let rig_eye = crate::common::class::ClassBuilds::shipped().rig_for(Class::Raptor).anatomy().eye;
+        assert_eq!(Some(eye), rig_eye, "the raptor looks out from the shared eye height, not its own");
+        assert!(eye < 1.6, "the raptor's eye is above its 1.6 m crown, at {eye}");
 
         let from = player_position(&mut app);
         latch(&mut app).0.movement = Vec2::Y;
         tick(&mut app, 30);
         latch(&mut app).0.movement = Vec2::ZERO;
-        assert!((player_position(&mut app) - from).with_y(0.0).length() > 0.5, "the strider would not walk");
+        assert!((player_position(&mut app) - from).with_y(0.0).length() > 0.5, "the raptor would not walk");
 
         let rounds = |app: &mut App| {
             let mut bodies = app.world_mut().query_filtered::<&Ammo, With<LocalPlayer>>();
@@ -1015,13 +1116,14 @@ mod tests {
         latch(&mut app).0.attack_held = true;
         tick(&mut app, 2);
         latch(&mut app).0.attack_held = false;
-        assert!(rounds(&mut app) < before, "the strider could not shoot");
+        assert!(rounds(&mut app) < before, "the raptor could not shoot");
 
         tick(&mut app, 64);
-        latch(&mut app).0.taunt = true;
+        latch(&mut app).0.taunt =
+            Some(crate::common::taunt::TauntRequest::Start(crate::common::taunt::TauntId::of("spar")));
         tick(&mut app, 1);
         let taunt = app.world_mut().query_filtered::<&Condition, With<LocalPlayer>>().single(app.world()).unwrap().taunt;
-        assert!(taunt.is_some(), "the strider was offered no taunt");
+        assert!(taunt.is_some(), "the raptor was offered no taunt");
 
         latch(&mut app).0.suicide = true;
         tick(&mut app, 2);
@@ -1032,7 +1134,7 @@ mod tests {
             .iter(app.world())
             .map(|build| build.0.kind().to_string())
             .collect();
-        assert_eq!(corpses, ["strider"], "the strider left no corpse of its own rig");
+        assert_eq!(corpses, ["raptor"], "the raptor left no corpse of its own rig");
     }
 
     #[test]

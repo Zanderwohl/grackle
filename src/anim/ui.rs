@@ -57,8 +57,6 @@ pub struct AnimPanels {
     /// Whether egui is actively using the pointer (a menu open, a widget mid-drag), not merely over a
     /// panel. The strip is a panel's rect, so "over egui" is true across all of it.
     pub egui_wants_pointer: bool,
-    /// `Delete` in a text field deletes a character.
-    pub egui_wants_keyboard: bool,
 }
 
 impl Default for AnimPanels {
@@ -75,7 +73,6 @@ impl Default for AnimPanels {
             right_width: 300.0,
             timeline_height: DEFAULT_STRIP,
             egui_wants_pointer: false,
-            egui_wants_keyboard: false,
         }
     }
 }
@@ -84,6 +81,7 @@ pub struct AnimUiPlugin;
 
 impl Plugin for AnimUiPlugin {
     fn build(&self, app: &mut App) {
+        crate::common::keybind::ensure(app);
         app.init_resource::<AnimPanels>()
             .init_resource::<BodyClipDialog>()
             .add_systems(
@@ -755,6 +753,24 @@ impl AnimTabs<'_> {
             });
             ui.end_row();
 
+            ui.label(get!("anim.label.taunt_icon"));
+            ui.horizontal(|ui| {
+                let mut name = edited.icon.clone().unwrap_or_default();
+                if ui.add(egui::TextEdit::singleline(&mut name).desired_width(140.0)).changed() {
+                    let name = name.trim();
+                    edited.icon = (!name.is_empty()).then(|| name.to_string());
+                }
+                let found = |icon: &str| {
+                    crate::common::assets::default_packs().iter().any(|pack| pack.join(format!("icons/{icon}.svg")).is_file())
+                };
+                if let Some(icon) = edited.icon.as_deref()
+                    && !found(icon)
+                {
+                    ui.colored_label(PROBLEM_COLOR, get!("anim.taunt.no_icon", "icon", icon));
+                }
+            });
+            ui.end_row();
+
             ui.label(get!("anim.label.taunt_length"));
             ui.horizontal(|ui| {
                 let mut kind = match edited.length {
@@ -784,6 +800,20 @@ impl AnimTabs<'_> {
                         }
                     }
                     TauntLength::UntilAgain => {}
+                }
+            });
+            ui.end_row();
+
+            ui.label(get!("anim.label.taunt_view"));
+            ui.horizontal(|ui| {
+                let mut set = edited.view.is_some();
+                ui.selectable_value(&mut set, false, get!("anim.taunt.view_as_it_was"));
+                ui.selectable_value(&mut set, true, get!("anim.taunt.view_from"));
+                if set != edited.view.is_some() {
+                    edited.view = set.then_some(180.0);
+                }
+                if let Some(degrees) = &mut edited.view {
+                    ui.add(egui::DragValue::new(degrees).speed(1.0).range(-180.0..=180.0).suffix(get!("anim.suffix.degrees")));
                 }
             });
             ui.end_row();
@@ -1759,7 +1789,6 @@ fn panels(
             .is_some_and(|layer| layer.order != egui::Order::Background)
     });
     layout.egui_wants_pointer = ctx.egui_is_using_pointer() || floating;
-    layout.egui_wants_keyboard = ctx.egui_wants_keyboard_input();
 
     // Both documents, since a gesture left open on the hidden one would absorb the next edit. The grab
     // clause is needed because egui is not "using the pointer" during a timeline drag, which would
@@ -1874,14 +1903,13 @@ fn save_the_body_clips(body: &mut BodyClips, pack: &std::path::Path) {
 /// The animation editor's file and undo chords, reaching whichever document the source selector
 /// names.
 fn anim_shortcuts(
-    keys: Res<ButtonInput<KeyCode>>,
-    egui: Res<bevy_egui::input::EguiWantsInput>,
+    actions: Res<crate::common::keybind::Actions>,
     anim: Res<AnimEditor>,
     mut editor: ResMut<PropEditor>,
     mut body: ResMut<BodyClips>,
     mut files: AnimFiles,
 ) {
-    let chords = crate::common::shortcuts::chords(&keys, egui.wants_keyboard_input());
+    let chords = crate::common::shortcuts::chords(&actions);
 
     let edit = match (chords.redo, chords.undo) {
         (true, _) => Some(EditAction::Redo),

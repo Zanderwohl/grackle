@@ -249,7 +249,7 @@ pub fn sense(
         senses.forget(now);
         let center = body.current;
         let feet = center - Vec3::Y * stance.half_extents().y;
-        let eye = center + Vec3::Y * player.duck.eye_from_center(*stance);
+        let eye = center + Vec3::Y * player.duck.eye_from_center(*stance, player.eye);
         let mut own_cell = None;
 
         for target in &targets {
@@ -345,7 +345,7 @@ fn draw_bot_senses(
     let now = time.elapsed_secs();
     for (body, stance, player, senses, team, color) in &bots {
         let color = Swatch::of_body(team.copied(), color.copied()).base;
-        let eye = body.current + Vec3::Y * player.duck.eye_from_center(*stance);
+        let eye = body.current + Vec3::Y * player.duck.eye_from_center(*stance, player.eye);
         let at = |yaw: f32, pitch: f32| eye + look(player.yaw + yaw, player.pitch + pitch) * VIEW_DRAWN;
         let (across, up) = (HALF_VIEW, HALF_VIEW_VERTICAL);
         for (yaw, pitch) in [(-across, -up), (across, -up), (across, up), (-across, up)] {
@@ -559,7 +559,7 @@ mod tests {
         world.run_system_once(sense).unwrap();
         let known = world.get::<BotSenses>(bot).unwrap().known[0];
         assert_eq!(known.how, Sense::Hurt);
-        let eye = world.get::<PhysicsBody>(bot).unwrap().current + Vec3::Y * Player::default().duck.eye_from_center(Stance::Standing);
+        let eye = world.get::<PhysicsBody>(bot).unwrap().current + Vec3::Y * Player::default().duck.eye_from_center(Stance::Standing, Player::default().eye);
         assert!((known.at - eye).normalize().dot((muzzle - eye).normalize()) > 0.999, "it does not know the direction");
         assert!((known.at.distance(eye) - HURT_GUESS).abs() < 1e-3, "it knows the distance");
     }

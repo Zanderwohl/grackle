@@ -67,6 +67,12 @@ wall and drawn with a depth bias so it does not flicker against it.
 - A room rebaked in place changes its `BakedRoomGeometry`: map decals and
   sprays touching it are cut again; transient ones there are dropped, which is
   cheaper and nobody misses a bullet hole on a wall that just moved.
+- A slot painted a material that refuses decals (`decal::takes_decals`: only
+  `skybox` so far) is left out of every cut. Each `BakedRoomGeometry` carries
+  `TakesDecals`, written only when a repaint changes it, and that change recuts
+  every decal on the room, transient ones too, so marks on its other slots
+  stay. A mark whose ray first meets a refusing face is not made at all, so it
+  cannot push a real one out of its ring.
 - On the server a spray is `SprayedBy` its client's link entity, with
   `linked_spawn`, so a disconnect despawns it and the despawn replicates.
 
@@ -77,8 +83,8 @@ wire, and each machine may keep a different number:
 
 - **Bullet hole**: an `Effect::Tracer` that stopped on the world. The wall is
   found by casting a short ray from just before its end.
-- **Scorch**: an `Effect::Blast`. The nearest surface within the radius takes
-  a scorch the size of the blast.
+- **Scorch**: an `Effect::Blast`. The nearest surface within the radius that
+  takes decals takes a scorch the size of the blast.
 - **Blood**: a `DamageDealt` on a body from a shot or a blast, followed on
   along the shot's line (for a blast, out from its center) onto the first
   surface within 5 m, and nothing if there is none. A killing hit also leaves

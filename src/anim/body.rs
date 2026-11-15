@@ -717,17 +717,17 @@ mod tests {
         std::fs::write(lower.join(CLIPS_DIR).join("low.gpa"), clip(1.0)).unwrap();
         // Another rig's state clip, beside its rig file.
         std::fs::create_dir_all(lower.join(RIGS_DIR)).unwrap();
-        std::fs::copy("assets/default/rigs/strider.toml", lower.join(RIGS_DIR).join("strider.toml")).unwrap();
-        std::fs::create_dir_all(lower.join(CLIPS_DIR).join("strider")).unwrap();
-        std::fs::write(lower.join(CLIPS_DIR).join("strider").join("idle.gpa"), clip(3.0)).unwrap();
+        std::fs::copy("assets/default/rigs/raptor.toml", lower.join(RIGS_DIR).join("raptor.toml")).unwrap();
+        std::fs::create_dir_all(lower.join(CLIPS_DIR).join("raptor")).unwrap();
+        std::fs::write(lower.join(CLIPS_DIR).join("raptor").join("idle.gpa"), clip(3.0)).unwrap();
 
         let mut clips = BodyClips::default();
         clips.doc = read_the_packs(&Assets::default(), &[lower.clone(), target.clone()]);
         clips.on_disk = clips.doc.clone();
         assert_eq!(clips.taunts().len(), 2);
         assert!(clips.get("low").is_some(), "a clip played by name was not read");
-        assert_eq!(clips.get("strider/idle").map(|clip| clip.length), Some(3.0), "another rig's clip was not read");
-        assert_eq!(BodyClips::rig_and_state("strider/idle"), Some(("strider", AnimationState::Idle)));
+        assert_eq!(clips.get("raptor/idle").map(|clip| clip.length), Some(3.0), "another rig's clip was not read");
+        assert_eq!(BodyClips::rig_and_state("raptor/idle"), Some(("raptor", AnimationState::Idle)));
         assert_eq!(BodyClips::rig_and_state("idle"), Some((HUMANOID, AnimationState::Idle)));
 
         clips.taunt_mut("b").unwrap().movement = crate::common::taunt::TauntMovement::Stopped;
@@ -739,9 +739,9 @@ mod tests {
 
         clips.taunt_mut("a").unwrap().movement = crate::common::taunt::TauntMovement::Stopped;
         clips.clip_mut("low").unwrap().length = 2.0;
-        clips.clip_mut("strider/idle").unwrap().length = 4.0;
+        clips.clip_mut("raptor/idle").unwrap().length = 4.0;
         clips.save(&target).unwrap();
-        let rig_clip = target.join(CLIPS_DIR).join("strider").join("idle.gpa");
+        let rig_clip = target.join(CLIPS_DIR).join("raptor").join("idle.gpa");
         assert!(rig_clip.exists(), "an edited clip of another rig was not written in its own directory");
         let saved = taunt_specs_in(&std::fs::read_to_string(target.join(TAUNTS_FILE)).unwrap());
         assert_eq!(saved.len(), 2, "an edited taunt was not written");

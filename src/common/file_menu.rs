@@ -11,7 +11,8 @@ use std::path::{Path, PathBuf};
 use bevy_egui::egui;
 use bevy_egui::egui::UiKind;
 
-use crate::common::shortcuts::{Chord, EditorChords};
+use crate::common::keybind::{self, Action};
+use crate::common::shortcuts::EditorChords;
 use crate::get;
 
 /// What the File menu was asked for. Every mode answers all but `DemoScene`,
@@ -71,11 +72,11 @@ impl FileAction {
         }
     }
 
-    pub fn chord(self) -> Option<Chord> {
+    pub fn chord(self) -> Option<Action> {
         match self {
-            FileAction::New => Some(Chord::NEW),
-            FileAction::Save => Some(Chord::SAVE),
-            FileAction::SaveAs => Some(Chord::SAVE_AS),
+            FileAction::New => Some(Action::New),
+            FileAction::Save => Some(Action::Save),
+            FileAction::SaveAs => Some(Action::SaveAs),
             FileAction::Open | FileAction::DemoScene | FileAction::Quit => None,
         }
     }
@@ -95,8 +96,8 @@ pub fn file_menu(ui: &mut egui::Ui, actions: &[FileAction], request: &mut Option
                 _ => {}
             }
             let mut button = egui::Button::new(get!(action.name_key()));
-            if let Some(chord) = action.chord() {
-                button = button.shortcut_text(chord.hint());
+            if let Some(hint) = action.chord().and_then(|chord| keybind::hint(ui.ctx(), chord)) {
+                button = button.shortcut_text(hint);
             }
             if ui.add(button).clicked() {
                 ui.close_kind(UiKind::Menu);

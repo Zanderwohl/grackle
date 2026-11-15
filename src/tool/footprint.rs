@@ -3,10 +3,10 @@
 //! added to it instead: corners snap onto its own, and a chain may end on one.
 //! See `documentation/footprint-rooms.md`.
 
+use crate::common::keybind::{Action, Actions};
 use bevy::app::App;
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
-use bevy_egui::input::EguiWantsInput;
 
 use crate::common::app_mode::AppMode;
 use crate::editor::editable::{EditEvent, Feature, FeatureId, FeatureTimeline, PointRef};
@@ -33,6 +33,7 @@ pub struct FootprintPlugin;
 
 impl Plugin for FootprintPlugin {
     fn build(&self, app: &mut App) {
+        crate::common::keybind::ensure(app);
         app.init_resource::<FootprintTool>()
             .add_systems(
                 Update,
@@ -213,27 +214,25 @@ impl FootprintTool {
         mut tool: ResMut<Self>,
         cameras: Query<(Entity, &Multicam)>,
         mouse_input: Res<CurrentMouseInput>,
-        keys: Res<ButtonInput<KeyCode>>,
+        actions: Res<Actions>,
         mut features: ResMut<FeatureTimeline>,
         rooms: MapVolumes,
         mut next_tool: ResMut<NextState<Tools>>,
-        egui: Res<EguiWantsInput>,
         mut commands: Commands,
         mut edit_events: MessageWriter<EditEvent>,
     ) {
-        let typing = egui.wants_keyboard_input();
         tool.aim_at_selection(&features);
-        if !typing && keys.just_pressed(KeyCode::Escape) {
+        if actions.just_pressed(Action::Cancel) {
             tool.draft = Draft::default();
             return;
         }
-        if !typing && keys.just_pressed(KeyCode::Backspace) {
+        if actions.just_pressed(Action::Delete) {
             tool.draft.pop();
             return;
         }
 
         tool.cursor = tool.floor_cursor(&mouse_input, &cameras, &rooms);
-        let shift_held = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
+        let shift_held = actions.pressed(Action::Modify);
 
         // With Shift, a feature's point under the pointer; with none there,
         // Shift changes nothing and the click goes on the grid.
@@ -253,7 +252,7 @@ impl FootprintTool {
                 if let Some((_, at)) = own {
                     tool.cursor = Some(at);
                 }
-                tool.cursor.filter(|_| commit_at_cursor(&mouse_input, &keys, typing)).map(|at| match own {
+                tool.cursor.filter(|_| commit_at_cursor(&mouse_input, &actions)).map(|at| match own {
                     Some((id, at)) => (at, ChainCorner::Existing(id)),
                     None => (at, ChainCorner::New(PointRef::absolute(at.x, at.y, at.z))),
                 })

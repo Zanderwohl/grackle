@@ -32,6 +32,7 @@ pub struct RecoilPlugin;
 
 impl Plugin for RecoilPlugin {
     fn build(&self, app: &mut App) {
+        crate::common::keybind::ensure(app);
         app.add_message::<ShotSeen>()
             .add_systems(
                 FixedUpdate,
@@ -83,10 +84,10 @@ fn see_shots(
 }
 
 /// Our own shot, decided as `pull_trigger` would from what this machine can
-/// see. Reads `ButtonInput` in `Update`, where nothing replays it.
+/// see. Reads `Actions` in `Update`, where nothing replays it.
 fn guess_our_shots(
     time: Res<Time>,
-    buttons: Res<ButtonInput<MouseButton>>,
+    actions: Res<crate::common::keybind::Actions>,
     paused: Option<Res<crate::game::pause_menu::MouseHeld>>,
     selection: Option<Res<crate::game::weapon_select::WeaponSelection>>,
     catalog: Res<WeaponCatalog>,
@@ -129,7 +130,7 @@ fn guess_our_shots(
         _ => told,
     };
 
-    for (button, mouse) in [(Button::Primary, MouseButton::Left), (Button::Secondary, MouseButton::Right)] {
+    for (button, mouse) in [(Button::Primary, crate::common::keybind::Action::Fire), (Button::Secondary, crate::common::keybind::Action::AltFire)] {
         let mounted = button.of(weapon);
         if matches!(mounted.action, WeaponAction::None) {
             continue;
@@ -137,8 +138,8 @@ fn guess_our_shots(
         let index = button as usize;
         let asked = cooldown[index] <= 0.0
             && match mounted.cadence {
-                Cadence::Semi { .. } => buttons.just_pressed(mouse),
-                Cadence::Automatic { .. } => buttons.pressed(mouse),
+                Cadence::Semi { .. } => actions.just_pressed(mouse),
+                Cadence::Automatic { .. } => actions.pressed(mouse),
             };
         if !asked || !spend(&mut state, &weapon.magazine, mounted.cost) {
             continue;
@@ -192,6 +193,7 @@ mod tests {
             key: "test".into(),
             name_key: "weapon.names.test".into(),
             model: None,
+            icon: None,
             bucket: 1,
             deploy: 0.0,
             primary: Mounted {
@@ -235,22 +237,26 @@ mod tests {
         let mut world = World::new();
         let body = holding(&mut world, Cadence::Semi { interval: 0.0 }, 2);
         press(&mut world);
+        crate::common::keybind::resolve_now(&mut world);
         world.run_system_once(guess_our_shots).unwrap();
         assert_eq!(seen(&mut world), vec![ShotSeen { body, button: Button::Primary }]);
 
         // Still held: semi-automatic asks for a fresh press.
         world.resource_mut::<ButtonInput<MouseButton>>().clear();
+        crate::common::keybind::resolve_now(&mut world);
         world.run_system_once(guess_our_shots).unwrap();
         assert!(seen(&mut world).is_empty(), "holding the button kicked twice");
 
         world.get_mut::<Ammo>(body).unwrap().at_mut(WeaponId::of("test")).clip = 0;
         press(&mut world);
+        crate::common::keybind::resolve_now(&mut world);
         world.run_system_once(guess_our_shots).unwrap();
         assert!(seen(&mut world).is_empty(), "an empty clip kicked");
 
         world.get_mut::<Ammo>(body).unwrap().at_mut(WeaponId::of("test")).clip = 2;
         *world.get_mut::<Condition>(body).unwrap() = Condition::HUMILIATED;
         press(&mut world);
+        crate::common::keybind::resolve_now(&mut world);
         world.run_system_once(guess_our_shots).unwrap();
         assert!(seen(&mut world).is_empty(), "a humiliated body kicked");
     }
@@ -267,6 +273,7 @@ mod tests {
         let mut kicks = 0;
         for _ in 0..10 {
             world.resource_mut::<Time>().advance_by(std::time::Duration::from_secs_f32(0.03));
+            crate::common::keybind::resolve_now(&mut world);
             world.run_system(guess).unwrap();
             kicks += seen(&mut world).len();
         }
@@ -285,6 +292,7 @@ mod tests {
         let mut kicks = 0;
         for _ in 0..10 {
             world.resource_mut::<Time>().advance_by(std::time::Duration::from_secs_f32(0.03));
+            crate::common::keybind::resolve_now(&mut world);
             world.run_system(guess).unwrap();
             kicks += seen(&mut world).len();
         }
@@ -292,6 +300,7 @@ mod tests {
 
         world.get_mut::<Ammo>(body).unwrap().at_mut(WeaponId::of("test")).clip = 3;
         world.resource_mut::<Time>().advance_by(std::time::Duration::from_secs_f32(0.2));
+        crate::common::keybind::resolve_now(&mut world);
         world.run_system(guess).unwrap();
         assert_eq!(seen(&mut world).len(), 1, "a reloaded clip from the server was not believed");
     }

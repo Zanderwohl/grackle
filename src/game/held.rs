@@ -6,6 +6,7 @@
 //! arrive on their own schedule, so what is drawn is compared with what is
 //! held every frame and redrawn when they differ.
 
+use bevy::camera::visibility::RenderLayers;
 use bevy::prelude::*;
 
 use crate::common::air_lit::LitMaterial;
@@ -21,7 +22,7 @@ use crate::common::skeleton::play::{
 use crate::common::skeleton::rig::ScratchPose;
 use crate::common::skeleton::{Pose, Skeleton};
 use crate::common::weapon::{Equipped, WeaponCatalog, WeaponId};
-use crate::common::taunt::Taunts;
+use crate::common::taunt::{Taunts, WeaponTaunts};
 use crate::game::condition::Condition;
 use crate::game::player::{LocalPlayer, Player, ViewMode};
 use crate::game::skeleton::SkeletonRoot;
@@ -208,6 +209,11 @@ impl HeldModel {
     }
 
     #[cfg(test)]
+    pub(crate) fn with_hold(hold: HoldSpec) -> HeldModel {
+        HeldModel { weapon: Some(WeaponId::of("held")), resolved: true, hold, ..default() }
+    }
+
+    #[cfg(test)]
     pub(crate) fn with_clips(names: &[&str]) -> HeldModel {
         let clips = names.iter().map(|name| (name.to_string(), Handle::default())).collect();
         HeldModel { clips, ..default() }
@@ -224,8 +230,10 @@ impl Plugin for HeldWeaponPlugin {
             .init_resource::<SurfaceMaterials>()
             .init_resource::<SharedWeaponClips>()
             .init_resource::<crate::common::clip_file::NamedClips>()
+            .init_resource::<WeaponTaunts>()
             .add_systems(Startup, load_shared_weapon_clips)
             .add_systems(Update, (dress_held_weapons, show_held_weapons).chain())
+            .add_systems(Update, learn_weapon_taunts)
             .add_systems(Update, bake_what_we_carry.run_if(crate::common::app_mode::simulating))
             // Before propagation, with the bone meshes, or a held part is drawn
             // a frame behind the hand.
@@ -259,6 +267,40 @@ fn wanted_model<'a>(equipped: &Equipped, catalog: &'a WeaponCatalog) -> Wanted<'
         Some(model) => Wanted::Model(model),
         None => Wanted::Nothing,
     }
+}
+
+/// A model the server sent or the prop editor saved is read from the cache; the rest are read off
+/// the packs once each, since any later change to one reaches the cache.
+fn learn_weapon_taunts(
+    catalog: Res<WeaponCatalog>,
+    cache: Res<PropCache>,
+    packs: Res<PackAssets>,
+    mut taunts: ResMut<WeaponTaunts>,
+    mut learned_at: Local<Option<u64>>,
+    mut on_disk: Local<std::collections::HashMap<String, Option<String>>>,
+) {
+    if !catalog.is_changed() && *learned_at == Some(cache.generation()) {
+        return;
+    }
+    *learned_at = Some(cache.generation());
+    let learned = WeaponTaunts(
+        catalog
+            .weapons
+            .iter()
+            .filter_map(|weapon| {
+                let model = weapon.model.as_deref()?;
+                let taunt = match cache.get(model) {
+                    Some(baked) => baked.taunt.clone(),
+                    None => on_disk
+                        .entry(model.to_owned())
+                        .or_insert_with(|| crate::prop::document::taunt_named_by(&packs, model))
+                        .clone(),
+                };
+                Some((weapon.id, taunt?))
+            })
+            .collect(),
+    );
+    taunts.set_if_neq(learned);
 }
 
 /// Every carried weapon, not only the one in hand: a prop is photographed when
@@ -302,13 +344,15 @@ fn dress_held_weapons(
             &Equipped,
             Option<&Class>,
             Has<LocalPlayer>,
+            Has<crate::game::player::Watched>,
             Option<&HeldModel>,
             Option<&Condition>,
         ),
         With<Skeleton>,
     >,
 ) {
-    for (body, equipped, class, ours, drawn, condition) in &bodies {
+    for (body, equipped, class, ours, watched, drawn, condition) in &bodies {
+        let ours = ours || watched;
         let held = equipped.held();
         if let Some(drawn) = drawn
             && drawn.weapon == held
@@ -686,23 +730,21 @@ pub(crate) fn grip_the_weapon(
     }
 }
 
-/// The only writer of a held part's visibility; `hide_own_body` leaves held
-/// parts to this.
+/// The only writer of a held part's visibility and layers; `hide_own_body` leaves held parts to
+/// this.
 fn held_visibility(
     ours: bool,
     view: ViewMode,
     condition: Option<Condition>,
     taunts: Option<&Taunts>,
-) -> Visibility {
-    let inside_our_head = ours && !view.shows_own_body();
+) -> (Visibility, RenderLayers) {
     let taken_away = condition.is_some_and(|condition| !condition.shows_weapon(taunts));
-    match inside_our_head || taken_away {
-        true => Visibility::Hidden,
-        false => Visibility::Inherited,
-    }
+    let visibility = if taken_away { Visibility::Hidden } else { Visibility::Inherited };
+    (visibility, crate::common::render_layers::body_layers(ours && !view.shows_own_body()))
 }
 
 fn show_held_weapons(
+    mut commands: Commands,
     view: Res<ViewMode>,
     taunts: Option<Res<Taunts>>,
     bodies: Query<(
@@ -712,7 +754,7 @@ fn show_held_weapons(
         Option<Ref<crate::game::player::Watched>>,
         Option<Ref<Condition>>,
     )>,
-    mut parts: Query<&mut Visibility, With<HeldPart>>,
+    mut parts: Query<(&mut Visibility, Option<&RenderLayers>), With<HeldPart>>,
     mut no_longer_ours: RemovedComponents<LocalPlayer>,
     mut no_longer_watched: RemovedComponents<crate::game::player::Watched>,
     mut no_longer_conditioned: RemovedComponents<Condition>,
@@ -734,12 +776,15 @@ fn show_held_weapons(
             continue;
         }
         let (ours, watched, condition) = (ours.is_some(), watched.is_some(), condition.as_deref());
-        let wanted = held_visibility(ours || watched, *view, condition.copied(), taunts.as_deref());
+        let (wanted, layers) = held_visibility(ours || watched, *view, condition.copied(), taunts.as_deref());
         for part in &held.parts {
-            let Ok(mut visibility) = parts.get_mut(*part) else { continue };
+            let Ok((mut visibility, had)) = parts.get_mut(*part) else { continue };
             // Assigned only on change, so parts are not dirtied every frame.
             if *visibility != wanted {
                 *visibility = wanted;
+            }
+            if had.cloned().unwrap_or_default() != layers {
+                commands.entity(*part).insert(layers.clone());
             }
         }
     }
@@ -777,6 +822,7 @@ mod tests {
             id: WeaponId::of(name),
             name_key: format!("weapon.names.{name}"),
             model: model.map(str::to_owned),
+            icon: None,
             bucket: 1,
             deploy: 0.0,
             primary: Mounted::EMPTY,

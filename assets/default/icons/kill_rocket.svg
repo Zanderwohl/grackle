@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <!-- Drawn about its middle, nose toward +X, then placed. -->
+  <g fill="#ffffff" transform="translate(12 12)">
+    <polygon points="-7.8,-1.2 -7.8,1.2 -10.5,0" />
+    <polygon points="-3,-2 -7,-2 -9,-5 -6.5,-5" />
+    <polygon points="-3,2 -7,2 -9,5 -6.5,5" />
+    <rect x="-7" y="-2" width="13" height="4" />
+    <path d="M 6 -2 L 8.5 -1.2 Q 10 0 8.5 1.2 L 6 2 Z" />
+  </g>
+</svg>

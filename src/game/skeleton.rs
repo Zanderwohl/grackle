@@ -58,6 +58,7 @@ pub struct SkeletonPlugin;
 
 impl Plugin for SkeletonPlugin {
     fn build(&self, app: &mut App) {
+        crate::common::keybind::ensure(app);
         app
             // Need the same renderer resources this plugin does.
             .add_plugins((HitboxPlugin, WeaponPlugin))
@@ -155,8 +156,8 @@ impl Plugin for GameTimePlugin {
     }
 }
 
-fn toggle_bones(keys: Res<ButtonInput<KeyCode>>, mut show: ResMut<ShowBones>) {
-    if keys.just_pressed(KeyCode::F6) {
+fn toggle_bones(actions: Res<crate::common::keybind::Actions>, mut show: ResMut<ShowBones>) {
+    if actions.just_pressed(crate::common::keybind::Action::ShowBones) {
         show.0 = !show.0;
     }
 }

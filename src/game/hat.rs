@@ -59,9 +59,10 @@ fn dress_hats(
     mut materials: ResMut<Assets<LitMaterial>>,
     mut clips: ResMut<Assets<Clip>>,
     view: Res<ViewMode>,
-    bodies: Query<(Entity, &Class, Has<LocalPlayer>, Option<&WornHat>), With<Skeleton>>,
+    bodies: Query<(Entity, &Class, Has<LocalPlayer>, Has<crate::game::player::Watched>, Option<&WornHat>), With<Skeleton>>,
 ) {
-    for (body, class, ours, worn) in &bodies {
+    for (body, class, ours, watched, worn) in &bodies {
+        let ours = ours || watched;
         let named = catalog.loadout(*class).and_then(|loadout| loadout.hat.as_deref());
         if let Some(worn) = worn
             && worn.model.as_deref() == named
@@ -93,12 +94,9 @@ fn dress_hats(
                         body.spawn((
                             HatPart,
                             FirstPersonHidden,
-                            // Spawned hidden: `hide_own_body` would only catch
-                            // it a frame later, a brim across the view.
-                            match ours && !view.shows_own_body() {
-                                true => Visibility::Hidden,
-                                false => Visibility::Inherited,
-                            },
+                            // Spawned out of the eye's way: `hide_own_body` would only
+                            // catch it a frame later, a brim across the view.
+                            crate::common::render_layers::body_layers(ours && !view.shows_own_body()),
                             Mesh3d(mesh),
                             MeshMaterial3d(material),
                             Transform::IDENTITY,
@@ -182,10 +180,15 @@ mod tests {
         assert!(bare.parts.is_empty(), "a class with no hat wore one");
     }
 
-    fn worn_parts(app: &App, body: Entity) -> Vec<Visibility> {
+    /// Whether each part is drawn only from outside the head.
+    fn worn_parts(app: &App, body: Entity) -> Vec<bool> {
         let worn = app.world().get::<WornHat>(body).expect("no hat was put on");
         assert!(!worn.parts.is_empty(), "the hat has no parts");
-        worn.parts.iter().map(|part| *app.world().get::<Visibility>(*part).unwrap()).collect()
+        let inside = bevy::camera::visibility::RenderLayers::layer(crate::common::render_layers::INSIDE_HEAD);
+        worn.parts
+            .iter()
+            .map(|part| app.world().get::<bevy::camera::visibility::RenderLayers>(*part).is_some_and(|layers| *layers == inside))
+            .collect()
     }
 
     /// Your own hat is hidden from inside your head, where its brim would cut
@@ -221,15 +224,15 @@ mod tests {
         app.update();
         app.update();
 
-        assert!(worn_parts(&app, ours).iter().all(|v| *v == Visibility::Hidden), "our hat is in our eyes");
-        assert!(worn_parts(&app, theirs).iter().all(|v| *v != Visibility::Hidden), "their hat vanished");
+        assert!(worn_parts(&app, ours).iter().all(|inside| *inside), "our hat is in our eyes");
+        assert!(worn_parts(&app, theirs).iter().all(|inside| !inside), "their hat vanished");
 
         *app.world_mut().resource_mut::<ViewMode>() = ViewMode::ThirdPerson;
         app.update();
-        assert!(worn_parts(&app, ours).iter().all(|v| *v != Visibility::Hidden), "our hat is missing in third person");
+        assert!(worn_parts(&app, ours).iter().all(|inside| !inside), "our hat is missing in third person");
 
         *app.world_mut().resource_mut::<ViewMode>() = ViewMode::FirstPerson;
         app.update();
-        assert!(worn_parts(&app, ours).iter().all(|v| *v == Visibility::Hidden), "our hat came back into view");
+        assert!(worn_parts(&app, ours).iter().all(|inside| *inside), "our hat came back into view");
     }
 }

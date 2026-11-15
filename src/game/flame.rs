@@ -32,7 +32,7 @@ impl Plugin for FlamePlugin {
                 draw_flame_cone
                     .run_if(crate::common::app_mode::simulating)
                     .run_if(resource_exists::<GizmoConfigStore>)
-                    .run_if(|show: Option<Res<crate::game::hitbox::ShowHitboxes>>| show.is_some_and(|show| show.0)),
+                    .run_if(|show: Option<Res<crate::game::skeleton::ShowBones>>| show.is_some_and(|show| show.0)),
             )
             // Every frame and in every mode, since `Burning` is taken off in
             // several places.
@@ -64,7 +64,7 @@ pub fn fire_flame(
         };
         // The step's position, not the interpolated one, so every machine
         // agrees.
-        let origin = eye(body.current, *stance, player.duck);
+        let origin = eye(body.current, *stance, player.duck, player.eye);
 
         // One body, one puff, however many rays found it.
         let mut caught: Vec<Entity> = Vec::new();
@@ -163,7 +163,7 @@ fn flame_cone(origin: Vec3, direction: Dir3, spec: &FlameSpec) -> (Cone, Isometr
     cone_gizmo(origin, direction, spec.range_m, spec.spread)
 }
 
-/// The traced cone, on `F4` with the hitboxes; what a player sees is
+/// The traced cone, on `F6` with the bones and triggers; what a player sees is
 /// [`crate::game::flame_jet`]. Reads `Equipped` rather than what was fired,
 /// because it draws between shots. `Equipped` is replicated, so this works on clients.
 fn draw_flame_cone(
@@ -175,7 +175,7 @@ fn draw_flame_cone(
         let held = catalog.held_by(equipped).map(|weapon| weapon.primary.action);
         let Some(WeaponAction::Flame(spec)) = held else { continue };
 
-        let (cone, isometry) = flame_cone(eye(transform.translation, *stance, player.duck), aim(player), &spec);
+        let (cone, isometry) = flame_cone(eye(transform.translation, *stance, player.duck, player.eye), aim(player), &spec);
         gizmos.primitive_3d(&cone, isometry, Color::srgba(1.0, 0.6, 0.1, 0.5));
     }
 }

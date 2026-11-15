@@ -108,8 +108,7 @@ anybody out**: the cap counts people only, so a slot a bot fills is open, and
 somebody joining takes a filler's seat and body in the same frame, before
 `give_bodies_to_whoever_needs_one` stands theirs up. A spectator takes no
 slot; somebody still choosing does. A **time limit** in seconds ends the round
-as the frag limit does. `B` seats a bot by hand
-(counted against the slots) and `Shift+B` retires the newest.
+as the frag limit does.
 `--server-config PATH` reads all of it, and bots to seat by hand, from a TOML
 file (`ServerConfig`; [`assets/default/servers/bot_arena.toml`](assets/default/servers/bot_arena.toml) is the
 example), refusing a bad one at startup. **An unattended round** is
@@ -201,7 +200,7 @@ shape is a new producer and not a rewrite of every consumer — see
 | `src/lang_editor/` | The lang editor: a pack's strings for one language. See "Editing a lang file". |
 | `src/common/` | Shared: i18n, geometry, rays, gamemodes, items. |
 | `src/unlock/` | The crate-drop prototype. Orthogonal — see above. |
-| `src/bin/` | `ensure_lang` (fills missing translation keys), `new_map_template` (writes the new-map, demo-scene, arena and cloister blueprints), `map_stats` (bakes a blueprint's nav graph headless and prints its statistics and top-down charts of each field), `decal_images` (rasterizes the default pack's decal SVGs), `bake_body_clips` (seeds a pack's body animations from the pose functions they replace), `default_materials` (writes the default pack's materials), `crate_drop`. |
+| `src/bin/` | `ensure_lang` (fills missing translation keys), `new_map_template` (writes the new-map, demo-scene, arena and cloister blueprints), `map_stats` (bakes a blueprint's nav graph headless and prints its statistics and top-down charts of each field), `decal_images` (rasterizes the default pack's decal SVGs), `bake_body_clips` (seeds a pack's body animations from the pose functions they replace, and writes the clips `seed::WRITTEN` generates key by key), `default_materials` (writes the default pack's materials), `crate_drop`. |
 | `assets/default/` | The default pack: `lang/`, `blueprints/`, `servers/` (example `--server-config` files). |
 | `assets/user/` | The user pack: gitignored, made at startup, last in `default_packs()` so it overrides the shipped one. A new map or prop is saved here unless the document already has a folder. |
 | `cache/` | Gitignored, derived from the packs and maps: `thumbnail/props/{name}.png`, `nav/{hash}.bin`, `lightmap/{hash}.bin`, `rounds/{map}/*.jsonl`. Safe to delete. |
@@ -226,7 +225,7 @@ with no build is drawn as `Proportions::DEFAULT` rather than not at all. Tests
 and tools read `ClassBuilds::shipped()`; there is no table in Rust to drift
 from the file.
 
-A build may name a **rig file** instead (`rig = "strider"`, with `height`,
+A build may name a **rig file** instead (`rig = "raptor"`, with `height`,
 `girth` and `[scales]` per bone group): `rigs/<name>.toml`
 ([`src/common/skeleton/rig_file.rs`](src/common/skeleton/rig_file.rs)), loaded
 because a build names it and checked by building it. The rigs ride in
@@ -235,8 +234,8 @@ body asks `ClassBuilds::rig_for` or `skeleton(build)`, never `humanoid`
 directly, and a `Build` — rig, proportions, scales — is what a skeleton, a
 corpse and the mesh cache remember. Another rig's state clips are
 `animations/<rig>/<state>.gpa`; without one a state stands in rest. The
-strider's, its taunt included, are written by `bake_body_clips` from
-[`strider_seed`](src/common/skeleton/strider_seed.rs), the one place besides
+raptor's, its taunt included, are written by `bake_body_clips` from
+[`raptor_seed`](src/common/skeleton/raptor_seed.rs), the one place besides
 its rig file that names its bones; a `Seed` names its rig. The
 animation editor lists every rig on disk, each with its states, and previews
 a rig's clip on that rig (`FigureRig`).
@@ -247,9 +246,16 @@ A clip names a rig's parts by name: an effector's `chain` is any limb
 after the six every rig has (`Anatomy::region_names`); a taunt's claims are
 names, resolved against each body's rig as it taunts.
 
-**`Class::Strider`** is the first class on a rig file: two digitigrade legs, a
-neck, a tail and no hands, so its weapon rides on the rig's `mount` and nothing
-grips. A limb's `bends_away` names the joint that bends away from its pole,
+**`Class::Raptor`** is the first class on a rig file: two digitigrade legs, a
+neck, a tail and two short arms folded under the chest, named `right_arm` and
+`left_arm` as the humanoid's are, so the hold's carry (from the spine's tail, in
+its arm-lengths) and grip work on it and shared clips that move an arm move
+its. A rig with no hands may instead state a `mount`, where the weapon is fixed
+and nothing grips. A rig file may name the bone its eye sits in (`[measures]
+eye`); `measure_eyes` copies that height onto `Player.eye` on the authority,
+and the camera, every shot and a bot's senses start there, crouched lower by
+the shared heights' share. Without one, as on the humanoid, the eye is the
+shared 1.8 m. The hull stays the same for every class. A limb's `bends_away` names the joint that bends away from its pole,
 and only a three-bone leg's last (knee forward, hock back) is accepted: it is
 solved exactly by `ik::digitigrade`, the metatarsus keeping its rest angle to
 the thigh, within the knee's and hock's own hinge `stops`. A
@@ -286,7 +292,7 @@ body by its own phase). Ducked in the air the box keeps its head and loses its
 lower half, so after `duck_under` puts the crown at its top,
 `ik::tuck_into_the_box` lifts each foot until the whole leg clears its bottom.
 A rig's `crouched_crown` (in `[measures]`, 1 for the humanoid) puts a planted
-crouch's crown lower than the box needs, so the strider stalks; in the air
+crouch's crown lower than the box needs, so the raptor stalks; in the air
 the crown stays at the box's top, since the legs need the room.
 
 A chain of three or more bones (a limb's `between`) is solved by FABRIK within
@@ -379,14 +385,61 @@ third mode key would be something to remember in exchange for saving a click
 on something nobody does mid-fight. `--prop` opens it at startup, which is the
 only way to reach it from a script.
 
-**Both editors answer the same chords**, defined once in
-[`src/common/shortcuts.rs`](src/common/shortcuts.rs): `Ctrl+S` saves,
-`Ctrl+Shift+S` saves as, `Ctrl+Z` undoes and `Ctrl+Shift+Z` or `Ctrl+Y` redoes,
-with `Super` counting as the modifier too. **Nothing fires while egui wants the
-keyboard** — `Ctrl+Z` in a text field means undo the text, and stealing it
-loses work rather than merely looking wrong. `typing` is passed in rather than
-read from `EguiWantsInput` inside the module, so the chords are testable
-without an egui context.
+**No system reads a key; every system reads an action.**
+[`src/common/keybind/`](src/common/keybind/mod.rs) is three layers: a
+`Keymap` (`assets/user/shortcuts.toml`, defaults in `keymap.rs`) says which
+`Chord`s — a `KeyCode` or a `MouseButton` with Ctrl/Super, Shift and Alt —
+fire which `Action`; `resolve_actions` reads Bevy's `ButtonInput`s in
+`PreUpdate` (`ResolveActions`, after `InputSystems`) into the `Actions`
+resource, pressed, just pressed and just released per action; systems read
+`Actions`. That is before `RunFixedMainLoop`, so `gather_input` sees a press in
+the frame it arrived and the indirection costs no latency. egui only *draws*
+bindings: a menu's hint comes from `keybind::hint`, out of a copy of the keymap
+the Settings plugin puts in egui's memory. A new key is an `Action` variant (the
+`actions!` table: its file name, its `Context`, whether it is exact), a default
+in `keymap.rs` and a `keybind.action.*` string — the tests fail on a missing
+one — and any plugin reading `Actions` calls `keybind::ensure`, since plugins
+stand alone in tests. A test that runs a system directly calls
+`keybind::resolve_now` first.
+
+- **Keys are positions** (`KeyCode`), so WASD stays put on any layout; `Ctrl+Z`
+  is positional too.
+- **Editor commands are exact, game actions are loose.** `Ctrl+Shift+S` is not
+  `Ctrl+S`, but `R` reloads while crouched on Ctrl. Where two loose actions
+  match one press, the one whose chord the other extends is dropped, so a
+  `Shift+G` binding does not also taunt.
+- **Clashes are by `Context`** (everywhere, editors, map, prop,
+  animation, play): `F` in Play and `F` in the prop editor are never live at
+  once, so they do not clash. The Shortcuts page marks a clash in red.
+- **Escape and Enter are fixed** (`Action::FIXED`: pause, cancel, confirm):
+  read from the table like any action, never rebindable, never saved, so the
+  key that gives the mouse back is always the same key.
+- **Nothing on a key fires while egui wants the keyboard**, mouse buttons
+  and bare modifiers (Shift-click) still do — `Ctrl+Z` in a text field means undo the text. Read from the
+  previous frame's `EguiWantsInput`, since egui drops a text field's focus on
+  the frame the Escape arrives. **Nothing at all fires while the Settings
+  window is open** (`Quiet`), so a key being bound does nothing else.
+- The editor's pointer gestures (`CurrentMouseInput`: click, drag, orbit,
+  pan) still read the mouse buttons; the mouse wheel is read where it is used.
+
+[`src/common/shortcuts.rs`](src/common/shortcuts.rs) turns the document
+actions into the `EditorChords` every authoring mode answers: save, save as,
+new, undo, redo.
+
+**The Settings window** ([`src/common/settings/`](src/common/settings/mod.rs),
+ported from redwing) is **Edit → Settings…** in every authoring mode, or
+`Ctrl+,`. A floating window, not a dock tab, because every mode opens it. It
+edits a draft — nothing is saved or in force until Apply, and Close with
+changes asks. Pages: **General** (the language, in
+`assets/user/settings.toml`; `--lang` overrides it for one run),
+**Shortcuts** (`keybind/sheet.rs`: click a binding, press a key, mouse button
+or chord; a modifier let go alone is bound alone; a mouse button is bound
+only when pressed on the prompt, and a press elsewhere stops the wait; Escape
+stops it too; keys are captured from Bevy's input, not egui's) and **Developer** (every pack's
+`icons/*.svg` in a grid with its name). Not reachable in Play yet, where the
+cursor is grabbed; leaving the editors closes it, dropping an unapplied
+draft, since an open window there could not be closed and would keep every
+action quiet.
 
 **Every authoring mode has the same Edit menu**, just right of File:
 [`src/common/edit_menu.rs`](src/common/edit_menu.rs), with Undo, Redo and
@@ -509,9 +562,11 @@ The **kill feed** ([`src/game/kill_feed.rs`](src/game/kill_feed.rs)) is up to fi
 at the top right of the safe zone, in the order they happened, oldest at the top. A line is up
 for ten seconds, or twenty if it names us; the latest two naming us are kept, and the other
 slots go to the latest of the rest, so ours are bumped less. It is built from the `Died` every
-machine gets, so spectators and every mode see it. "Killer > victim" or "killer + assist > victim" is painted in
-the killer's color; "assist finished off victim" (killed by themself or the map, with help) and
-"victim died" are cream. Each line is a **`Plate`** ([`src/game/plate.rs`](src/game/plate.rs)):
+machine gets, so spectators and every mode see it. "Killer [icon] victim" or "killer + assist [icon] victim" is
+painted in the killer's color; "assist finished off [icon] victim" (killed by themself or the map, with help) and
+"[icon] victim" are cream. The icon is what killed ([`src/game/kill_icon.rs`](src/game/kill_icon.rs)): a
+weapon's `icon` in `weapons.toml`, a white SVG under `icons/` rasterized at runtime, else the flame for
+afterburn, the explosion for splash and the skull for the map, a suicide or a weapon with none. Each line is a **`Plate`** ([`src/game/plate.rs`](src/game/plate.rs)):
 a node with `PlateText` children, given its leaning panel after layout, repainted when its size
 or `swatch` changes, its text black or white by `Swatch::text`. Its lines and panel stay hidden
 until the panel is laid out; the plate's own `Visibility` is its owner's, which is how a name tag
@@ -526,6 +581,11 @@ at the camera — from the **rest pose**, never the animated one, because the
 arms are welded to a view that neither bobs nor crouches. The eye is taken off
 the **rig** rather than the movement hull, whose 1.8 m is the same for every
 class and would hang a Scout's arms from a Heavy's shoulders.
+
+A rig whose trigger hand cannot reach the weapon from its eye (the raptor's
+eye is half a meter above its shoulders) is stood **by its carry** instead,
+set back from the weapon by the hold's carry, so its hands are where a match's
+hold puts them (`stand_and_grip`).
 
 Three consequences: only **forearms and hands** are drawn, since an upper arm
 runs back to a shoulder beside the camera and at a 5 mm near plane reads as a
@@ -581,13 +641,17 @@ lowest-order one, the same way the viewmodel and HUD cameras already set
 `ClearColorConfig::None`. Let each clear and every view but the top one is
 blank, with no error.
 
+Every key named in this file is a default binding; Settings → Shortcuts
+rebinds it. Debug views and cheats (`Action::is_debug`) are listed in a
+section of their own there, but clash by their context like any action.
+
 Four more keys while playing: **`.`** brings the team picker back (see "Teams"), **`F`** swaps between first and third person
 (`ViewPreference` in [`src/game/player.rs`](src/game/player.rs), which a
 condition can override; `ViewMode` is what is drawn, and the camera swings
 between the two over `CAMERA_PULL_SECONDS` rather than cutting — your own body and
 its hitboxes are hidden from inside your own head, nobody else's are),
-**`F4`** toggles the hitbox gizmos, the debug laser aimed at them and each shot's line and the flame's traced cone, and
-**`F6`** toggles the bone gizmos and the pickups' trigger volumes
+**`F4`** toggles the hitbox gizmos, the debug laser aimed at them and each shot's line, and
+**`F6`** toggles the bone gizmos, the pickups' trigger volumes and the flame's and airblast's cones
 (green, dim while one restocks), **`F7`** shows the nav overlay picked in
 the Bakes panel, and **`F8`** draws each bot's route over the floor, its view
 and what it senses, in its color, and puts its name tag up with its goal. All four are off by default: they are debug
@@ -600,13 +664,34 @@ primary and the right its secondary — held, for anything automatic — and
 **`R`** reloads. Holding **`Tab`** swaps the HUD for a scoreboard
 ranked by points (`tab_board`, recomputed from the key every frame so it
 cannot stick). **`H`** toggles humiliation, a debug key until there are
-rounds to lose: hands up, no weapon, no firing, third person. **`G`** starts
-the first taunt in `assets/default/taunts.toml` (a wave, which ends by itself;
-`G` again ends it early), and works while humiliated, as in TF2; **`O`** is
+rounds to lose: hands up, no weapon, no firing, third person. **`G`** opens
+the taunt menu ([`src/game/taunt_menu.rs`](src/game/taunt_menu.rs)) and `G`
+again plays its first: the held weapon's own taunt, else the first in
+`assets/default/taunts.toml` (a wave, which ends by itself; `G` during a taunt
+ends it early). It works while humiliated, as in TF2. **A weapon's taunt is
+named by its prop** (`taunt`, a key in `taunts.toml`, picked in the Fit
+workspace's Hold panel): the prop refers to it and the taunt and its clip stay
+in `taunts.toml` and `animations/`. A taunt some weapon names is offered only
+while that weapon is held, and the authority refuses it otherwise
+(`WeaponTaunts`, built on every machine from the catalog and the props by
+`learn_weapon_taunts`). The pistol's is `twirl`: spun on the trigger finger,
+caught, and raised barrel-up before the mouth to be blown across, written by
+[`pistol_twirl`](src/common/skeleton/pistol_twirl.rs) through `bake_body_clips`;
+its tests play the shipped clip through the game's hold and grip on every
+humanoid build. With `weapon = "shown"` its clip moves the
+weapon with `Weapon`, `WeaponRotation` and `PropBone` tracks and the grip
+follows, so it should claim `weapon` and leave the arms that hold it unclaimed.
+**Nobody switches weapons while taunting** (`Condition::may_switch_weapons`):
+`select_weapons` drops the request, the selector stays shut, and a weapon
+picked up mid-taunt is carried but not drawn. **`O`** is
 suicide, **`T`** puts your spray on the surface you look at within 2 m, or moves it there (see "Decals"), 1000 damage credited to yourself, a debug key for the death cam; nobody
 crouches while taunting; each taunt states what it claims, whether it
 shows the weapon, how far you can move, and how far your body (never the
-camera) can turn — all of it edited in the animation editor's **Taunts**
+camera) can turn, and optionally a `view`: degrees left of the body's facing
+the third-person camera swings to as it starts and back from as it ends
+([`src/game/taunt_view.rs`](src/game/taunt_view.rs)), an offset on the camera
+alone; while it plays the mouse turns that offset and not the aim, so the body
+faces where it started when the taunt frees it — all of it edited in the animation editor's **Taunts**
 section (`write_taunts` edits the file in place, so its comments survive).
 `length = "clip"` lasts as long as the clip (until `G` again if the clip is
 in no pack); it is resolved to a number where the table is loaded, so a client
@@ -1255,6 +1340,12 @@ The plan and what is left is
   scoring, respawning, telemetry, bots and the map's collision rebuild still
   ask for Play. A new system the range should show joins by asking it, and
   one that seats or scores must not.
+- **The views are stacked**: first person on the top half of the middle, the stage camera
+  under it, eased onto the closest place from the shooter's right that frames every puppet within
+  8 m and the floor under the spawn (`frame_the_stage`, `thumbnail::frame_wide`).
+  A body is kept out of its own eye by `render_layers::INSIDE_HEAD`, a layer the play camera
+  does not draw, rather than by `Visibility::Hidden`, so the stage camera, which draws it, still
+  shows the shooter, its hat and its weapon.
 - **The stage is 2 km under the map** (`RANGE_ORIGIN`), on its own
   `CollisionWorld`, swapped in on entry and back on exit, so the map's
   triggers and pickups never touch a puppet. The map's roots are hidden as
@@ -1429,7 +1520,8 @@ GPU path draws them ([`src/material/library.rs`](src/material/library.rs),
   gradient is the map's `SkyTime` (Metadata panel), stops by elevation mixed
   in **Oklab**, on the CPU in [`src/common/sky.rs`](src/common/sky.rs) for
   previews and tests and again in `sky.wesl`; change one, change both. Sky
-  slots are `NotShadowCaster`, so a sun added later can shine in through them.
+  slots are `NotShadowCaster`, so a sun added later can shine in through them,
+  and take no decals (`decal::takes_decals`).
 - **`pit` is a material with no file too** (`pit::PIT`,
   [`src/material/pit.rs`](src/material/pit.rs)): one unlit black
   `StandardMaterial`, so no light, lightmap or ambient brightens it — the
@@ -1457,6 +1549,11 @@ and `PaintedOn` its room's `BakedRoomGeometry` (both `linked_spawn`), with `UV_1
 room's lightmap chart. A root marked `Uncut` is cut next frame; a room rebaked in place recuts
 the lasting decals on it and drops the transient ones.
 
+- **A slot whose material refuses decals is left out of the cut** — sky, so far
+  (`decal::takes_decals`). `TakesDecals` on each `BakedRoomGeometry` notes which slots take
+  them, written only when it differs; a change recuts every decal on that room, transient ones
+  included. A mark whose ray first meets a refusing face is never made (`surface_hit`), so it
+  takes no place in a transient ring.
 - **Three lifetimes, one marker each**: `MapDecal` (an `EditorDecal` feature: a picture under a
   pack's `decals/`, pressed along its `-Z`), `Spray` (its owner's connection, and cleared on leaving Play) and `Transient`
   (bullet holes, scorch and blood: a ring per kind capped by this machine's `PlayerSettings::debris`, fading out over their last
@@ -1925,6 +2022,11 @@ Four things about it are load-bearing and easy to undo by accident:
   hips. Bodies pick up a bias that drag exactly cancels and slide across the
   room forever. It is seeded from the pose the body died in and only ever
   swung onto wherever the pelvis now points.
+- **A limit never pushes a point into a surface it is touching.** A joint
+  whose allowed direction points into the floor was lifted back out every
+  pass, and the sideways remainder walked the corpse across the room. The
+  limits are measured in a parent's frame whose roll goes untracked once a
+  corpse rolls, which is also why the raptor's arm joints are all wide cones.
 - **Limits are relaxed toward, not snapped onto.** A hinge removes sideways
   motion outright, and a hard projection fighting the distance constraints
   overshoots — an arm flaps at the elbow for as long as you watch it.
@@ -2632,7 +2734,7 @@ round its kept bones (`Ragdoll::bounds`). Each flame is a billboard from a gener
 shapes (`flame_sheet`), stood upright on screen rather than along its flight,
 since a flame flying away from the eye would be a sliver. They are unlit and
 brighter than one, so they glow and light nothing. The traced cone is drawn
-only on `F4`. The flamethrower's `fire` and `recoil` clips are a flat pull back that
+only on `F6`. The flamethrower's `fire` and `recoil` clips are a flat pull back that
 outlasts its shot interval, so each shot restarts the same pose and the clip's
 `blend_out` takes the weapon home after the trigger is let go.
 
@@ -2646,7 +2748,10 @@ out. A projectile's blast is measured from its shooter, or from where it was
 fired once they are gone. Each part is a field, so a
 weapon can push without reflecting. It runs in `Deal` before
 `step_projectiles`, so a rocket turned this tick flies back this tick, and its
-cone is an `Effect::Gust`, which bots hear like a shot.
+cone is an `Effect::Gust`, which bots hear like a shot. What a player sees is a smoke ring
+([`src/game/gust_ring.rs`](src/game/gust_ring.rs)): a burst of puffs from a generated sheet,
+started on a circle round the muzzle and flown down the aim, widening with the cone and coming to
+rest at its end; the cone itself is drawn on `F6`.
 
 `ProjectileEmitter` fires a spec along its own forward on an interval.
 Nothing places one: the player's key for it is gone, and it is meant to come
@@ -3340,6 +3445,8 @@ key that has slots — fill those in by hand.
   `Prop` feature's placeholder cube is on it too.
 - Panels are `egui_dock` tabs — add a `TabKinds` variant in
   [`src/editor/panels.rs`](src/editor/panels.rs), not a floating `egui::Window`.
+  A dialog is the exception: a modal question (the connect dialog) or a window
+  every mode opens (Settings), which no one mode's dock can hold.
 - Asset paths are relative to the working directory (`assets/default/...`), so
   binaries must run from the repo root.
 - **Every binary links `lib.rs`; none re-declares the module tree.** `main.rs`

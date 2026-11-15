@@ -1,20 +1,50 @@
 # Each taunt is a clip under `animations/` and what performing it does to the
 # body. `claims` are the parts the taunt takes from the layers beneath it:
 # legs, torso, head, arm.l, arm.r, weapon, or a region a rig names itself (a
-# strider's tail), which claims nothing on a rig without it. `movement` is "free", "stopped",
+# raptor's tail), which claims nothing on a rig without it. `movement` is "free", "stopped",
 # or { slowed = 0.5 }. `turning` is how far the body follows the aim: "free",
 # "locked", or { at_most = 90 } degrees a second; the camera always turns.
-# `weapon` is "hidden" or "shown". `length` is seconds until it ends by
-# itself, or "clip" for as long as its clip; leave it out and it lasts until G
-# is pressed again. `rigs` names another rig's clip for the taunt; a body on a
-# rig that is neither the humanoid nor named there is not offered it. The
-# animation editor writes this file and keeps comments.
+# `weapon` is "hidden" or "shown". `icon` names a white SVG under `icons/`, drawn
+# in the taunt menu that G opens. The held weapon's own taunt, which its prop
+# names with `taunt = "<key>"`, comes first; then the rest in file order, each
+# the body has a clip for. A taunt a weapon's prop names is offered only with
+# that weapon in hand. G again plays the first, a digit the one over it. `length` is seconds until it ends by itself,
+# or "clip" for as long as its clip; leave it out and it lasts until G is
+# pressed again. `rigs` names another rig's clip for the taunt; a body on a
+# rig that is neither the humanoid nor named there is not offered it. `view`
+# swings the third-person camera that many degrees left of the body's facing as
+# the taunt starts (180 looks at its front, 90 from its right side), and back
+# as it ends; the mouse turns the camera, not the aim, while it plays. Leave it
+# out and the camera stays as it was. The animation editor writes this file and
+# keeps comments.
 
 [wave]
 clip = "taunt_wave"
-rigs = { strider = "strider/taunt_wag" }
+rigs = { raptor = "raptor/taunt_wag" }
 claims = ["legs", "torso", "head", "tail", "arm.l", "arm.r", "weapon"]
 movement = "stopped"
 turning = "locked"
 weapon = "hidden"
+icon = "taunt_wave"
 length = "clip"
+
+[spar]
+clip = "taunt_shadowbox"
+rigs = { raptor = "raptor/taunt_lunge" }
+claims = ["legs", "torso", "head", "tail", "arm.l", "arm.r", "weapon"]
+movement = "stopped"
+turning = "locked"
+weapon = "hidden"
+icon = "taunt_spar"
+length = "clip"
+view = 90.0
+
+[twirl]
+clip = "taunt_twirl"
+claims = ["torso", "head", "arm.l", "weapon"]
+movement = "stopped"
+turning = "locked"
+weapon = "shown"
+icon = "taunt_twirl"
+length = "clip"
+view = 180.0

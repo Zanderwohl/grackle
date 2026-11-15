@@ -418,7 +418,7 @@ impl Ragdoll {
         let root = self.root_frame();
         for _ in 0..SOLVER_ITERATIONS {
             self.hold_together(skeleton);
-            self.hold_joints(skeleton, root);
+            self.hold_joints(skeleton, root, &touching);
             self.clear_walls(world, &mut touching);
         }
 
@@ -650,7 +650,11 @@ impl Ragdoll {
     ///
     /// Parents first (see [`Ragdoll::frame`]). Only the tail moves: moving the
     /// head too would fight the joint constraints and the corpse hums.
-    fn hold_joints(&mut self, skeleton: &Skeleton, root: Quat) {
+    ///
+    /// A tail is not pushed into a surface it touches. Otherwise a limit pointing into the floor
+    /// and the floor push it back and forth every pass, and the sideways part of each push moves
+    /// the corpse across the room.
+    fn hold_joints(&mut self, skeleton: &Skeleton, root: Quat, touching: &[Touched]) {
         let bones = skeleton.bones();
         let mut frames = Scratch::<Quat, BONES_ON_THE_STACK>::new(bones.len(), Quat::IDENTITY);
 
@@ -666,7 +670,8 @@ impl Ragdoll {
             let was = (self.points[index * 2 + 1].at - head).normalize_or(direction);
             let eased = was.lerp(direction, LIMIT_RELAXATION).normalize_or(direction);
 
-            self.points[index * 2 + 1].at = head + eased * bone.length;
+            let tail = &mut self.points[index * 2 + 1].at;
+            *tail += touching[index * 2 + 1].clip(head + eased * bone.length - *tail);
             frames[index] = world;
         }
     }
@@ -1349,13 +1354,14 @@ mod tests {
     /// feeding energy back into the solver, not a constant to nudge.
     #[test]
     fn every_corpse_settles_however_it_lands() {
-        let strider = crate::common::class_file::tests::builds_with_a_strider()
+        let raptor = crate::common::class_file::tests::builds_with_a_raptor()
             .rig_for(crate::common::class::Class::Mercenary);
         let world = a_room();
 
-        // The strider's long neck and tail can rest balanced and then roll: one drop in forty
-        // topples at five seconds and is still by thirteen, losing motion every second after.
-        for (skeleton, seconds) in [(rig(), 12), (strider, 16)] {
+        // The raptor's long neck and tail can rest balanced and then roll, slowing all the
+        // while: a few drops in a hundred take 20 to 30 seconds, with or without its arms. A
+        // corpse is gone after `RAGDOLL_LIFETIME` anyway, so this only costs the solve.
+        for (skeleton, seconds) in [(rig(), 12), (raptor, 30)] {
             let anatomy = skeleton.anatomy();
             let name = |bone: Option<usize>| skeleton.bones()[bone.expect("the rig has it")].name;
             let (torso, head) = (name(anatomy.carry), name(anatomy.head));
@@ -2242,7 +2248,7 @@ mod tests {
 
         if cfg!(all(target_arch = "aarch64", target_os = "macos")) {
             let expected = if cfg!(debug_assertions) {
-                0x1cda_b6fd_79ed_e0ca
+                0x174c_c9c0_537d_4118
             } else {
                 0x93d1_f1d3_b313_e938
             };
@@ -2277,7 +2283,7 @@ mod tests {
     #[test]
     fn a_corpse_comes_back_as_the_rig_it_was() {
         use bevy::ecs::system::RunSystemOnce;
-        let builds = crate::common::class_file::tests::builds_with_a_strider();
+        let builds = crate::common::class_file::tests::builds_with_a_raptor();
         let body = builds.rig_for(crate::common::class::Class::Mercenary);
         let sent = CorpseBuild(body.build().clone());
         let wire = postcard::to_allocvec(&sent).expect("a corpse's build goes on the wire");
@@ -2290,6 +2296,6 @@ mod tests {
         let corpse = world.spawn((seed, back)).id();
         world.run_system_once(dress_corpses_from_elsewhere).unwrap();
         world.flush();
-        assert_eq!(world.get::<Skeleton>(corpse).map(|rig| rig.kind().to_string()), Some("strider".into()));
+        assert_eq!(world.get::<Skeleton>(corpse).map(|rig| rig.kind().to_string()), Some("raptor".into()));
     }
 }

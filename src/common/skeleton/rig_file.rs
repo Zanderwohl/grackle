@@ -149,6 +149,10 @@ pub struct Measures {
     /// `Anatomy::crouched_crown`.
     #[serde(default = "the_box_top")]
     pub crouched_crown: f32,
+    /// The bone the eye sits in, `EYE_UP_THE_HEAD` of the way to its tail: where the play
+    /// camera and every shot start. Absent, the eye is at the shared standing height.
+    #[serde(default)]
+    pub eye: Option<String>,
 }
 
 fn the_box_top() -> f32 {
@@ -325,6 +329,13 @@ pub fn build_rig(file: &RigFile, build: &Build) -> Result<Skeleton, String> {
     };
     let hip = bone(&file.measures.hip)?;
     let hip = placed[hip].0.y + lift.y;
+    let eye = match &file.measures.eye {
+        Some(name) => {
+            let (head, tail) = placed[bone(name)?];
+            Some(head.lerp(tail, super::anatomy::EYE_UP_THE_HEAD).y + lift.y)
+        }
+        None => None,
+    };
 
     let anatomy = Anatomy {
         feet,
@@ -345,6 +356,7 @@ pub fn build_rig(file: &RigFile, build: &Build) -> Result<Skeleton, String> {
         arm,
         hip,
         crouched_crown: file.measures.crouched_crown.clamp(0.1, 1.0),
+        eye,
         limbs,
     };
     Ok(Skeleton::from_parts(build.clone(), bones, anatomy))
@@ -358,18 +370,18 @@ mod tests {
     use crate::common::skeleton::rig::Pose;
     use crate::common::skeleton::state::{AnimationState, PoseInputs};
 
-    fn strider() -> RigFile {
-        crate::common::class_file::load_rig(&Assets::default(), &default_packs(), "strider")
-            .expect("the default pack's strider should load")
+    fn raptor() -> RigFile {
+        crate::common::class_file::load_rig(&Assets::default(), &default_packs(), "raptor")
+            .expect("the default pack's raptor should load")
     }
 
     fn sized(height: f32, scales: &[(&str, f32)]) -> Skeleton {
         let build = Build {
-            rig: Some("strider".into()),
+            rig: Some("raptor".into()),
             proportions: crate::common::skeleton::Proportions { height, ..default() },
             scales: scales.iter().map(|(group, scale)| (group.to_string(), *scale)).collect(),
         };
-        build_rig(&strider(), &build).unwrap()
+        build_rig(&raptor(), &build).unwrap()
     }
 
     fn lowest(skeleton: &Skeleton) -> f32 {
@@ -382,13 +394,14 @@ mod tests {
 
     /// Fails if the shipped example stops building, or names something it does not define.
     #[test]
-    fn the_strider_builds_with_nothing_to_complain_about() {
+    fn the_raptor_builds_with_nothing_to_complain_about() {
         let rig = sized(1.6, &[]);
-        assert_eq!(rig.kind(), "strider");
+        assert_eq!(rig.kind(), "raptor");
         assert_eq!(rig.anatomy().problems(rig.bones()), Vec::<String>::new());
         assert_eq!(rig.anatomy().feet.len(), 2);
-        assert!(rig.anatomy().hand(0).is_none(), "the strider has no hands");
-        assert!(lowest(&rig).abs() < 1e-4, "the strider's feet are off the floor at {}", lowest(&rig));
+        assert!(rig.anatomy().hand(0).is_some() && rig.anatomy().hand(1).is_some(), "the raptor has no hands");
+        assert!(rig.anatomy().mount.is_none(), "the raptor holds its weapon, not mounts it");
+        assert!(lowest(&rig).abs() < 1e-4, "the raptor's feet are off the floor at {}", lowest(&rig));
     }
 
     /// A build resizes the whole rig to its height and each group by its scale, feet on the floor.
@@ -406,23 +419,23 @@ mod tests {
 
     #[test]
     fn a_file_naming_what_it_does_not_define_is_refused() {
-        let mut child_first = strider();
+        let mut child_first = raptor();
         child_first.bones.swap(0, 1);
-        assert!(child_first.check("strider").is_err(), "a child listed before its parent built");
+        assert!(child_first.check("raptor").is_err(), "a child listed before its parent built");
 
-        let mut bad_limb = strider();
+        let mut bad_limb = raptor();
         bad_limb.limbs[0].lower = "elbow".into();
-        assert!(bad_limb.check("strider").is_err(), "a limb on a missing bone built");
+        assert!(bad_limb.check("raptor").is_err(), "a limb on a missing bone built");
 
-        let mut bad_joint = strider();
+        let mut bad_joint = raptor();
         bad_joint.bones[1].limit = Some("swivel".into());
-        assert!(bad_joint.check("strider").is_err(), "an unknown joint built");
+        assert!(bad_joint.check("raptor").is_err(), "an unknown joint built");
     }
 
     /// The feet plant and the walk reaches, through the same path a match poses a body by; with no
     /// clip of its own a state stands in rest, never in the humanoid's pose functions.
     #[test]
-    fn a_strider_stands_and_walks_on_its_own_feet() {
+    fn a_raptor_stands_and_walks_on_its_own_feet() {
         let rig = sized(1.6, &[]);
         let root = Transform::IDENTITY;
         let mut pose = Pose::rest();
@@ -434,9 +447,9 @@ mod tests {
             let pose = finish_pose(&rig, AnimationState::RunForward, &inputs, &root, None);
             assert!(
                 pose.joint("chest") == Quat::IDENTITY && pose.joint("upper_arm.l") == Quat::IDENTITY,
-                "the strider was posed by the humanoid's functions",
+                "the raptor was posed by the humanoid's functions",
             );
-            assert!(pose.joint("thigh.l") != Quat::IDENTITY, "the strider's legs did not walk at stride {step}");
+            assert!(pose.joint("thigh.l") != Quat::IDENTITY, "the raptor's legs did not walk at stride {step}");
         }
     }
 
@@ -479,7 +492,7 @@ to = [0.0, -0.6, 0.1]
         let ground = |_: Vec3| 0.0;
         let frames = Frames::standing(root, root, &ground);
         let reaches = apply(&clip, 0.0, &rig, &mut pose, &frames, None);
-        assert_eq!(reaches, [Reach::Reached], "the strider's own leg did not reach");
+        assert_eq!(reaches, [Reach::Reached], "the raptor's own leg did not reach");
 
         let pelvis = rig.posed_bone(&Pose::rest(), &root, rig.index_of("pelvis").unwrap());
         let wanted = pelvis.tail + pelvis.rotation * Vec3::new(0.0, -0.6, 0.1);
@@ -492,7 +505,7 @@ to = [0.0, -0.6, 0.1]
     fn a_rig_names_its_own_regions() {
         let rig = sized(1.6, &[]);
         let anatomy = rig.anatomy();
-        let tail = anatomy.region_named("tail").expect("the strider names its tail");
+        let tail = anatomy.region_named("tail").expect("the raptor names its tail");
         assert_eq!(tail, Regions::bit(Regions::FIRST_OWN));
         assert_eq!(anatomy.region_of(rig.index_of("tail.2").unwrap()), tail);
         assert_eq!(anatomy.claims(["tail", "arm.l"]), tail.union(Regions::ARM_L));
@@ -505,7 +518,7 @@ to = [0.0, -0.6, 0.1]
     #[test]
     fn a_longer_limb_reaches_within_its_joints() {
         let rig = sized(1.6, &[]);
-        let tail = *rig.anatomy().limb("tail").expect("the strider's tail is a limb");
+        let tail = *rig.anatomy().limb("tail").expect("the raptor's tail is a limb");
         assert_eq!(tail.chain.middle, ["tail.2"]);
         let root = Transform::IDENTITY;
         let base = rig.posed_bone(&Pose::rest(), &root, rig.index_of("tail.1").unwrap()).head;
@@ -598,24 +611,24 @@ to = [0.0, -0.6, 0.1]
         let leg = rig.anatomy().limb("left_leg").unwrap().chain;
         assert_eq!(leg.away, 1 << 2, "the hock is the third bone's head");
 
-        let mut file = strider();
+        let mut file = raptor();
         file.limbs[0].bends_away = vec!["thigh.l".into()];
-        assert!(build_rig(&file, &Build { rig: Some("strider".into()), ..default() }).is_err());
-        let mut file = strider();
+        assert!(build_rig(&file, &Build { rig: Some("raptor".into()), ..default() }).is_err());
+        let mut file = raptor();
         let shin = file.bones.iter().position(|bone| bone.name == "shin.l").unwrap();
         file.bones[shin].stops = Some([10.0, 20.0]);
-        assert!(build_rig(&file, &Build { rig: Some("strider".into()), ..default() }).is_err());
+        assert!(build_rig(&file, &Build { rig: Some("raptor".into()), ..default() }).is_err());
     }
 
     /// Fails if a reversed knee or a splayed digitigrade leg loads.
     #[test]
     fn a_rig_file_refuses_a_leg_it_cannot_solve() {
-        let build = Build { rig: Some("strider".into()), ..default() };
-        let mut reversed = strider();
+        let build = Build { rig: Some("raptor".into()), ..default() };
+        let mut reversed = raptor();
         reversed.limbs[0].bends_away = vec!["shin.l".into()];
         assert!(build_rig(&reversed, &build).is_err(), "a reversed knee loaded");
 
-        let mut splayed = strider();
+        let mut splayed = raptor();
         let meta = splayed.bones.iter().position(|bone| bone.name == "metatarsus.l").unwrap();
         splayed.bones[meta].tail[0] -= 0.1;
         let foot = splayed.bones.iter().position(|bone| bone.name == "foot.l").unwrap();
@@ -687,7 +700,7 @@ to = [0.0, -0.6, 0.1]
         let planted = finish_pose(&rig, AnimationState::RunForward, &inputs, &root, None);
         let free = finish_pose(&rig, AnimationState::RunForward, &PoseInputs { feet_free: 1.0, ..inputs }, &root, None);
         assert_ne!(planted.joint("thigh.l"), free.joint("thigh.l"), "letting the feet go changed nothing");
-        assert_eq!(free.joint("thigh.l"), Quat::IDENTITY, "a let-go strider leg was posed anyway");
+        assert_eq!(free.joint("thigh.l"), Quat::IDENTITY, "a let-go raptor leg was posed anyway");
     }
 
     /// Keys in different spaces are each placed in their own and blended in world space.

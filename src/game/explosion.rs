@@ -257,18 +257,21 @@ fn fade_blast_marks(
     }
 }
 
-/// A blast as a sphere the size of the damage radius, a gust as its cone.
-fn draw_blast_marks(mut gizmos: Gizmos, marks: Query<&EffectMark>) {
+/// A blast as a sphere the size of the damage radius, a gust as its cone on `F6`; what a player
+/// sees of a gust is [`crate::game::gust_ring`].
+fn draw_blast_marks(mut gizmos: Gizmos, marks: Query<&EffectMark>, show: Option<Res<crate::game::skeleton::ShowBones>>) {
+    let cones = show.is_some_and(|show| show.0);
     for mark in &marks {
         let alpha = (mark.remaining / mark.lifetime).clamp(0.0, 1.0);
         match mark.shape {
             MarkShape::Blast { at, radius } => {
                 gizmos.sphere(Isometry3d::from_translation(at), radius, Color::srgba(1.0, 0.55, 0.1, alpha));
             }
-            MarkShape::Gust { from, toward, range, spread } => {
+            MarkShape::Gust { from, toward, range, spread } if cones => {
                 let (cone, isometry) = crate::game::flame::cone_gizmo(from, toward, range, spread);
                 gizmos.primitive_3d(&cone, isometry, Color::srgba(0.75, 0.9, 1.0, alpha * 0.6));
             }
+            MarkShape::Gust { .. } => {}
         }
     }
 }

@@ -1,5 +1,6 @@
-# A rig a class can name in classes.toml with `rig = "strider"`: two
-# digitigrade legs, a long neck and a tail, and no arms. Bones are where they rest in a body
+# A rig a class can name in classes.toml with `rig = "raptor"`: two
+# digitigrade legs, a long neck, a tail, and short arms folded under the chest that grip a
+# weapon as a humanoid's do. Bones are where they rest in a body
 # `height` meters tall, feet on the floor, facing -Z, parents first. A build
 # resizes the rig to its own height and lengthens each `group` by its scale.
 #
@@ -12,16 +13,19 @@
 # forward.
 
 height = 1.6
+# A hold's carry is measured from the spine's tail, between the shoulders, in arm-lengths.
 carry = "spine"
 head = "head"
-# No hands, so a weapon rides here: meters from the spine's tail along the aim.
-mount = { bone = "spine", offset = [0.0, 0.14, -0.1] }
+hands = ["right_arm", "left_arm"]
 
 [measures]
 leg = "left_leg"
+arm = "right_arm"
 hip = "pelvis"
+# Its own eye, in its head, rather than the shared 1.8 m above a body 1.6 m tall.
+eye = "head"
 # Crouched, the crown sits this share of the way up the crouched box: lower than it needs, so
-# the strider stalks with its head down rather than standing tall inside it.
+# the raptor stalks with its head down rather than standing tall inside it.
 crouched_crown = 0.82
 
 [[bones]]
@@ -65,6 +69,74 @@ thickness = [0.14, 0.18]
 region = "head"
 limit = "head"
 profile = "head"
+
+# Every arm joint is the widest cone: a corpse's limits use its parent's frame, whose roll is
+# untracked once it rolls, and a narrower limit can point the arm into the floor.
+[[bones]]
+name = "upper_arm.l"
+parent = "spine"
+head = [-0.1, 0.99, -0.41]
+tail = [-0.13, 0.8, -0.4]
+thickness = [0.06, 0.06]
+group = "arm"
+region = "arm.l"
+limit = "shoulder"
+profile = "upper_arm"
+
+[[bones]]
+name = "forearm.l"
+parent = "upper_arm.l"
+head = [-0.13, 0.8, -0.4]
+tail = [-0.12, 0.79, -0.61]
+thickness = [0.05, 0.05]
+group = "arm"
+region = "arm.l"
+limit = "shoulder"
+profile = "forearm"
+
+[[bones]]
+name = "hand.l"
+parent = "forearm.l"
+head = [-0.12, 0.79, -0.61]
+tail = [-0.11, 0.72, -0.68]
+thickness = [0.035, 0.06]
+group = "arm"
+region = "arm.l"
+limit = "shoulder"
+profile = "hand"
+
+[[bones]]
+name = "upper_arm.r"
+parent = "spine"
+head = [0.1, 0.99, -0.41]
+tail = [0.13, 0.8, -0.4]
+thickness = [0.06, 0.06]
+group = "arm"
+region = "arm.r"
+limit = "shoulder"
+profile = "upper_arm"
+
+[[bones]]
+name = "forearm.r"
+parent = "upper_arm.r"
+head = [0.13, 0.8, -0.4]
+tail = [0.12, 0.79, -0.61]
+thickness = [0.05, 0.05]
+group = "arm"
+region = "arm.r"
+limit = "shoulder"
+profile = "forearm"
+
+[[bones]]
+name = "hand.r"
+parent = "forearm.r"
+head = [0.12, 0.79, -0.61]
+tail = [0.11, 0.72, -0.68]
+thickness = [0.035, 0.06]
+group = "arm"
+region = "arm.r"
+limit = "shoulder"
+profile = "hand"
 
 [[bones]]
 name = "tail.1"
@@ -188,6 +260,21 @@ region = "legs"
 limit = "ankle"
 profile = "foot"
 
+# Named as the humanoid's are, so shared clips that move an arm move these.
+[[limbs]]
+name = "right_arm"
+upper = "upper_arm.r"
+lower = "forearm.r"
+tip = "hand.r"
+side = 1.0
+
+[[limbs]]
+name = "left_arm"
+upper = "upper_arm.l"
+lower = "forearm.l"
+tip = "hand.l"
+side = -1.0
+
 # Digitigrade: the knee bends toward the pole (forward) and the hock away.
 [[limbs]]
 name = "left_leg"
@@ -228,6 +315,23 @@ phase = 0.0
 [[feet]]
 limb = "right_leg"
 phase = 0.5
+
+# Forearms and hands only, as on the humanoid.
+[[viewmodel]]
+bone = "forearm.r"
+hand = 0
+
+[[viewmodel]]
+bone = "hand.r"
+hand = 0
+
+[[viewmodel]]
+bone = "forearm.l"
+hand = 1
+
+[[viewmodel]]
+bone = "hand.l"
+hand = 1
 
 [[look]]
 bone = "neck"

@@ -58,6 +58,7 @@ pub struct ToolPlugin;
 
 impl Plugin for ToolPlugin {
     fn build(&self, app: &mut App) {
+        crate::common::keybind::ensure(app);
         app
             .init_resource::<ToolData>()
             .init_state::<Tools>()

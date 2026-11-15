@@ -140,6 +140,7 @@ pub struct SpectatePlugin;
 
 impl Plugin for SpectatePlugin {
     fn build(&self, app: &mut App) {
+        crate::common::keybind::ensure(app);
         app.init_resource::<SpectatorView>()
             .init_resource::<MouseHeld>()
             .init_resource::<TeamOptions>()
@@ -166,7 +167,7 @@ impl Plugin for SpectatePlugin {
 pub(crate) fn watch(
     mut commands: Commands,
     offer: Res<TeamOptions>,
-    buttons: Res<ButtonInput<MouseButton>>,
+    actions: Res<crate::common::keybind::Actions>,
     held: Res<MouseHeld>,
     mut view: ResMut<SpectatorView>,
     ours: Query<(), With<LocalPlayer>>,
@@ -202,7 +203,10 @@ pub(crate) fn watch(
 
     let by = match held.any() {
         true => 0,
-        false => buttons.just_pressed(MouseButton::Left) as isize - buttons.just_pressed(MouseButton::Right) as isize,
+        false => {
+            use crate::common::keybind::Action;
+            actions.just_pressed(Action::Fire) as isize - actions.just_pressed(Action::AltFire) as isize
+        }
     };
     let list = viewpoints(bodies.iter().map(|(_, id)| *id), cameras_for(&cameras, offer.seat), spawns.iter().map(|(spawn, _)| spawn));
     let was = view.at;

@@ -30,6 +30,7 @@ pub struct WeaponUiPlugin;
 
 impl Plugin for WeaponUiPlugin {
     fn build(&self, app: &mut App) {
+        crate::common::keybind::ensure(app);
         app.init_resource::<WeaponPanels>()
             // A prop saved in another mode is read again.
             .add_systems(OnEnter(AppMode::Weapon), |mut panels: ResMut<WeaponPanels>| panels.browser.model = None)
@@ -330,13 +331,13 @@ impl Tabs<'_, '_, '_> {
         let except = if naming == Naming::Rename { selected } else { None };
         let problem = self.editor.key_problem(&text, except);
         let mut done = false;
-        let mut cancelled = false;
+        let mut canceled = false;
         ui.horizontal(|ui| {
             ui.label(get!("weapon_editor.fields.key"));
             let field = ui.text_edit_singleline(&mut text);
             done = field.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
             done |= ui.add_enabled(problem.is_none(), egui::Button::new(get!("weapon_editor.browser.ok"))).clicked();
-            cancelled = ui.button(get!("weapon_editor.browser.cancel")).clicked();
+            canceled = ui.button(get!("weapon_editor.browser.cancel")).clicked();
         });
         if let Some(problem) = problem.filter(|_| !text.is_empty()) {
             let why = match problem {
@@ -351,7 +352,7 @@ impl Tabs<'_, '_, '_> {
             ui.checkbox(&mut self.browser.rename_loadouts, get!("weapon_editor.browser.rename_loadouts"));
             self.dependants_ui(ui, index);
         }
-        if cancelled {
+        if canceled {
             self.browser.naming = None;
             return;
         }
@@ -482,6 +483,9 @@ impl Tabs<'_, '_, '_> {
         for why in &problems {
             ui.colored_label(ui.visuals().error_fg_color, why);
         }
+        if let Some(icon) = weapon.entry.icon.as_deref().filter(|icon| !crate::common::weapon_file::icon_exists(self.assets, icon)) {
+            ui.colored_label(ui.visuals().warn_fg_color, get!("weapon_editor.problems.icon", "icon", icon));
+        }
         ui.separator();
 
         egui::Grid::new("weapon_settings").num_columns(2).show(ui, |ui| {
@@ -494,6 +498,14 @@ impl Tabs<'_, '_, '_> {
             if let Some(pick) = prop_button(ui, entry.model.as_deref(), &get!("weapon_editor.model_none")) {
                 changed |= pick != entry.model;
                 entry.model = pick;
+            }
+            ui.end_row();
+
+            ui.label(get!("weapon_editor.fields.icon"));
+            let mut icon = entry.icon.clone().unwrap_or_default();
+            if ui.text_edit_singleline(&mut icon).changed() {
+                entry.icon = Some(icon).filter(|icon| !icon.is_empty());
+                changed = true;
             }
             ui.end_row();
 
@@ -668,13 +680,12 @@ fn drawings(ui: &mut Ui, mounted: &Mounted) {
 
 /// Chords go through the menus' handlers, so a chord and its menu entry are one action.
 fn weapon_shortcuts(
-    keys: Res<ButtonInput<KeyCode>>,
-    egui: Res<bevy_egui::input::EguiWantsInput>,
+    actions: Res<crate::common::keybind::Actions>,
     mut editor: ResMut<WeaponEditor>,
     mut published: ResMut<PublishedCatalog>,
     assets: Res<Assets>,
 ) {
-    let chords = chords(&keys, egui.wants_keyboard_input());
+    let chords = chords(&actions);
     handle_edit(
         match (chords.redo, chords.undo) {
             (true, _) => Some(EditAction::Redo),

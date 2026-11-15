@@ -435,8 +435,8 @@ ranges from the start, so chunking is a scheduler change and not a rewrite.
       by `steer_bots` before the step, following the route and replaying a
       link's input across drops and jumps; replanned when the goal or graph
       changes or the bot stops closing on its next cell
-- [x] `B` / `Shift+B` to seat and retire bots in a round; `Roam` as a
-      placeholder goal
+- [x] Seating bots in a round (now the Round tab's slots and
+      `--server-config`); `Roam` as a placeholder goal
 - [x] Slots and "fill empty slots with bots" in a Round tab, kept true
       through a round as people come and go
 - [ ] A bot count per team: deferred until a mode other than arena; bots fill

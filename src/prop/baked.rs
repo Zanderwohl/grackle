@@ -7,7 +7,7 @@ use bevy::mesh::{Indices, VertexAttributeValues};
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 
-use crate::common::assets::{default_packs, Assets as PackAssets};
+use crate::common::assets::Assets as PackAssets;
 use crate::prop::document::{self, PropDoc};
 use crate::prop::feature::Evaluated;
 
@@ -149,6 +149,8 @@ pub struct BakedProp {
     pub breakable: BreakableSpec,
     pub pickup: PickupSpec,
     pub hat: HatSpec,
+    /// A key in `taunts.toml`.
+    pub taunt: Option<String>,
     /// [`PropCache::bakes`] as it stood after this bake, so a replaced entry
     /// can be told from the one it replaced.
     pub bake: u64,
@@ -245,17 +247,7 @@ fn bake(
     surfaces: &mut SurfaceMaterials,
     clips: &mut Assets<Clip>,
 ) -> Option<BakedProp> {
-    // Highest priority last, so an overriding pack wins.
-    let mut found = None;
-    for pack in default_packs().iter() {
-        match document::load(packs, pack, name) {
-            Ok(doc) => found = Some((doc, document::prop_path(pack, name))),
-            Err(document::PropFileError::Asset(_)) => {}
-            Err(e) => error!("{e}"),
-        }
-    }
-
-    let (doc, file) = found?;
+    let (doc, file) = document::from_the_packs(packs, name, document::load)?;
     let clips = publish_clips(&doc.animations, None, clips);
     let mut baked = bake_doc(name, &doc, meshes, materials, surfaces, clips);
     baked.file = Some(file);
@@ -326,6 +318,7 @@ fn bake_doc(
         breakable: doc.breakable,
         pickup: doc.pickup,
         hat: doc.hat.clone(),
+        taunt: doc.taunt.clone(),
         bake: 0,
         file: None,
     }

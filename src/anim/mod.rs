@@ -13,6 +13,7 @@ pub mod body;
 pub mod timeline;
 pub mod ui;
 
+use crate::common::keybind::{Action, Actions};
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
@@ -90,6 +91,7 @@ pub struct AnimPlugin;
 
 impl Plugin for AnimPlugin {
     fn build(&self, app: &mut App) {
+        crate::common::keybind::ensure(app);
         app.init_resource::<AnimEditor>()
             .init_resource::<TimelineView>()
             .init_resource::<TimelineCursor>()
@@ -321,7 +323,7 @@ fn follow_the_document(
 #[allow(clippy::too_many_arguments)]
 fn timeline_input(
     buttons: Res<ButtonInput<MouseButton>>,
-    keys: Res<ButtonInput<KeyCode>>,
+    actions: Res<Actions>,
     mut scrolls: MessageReader<MouseWheel>,
     windows: Query<&Window, With<PrimaryWindow>>,
     panels: Res<ui::AnimPanels>,
@@ -358,8 +360,8 @@ fn timeline_input(
 
     let length = shown.0.as_ref().map_or(1.0, |clip| clip.length);
     let over = view.rect.contains(at);
-    let adding = keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
-    let free = keys.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]);
+    let adding = actions.pressed(Action::Modify);
+    let free = actions.pressed(Action::Alternate);
 
     if over && notches.abs() > 0.0 {
         view.zoom_about(at.x, notches);
@@ -490,14 +492,14 @@ fn follow_the_key_selection(selection: Res<TimelineSelection>, mut anim: ResMut<
     }
 }
 
-/// Not while egui wants the keyboard: a space typed into the note is a space.
+/// Not while egui wants the keyboard, which `Actions` already knows: a space typed into the note is
+/// a space.
 fn play_or_pause(
-    keyboard: Res<ButtonInput<KeyCode>>,
-    panels: Res<ui::AnimPanels>,
+    actions: Res<Actions>,
     shown: Res<ShownClip>,
     mut cursor: ResMut<TimelineCursor>,
 ) {
-    if panels.egui_wants_keyboard || !keyboard.just_pressed(KeyCode::Space) {
+    if !actions.just_pressed(Action::PlayClip) {
         return;
     }
     let Some(clip) = shown.0.as_ref() else { return };
@@ -658,22 +660,18 @@ fn nudge_the_selection(
     true
 }
 
-/// Not while egui wants the keyboard: `Delete` in a text field deletes a character.
+/// Not while egui wants the keyboard, which `Actions` already knows: `Delete` in a text field
+/// deletes a character.
 fn edit_keys(
-    keyboard: Res<ButtonInput<KeyCode>>,
-    panels: Res<ui::AnimPanels>,
+    actions: Res<Actions>,
     anim: Res<AnimEditor>,
     cursor: Res<TimelineCursor>,
     mut editor: ResMut<PropEditor>,
     mut body: ResMut<body::BodyClips>,
     mut selection: ResMut<TimelineSelection>,
 ) {
-    if panels.egui_wants_keyboard {
-        return;
-    }
-
-    let removing = keyboard.any_just_pressed([KeyCode::Delete, KeyCode::Backspace]);
-    let keying = keyboard.just_pressed(KeyCode::KeyK);
+    let removing = actions.just_pressed(Action::Delete);
+    let keying = actions.just_pressed(Action::SetKey);
     if !removing && !keying {
         return;
     }
@@ -1376,12 +1374,12 @@ mod tests {
         let mut body = body::BodyClips::default();
         body.ensure_loaded(&crate::common::assets::Assets::default());
         body.edit(|clips| {
-            clips.insert("strider/idle".into(), Clip { length: 1.0, ..Clip::default() }.into());
+            clips.insert("raptor/idle".into(), Clip { length: 1.0, ..Clip::default() }.into());
         });
         let builds = crate::common::class::ClassBuilds::shipped();
         let class = crate::common::class::Class::Mercenary;
-        let mut anim = AnimEditor { source: ClipSource::Body, selected: Some("strider/idle".into()), ..default() };
-        assert_eq!(preview_rig(&anim, &body, &builds, class).kind(), "strider");
+        let mut anim = AnimEditor { source: ClipSource::Body, selected: Some("raptor/idle".into()), ..default() };
+        assert_eq!(preview_rig(&anim, &body, &builds, class).kind(), "raptor");
 
         anim.selected = Some("idle".into());
         assert_eq!(preview_rig(&anim, &body, &builds, class).kind(), crate::common::skeleton::rig::HUMANOID);

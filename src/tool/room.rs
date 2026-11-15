@@ -1,10 +1,10 @@
 use bevy::app::App;
+use crate::common::keybind::{Action, Actions};
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use crate::common::world_surface::{self, Fill, Volume};
 use crate::common::csg::{self, Polygon};
 use crate::common::triangulate::triangulate;
-use bevy_egui::input::EguiWantsInput;
 use crate::common::app_mode::AppMode;
 use crate::editor::editable::{EditEvent, FeatureId, FeatureTimeline, FeatureTrait, PointRef};
 use crate::editor::editor_room::EditorRoom;
@@ -21,6 +21,7 @@ pub struct RoomPlugin;
 
 impl Plugin for RoomPlugin {
     fn build(&self, app: &mut App) {
+        crate::common::keybind::ensure(app);
         app
             .init_resource::<RoomTool>()
             .init_resource::<RoomDragState>()
@@ -125,16 +126,15 @@ impl RoomTool {
         mut tool: ResMut<Self>,
         cameras: Query<(Entity, &Multicam)>,
         mouse_input: Res<CurrentMouseInput>,
-        keys: Res<ButtonInput<KeyCode>>,
+        actions: Res<Actions>,
         mut features: ResMut<FeatureTimeline>,
         rooms: MapVolumes,
         mut next_tool: ResMut<NextState<Tools>>,
         current_tool: Res<State<Tools>>,
-        egui: Res<EguiWantsInput>,
     ) {
         let drawing = current_tool.get().clone();
-        let shift_held = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
-        let shift_just_pressed = keys.just_pressed(KeyCode::ShiftLeft) || keys.just_pressed(KeyCode::ShiftRight);
+        let shift_held = actions.pressed(Action::Modify);
+        let shift_just_pressed = actions.just_pressed(Action::Modify);
 
         let suggestion = tool.suggestion();
 
@@ -145,8 +145,7 @@ impl RoomTool {
 
         // Escape while placing max discards the min, unless placing relatively, where it means zero offset.
         if matches!(tool.mode, RoomToolMode::PlacingMax(ref cm) if !matches!(cm, RoomCornerMode::RelativeSelected { .. }))
-            && keys.just_pressed(KeyCode::Escape)
-            && !egui.wants_keyboard_input()
+            && actions.just_pressed(Action::Cancel)
         {
             tool.mode = RoomToolMode::PlacingMin(RoomCornerMode::Normal);
             tool.min_point = None;
@@ -178,7 +177,7 @@ impl RoomTool {
                     tool.flew = false;
                 } else if is_placing_min {
                     if let Some(cursor) = tool.cursor
-                        && commit_at_cursor(&mouse_input, &keys, egui.wants_keyboard_input())
+                        && commit_at_cursor(&mouse_input, &actions)
                     {
                         tool.min_point = Some(PointRef::absolute(cursor.x, cursor.y, cursor.z));
                         tool.min_resolved = Some(cursor);
@@ -188,8 +187,7 @@ impl RoomTool {
                     }
                 } else if let (Some(cursor), Some(min)) = (tool.cursor, tool.min_resolved) {
                     // The far corner is a size, measured from the first.
-                    let typing = egui.wants_keyboard_input();
-                    if commit_at_cursor(&mouse_input, &keys, typing) {
+                    if commit_at_cursor(&mouse_input, &actions) {
                         Self::create_room(&mut tool, &mut features, &mut next_tool, &drawing, FarCorner::FromMin(cursor - min), cursor);
                     }
                 }
@@ -237,9 +235,7 @@ impl RoomTool {
                     set_mode(&mut tool, is_placing_min, RoomCornerMode::Picking);
                     return;
                 }
-
-                let typing = egui.wants_keyboard_input();
-                if let Some(cursor) = relative_commit(&mouse_input, &keys, typing, tool.cursor, reference_resolved) {
+                if let Some(cursor) = relative_commit(&mouse_input, &actions, tool.cursor, reference_resolved) {
                     let d = cursor - reference_resolved;
                     let mut pr = PointRef::reference_with_offset(reference_feature, d.x, d.y, d.z);
                     if !reference_key.is_empty() {
@@ -630,6 +626,15 @@ pub enum RoomSlot {
 
 impl RoomSlot {
     pub const ALL: [RoomSlot; 3] = [RoomSlot::Floor, RoomSlot::Walls, RoomSlot::Ceiling];
+
+    /// Its place in [`RoomSlot::ALL`].
+    pub fn index(self) -> usize {
+        match self {
+            RoomSlot::Floor => 0,
+            RoomSlot::Walls => 1,
+            RoomSlot::Ceiling => 2,
+        }
+    }
 
     pub fn name_key(self) -> &'static str {
         match self {

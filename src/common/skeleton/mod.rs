@@ -25,16 +25,18 @@ pub mod anatomy;
 pub mod clip;
 pub mod draw;
 pub mod gait;
+pub mod humanoid_seed;
 pub mod ik;
 pub mod interpolation;
 pub mod joints;
 pub mod mesh;
+pub mod pistol_twirl;
 pub mod play;
 pub mod rig;
 pub mod rig_file;
 pub mod seed;
 pub mod state;
-pub mod strider_seed;
+pub mod raptor_seed;
 
 pub use clip::{
     Axis, ChainRef, Channel, Clip, ClipSet, Clock, Combine, Key, Space, Track, Unit,

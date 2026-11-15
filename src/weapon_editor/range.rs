@@ -16,7 +16,7 @@ use bevy::camera::visibility::RenderLayers;
 use bevy::window::PrimaryWindow;
 
 use crate::common::app_mode::AppMode;
-use crate::common::class::{CLASS_HALF_EXTENTS, TALLEST_CLASS_EYE_HEIGHT};
+use crate::common::class::CLASS_HALF_EXTENTS;
 use crate::common::damage::{DamageDealt, DamageSource, Died, PlayerId};
 use crate::common::flame::Burning;
 use crate::common::game_rules::ModeRules;
@@ -267,7 +267,7 @@ struct HiddenByRange(Vec<(Entity, Visibility)>);
 #[derive(Resource, Default)]
 struct MapCollision(Option<CollisionWorld>);
 
-/// The view the player chose, put back on exit: the range's left half is always first person.
+/// The view the player chose, put back on exit: the range's top half is always first person.
 #[derive(Resource, Default)]
 struct ChosenView(Option<ViewPreference>);
 
@@ -322,6 +322,8 @@ fn enter_range(
     commands.spawn((
         RangeStage,
         DirectionalLight { illuminance: 8000.0, shadow_maps_enabled: false, ..default() },
+        // The shooter's body is on `INSIDE_HEAD`, and a light lights only its own layers.
+        RenderLayers::from_layers(&[render_layers::WORLD, render_layers::INSIDE_HEAD]),
         Transform::from_translation(RANGE_ORIGIN).looking_at(RANGE_ORIGIN + Vec3::new(0.4, -1.0, -0.6), Vec3::Y),
     ));
     // Above the play camera and its viewmodel: only the bottom camera on a window clears.
@@ -332,8 +334,10 @@ fn enter_range(
         Camera { order: PLAY_CAMERA_ORDER + 10, clear_color: ClearColorConfig::None, ..default() },
         Hdr,
         Tonemapping::TonyMcMapface,
-        RenderLayers::from_layers(&[render_layers::WORLD, render_layers::GIZMOS]),
-        Transform::from_translation(RANGE_ORIGIN + Vec3::new(9.0, 6.0, 5.0)).looking_at(RANGE_ORIGIN + Vec3::new(0.0, 1.0, -8.0), Vec3::Y),
+        // `INSIDE_HEAD`, so it shows the shooter the first-person view looks out of.
+        RenderLayers::from_layers(&[render_layers::WORLD, render_layers::GIZMOS, render_layers::INSIDE_HEAD]),
+        // Placed by `frame_the_stage` on its first frame.
+        Transform::default(),
     ));
 }
 
@@ -367,8 +371,8 @@ fn leave_range(
     }
 }
 
-fn eye_of(center: Vec3) -> Vec3 {
-    center + Vec3::Y * (TALLEST_CLASS_EYE_HEIGHT - CLASS_HALF_EXTENTS.y)
+fn eye_of(center: Vec3, eye: f32) -> Vec3 {
+    center + Vec3::Y * (eye - CLASS_HALF_EXTENTS.y)
 }
 
 fn helpers(catalog: &WeaponCatalog, weapon: WeaponId) -> (Option<WeaponId>, Option<WeaponId>) {
@@ -460,9 +464,9 @@ fn direct(
 
     let t = show.elapsed - LEAD_IN;
     let kind = show.beats[show.current].kind;
-    let shooter = puppets.iter().find(|(_, puppet, ..)| puppet.0 == Role::Shooter).map(|(entity, _, body, ..)| (entity, body.current));
+    let shooter = puppets.iter().find(|(_, puppet, ..)| puppet.0 == Role::Shooter).map(|(entity, _, body, player, ..)| (entity, body.current, player.eye));
     let target = puppets.iter().find(|(_, puppet, ..)| puppet.0 != Role::Shooter).map(|(_, _, body, player, ..)| (body.current, player.velocity));
-    let incoming = shooter.and_then(|(_, at)| {
+    let incoming = shooter.and_then(|(_, at, _)| {
         projectiles.iter().map(|(_, body)| body.current).min_by(|a, b| a.distance(at).total_cmp(&b.distance(at)))
     });
     if let Some((_, velocity)) = target {
@@ -470,7 +474,7 @@ fn direct(
     }
 
     for (_, puppet, body, player, mut inputs, ammo) in &mut puppets {
-        let eye = eye_of(body.current);
+        let eye = eye_of(body.current, player.eye);
         let mut input = PlayerInput { yaw: player.yaw, pitch: player.pitch, ..default() };
         match puppet.0 {
             Role::Shooter => {
@@ -485,8 +489,8 @@ fn direct(
                 shooter_presses(kind, t, &mut input, weapon, ammo, incoming.map(|at| at.distance(eye)));
             }
             Role::Enemy => {
-                if let Some((_, at)) = shooter {
-                    (input.yaw, input.pitch) = aim_at(eye, eye_of(at));
+                if let Some((_, at, its_eye)) = shooter {
+                    (input.yaw, input.pitch) = aim_at(eye, eye_of(at, its_eye));
                 }
                 match kind {
                     BeatKind::Shoot { strafing: true, .. } => {
@@ -672,14 +676,14 @@ fn tally(
     mut show: ResMut<RangeShow>,
     mut dealt: MessageReader<DamageDealt>,
     mut died: MessageReader<Died>,
-    puppets: Query<(&RangePuppet, &PhysicsBody)>,
+    puppets: Query<(&RangePuppet, &PhysicsBody, &Player)>,
 ) {
-    let shooter = puppets.iter().find(|(puppet, _)| puppet.0 == Role::Shooter).map(|(_, body)| eye_of(body.current));
+    let shooter = puppets.iter().find(|(puppet, ..)| puppet.0 == Role::Shooter).map(|(_, body, player)| eye_of(body.current, player.eye));
     let elapsed = show.elapsed - LEAD_IN;
     // The shooter is always the first puppet stood up.
     let ours = DamageSource::Player(PlayerId(FIRST_PUPPET_ID + 1));
     for hit in dealt.read() {
-        let on_the_shooter = puppets.get(hit.target).is_ok_and(|(puppet, _)| puppet.0 == Role::Shooter);
+        let on_the_shooter = puppets.get(hit.target).is_ok_and(|(puppet, ..)| puppet.0 == Role::Shooter);
         if hit.source != ours || on_the_shooter {
             continue;
         }
@@ -696,7 +700,8 @@ fn tally(
     }
 }
 
-/// The play camera and its viewmodel on the left half of the middle, the stage camera on the right.
+/// The play camera and its viewmodel on the top half of the middle, the stage camera under it.
+/// The middle is wider than it is tall, so side by side each view would be a tall strip.
 #[allow(clippy::type_complexity)]
 fn place_the_views(
     show: Res<RangeShow>,
@@ -714,9 +719,9 @@ fn place_the_views(
         viewport.clamp_to_size(window.physical_size());
         Some(viewport)
     };
-    let half = rect.center().x;
-    let left = to_viewport(rect.min, bevy_egui::egui::pos2(half, rect.max.y));
-    let right = to_viewport(bevy_egui::egui::pos2(half, rect.min.y), rect.max);
+    let half = rect.center().y;
+    let top = to_viewport(rect.min, bevy_egui::egui::pos2(rect.max.x, half));
+    let bottom = to_viewport(bevy_egui::egui::pos2(rect.min.x, half), rect.max);
     // Compared before writing, so a still window does not mark every camera changed each frame.
     let same = |a: &Option<Viewport>, b: &Option<Viewport>| match (a, b) {
         (Some(a), Some(b)) => a.physical_position == b.physical_position && a.physical_size == b.physical_size,
@@ -724,15 +729,73 @@ fn place_the_views(
         _ => false,
     };
     for mut camera in &mut first_person {
-        if !same(&camera.viewport, &left) {
-            camera.viewport = left.clone();
+        if !same(&camera.viewport, &top) {
+            camera.viewport = top.clone();
         }
     }
     for mut camera in &mut stage {
-        if !same(&camera.viewport, &right) {
-            camera.viewport = right.clone();
+        if !same(&camera.viewport, &bottom) {
+            camera.viewport = bottom.clone();
         }
     }
+}
+
+/// From the shooter's right, a little behind and above, so a body is seen side on.
+const STAGE_LOOK: Vec3 = Vec3::new(-1.0, -0.3, -0.5);
+/// Meters ahead of the shooter a puppet may stand and still be framed: past the farthest target a
+/// beat stands up (a reflect's rocketeer at 15 m), so the stage view shows both ends of the action.
+const FRAME_AHEAD: f32 = 16.0;
+/// Meters above a body's box kept in frame, for a hat.
+const HAT_ROOM: f32 = 0.45;
+/// Share of the frame's half-width left clear round what is framed.
+const FRAME_PADDING: f32 = 0.08;
+/// Per second, exponential, how fast the stage camera eases onto its framing.
+const FRAME_EASE: f32 = 6.0;
+
+/// What the stage camera keeps in frame, with the floor under the spawn and air ahead of it.
+fn framed_points(puppets: impl IntoIterator<Item = Vec3>) -> Vec<Vec3> {
+    let mut points = vec![RANGE_ORIGIN, RANGE_ORIGIN + Vec3::new(0.0, 1.0, -3.0)];
+    for center in puppets {
+        if RANGE_ORIGIN.z - center.z > FRAME_AHEAD {
+            continue;
+        }
+        for corner in 0..8 {
+            let sign = Vec3::new(
+                if corner & 1 == 0 { -1.0 } else { 1.0 },
+                if corner & 2 == 0 { -1.0 } else { 1.0 },
+                if corner & 4 == 0 { -1.0 } else { 1.0 },
+            );
+            points.push(center + sign * CLASS_HALF_EXTENTS);
+        }
+        points.push(center + Vec3::Y * (CLASS_HALF_EXTENTS.y + HAT_ROOM));
+    }
+    points
+}
+
+/// On real time, so it settles while the range is paused or slowed.
+fn frame_the_stage(
+    time: Res<Time<Real>>,
+    puppets: Query<&PhysicsBody, With<RangePuppet>>,
+    mut camera: Single<(Entity, &Camera, &Projection, &mut Transform), With<RangeCamera>>,
+    // A camera not framed before is put in place at once rather than eased.
+    mut framed: Local<Option<Entity>>,
+) {
+    let (entity, camera, projection, transform) = &mut *camera;
+    let Projection::Perspective(perspective) = projection else { return };
+    let aspect = camera.viewport.as_ref().map_or(perspective.aspect_ratio, |viewport| {
+        viewport.physical_size.x as f32 / viewport.physical_size.y.max(1) as f32
+    });
+    let rotation = Transform::IDENTITY.looking_to(STAGE_LOOK, Vec3::Y).rotation;
+    let points = framed_points(puppets.iter().map(|body| body.current));
+    let Some(framing) = crate::prop::thumbnail::frame_wide(points, rotation, perspective.fov, aspect, FRAME_PADDING) else {
+        return;
+    };
+    let ease = match framed.replace(*entity) == Some(*entity) {
+        true => 1.0 - (-FRAME_EASE * time.delta_secs()).exp(),
+        false => 1.0,
+    };
+    transform.translation = transform.translation.lerp(framing.translation, ease);
+    transform.rotation = rotation;
 }
 
 /// Pausing stops the clock rather than the director, so a body in the air stays there.
@@ -759,7 +822,7 @@ impl Plugin for RangePlugin {
             .add_systems(OnExit(AppMode::Weapon), (leave_range, crate::game::player::despawn_the_view))
             // Hits are read before the director moves on, so each lands in the beat it was dealt in.
             .add_systems(FixedPreUpdate, (tally, direct).chain().run_if(in_state(AppMode::Weapon)))
-            .add_systems(Update, (place_the_views, keep_time).run_if(in_state(AppMode::Weapon)));
+            .add_systems(Update, (place_the_views, frame_the_stage, keep_time).chain().run_if(in_state(AppMode::Weapon)));
     }
 }
 

@@ -14,7 +14,9 @@ use grackle::game::rounds::QuitAfterRounds;
 use grackle::game::spectate::StartSpectating;
 use grackle::common::fonts::FontsPlugin;
 use grackle::common::ui_shape::UiShapePlugin;
-use grackle::common::lang::{change_lang_or_fallback, default_packs};
+use grackle::common::lang::{change_lang_or_fallback, default_packs, FALLBACK_LANG};
+use grackle::common::keybind::Keymap;
+use grackle::common::settings::{Settings, SettingsPlugin};
 use grackle::common::net::NetPlugin;
 use grackle::common::net_transport::NetTransportPlugin;
 use grackle::common::perf::PerfPlugin;
@@ -45,9 +47,11 @@ fn main() {
             eprintln!("Editor Startup Error:\n{}", message);
             std::process::exit(1);
         });
+    let (settings, settings_problem) = Settings::load();
     // Falls back to en-US rather than exiting: a bad `--lang` should not stop
     // the editor from opening.
-    change_lang_or_fallback(&editor_params.lang, &default_packs());
+    let lang = editor_params.lang.clone().or_else(|| settings.language.clone());
+    change_lang_or_fallback(lang.as_deref().unwrap_or(FALLBACK_LANG), &default_packs());
 
     App::new()
         .add_plugins(DefaultPlugins
@@ -66,6 +70,8 @@ fn main() {
             })
             .set(bevy::log::LogPlugin { custom_layer: grackle::common::log_file::layer, ..default() }),
         )
+        .insert_resource(settings)
+        .insert_resource(Keymap::load())
         .insert_resource(editor_params.net.clone())
         .insert_resource(StartInPlay(editor_params.start_playing))
         .insert_resource(StartupMap(editor_params.map.clone()))
@@ -106,9 +112,15 @@ fn main() {
             PropEditorPlugin,
             (AnimPlugin, MaterialEditorPlugin, grackle::weapon_editor::WeaponEditorPlugin, LangEditorPlugin),
             GamePlugin,
-            (WorldPropPlugin, ThumbnailPlugin, ForwardCameraPlugin, SunlitPlugin, DecalPlugin, SprayPlugin, grackle::game::streak::StreakPlugin, grackle::game::gib_blood::GibBloodPlugin, grackle::game::flame_jet::FlameJetPlugin),
+            (WorldPropPlugin, ThumbnailPlugin, ForwardCameraPlugin, SunlitPlugin, DecalPlugin, SprayPlugin, grackle::game::streak::StreakPlugin, grackle::game::gib_blood::GibBloodPlugin, grackle::game::flame_jet::FlameJetPlugin, grackle::game::gust_ring::GustRingPlugin),
             SkeletonPlugin,
-            (PerfPlugin, FontsPlugin, grackle::common::icons::IconsPlugin, UiShapePlugin, grackle::common::player_settings::PlayerSettingsPlugin { profile: editor_params.profile }),
+            (PerfPlugin, SettingsPlugin, FontsPlugin, grackle::common::icons::IconsPlugin, UiShapePlugin, grackle::common::player_settings::PlayerSettingsPlugin { profile: editor_params.profile }),
             ))
+        .add_systems(Startup, move || {
+            // Read before the log existed, so said now.
+            if let Some(problem) = &settings_problem {
+                warn!("{problem}");
+            }
+        })
         .run();
 }

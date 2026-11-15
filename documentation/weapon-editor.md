@@ -275,7 +275,7 @@ local, so the switch is one transition.
 - [x] `AppMode::simulates()` (the `simulating` run condition); step, face and place, weapons, damage, projectiles, blasts, flame, recoil, reloading, the viewmodel, held weapons, flinch, conditions, body description and game time widened to it, and their `OnExit` cleanups run on leaving `Weapon` too
 - [x] The stage, a 20 × 46 m room 2 km below the map (`RANGE_ORIGIN`), so the map's triggers and pickups are nowhere near; its own `CollisionWorld` swapped in and the map's put back on exit; the map's roots hidden as they stood on entry and restored, rather than the prop mode's every-frame rule, which would hide every shot and corpse the range makes
 - [x] Puppets: real `Player` bodies from `spawn_player`, ids counted down from `u64::MAX - 64`, teams, stood up and taken down by the director each beat; `the_range_shoots_but_seats_nobody_and_scores_nothing`
-- [x] Shooter `Watched`; the play camera (and its viewmodel) on the middle's left half and a fixed `RangeCamera` on its right, the stage camera above and not clearing
+- [x] Shooter `Watched`; the play camera (and its viewmodel) on the middle's top half and a `RangeCamera` under it, framed on the shooter, the stage camera above and not clearing
 - [x] Beats: `beats_for` per action kind plus the weapon's draw and reload (`loop_for`); every puppet reset per beat; the director aims with `bot::aim_at` and `bot_fight::aim_point`
 - [x] Strip: beats with on/off toggles, play/pause (pausing `Time<Virtual>`), restart, previous/next, speed
 - [x] Beat log: hits, damage, time to kill, reflected or not, fastest speed after a push or a rocket jump

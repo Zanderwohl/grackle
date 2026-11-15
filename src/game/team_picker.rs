@@ -61,6 +61,7 @@ pub struct TeamPickerPlugin;
 
 impl Plugin for TeamPickerPlugin {
     fn build(&self, app: &mut App) {
+        crate::common::keybind::ensure(app);
         app.init_resource::<TeamPicker>()
             .init_resource::<MouseHeld>()
             .init_resource::<DisplayFont>()
@@ -80,8 +81,8 @@ impl Plugin for TeamPickerPlugin {
     }
 }
 
-fn toggle_the_picker(keys: Res<ButtonInput<KeyCode>>, mut picker: ResMut<TeamPicker>) {
-    if keys.just_pressed(KeyCode::Period) {
+fn toggle_the_picker(actions: Res<crate::common::keybind::Actions>, mut picker: ResMut<TeamPicker>) {
+    if actions.just_pressed(crate::common::keybind::Action::TeamPicker) {
         picker.wanted = !picker.wanted;
         picker.asked_from = None;
     }
@@ -325,6 +326,7 @@ mod tests {
         app.update();
 
         app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Period);
+        crate::common::keybind::resolve_now(app.world_mut());
         app.world_mut().run_schedule(Update);
         app.world_mut().resource_mut::<ButtonInput<KeyCode>>().release(KeyCode::Period);
         assert!(up(&app), "`.` did not open the picker");

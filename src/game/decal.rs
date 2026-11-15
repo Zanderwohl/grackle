@@ -23,11 +23,14 @@ use crate::common::decal::{self, Projection};
 use crate::common::effects::Effect;
 use crate::common::world_surface;
 use crate::common::lightmap::Atlas;
+use crate::common::palette::Palette;
+use crate::common::team::Side;
 use crate::common::player_settings::{DebrisDecals, PlayerSettings};
 use crate::common::skeleton::Skeleton;
 use crate::editor::decal::MapDecalSpec;
 use crate::game::ragdoll::{GibImpact, GIB_SPLAT_SPEED};
 use crate::tool::bakes::BakedRoomGeometry;
+use crate::tool::room::{RoomSlot, RoomSurfaces};
 use crate::tool::sun_bake::{keep_lightmap, SunBake};
 
 #[derive(Component, Clone, Copy, Debug)]
@@ -347,6 +350,49 @@ fn dress_map_decals(
     }
 }
 
+/// Which slots of a `BakedRoomGeometry` take decals, in [`RoomSlot::ALL`] order. Written only when
+/// it differs, so `Changed<TakesDecals>` means a repaint.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TakesDecals(pub [bool; 3]);
+
+impl TakesDecals {
+    /// A room not noted yet takes them everywhere.
+    fn slot(this: Option<&Self>, slot: RoomSlot) -> bool {
+        this.is_none_or(|this| this.0[slot.index()])
+    }
+
+    fn face(this: Option<&Self>, face: &world_surface::Face) -> bool {
+        Self::slot(this, RoomSlot::of(face.plane.normal))
+    }
+}
+
+pub type Surfaces<'w, 's> = Query<'w, 's, (&'static BakedRoomGeometry, Option<&'static TakesDecals>)>;
+
+fn note_what_takes_decals(
+    mut commands: Commands,
+    bakes: Query<(Entity, Ref<BakedRoomGeometry>, Option<&TakesDecals>)>,
+    paint: Query<(Option<&RoomSurfaces>, Option<&Side>)>,
+    palette: Option<Res<Palette>>,
+    repainted: Query<(), Or<(Changed<RoomSurfaces>, Changed<Side>)>>,
+    (mut unpainted, mut unsided): (RemovedComponents<RoomSurfaces>, RemovedComponents<Side>),
+) {
+    // Summed rather than `||`, so both are read: an unread reader keeps its removals for later.
+    let removed = unpainted.read().count() + unsided.read().count() > 0;
+    let everything = removed || !repainted.is_empty() || palette.as_ref().is_some_and(|palette| palette.is_changed());
+    let fallback = Palette::default();
+    let palette = palette.as_deref().unwrap_or(&fallback);
+    for (entity, baked, noted) in &bakes {
+        if !everything && noted.is_some() && !baked.is_changed() {
+            continue;
+        }
+        let (surfaces, side) = paint.get(baked.room).unwrap_or((None, None));
+        let takes = TakesDecals(palette.paint_slots(surfaces, side.copied()).map(decal::takes_decals));
+        if noted != Some(&takes) {
+            commands.entity(entity).insert(takes);
+        }
+    }
+}
+
 /// Each room's lightmap layout, kept while its faces stay the same.
 #[derive(Default)]
 struct Charts(HashMap<Entity, (u64, Atlas, Option<(Vec3, Vec3)>)>);
@@ -364,7 +410,7 @@ impl Charts {
 fn cut_decals(
     mut commands: Commands,
     uncut: Query<(Entity, &Decal, &DecalMaterial, Has<Lit>, Has<Transient>), With<Uncut>>,
-    bakes: Query<(Entity, &BakedRoomGeometry)>,
+    bakes: Query<(Entity, &BakedRoomGeometry, Option<&TakesDecals>)>,
     mut charts: Local<Charts>,
     mut meshes: ResMut<Assets<Mesh>>,
 ) {
@@ -376,12 +422,12 @@ fn cut_decals(
         commands.entity(root).despawn_related::<DecalPieces>().remove::<Uncut>();
         let reach = projection.bounds();
         let mut any = false;
-        for (room, baked) in &bakes {
+        for (room, baked, takes) in &bakes {
             let (faces_hash, atlas, bounds) = charts.of(room, baked);
             if !bounds.is_some_and(|bounds| decal::overlaps(bounds, reach)) {
                 continue;
             }
-            let piece = decal::cut(projection, &baked.faces, atlas);
+            let piece = decal::cut(projection, &baked.faces, atlas, |slot| TakesDecals::slot(takes, slot));
             if piece.is_empty() {
                 continue;
             }
@@ -407,30 +453,43 @@ fn cut_decals(
 }
 
 /// A rebaked or new room recuts the lasting decals it touches and drops the transient ones on it.
+/// A repainted room recuts every decal it touches, so transient ones keep their pieces on slots
+/// that still take them.
 /// A despawned room takes its pieces with it, so every lasting decal is recut, and a transient one
 /// left with no piece goes.
 fn follow_rebakes(
     mut commands: Commands,
-    rebaked: Query<(Entity, &BakedRoomGeometry), Changed<BakedRoomGeometry>>,
+    changed: Query<(Entity, Ref<BakedRoomGeometry>), Or<(Changed<BakedRoomGeometry>, Changed<TakesDecals>)>>,
     mut gone: RemovedComponents<BakedRoomGeometry>,
     decals: Query<(Entity, &Decal, Has<Transient>, Option<&DecalPieces>), Without<Uncut>>,
     painted: Query<&PaintedOn>,
 ) {
     let any_gone = gone.read().count() > 0;
-    let rebaked: Vec<(Entity, (Vec3, Vec3))> = rebaked.iter().filter_map(|(room, baked)| Some((room, baked.bounds?))).collect();
-    if rebaked.is_empty() && !any_gone {
+    let (mut rebaked, mut repainted) = (Vec::new(), Vec::new());
+    for (room, baked) in &changed {
+        let Some(bounds) = baked.bounds else { continue };
+        match baked.is_changed() {
+            true => rebaked.push((room, bounds)),
+            false => repainted.push(bounds),
+        }
+    }
+    if rebaked.is_empty() && repainted.is_empty() && !any_gone {
         return;
     }
     for (root, Decal(projection), transient, pieces) in &decals {
         let on = |room: Entity| pieces.is_some_and(|pieces| pieces.iter().any(|piece| painted.get(piece).is_ok_and(|p| p.0 == room)));
         let reach = projection.bounds();
         let touched = rebaked.iter().filter(|(_, bounds)| decal::overlaps(*bounds, reach)).map(|(room, _)| *room).collect::<Vec<_>>();
+        let recolored = repainted.iter().any(|bounds| decal::overlaps(*bounds, reach));
         match transient {
             true if touched.iter().any(|room| on(*room)) || pieces.is_none() => {
                 commands.entity(root).despawn();
             }
+            true if recolored => {
+                commands.entity(root).insert(Uncut);
+            }
             true => {}
-            false if any_gone || !touched.is_empty() => {
+            false if any_gone || recolored || !touched.is_empty() => {
                 commands.entity(root).insert(Uncut);
             }
             false => {}
@@ -451,17 +510,31 @@ fn light_decals(
     }
 }
 
-/// The faces of the rooms whose bounds meet `reach`.
-pub fn faces_near<'a>(bakes: impl IntoIterator<Item = &'a BakedRoomGeometry>, reach: (Vec3, Vec3)) -> impl Iterator<Item = &'a world_surface::Face> {
+/// The faces of the rooms whose bounds meet `reach`, each with whether it takes decals.
+pub fn faces_near<'a>(
+    bakes: impl IntoIterator<Item = (&'a BakedRoomGeometry, Option<&'a TakesDecals>)>,
+    reach: (Vec3, Vec3),
+) -> impl Iterator<Item = (&'a world_surface::Face, bool)> {
     bakes
         .into_iter()
-        .filter(move |baked| baked.bounds.is_some_and(|bounds| decal::overlaps(bounds, reach)))
-        .flat_map(|baked| baked.faces.iter())
+        .filter(move |(baked, _)| baked.bounds.is_some_and(|bounds| decal::overlaps(bounds, reach)))
+        .flat_map(|(baked, takes)| baked.faces.iter().map(move |face| (face, TakesDecals::face(takes, face))))
 }
 
-pub fn surface_hit(bakes: &Query<&BakedRoomGeometry>, origin: Vec3, direction: Vec3, range: f32) -> Option<(Vec3, Vec3)> {
+/// `None` when the first face refuses decals; that face still stops the ray.
+fn markable_hit<'a>(
+    faces: impl IntoIterator<Item = (&'a world_surface::Face, bool)>,
+    origin: Vec3,
+    direction: Vec3,
+    range: f32,
+) -> Option<(Vec3, Vec3)> {
+    decal::hit_tagged(faces, origin, direction, range).and_then(|(at, normal, takes)| takes.then_some((at, normal)))
+}
+
+/// `None` past `range` or where the first face refuses decals.
+pub fn surface_hit(bakes: &Surfaces, origin: Vec3, direction: Vec3, range: f32) -> Option<(Vec3, Vec3)> {
     let end = origin + direction * range;
-    decal::hit(faces_near(bakes, (origin.min(end), origin.max(end))), origin, direction, range)
+    markable_hit(faces_near(bakes, (origin.min(end), origin.max(end))), origin, direction, range)
 }
 
 /// A stable number from a place, so every machine picks the same picture and turn for one mark.
@@ -497,9 +570,9 @@ fn thrown(at: Vec3, normal: Vec3, size: f32, direction: Vec3, seed: u32) -> Proj
 }
 
 /// Larger the harder the gib struck. `None` when no face is there.
-fn gib_splat<'a>(faces: impl IntoIterator<Item = &'a world_surface::Face>, impact: &GibImpact) -> Option<(Projection, u32)> {
+fn gib_splat<'a>(faces: impl IntoIterator<Item = (&'a world_surface::Face, bool)>, impact: &GibImpact) -> Option<(Projection, u32)> {
     let from = impact.at + impact.normal * GIB_SPLAT_REACH;
-    let (at, normal) = decal::hit(faces, from, -impact.normal, GIB_SPLAT_REACH * 2.0)?;
+    let (at, normal) = markable_hit(faces, from, -impact.normal, GIB_SPLAT_REACH * 2.0)?;
     let speed = impact.velocity.length();
     let share = (speed - GIB_SPLAT_SPEED) / (GIB_FULL_SPLAT_SPEED - GIB_SPLAT_SPEED);
     let size = blood_size(share);
@@ -540,7 +613,7 @@ fn mark_the_world(
     mut dealt: MessageReader<DamageDealt>,
     mut gibs: MessageReader<GibImpact>,
     mut hit_bodies: HitBodies,
-    bakes: Query<&BakedRoomGeometry>,
+    bakes: Surfaces,
     art: Res<DecalArt>,
     mut rings: ResMut<TransientDecals>,
     settings: Option<Res<PlayerSettings>>,
@@ -562,7 +635,9 @@ fn mark_the_world(
                 }
             }
             Effect::Blast { at, radius } => {
+                // The nearest face that takes one, so a blast under a sky still scorches the floor.
                 let nearest = faces_near(&bakes, (at - Vec3::splat(radius), at + Vec3::splat(radius)))
+                    .filter_map(|(face, takes)| takes.then_some(face))
                     .filter_map(|face| decal::hit([face], at, -face.plane.normal, radius).map(|(point, normal)| (point.distance(at), point, normal)))
                     .min_by(|a, b| a.0.total_cmp(&b.0));
                 if let Some((_, point, normal)) = nearest {
@@ -741,7 +816,15 @@ impl Plugin for DecalPlugin {
             // change during a round.
             .add_systems(
                 Update,
-                (dress_map_decals, mark_the_world, age_transients, follow_rebakes, cut_decals, light_decals)
+                (
+                    dress_map_decals,
+                    mark_the_world,
+                    age_transients,
+                    note_what_takes_decals,
+                    follow_rebakes,
+                    cut_decals,
+                    light_decals,
+                )
                     .chain()
                     .after(crate::tool::bakes::BakePlugin::auto_bake_rooms),
             )
@@ -758,14 +841,18 @@ mod tests {
         world_surface::of_rooms(&[crate::tool::room::Room::new(Vec3::ZERO, Vec3::new(4.0, 3.0, 4.0))])
     }
 
+    fn taking(faces: &[world_surface::Face]) -> impl Iterator<Item = (&world_surface::Face, bool)> {
+        faces.iter().map(|face| (face, true))
+    }
+
     /// Fails if a gib striking a floor leaves no blood there, or a harder strike a smaller splat.
     #[test]
     fn a_gib_leaves_blood_where_it_strikes_and_more_the_harder() {
         let faces = a_room();
         let strike = |speed: f32| GibImpact { at: Vec3::new(2.0, 0.0, 2.0), normal: Vec3::Y, velocity: Vec3::new(1.0, -speed, 0.0) };
 
-        let (soft, _) = gib_splat(&faces, &strike(3.0)).expect("no blood on the floor");
-        let (hard, _) = gib_splat(&faces, &strike(12.0)).expect("no blood on the floor");
+        let (soft, _) = gib_splat(taking(&faces), &strike(3.0)).expect("no blood on the floor");
+        let (hard, _) = gib_splat(taking(&faces), &strike(12.0)).expect("no blood on the floor");
         assert!(soft.center.distance(Vec3::new(2.0, 0.0, 2.0)) < 0.01, "blood at {}", soft.center);
         assert!(soft.normal.abs_diff_eq(Vec3::Y, 1.0e-5));
         assert!(hard.size.x > soft.size.x, "{} is not larger than {}", hard.size.x, soft.size.x);
@@ -776,7 +863,66 @@ mod tests {
     fn a_gib_leaves_no_blood_where_there_is_no_surface() {
         let faces = a_room();
         let impact = GibImpact { at: Vec3::new(2.0, 1.5, 2.0), normal: Vec3::Y, velocity: Vec3::NEG_Y * 5.0 };
-        assert!(gib_splat(&faces, &impact).is_none());
+        assert!(gib_splat(taking(&faces), &impact).is_none());
+    }
+
+    /// Fails if a gib leaves blood on a floor that refuses decals, or the ray goes on past it.
+    #[test]
+    fn a_gib_leaves_no_blood_on_a_floor_that_refuses_it() {
+        let faces = a_room();
+        let impact = GibImpact { at: Vec3::new(2.0, 0.0, 2.0), normal: Vec3::Y, velocity: Vec3::NEG_Y * 12.0 };
+        let refusing = faces.iter().map(|face| (face, RoomSlot::of(face.plane.normal) != RoomSlot::Floor));
+        assert!(gib_splat(refusing, &impact).is_none());
+    }
+
+    /// Fails if a slot painted sky is not noted as refusing decals, or a repaint is not noted.
+    #[test]
+    fn a_sky_slot_refuses_decals_until_it_is_repainted() {
+        let mut app = App::new();
+        app.add_systems(Update, note_what_takes_decals);
+        let surfaces = RoomSurfaces { ceiling: Some(crate::common::sky::SKYBOX.into()), ..default() };
+        let room = app.world_mut().spawn(surfaces).id();
+        let faces = a_room();
+        let baked = BakedRoomGeometry { room, faces_hash: 0, bounds: decal::bounds_of(&faces), faces, air: None };
+        let bake = app.world_mut().spawn(baked).id();
+
+        app.update();
+        assert_eq!(app.world().get::<TakesDecals>(bake), Some(&TakesDecals([true, true, false])));
+
+        app.world_mut().get_mut::<RoomSurfaces>(room).unwrap().ceiling = None;
+        app.update();
+        assert_eq!(app.world().get::<TakesDecals>(bake), Some(&TakesDecals([true, true, true])));
+    }
+
+    /// Fails if painting a ceiling sky leaves the decals on it, takes away the ones on its walls,
+    /// or painting it back does not put them back.
+    #[test]
+    fn repainting_a_slot_sky_recuts_only_what_lies_on_it() {
+        let mut app = App::new();
+        app.init_resource::<Assets<Mesh>>()
+            .add_systems(Update, (note_what_takes_decals, follow_rebakes, cut_decals).chain());
+        let room = app.world_mut().spawn(RoomSurfaces::default()).id();
+        let faces = a_room();
+        let baked = BakedRoomGeometry { room, faces_hash: 0, bounds: decal::bounds_of(&faces), faces, air: None };
+        app.world_mut().spawn(baked);
+        let mark = |at: Vec3, normal: Vec3| (Decal(Projection::on(at, normal, 0.5, 0.2, -normal)), DecalMaterial(default()));
+        let ceiling = app.world_mut().spawn(mark(Vec3::new(2.0, 3.0, 2.0), Vec3::NEG_Y)).id();
+        let wall = app.world_mut().spawn((mark(Vec3::new(2.0, 1.5, 0.0), Vec3::Z), Transient { kind: TransientKind::BulletHole, born: 0.0 })).id();
+        let pieces = |app: &App, root: Entity| app.world().get::<DecalPieces>(root).map_or(0, |pieces| pieces.len());
+
+        app.update();
+        assert_eq!((pieces(&app, ceiling), pieces(&app, wall)), (1, 1));
+
+        app.world_mut().get_mut::<RoomSurfaces>(room).unwrap().ceiling = Some(crate::common::sky::SKYBOX.into());
+        app.update();
+        app.update();
+        assert_eq!(pieces(&app, ceiling), 0);
+        assert!(app.world().get_entity(wall).is_ok() && pieces(&app, wall) == 1, "the wall's bullet hole went");
+
+        app.world_mut().get_mut::<RoomSurfaces>(room).unwrap().ceiling = None;
+        app.update();
+        app.update();
+        assert_eq!(pieces(&app, ceiling), 1);
     }
 
     #[test]

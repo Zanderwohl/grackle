@@ -16,7 +16,7 @@ use clap::Parser;
 
 use grackle::common::clip_file::{rig_clips_dir, CLIPS_DIR, CLIP_EXTENSION};
 use grackle::common::skeleton::clip::StateAnimation;
-use grackle::common::skeleton::seed::{bake, Seed, SEEDS};
+use grackle::common::skeleton::seed::{bake, Seed, SEEDS, WRITTEN};
 
 #[derive(Parser)]
 #[command(about = "Seed a pack's body animations from the built-in pose functions")]
@@ -42,21 +42,32 @@ enum Outcome {
 fn main() {
     let args = Args::parse();
 
+    let written: Vec<(&str, StateAnimation)> = WRITTEN
+        .iter()
+        .filter(|(name, _)| args.states.is_empty() || args.states.iter().any(|wanted| wanted == name))
+        .map(|(name, clip)| (*name, StateAnimation::Single(clip())))
+        .collect();
+    let states: Vec<String> =
+        args.states.iter().filter(|wanted| !WRITTEN.iter().any(|(name, _)| name == wanted)).cloned().collect();
+
     let chosen: Vec<Seed> = if args.states.is_empty() {
         SEEDS.to_vec()
+    } else if states.is_empty() {
+        Vec::new()
     } else {
         let mut chosen = Vec::new();
-        for name in &args.states {
-            // `idle` is every rig's idle; `strider/idle` is one.
+        for name in &states {
+            // `idle` is every rig's idle; `raptor/idle` is one.
             let named = |seed: &&Seed| seed.file_name() == name || format!("{}/{}", seed.rig, seed.file_name()) == *name;
             match SEEDS.iter().filter(named).copied().collect::<Vec<_>>() {
                 found if !found.is_empty() => chosen.extend(found),
                 _ => {
                     eprintln!(
-                        "'{name}' is not a migrated state. Try one of: {}",
+                        "'{name}' is not a migrated state or a written clip. Try one of: {}",
                         SEEDS
                             .iter()
                             .map(|seed| seed.file_name())
+                            .chain(WRITTEN.iter().map(|(name, _)| *name))
                             .collect::<Vec<_>>()
                             .join(", "),
                     );
@@ -67,16 +78,20 @@ fn main() {
         chosen
     };
 
-    let mut kept = 0;
-    for seed in chosen {
+    let seeded = chosen.into_iter().map(|seed| {
         let directory = match seed.rig {
             grackle::common::skeleton::rig::HUMANOID => args.pack.join(CLIPS_DIR),
             rig => args.pack.join(rig_clips_dir(rig)),
         };
+        (directory, seed.file_name(), bake(seed))
+    });
+    let written = written.into_iter().map(|(name, clip)| (args.pack.join(CLIPS_DIR), name, clip));
+
+    let mut kept = 0;
+    for (directory, name, clip) in seeded.chain(written) {
         std::fs::create_dir_all(&directory)
             .unwrap_or_else(|e| panic!("{}: {e}", directory.display()));
-        let clip = bake(seed);
-        let path = directory.join(format!("{}.{CLIP_EXTENSION}", seed.file_name()));
+        let path = directory.join(format!("{name}.{CLIP_EXTENSION}"));
         let text = clip.to_toml().expect("a clip should serialize");
 
         match outcome(&path, &clip, &text, args.force) {

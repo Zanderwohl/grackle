@@ -171,6 +171,7 @@ pub struct LangUiPlugin;
 
 impl Plugin for LangUiPlugin {
     fn build(&self, app: &mut App) {
+        crate::common::keybind::ensure(app);
         app.init_resource::<LangFileDialog>()
             .init_resource::<LangUi>()
             .add_systems(OnEnter(AppMode::Lang), |mut state: ResMut<LangUi>| state.rescan())
@@ -650,13 +651,12 @@ fn open_file(editor: &mut LangEditor, path: PathBuf) {
 
 /// Chords go through the menus' handlers, so a chord and its menu entry are one action.
 fn lang_shortcuts(
-    keys: Res<ButtonInput<KeyCode>>,
-    egui: Res<bevy_egui::input::EguiWantsInput>,
+    actions: Res<crate::common::keybind::Actions>,
     dialog: Res<LangFileDialog>,
     mut editor: ResMut<LangEditor>,
     mut state: ResMut<LangUi>,
 ) {
-    let chords = chords(&keys, egui.wants_keyboard_input());
+    let chords = chords(&actions);
     handle_edit(
         match (chords.redo, chords.undo) {
             (true, _) => Some(EditAction::Redo),

@@ -49,10 +49,10 @@ default = "pill_launcher"
 permitted = ["rpg"]
 default = "rpg"
 
-# Built on the strider rig, with no hands: its weapon rides on the rig's mount.
-[loadouts.strider]
+# Built on the raptor rig, whose short arms grip a weapon as a humanoid's do.
+[loadouts.raptor]
 health = 125
 
-[loadouts.strider.secondary]
+[loadouts.raptor.secondary]
 permitted = ["pistol", "rocket_launcher"]
 default = "pistol"

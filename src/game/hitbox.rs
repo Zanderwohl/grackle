@@ -38,6 +38,7 @@ pub struct HitboxPlugin;
 
 impl Plugin for HitboxPlugin {
     fn build(&self, app: &mut App) {
+        crate::common::keybind::ensure(app);
         app
             .init_resource::<ShowHitboxes>()
             .add_systems(Update, toggle_hitboxes)
@@ -62,8 +63,8 @@ impl Plugin for HitboxPlugin {
     }
 }
 
-fn toggle_hitboxes(keys: Res<ButtonInput<KeyCode>>, mut show: ResMut<ShowHitboxes>) {
-    if keys.just_pressed(KeyCode::F4) {
+fn toggle_hitboxes(actions: Res<crate::common::keybind::Actions>, mut show: ResMut<ShowHitboxes>) {
+    if actions.just_pressed(crate::common::keybind::Action::ShowHitboxes) {
         show.0 = !show.0;
     }
 }

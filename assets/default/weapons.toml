@@ -20,6 +20,9 @@
 # than a path because a client is told which prop to build and builds it from
 # its own pack. Omitted means nobody has modeled this weapon yet.
 #
+# `icon` names an SVG under `icons/`, without its extension, that stands for the
+# weapon in the kill feed. Omitted draws the skull.
+#
 # **Animations, when they exist, go at the bottom of an entry.** Not tidiness:
 # a TOML array-of-tables header captures every key written after it, so an
 # `[[weapons.x.animations]]` followed by `name_key` would quietly make that a
@@ -44,6 +47,7 @@ name_key = "weapon.names.laser_rifle"
 bucket = 1
 deploy = 0.6
 model = "sniper_rifle"
+icon = "kill_laser_rifle"
 magazine = { clip = 12, reserve = 60, reload = 1.0 }
 primary = { cadence = { kind = "semi", interval = 0.5 }, cost = { kind = "ammo", rounds = 1 }, action = { kind = "hitscan", range = 200.0, damage = 30, headshot_multiplier = 3, shove_per_damage = 0.15, shove_radius = 0.4 } }
 secondary = { cadence = { kind = "semi" }, cost = { kind = "free" }, action = { kind = "scope", zoom = 2.5 } }
@@ -58,6 +62,7 @@ name_key = "weapon.names.rocket_launcher"
 bucket = 2
 deploy = 0.5
 model = "rocket_launcher"
+icon = "kill_rocket"
 magazine = { clip = 4, reserve = 20, reload = 0.8, reload_one_at_a_time = true, first_reload = 0.92 }
 primary = { cadence = { kind = "semi", interval = 0.8 }, cost = { kind = "ammo", rounds = 1 }, action = { kind = "projectile", initial_speed = 20.0, gravity_factor = 0.0, air_resistance = 0.0, spin_rate = 0.0, max_bounces = 0, restitution = 0.0, max_lifetime = 8.0, explodes_at_last_bounce = true, explodes_at_lifetime_end = false, explosion_radius = 2.8, damage = 90, splash_at_edge = 0.5, ramp_up = { near = 0.0, far = 5.0, scale = 1.25 }, falloff = { near = 5.0, far = 10.0, scale = 0.528 }, knockback = 9.0, radius = 0.12 } }
 secondary = { cadence = { kind = "semi" }, cost = { kind = "free" }, action = { kind = "none" } }
@@ -74,6 +79,7 @@ name_key = "weapon.names.rpg"
 bucket = 2
 deploy = 0.7
 model = "rpg"
+icon = "kill_rpg"
 magazine = { clip = 1, reserve = 8, reload = 1.5 }
 primary = { cadence = { kind = "semi", interval = 0.8 }, cost = { kind = "ammo", rounds = 1 }, action = { kind = "projectile", initial_speed = 34.0, gravity_factor = 1.0, air_resistance = 0.0, spin_rate = 0.0, max_bounces = 0, restitution = 0.0, max_lifetime = 8.0, explodes_at_last_bounce = true, explodes_at_lifetime_end = false, explosion_radius = 3.2, damage = 110, splash_at_edge = 0.5, knockback = 11.0, radius = 0.14 } }
 secondary = { cadence = { kind = "semi" }, cost = { kind = "free" }, action = { kind = "none" } }
@@ -95,6 +101,7 @@ name_key = "weapon.names.pill_launcher"
 bucket = 2
 deploy = 0.5
 model = "pill_launcher"
+icon = "kill_grenade"
 magazine = { clip = 4, reserve = 16, reload = 0.6, reload_one_at_a_time = true, first_reload = 1.24 }
 primary = { cadence = { kind = "semi", interval = 0.6 }, cost = { kind = "ammo", rounds = 1 }, action = { kind = "projectile", initial_speed = 23.0, gravity_factor = 1.0, air_resistance = 0.1, spin_rate = 12.0, max_bounces = 2, restitution = 0.45, max_lifetime = 2.3, explodes_at_last_bounce = true, explodes_at_lifetime_end = true, explosion_radius = 2.8, damage = 100, splash_at_edge = 0.5, knockback = 10.0, radius = 0.14 } }
 secondary = { cadence = { kind = "semi" }, cost = { kind = "free" }, action = { kind = "none" } }
@@ -108,6 +115,7 @@ name_key = "weapon.names.pistol"
 bucket = 2
 deploy = 0.35
 model = "pistol"
+icon = "kill_pistol"
 magazine = { clip = 12, reserve = 36, reload = 1.25 }
 primary = { cadence = { kind = "semi", interval = 0.17 }, cost = { kind = "ammo", rounds = 1 }, action = { kind = "hitscan", range = 120.0, damage = 15, headshot_multiplier = 1, shove_per_damage = 0.15, shove_radius = 0.35, ramp_up = { near = 0.0, far = 5.0, scale = 1.5 }, falloff = { near = 5.0, far = 10.0, scale = 0.5 } } }
 secondary = { cadence = { kind = "semi" }, cost = { kind = "free" }, action = { kind = "none" } }
@@ -124,6 +132,7 @@ name_key = "weapon.names.shotgun"
 bucket = 1
 deploy = 0.5
 model = "shotgun"
+icon = "kill_shotgun"
 magazine = { clip = 6, reserve = 32, reload = 0.625, reload_one_at_a_time = true }
 primary = { cadence = { kind = "semi", interval = 0.625 }, cost = { kind = "ammo", rounds = 1 }, action = { kind = "hitscan", range = 100.0, damage = 7, headshot_multiplier = 1, shove_per_damage = 0.15, shove_radius = 0.3, pellets = { across = 3, spread = 30.0 }, ramp_up = { near = 0.0, far = 5.0, scale = 1.5 }, falloff = { near = 5.0, far = 10.0, scale = 0.5 }, kill_shove = { speed = 10.0, lift = 3.0, radius = 1.2 } } }
 secondary = { cadence = { kind = "semi" }, cost = { kind = "free" }, action = { kind = "none" } }
@@ -139,6 +148,7 @@ name_key = "weapon.names.flamethrower"
 bucket = 1
 deploy = 0.5
 model = "flamethrower"
+icon = "kill_flamethrower"
 magazine = { reserve = 200, reload = 0.0 }
 primary = { cadence = { kind = "automatic", interval = 0.1 }, cost = { kind = "ammo", rounds = 1 }, action = { kind = "flame", range = 6.0, spread = 0.28, rays = 5, damage = 7, afterburn_duration = 6.0, afterburn_damage = 4, afterburn_interval = 0.5, ramp_up = { near = 0.0, far = 2.0, scale = 1.25 }, falloff = { near = 2.0, far = 6.0, scale = 0.5 } } }
 secondary = { cadence = { kind = "automatic", interval = 0.75 }, cost = { kind = "ammo", rounds = 20 }, action = { kind = "airblast", range = 5.0, spread = 0.5, push = 9.0, lift = 4.0, reflect = true, reflect_speed = 1.0, extinguish = true } }

@@ -1,5 +1,5 @@
-//! The strider's body clips, as poses to sample: a generator, as `new_map_template` is for
-//! blueprints, and with its rig file the only place that names the strider's bones.
+//! The raptor's body clips, as poses to sample: a generator, as `new_map_template` is for
+//! blueprints, and with its rig file the only place that names the raptor's bones.
 //!
 //! Turns are stated about the body's axes and carried into each bone's rest frame
 //! ([`Turn::onto`]), so one sign means one thing on every bone: `yaw` positive to the left,
@@ -7,7 +7,7 @@
 //! right side. A tail points backwards, so it is turned by `swing` (positive, tip to the right)
 //! and `lift` (positive, tip up).
 //!
-//! The motions are the humanoid's ([`super::gait::gait_pose`]) where a strider has the part,
+//! The motions are the humanoid's ([`super::gait::gait_pose`]) where a raptor has the part,
 //! and the tail counterbalances the legs.
 
 use std::f32::consts::TAU;
@@ -24,6 +24,8 @@ const SPINE: &str = "spine";
 const NECK: &str = "neck";
 const HEAD: &str = "head";
 const TAIL: [&str; 3] = ["tail.1", "tail.2", "tail.3"];
+/// Each arm's upper bone and forearm.
+const ARMS: [(&str, &str); 2] = [("upper_arm.l", "forearm.l"), ("upper_arm.r", "forearm.r")];
 /// Each leg's limb, its foot, and where in a pedal it starts.
 const LEGS: [(&str, &str, f32); 2] = [("left_leg", "foot.l", 0.0), ("right_leg", "foot.r", 0.5)];
 
@@ -83,7 +85,7 @@ const RUN_NECK_DROP: f32 = 15.0 * std::f32::consts::PI / 180.0;
 const CROUCH_NECK_DROP: f32 = 85.0 * std::f32::consts::PI / 180.0;
 const CROUCH_TAIL_LIFT: [f32; 3] = [-0.15, 0.0, 0.05];
 
-/// The taunt: its file name under the strider's clips, and its length in seconds, the humanoid
+/// The taunt: its file name under the raptor's clips, and its length in seconds, the humanoid
 /// wave's.
 pub const TAUNT_WAG: &str = "taunt_wag";
 pub const TAUNT_LENGTH: f32 = 1.2;
@@ -99,6 +101,43 @@ const TAUNT_TAIL_LAG: f32 = 0.6;
 const TAUNT_SPINE: f32 = 0.1;
 const TAUNT_NECK: f32 = 0.25;
 const TAUNT_HEAD: f32 = 0.2;
+
+/// The lunge: its file name under the raptor's clips, and its length in seconds, the humanoid
+/// shadow-box's.
+pub const TAUNT_LUNGE: &str = "taunt_lunge";
+pub const LUNGE_LENGTH: f32 = super::humanoid_seed::SHADOWBOX_LENGTH;
+/// The hips, in hip-heights: down and back into the crouch, breathing in it, drawn further back
+/// and down, thrown forward and up over the feet, sinking as the weight lands, and back.
+const LUNGE_ROOT_Y: &[(f32, f32)] = &[(0.0, 0.0), (0.36, -0.23), (0.46, -0.21), (0.62, -0.225), (0.84, -0.215), (0.98, -0.27), (1.14, -0.08), (1.26, -0.11), (1.45, -0.13), (1.85, -0.02), (2.2, 0.0)];
+/// Backwards positive.
+const LUNGE_ROOT_Z: &[(f32, f32)] = &[(0.0, 0.0), (0.36, 0.06), (0.84, 0.06), (0.98, 0.12), (1.14, -0.27), (1.26, -0.25), (1.45, -0.23), (1.9, -0.01), (2.2, 0.0)];
+/// Radians, positive lifting the front: the shoulders drop to bring the body level in the crouch,
+/// and the hips tip forward into the lunge.
+const LUNGE_PELVIS: &[(f32, f32)] = &[(0.0, 0.0), (0.36, -0.05), (0.84, -0.05), (0.98, -0.02), (1.14, -0.2), (1.45, -0.15), (1.9, -0.01), (2.2, 0.0)];
+const LUNGE_SPINE: &[(f32, f32)] = &[(0.0, 0.0), (0.36, -0.2), (0.84, -0.2), (0.98, -0.12), (1.12, -0.18), (1.3, -0.18), (1.9, 0.0), (2.2, 0.0)];
+/// The neck drawn up and back to coil, further as it draws back, and thrown out level to strike.
+const LUNGE_NECK: &[(f32, f32)] = &[(0.0, 0.0), (0.36, 0.35), (0.84, 0.35), (0.98, 0.5), (1.12, -0.55), (1.26, -0.48), (1.5, -0.42), (1.95, 0.0), (2.2, 0.0)];
+/// The head tipped down to watch from the coil, thrown back to open the jaws as it strikes,
+/// snapped down, and again.
+const LUNGE_HEAD: &[(f32, f32)] = &[(0.0, 0.0), (0.36, -0.5), (0.84, -0.5), (0.98, -0.55), (1.08, 0.6), (1.14, -0.2), (1.22, 0.0), (1.3, 0.35), (1.35, -0.15), (1.48, 0.05), (1.95, 0.0), (2.2, 0.0)];
+/// A shake of the head once it has bitten, radians to the left, the neck taking `LUNGE_NECK_SHAKE`
+/// of it.
+const LUNGE_SHAKE: &[(f32, f32)] = &[(0.0, 0.0), (1.48, 0.0), (1.54, 0.14), (1.62, -0.12), (1.7, 0.06), (1.8, 0.0), (2.2, 0.0)];
+const LUNGE_NECK_SHAKE: f32 = 0.4;
+/// The claws: each arm swung forward and each forearm up to reach, radians.
+const LUNGE_ARM: &[(f32, f32)] = &[(0.0, 0.0), (0.4, 0.2), (0.84, 0.2), (0.98, 0.05), (1.12, 1.0), (1.2, 1.05), (1.45, 0.7), (1.9, 0.0), (2.2, 0.0)];
+const LUNGE_FOREARM: &[(f32, f32)] = &[(0.0, 0.0), (0.4, 0.3), (0.84, 0.3), (1.0, 0.1), (1.1, 0.2), (1.16, 0.7), (1.4, 0.4), (1.9, 0.0), (2.2, 0.0)];
+/// The tail lifted over the idle's carriage to balance the body: held level behind the crouch,
+/// dropped as the body draws back, flung up as the front goes down. Each bone lags the one before by `LUNGE_TAIL_LAG`
+/// seconds, so it whips.
+const LUNGE_TAIL: &[(f32, f32)] = &[(0.0, 0.0), (0.36, -0.05), (0.84, -0.05), (0.98, -0.1), (1.16, 0.25), (1.35, 0.18), (1.8, 0.02), (2.2, 0.0)];
+const LUNGE_TAIL_LAG: f32 = 0.05;
+/// A lash from side to side while it waits, and once more after the bite: how strongly, how far
+/// each bone swings, radians, how often, and how far each lags the one before, radians of a lash.
+const LUNGE_LASH: &[(f32, f32)] = &[(0.0, 0.0), (0.3, 0.0), (0.45, 1.0), (0.84, 1.0), (0.98, 0.0), (1.4, 0.0), (1.55, 0.5), (1.75, 0.0), (2.2, 0.0)];
+const LUNGE_LASH_SWING: [f32; 3] = [0.06, 0.12, 0.18];
+const LUNGE_LASH_HZ: f32 = 2.0;
+const LUNGE_LASH_LAG: f32 = 0.8;
 
 /// A pedal in the air: the ankle drawn round a loop above where it rests, meters on the reference
 /// rig, raised by `lift`, `reach` either way along the body and `rise` up and down.
@@ -120,10 +159,10 @@ const AIRBORNE_TAIL_SWING: [f32; 3] = [0.06, 0.09, 0.13];
 
 /// A turn about the body's axes, radians; see the module docs for the signs.
 #[derive(Clone, Copy, Debug, Default)]
-struct Turn {
-    yaw: f32,
-    pitch: f32,
-    roll: f32,
+pub(super) struct Turn {
+    pub(super) yaw: f32,
+    pub(super) pitch: f32,
+    pub(super) roll: f32,
 }
 
 impl Turn {
@@ -143,7 +182,7 @@ impl Turn {
 
     /// Set on `bone` as a joint: the turn about the body's axes, carried into the bone's rest
     /// frame, so it turns the bone the same way whatever its parents are doing.
-    fn onto(self, skeleton: &Skeleton, pose: &mut Pose, bone: &'static str) {
+    pub(super) fn onto(self, skeleton: &Skeleton, pose: &mut Pose, bone: &'static str) {
         let Some(index) = skeleton.index_of(bone) else { return };
         let frame = skeleton.posed_bone(&Pose::rest(), &Transform::IDENTITY, index).rotation;
         pose.set(bone, frame.inverse() * self.quat() * frame);
@@ -187,7 +226,7 @@ impl Posture {
     }
 }
 
-/// The pose a strider's `state` is in, before corrections. Rest for a state it has no clip for.
+/// The pose a raptor's `state` is in, before corrections. Rest for a state it has no clip for.
 pub fn pose(state: AnimationState, inputs: &PoseInputs, skeleton: &Skeleton) -> Pose {
     match state {
         AnimationState::Idle => idle(inputs.seconds).pose(skeleton),
@@ -203,11 +242,12 @@ pub fn pose(state: AnimationState, inputs: &PoseInputs, skeleton: &Skeleton) -> 
 pub fn named(name: &str, inputs: &PoseInputs, skeleton: &Skeleton) -> Pose {
     match name {
         TAUNT_WAG => taunt_wag(inputs.seconds).pose(skeleton),
+        TAUNT_LUNGE => taunt_lunge(inputs.seconds, skeleton).0,
         _ => Pose::rest(),
     }
 }
 
-/// The strider's wave: the tail curls up to point at the sky and waggles, the head lifts to
+/// The raptor's wave: the tail curls up to point at the sky and waggles, the head lifts to
 /// look up, and it all settles back by the end.
 fn taunt_wag(seconds: f32) -> Posture {
     let smooth = |t: f32| {
@@ -226,6 +266,53 @@ fn taunt_wag(seconds: f32) -> Posture {
         }),
         ..default()
     }
+}
+
+/// Crouches into a ready stance with the neck coiled and the tail lashing, draws back, and lunges
+/// over its planted feet with the claws out, snapping twice and shaking its head before it
+/// settles. Returns each leg's reach so a test can see the feet stayed down.
+fn taunt_lunge(seconds: f32, skeleton: &Skeleton) -> (Pose, [ik::Reach; 2]) {
+    use super::seed::keyed;
+    let at = |keys| keyed(keys, seconds);
+    let shake = at(LUNGE_SHAKE);
+    let lash = at(LUNGE_LASH);
+    let posture = Posture {
+        root: Vec3::new(0.0, at(LUNGE_ROOT_Y), at(LUNGE_ROOT_Z)),
+        pelvis: Turn { pitch: at(LUNGE_PELVIS), ..default() },
+        spine: Turn { pitch: at(LUNGE_SPINE), ..default() },
+        neck: Turn { pitch: at(LUNGE_NECK), yaw: shake * LUNGE_NECK_SHAKE, ..default() },
+        head: Turn { pitch: at(LUNGE_HEAD), yaw: shake * (1.0 - LUNGE_NECK_SHAKE), ..default() },
+        tail: [0, 1, 2].map(|bone| {
+            let behind = bone as f32;
+            let lift = keyed(LUNGE_TAIL, seconds - LUNGE_TAIL_LAG * behind);
+            let swing = lash * LUNGE_LASH_SWING[bone] * (TAU * LUNGE_LASH_HZ * seconds - LUNGE_LASH_LAG * behind).sin();
+            Turn::of_tail(swing, IDLE_TAIL_LIFT[bone] + lift)
+        }),
+    };
+    let mut pose = posture.pose(skeleton);
+    for (upper, forearm) in ARMS {
+        Turn { pitch: at(LUNGE_ARM), ..default() }.onto(skeleton, &mut pose, upper);
+        Turn { pitch: at(LUNGE_FOREARM), ..default() }.onto(skeleton, &mut pose, forearm);
+    }
+    let reaches = plant_legs(skeleton, &mut pose);
+    (pose, reaches)
+}
+
+/// Each foot back where it rests and flat on the floor, under however the body has moved.
+fn plant_legs(skeleton: &Skeleton, pose: &mut Pose) -> [ik::Reach; 2] {
+    let root = Transform::IDENTITY;
+    let rest = Pose::rest();
+    LEGS.map(|(limb, foot, _)| {
+        let Some(limb) = skeleton.anatomy().limb(limb) else { return ik::Reach::Impossible };
+        let Some(lower) = skeleton.index_of(limb.chain.lower) else { return ik::Reach::Impossible };
+        let ankle = skeleton.posed_bone(&rest, &root, lower).tail;
+        let reach = ik::solve(skeleton, pose, &root, &limb.chain, ankle, limb.pole);
+        if let Some(index) = skeleton.index_of(foot) {
+            let flat = skeleton.posed_bone(&rest, &root, index).rotation;
+            ik::set_world_rotation(skeleton, pose, &root, foot, flat);
+        }
+        reach
+    })
 }
 
 /// A slow breath: the hips settle and the body tips into it, the neck taking the tip back, and
@@ -359,26 +446,27 @@ mod tests {
     use super::*;
     use crate::common::skeleton::ik::Reach;
 
-    fn strider() -> Skeleton {
-        crate::common::class::ClassBuilds::shipped().rig_for(crate::common::class::Class::Strider)
+    fn raptor() -> Skeleton {
+        crate::common::class::ClassBuilds::shipped().rig_for(crate::common::class::Class::Raptor)
     }
 
     /// Every bone this names is the rig's: a renamed bone would be a track that does nothing.
     #[test]
-    fn every_bone_named_here_is_the_striders() {
-        let rig = strider();
-        for name in [PELVIS, SPINE, NECK, HEAD].into_iter().chain(TAIL).chain(LEGS.iter().map(|(_, foot, _)| *foot)) {
-            assert!(rig.index_of(name).is_some(), "the strider has no {name}");
+    fn every_bone_named_here_is_the_raptors() {
+        let rig = raptor();
+        let arms = ARMS.iter().flat_map(|(upper, forearm)| [*upper, *forearm]);
+        for name in [PELVIS, SPINE, NECK, HEAD].into_iter().chain(TAIL).chain(LEGS.iter().map(|(_, foot, _)| *foot)).chain(arms) {
+            assert!(rig.index_of(name).is_some(), "the raptor has no {name}");
         }
         for (limb, _, _) in LEGS {
-            assert!(rig.anatomy().limb(limb).is_some(), "the strider has no {limb}");
+            assert!(rig.anatomy().limb(limb).is_some(), "the raptor has no {limb}");
         }
     }
 
     /// A pedal the leg cannot reach straightens it toward the loop and the foot stops drawing one.
     #[test]
     fn every_pedal_is_within_the_legs_reach() {
-        let rig = strider();
+        let rig = raptor();
         for pedal in [AIRBORNE_PEDAL, CROUCH_AIRBORNE_PEDAL] {
             for step in 0..32 {
                 let turn = TAU * step as f32 / 32.0;
@@ -392,11 +480,44 @@ mod tests {
         }
     }
 
+    /// The feet stay where they rest through the whole lunge: a leg short of its ankle is
+    /// pointed at it and the foot slides or lifts.
+    #[test]
+    fn the_lunge_keeps_both_feet_planted() {
+        let rig = raptor();
+        let root = Transform::IDENTITY;
+        let ankle = |pose: &Pose, limb: &str| {
+            let lower = rig.anatomy().limb(limb).unwrap().chain.lower;
+            rig.posed_bone(pose, &root, rig.index_of(lower).unwrap()).tail
+        };
+        for step in 0..=440 {
+            let seconds = LUNGE_LENGTH * step as f32 / 440.0;
+            let (pose, reaches) = taunt_lunge(seconds, &rig);
+            assert!(reaches.iter().all(|reach| *reach == Reach::Reached), "at {seconds:.3} s: {reaches:?}");
+            for (limb, _, _) in LEGS {
+                let apart = ankle(&pose, limb).distance(ankle(&Pose::rest(), limb));
+                assert!(apart < 1e-3, "at {seconds:.3} s the {limb} ankle is {apart:.3} m from where it rests");
+            }
+        }
+    }
+
+    /// The head goes out ahead of where it rests at the bite, which is what makes it a lunge.
+    #[test]
+    fn the_lunge_throws_the_head_forward() {
+        let rig = raptor();
+        let head = |seconds: f32| {
+            let (pose, _) = taunt_lunge(seconds, &rig);
+            rig.posed_bone(&pose, &Transform::IDENTITY, rig.index_of(HEAD).unwrap()).tail
+        };
+        let reached = head(0.0).z - head(1.14).z;
+        assert!(reached > 0.4, "the head reaches only {reached:.2} m forward");
+    }
+
     /// The tail counterbalances the legs: it swings, and to the right while the left leg swings
     /// forward.
     #[test]
     fn the_tail_swings_against_the_legs() {
-        let rig = strider();
+        let rig = raptor();
         let tip = |stride: f32| {
             let inputs = PoseInputs { stride, speed: super::super::gait::RUN_SPEED, travel: Vec2::Y, ..default() };
             let pose = pose(AnimationState::RunForward, &inputs, &rig);
@@ -410,11 +531,11 @@ mod tests {
         assert!(reach.1 - reach.0 > 0.08, "the tail tip swings only {:.3} m", reach.1 - reach.0);
     }
 
-    /// The strider's clips, baked as the shipped ones are, as a match holds them.
+    /// The raptor's clips, baked as the shipped ones are, as a match holds them.
     fn library() -> crate::common::skeleton::state::ClipLibrary {
         let mut library = crate::common::skeleton::state::ClipLibrary::default();
-        for seed in super::super::seed::SEEDS.iter().filter(|seed| seed.rig == "strider" && seed.name.is_none()) {
-            library.insert_for("strider", seed.state, super::super::seed::bake(*seed));
+        for seed in super::super::seed::SEEDS.iter().filter(|seed| seed.rig == "raptor" && seed.name.is_none()) {
+            library.insert_for("raptor", seed.state, super::super::seed::bake(*seed));
         }
         library
     }
@@ -428,13 +549,13 @@ mod tests {
         (low, high)
     }
 
-    /// Crouched, the strider fits the short box with its feet on the floor and its hips well
+    /// Crouched, the raptor fits the short box with its feet on the floor and its hips well
     /// down; crouched in the air it stays inside the box's top and bottom.
     #[test]
-    fn a_crouched_strider_fits_its_box_and_sits_down_into_it() {
+    fn a_crouched_raptor_fits_its_box_and_sits_down_into_it() {
         use crate::common::class::CROUCH_HEIGHT;
         use crate::common::skeleton::ik::finish_pose;
-        let rig = strider();
+        let rig = raptor();
         let library = library();
         let root = Transform::IDENTITY;
         let hips = |pose: &Pose| rig.posed_bone(pose, &root, rig.index_of(PELVIS).unwrap()).head.y;

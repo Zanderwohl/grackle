@@ -186,8 +186,7 @@ fn sky_per_face(faces: &[Face], is_sky: [bool; 3]) -> Vec<bool> {
     faces
         .iter()
         .map(|face| {
-            let slot = RoomSlot::of(face.plane.normal);
-            is_sky[RoomSlot::ALL.iter().position(|s| *s == slot).expect("every slot is in ALL")]
+            is_sky[RoomSlot::of(face.plane.normal).index()]
         })
         .collect()
 }
@@ -258,9 +257,7 @@ impl Snapshot {
             .iter()
             .map(|(entity, baked)| {
                 let (surfaces, side) = paint.get(baked.room).unwrap_or((None, None));
-                let is_sky = RoomSlot::ALL.map(|slot| {
-                    surfaces.and_then(|surfaces| palette.paint(surfaces, slot, side.copied())) == Some(SKYBOX)
-                });
+                let is_sky = palette.paint_slots(surfaces, side.copied()).map(|name| name == Some(SKYBOX));
                 (entity, baked.room, baked.faces_hash, is_sky)
             })
             .collect();

@@ -14,7 +14,7 @@ use crate::common::assets::Assets as PackAssets;
 use crate::common::clip_file::NamedClips;
 use crate::common::skeleton::clip::Clip;
 use crate::common::skeleton::play::{ClipStack, Layer, LayerClaims};
-use crate::common::taunt::{TauntId, TauntTurning, TauntWeapon, Taunts};
+use crate::common::taunt::{TauntId, TauntRequest, TauntTurning, TauntWeapon, Taunts};
 use crate::game::player::{
     CameraPull, DeathCam, Inputs, LocalPlayer, ViewMode, ViewPreference, Viewed, CAMERA_PULL_SECONDS,
 };
@@ -26,7 +26,7 @@ use crate::game::player::{
 pub struct Condition {
     /// `H` toggles it until there are rounds to lose.
     pub humiliated: bool,
-    /// `G` toggles the first taunt in `taunts.toml` until there is a menu.
+    /// Chosen from the taunt menu; see [`crate::game::taunt_menu`].
     pub taunt: Option<TauntId>,
     /// The authority's tick the taunt began on, so a viewer arriving mid-taunt
     /// starts the clip partway. Lightyear's, since a client's timeline is
@@ -54,6 +54,11 @@ impl Condition {
                 .is_some_and(|taunt| taunt.weapon == TauntWeapon::Shown),
             None => !self.humiliated,
         }
+    }
+
+    /// A taunt may be the held weapon's own, so nothing swaps or reloads it until it ends.
+    pub fn may_switch_weapons(self) -> bool {
+        self.taunt.is_none()
     }
 
     /// A taunt's clip is authored standing, so a taunting body stands up as
@@ -108,22 +113,41 @@ impl Plugin for ConditionPlugin {
 /// Reads the edges and never takes them: `write_client_inputs` already did.
 pub fn toggle_conditions(
     taunts: Option<Res<Taunts>>,
+    weapons: Option<Res<crate::common::taunt::WeaponTaunts>>,
     timeline: Option<Res<LocalTimeline>>,
-    mut bodies: Query<(&Inputs, &mut Condition, &mut TauntClock, Option<&crate::common::skeleton::Skeleton>)>,
+    mut bodies: Query<(
+        &Inputs,
+        &mut Condition,
+        &mut TauntClock,
+        Option<&crate::common::skeleton::Skeleton>,
+        Option<&crate::common::weapon::Equipped>,
+    )>,
 ) {
-    for (input, mut condition, mut clock, skeleton) in &mut bodies {
+    for (input, mut condition, mut clock, skeleton, equipped) in &mut bodies {
         let kind = skeleton.map_or(crate::common::skeleton::rig::HUMANOID, |rig| rig.kind());
         if input.humiliate {
             condition.humiliated = !condition.humiliated;
         }
-        if input.taunt {
-            condition.taunt = match condition.taunt {
-                Some(_) => None,
-                None => taunts.as_deref().and_then(|taunts| taunts.first_for(kind)).map(|taunt| taunt.id),
-            };
-            condition.taunt_started = timeline.as_deref().map_or_else(Tick::default, LocalTimeline::tick);
-            clock.0 = 0.0;
-        }
+        let wanted = match input.taunt {
+            None => continue,
+            Some(TauntRequest::Stop) => None,
+            // Without a clip for this rig it would hold the body in rest; another weapon's taunt
+            // would move this one as if it were that weapon.
+            Some(TauntRequest::Start(id)) => match taunts.as_deref().and_then(|taunts| taunts.get(id)) {
+                Some(taunt)
+                    if taunt.clip_for(kind).is_some()
+                        && weapons.as_deref().is_none_or(|weapons| {
+                            weapons.may_play(&taunt.key, equipped.and_then(|equipped| equipped.held()))
+                        }) =>
+                {
+                    Some(id)
+                }
+                _ => continue,
+            },
+        };
+        condition.taunt = wanted;
+        condition.taunt_started = timeline.as_deref().map_or_else(Tick::default, LocalTimeline::tick);
+        clock.0 = 0.0;
     }
 }
 
@@ -338,6 +362,30 @@ mod tests {
         assert_eq!(press(&mut world, true), Condition::HUMILIATED);
         assert_eq!(press(&mut world, false), Condition::HUMILIATED, "a tick with no press toggled");
         assert_eq!(press(&mut world, true), Condition::default());
+    }
+
+    /// The menu hides another weapon's taunt; the authority refuses one asked for anyway.
+    #[test]
+    fn only_the_weapon_a_taunt_belongs_to_may_play_it() {
+        use crate::common::taunt::{TauntRequest, WeaponTaunts};
+        use crate::common::weapon::{Equipped, WeaponId};
+        let spar = Taunts::shipped().by_key("spar").unwrap().id;
+        let pistol = WeaponId::of("pistol");
+        let rockets = WeaponId::of("rocket_launcher");
+        let mut world = World::new();
+        world.insert_resource(Taunts::shipped());
+        world.insert_resource(WeaponTaunts([(pistol, "spar".to_string())].into()));
+        let body = world.spawn((Condition::default(), Inputs::default(), Equipped::carrying([rockets, pistol]))).id();
+
+        let ask = |world: &mut World| {
+            world.get_mut::<Inputs>(body).unwrap().0 = PlayerInput { taunt: Some(TauntRequest::Start(spar)), ..default() };
+            world.run_system_once(toggle_conditions).unwrap();
+            world.get::<Condition>(body).unwrap().taunt
+        };
+
+        assert_eq!(ask(&mut world), None, "the pistol's taunt played with the launcher in hand");
+        world.get_mut::<Equipped>(body).unwrap().select(pistol);
+        assert_eq!(ask(&mut world), Some(spar));
     }
 
     fn a_view_world(preference: ViewMode) -> World {

@@ -1,4 +1,5 @@
 use bevy::core_pipeline::tonemapping::Tonemapping;
+use crate::common::keybind::{Action, Actions};
 use bevy::camera::Hdr;
 use bevy::input::mouse::MouseMotion;
 use bevy::camera::visibility::RenderLayers;
@@ -118,6 +119,9 @@ pub struct Player {
     /// How far down the body is, this step and the one before, to draw between.
     pub duck: Duck,
     pub duck_before: Duck,
+    /// Standing eye height off the floor, meters: the rig's own where it states one. Written by
+    /// `measure_eyes` and never changed by a step.
+    pub eye: f32,
 }
 
 /// How far down a body is, moving at a steady rate toward what it asked for. The eye, the pose
@@ -143,9 +147,11 @@ impl Duck {
         self.feet - stance.half_extents().y
     }
 
-    /// Where the eye is, from the center of a body's box.
-    pub fn eye_from_center(self, stance: Stance) -> f32 {
-        self.feet_from_center(stance) + TALLEST_CLASS_EYE_HEIGHT.lerp(CROUCH_EYE_HEIGHT, self.amount)
+    /// Where the eye is, from the center of a body's box, for a body whose standing eye is
+    /// `eye` meters up. Crouched, it drops by the share the shared heights do.
+    pub fn eye_from_center(self, stance: Stance, eye: f32) -> f32 {
+        let crouched = eye * (CROUCH_EYE_HEIGHT / TALLEST_CLASS_EYE_HEIGHT);
+        self.feet_from_center(stance) + eye.lerp(crouched, self.amount)
     }
 }
 
@@ -184,6 +190,7 @@ impl Default for Player {
             sliding: 0.0,
             duck: Duck::default(),
             duck_before: Duck::default(),
+            eye: TALLEST_CLASS_EYE_HEIGHT,
         }
     }
 }
@@ -223,7 +230,9 @@ pub struct PlayerInput {
     pub reload: bool,
     /// A debug key until there are rounds to lose.
     pub humiliate: bool,
-    pub taunt: bool,
+    /// A taunt started or stopped since the last tick consumed it. Written by the taunt menu,
+    /// which owns `G` and, while it is up, the digits.
+    pub taunt: Option<crate::common::taunt::TauntRequest>,
     /// A debug key until there is a kill command.
     pub suicide: bool,
     /// Put this player's spray on the wall in front of them, or move it there.
@@ -512,6 +521,17 @@ pub fn spawn_the_view(mut commands: Commands, existing: Query<(), With<PlayerCam
     ));
 }
 
+/// Sets each body's standing eye from its rig, on the authority, and replication carries it.
+/// Runs before the fixed loop, so a body's first shot already leaves its own eye.
+pub fn measure_eyes(mut bodies: Query<(&crate::common::skeleton::Skeleton, &mut Player), Changed<crate::common::skeleton::Skeleton>>) {
+    for (skeleton, mut player) in &mut bodies {
+        let eye = skeleton.anatomy().eye.unwrap_or(TALLEST_CLASS_EYE_HEIGHT);
+        if player.eye != eye {
+            player.eye = eye;
+        }
+    }
+}
+
 /// Point the view where our new body is already looking.
 ///
 /// The latch is what the view is aimed from and what the next tick sends, so a
@@ -533,48 +553,33 @@ pub fn despawn_the_view(mut commands: Commands, cameras: Query<Entity, With<Play
     }
 }
 
-/// Read the keyboard into [`InputLatch`], once per frame.
+/// Read the actions into [`InputLatch`], once per frame.
 ///
 /// Runs before the fixed loop so a press reaches the same frame's steps.
-pub fn gather_input(
-    keys: Res<ButtonInput<KeyCode>>,
-    buttons: Res<ButtonInput<MouseButton>>,
-    mut latch: ResMut<InputLatch>,
-) {
+pub fn gather_input(actions: Res<Actions>, mut latch: ResMut<InputLatch>) {
     let input = &mut latch.0;
-    let mut movement = Vec2::ZERO;
-    if keys.pressed(KeyCode::KeyW) {
-        movement.y += 1.0;
-    }
-    if keys.pressed(KeyCode::KeyS) {
-        movement.y -= 1.0;
-    }
-    if keys.pressed(KeyCode::KeyA) {
-        movement.x -= 1.0;
-    }
-    if keys.pressed(KeyCode::KeyD) {
-        movement.x += 1.0;
-    }
-    input.movement = movement;
+    input.movement = Vec2::new(
+        actions.axis(Action::MoveLeft, Action::MoveRight),
+        actions.axis(Action::MoveBack, Action::MoveForward),
+    );
 
     // Accumulated, so a press between two fixed steps survives the frames
     // either side.
-    input.jump |= keys.pressed(KeyCode::Space);
+    input.jump |= actions.pressed(Action::Jump);
 
     // The edge, not the state: one press is one shot.
-    input.attack |= buttons.just_pressed(MouseButton::Left);
-    input.attack_held = buttons.pressed(MouseButton::Left);
-    input.alt_attack |= buttons.just_pressed(MouseButton::Right);
-    input.alt_attack_held = buttons.pressed(MouseButton::Right);
+    input.attack |= actions.just_pressed(Action::Fire);
+    input.attack_held = actions.pressed(Action::Fire);
+    input.alt_attack |= actions.just_pressed(Action::AltFire);
+    input.alt_attack_held = actions.pressed(Action::AltFire);
 
-    input.reload |= keys.just_pressed(KeyCode::KeyR);
-    input.humiliate |= keys.just_pressed(KeyCode::KeyH);
-    input.taunt |= keys.just_pressed(KeyCode::KeyG);
-    input.suicide |= keys.just_pressed(KeyCode::KeyO);
-    input.spray |= keys.just_pressed(KeyCode::KeyT);
+    input.reload |= actions.just_pressed(Action::Reload);
+    input.humiliate |= actions.just_pressed(Action::Humiliate);
+    input.suicide |= actions.just_pressed(Action::Suicide);
+    input.spray |= actions.just_pressed(Action::Spray);
 
-    input.sprint = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
-    input.crouch = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
+    input.sprint = actions.pressed(Action::Sprint);
+    input.crouch = actions.pressed(Action::Crouch);
 }
 
 /// Read the mouse into the latch, once per frame.
@@ -620,7 +625,7 @@ pub fn write_client_inputs(
     latch.0.alt_attack = false;
     latch.0.reload = false;
     latch.0.humiliate = false;
-    latch.0.taunt = false;
+    latch.0.taunt = None;
     latch.0.suicide = false;
     latch.0.spray = false;
     latch.0.select = None;
@@ -643,8 +648,8 @@ pub fn face_bodies(mut bodies: Query<(&Player, &mut Transform)>) {
 }
 
 /// `F` swaps between looking out of the body and looking at it.
-pub fn toggle_view(keys: Res<ButtonInput<KeyCode>>, mut preference: ResMut<ViewPreference>) {
-    if !keys.just_pressed(KeyCode::KeyF) {
+pub fn toggle_view(actions: Res<Actions>, mut preference: ResMut<ViewPreference>) {
+    if !actions.just_pressed(Action::ToggleView) {
         return;
     }
     preference.0 = match preference.0 {
@@ -673,15 +678,18 @@ pub fn place_camera(
     through: Option<Res<ThroughCamera>>,
     kill_cam: Option<Res<crate::game::kill_cam::KillCam>>,
     fixed: Res<Time<Fixed>>,
+    taunt_view: Option<Res<crate::game::taunt_view::TauntView>>,
     body: Option<Single<(&Transform, &Stance, &Player), (With<LocalPlayer>, Without<PlayerCamera>)>>,
     watched: Option<Single<(Entity, &Transform, &Stance, &Player, Has<UneasedAim>), (With<Watched>, Without<LocalPlayer>, Without<PlayerCamera>)>>,
     mut cameras: Query<&mut Transform, With<PlayerCamera>>,
 ) {
     // Ducking lowers the eye and the third-person pivot with it.
     let eye = |transform: &Transform, stance: &Stance, player: &Player| {
-        transform.translation + Vec3::Y * player.drawn_duck(fixed.overstep_fraction()).eye_from_center(*stance)
+        transform.translation + Vec3::Y * player.drawn_duck(fixed.overstep_fraction()).eye_from_center(*stance, player.eye)
     };
-    let ours = (latch.0.yaw, latch.0.pitch);
+    // A taunt's swing turns the camera and not the aim the body follows.
+    let swing = taunt_view.map_or(Vec2::ZERO, |view| view.offset());
+    let ours = (latch.0.yaw + swing.x, latch.0.pitch + swing.y);
     // So watching the same body again starts on its aim rather than easing from the last time.
     if watched.is_none() || body.is_some() {
         *eased = None;
@@ -837,7 +845,7 @@ pub fn start_the_death_cam(
 ) {
     let seen = ours.map(|ours| {
         let (body, stance, player, id, dying) = ours.into_inner();
-        let cam = DeathCam { pivot: body.translation + Vec3::Y * player.duck.eye_from_center(*stance), whose: id.copied() };
+        let cam = DeathCam { pivot: body.translation + Vec3::Y * player.duck.eye_from_center(*stance, player.eye), whose: id.copied() };
         (cam, dying)
     });
     let mut last = match (last, seen) {
@@ -1524,7 +1532,7 @@ mod tests {
         (0..ticks)
             .map(|_| {
                 duck(player, stance, body, wants, world, TICK);
-                body.current.y + player.duck.eye_from_center(*stance)
+                body.current.y + player.duck.eye_from_center(*stance, player.eye)
             })
             .collect()
     }
@@ -1569,7 +1577,7 @@ mod tests {
     fn the_eye_moves_at_a_steady_rate() {
         let world = open_room();
         let (mut player, mut stance, mut body) = standing_at(Vec3::ZERO);
-        let start = body.current.y + player.duck.eye_from_center(stance);
+        let start = body.current.y + player.duck.eye_from_center(stance, player.eye);
         let mut eyes = vec![start];
         eyes.extend(ducking(&world, &mut player, &mut stance, &mut body, true, true, 20));
         eyes.extend(ducking(&world, &mut player, &mut stance, &mut body, true, false, 20));
@@ -1604,7 +1612,7 @@ mod tests {
         let (mut player, mut stance, mut body) = standing_at(Vec3::new(0.0, 2.0, 0.0));
         player.ground = None;
         let drawn = |player: &Player, stance: Stance, body: &PhysicsBody, overstep: f32| {
-            body.previous.lerp(body.current, overstep).y + player.drawn_duck(overstep).eye_from_center(stance)
+            body.previous.lerp(body.current, overstep).y + player.drawn_duck(overstep).eye_from_center(stance, player.eye)
         };
         let before = drawn(&player, stance, &body, 1.0);
         body.previous = body.current;
@@ -1655,6 +1663,7 @@ mod tests {
             app.world_mut()
                 .resource_mut::<ButtonInput<KeyCode>>()
                 .press(KeyCode::KeyF);
+            crate::common::keybind::resolve_now(app.world_mut());
             app.world_mut().run_system_once(toggle_view).unwrap();
             // Released too: a held key is not pressed again.
             let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();

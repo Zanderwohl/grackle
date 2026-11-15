@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use crate::common::keybind::{Action, Actions};
 use crate::common::ray::ray_intersects_aabb;
 use crate::common::world_surface;
 use crate::editor::editable::{FeatureId, FeatureTimeline};
@@ -16,14 +17,13 @@ pub const PICK_RADIUS: f32 = 0.1;
 /// end of a camera turn), or not yet.
 pub fn relative_commit(
     mouse: &CurrentMouseInput,
-    keys: &ButtonInput<KeyCode>,
-    typing: bool,
+    actions: &Actions,
     cursor: Option<Vec3>,
     reference: Vec3,
 ) -> Option<Vec3> {
-    if (!typing && keys.just_pressed(KeyCode::Escape)) || (mouse.in_camera.is_some() && mouse.clicked(MouseButton::Right)) {
+    if actions.just_pressed(Action::Cancel) || (mouse.in_camera.is_some() && mouse.clicked(MouseButton::Right)) {
         Some(reference)
-    } else if commit_at_cursor(mouse, keys, typing) {
+    } else if commit_at_cursor(mouse, actions) {
         cursor
     } else {
         None
@@ -37,9 +37,8 @@ pub fn camera_dragging(mouse: &CurrentMouseInput) -> bool {
 }
 
 /// A click, or `Enter` while no text field has the keyboard.
-pub fn commit_at_cursor(mouse: &CurrentMouseInput, keys: &ButtonInput<KeyCode>, typing: bool) -> bool {
-    let enter = keys.just_pressed(KeyCode::Enter) || keys.just_pressed(KeyCode::NumpadEnter);
-    mouse.released == Some(MouseButton::Left) || (!typing && enter)
+pub fn commit_at_cursor(mouse: &CurrentMouseInput, actions: &Actions) -> bool {
+    mouse.released == Some(MouseButton::Left) || actions.just_pressed(Action::Confirm)
 }
 const SELECT_POINT_RADIUS: f32 = 0.3;
 

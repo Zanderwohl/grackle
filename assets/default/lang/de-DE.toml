@@ -164,7 +164,7 @@ killed_by = "Du wurdest von { name } getötet"
 using = "Mit { weapon }"
 
 [kill_feed]
-killed = "{ killer } > { victim }"
-killed_with_help = "{ killer } + { assist } > { victim }"
-finished_off = "{ assist } gab { victim } den Rest"
-died = "{ victim } ist gestorben"
+killed = "{ killer } { icon } { victim }"
+killed_with_help = "{ killer } + { assist } { icon } { victim }"
+finished_off = "{ assist } gab { victim } den Rest { icon }"
+died = "{ icon } { victim } ist gestorben"

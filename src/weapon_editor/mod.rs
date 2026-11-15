@@ -222,6 +222,7 @@ impl WeaponEditor {
         let entry = WeaponEntry {
             name_key: format!("weapon.names.{key}"),
             model: None,
+            icon: None,
             bucket: 1,
             deploy: 0.5,
             magazine: crate::common::weapon::Magazine {

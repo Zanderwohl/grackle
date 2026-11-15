@@ -443,6 +443,10 @@ pub struct Weapon {
     /// distinct from a name that fails to load.
     #[serde(default)]
     pub model: Option<String>,
+    /// An icon under a pack's `icons/`, without the extension, standing for
+    /// this weapon in the kill feed. `None` draws the skull.
+    #[serde(default)]
+    pub icon: Option<String>,
     /// The digit that selects it, `1..=BUCKETS`. Weapons may share one.
     pub bucket: u8,
     /// Seconds after being drawn before it may fire.

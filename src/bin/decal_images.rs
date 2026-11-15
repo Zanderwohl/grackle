@@ -7,7 +7,7 @@
 
 use std::path::Path;
 
-use resvg::{tiny_skia, usvg};
+use grackle::common::icons::render_svg;
 
 /// Pixels on a side, by the start of the file's name.
 const SIZES: [(&str, u32); 3] = [("bullet_hole", 128), ("blood", 256), ("scorch", 256)];
@@ -23,11 +23,7 @@ fn main() {
         }
         let stem = path.file_stem().unwrap().to_string_lossy().into_owned();
         let size = SIZES.iter().find(|(prefix, _)| stem.starts_with(prefix)).map_or(256, |(_, size)| *size);
-        let tree = usvg::Tree::from_data(&std::fs::read(&path).unwrap(), &usvg::Options::default())
-            .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-        let mut pixmap = tiny_skia::Pixmap::new(size, size).unwrap();
-        let scale = size as f32 / tree.size().width().max(tree.size().height());
-        resvg::render(&tree, tiny_skia::Transform::from_scale(scale, scale), &mut pixmap.as_mut());
+        let pixmap = render_svg(&std::fs::read(&path).unwrap(), size).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
         let out = dir.join(format!("{stem}.png"));
         pixmap.save_png(&out).unwrap();
         println!("{}", out.display());

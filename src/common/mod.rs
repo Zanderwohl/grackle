@@ -1,5 +1,6 @@
 pub mod app_mode;
 pub mod assets;
+pub mod bot_names;
 pub mod class;
 pub mod round_settings;
 pub mod clip_file;
@@ -59,6 +60,8 @@ pub mod air_light;
 pub mod air_lit;
 pub mod render_layers;
 pub mod shortcuts;
+pub mod keybind;
+pub mod settings;
 pub mod reorder;
 pub mod toolbar;
 pub mod icons;

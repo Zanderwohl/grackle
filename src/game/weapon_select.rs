@@ -12,6 +12,8 @@
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
 
+use crate::common::keybind::{Action, Actions};
+
 use crate::common::weapon::{Equipped, WeaponCatalog, WeaponId, BUCKETS};
 use crate::game::pause_menu::MouseHeld;
 use crate::game::player::{InputLatch, LocalPlayer};
@@ -26,17 +28,7 @@ pub const SETTLE_SECONDS: f32 = 0.35;
 /// For a trackpad, which reports pixels rather than lines.
 const PIXELS_PER_NOTCH: f32 = 40.0;
 
-const DIGITS: [KeyCode; BUCKETS as usize] = [
-    KeyCode::Digit1,
-    KeyCode::Digit2,
-    KeyCode::Digit3,
-    KeyCode::Digit4,
-    KeyCode::Digit5,
-    KeyCode::Digit6,
-    KeyCode::Digit7,
-    KeyCode::Digit8,
-    KeyCode::Digit9,
-];
+pub(crate) const DIGITS: [Action; BUCKETS as usize] = Action::BUCKETS;
 
 /// What this machine has chosen. A second press moves on from here, not from
 /// `Equipped`, which is a round trip behind.
@@ -117,11 +109,12 @@ pub fn scroll<T: Copy + PartialEq>(order: &[(u8, T)], from: Option<T>, notches: 
 /// `MessageReader` first. After `gather_input`, whose clicks it may take back.
 pub fn choose_weapons(
     time: Res<Time>,
-    keys: Res<ButtonInput<KeyCode>>,
+    actions: Res<Actions>,
     mut wheel: MessageReader<MouseWheel>,
     paused: Option<Res<MouseHeld>>,
+    taunt_menu: Option<Res<crate::game::taunt_menu::TauntMenu>>,
     catalog: Res<WeaponCatalog>,
-    ours: Option<Single<(Entity, &Equipped), With<LocalPlayer>>>,
+    ours: Option<Single<(Entity, &Equipped, Option<&crate::game::condition::Condition>), With<LocalPlayer>>>,
     mut selection: ResMut<WeaponSelection>,
     mut travel: Local<f32>,
     mut latch: ResMut<InputLatch>,
@@ -138,7 +131,14 @@ pub fn choose_weapons(
         selection.forget();
         return;
     };
-    let (body, equipped) = ours.into_inner();
+    let (body, equipped, condition) = ours.into_inner();
+    // The authority refuses a switch mid-taunt.
+    if condition.is_some_and(|condition| !condition.may_switch_weapons()) {
+        *travel = 0.0;
+        selection.forget();
+        selection.highlight = equipped.held();
+        return;
+    }
 
     if selection.body != Some(body) {
         *selection = WeaponSelection { body: Some(body), ..default() };
@@ -157,8 +157,11 @@ pub fn choose_weapons(
         };
     }
 
-    let pressed: Vec<u8> =
-        (1..=BUCKETS).zip(DIGITS).filter(|(_, key)| keys.just_pressed(*key)).map(|(b, _)| b).collect();
+    // The taunt menu's while it is up.
+    let pressed: Vec<u8> = match taunt_menu.is_some_and(|menu| menu.holds_the_digits()) {
+        true => Vec::new(),
+        false => (1..=BUCKETS).zip(DIGITS).filter(|(_, action)| actions.just_pressed(*action)).map(|(b, _)| b).collect(),
+    };
     let notches = travel.trunc();
     *travel -= notches;
 
@@ -331,18 +334,18 @@ mod tests {
         world.init_resource::<WeaponSelection>();
         world.init_resource::<InputLatch>();
         world.init_resource::<Messages<MouseWheel>>();
-        world.init_resource::<ButtonInput<KeyCode>>();
+        world.init_resource::<Actions>();
         world.spawn((equipped, LocalPlayer));
         (world, bucket, inside)
     }
 
-    fn frame(world: &mut World, seconds: f32, key: Option<KeyCode>) {
+    fn frame(world: &mut World, seconds: f32, bucket: Option<Action>) {
         world.resource_mut::<Time>().advance_by(std::time::Duration::from_secs_f32(seconds));
-        let mut keys = world.resource_mut::<ButtonInput<KeyCode>>();
-        keys.reset_all();
-        if let Some(key) = key {
-            keys.press(key);
+        let mut actions = Actions::default();
+        if let Some(bucket) = bucket {
+            actions.press(bucket);
         }
+        world.insert_resource(actions);
         world.run_system_once(choose_weapons).unwrap();
     }
 

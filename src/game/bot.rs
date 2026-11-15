@@ -10,7 +10,7 @@
 use bevy::prelude::*;
 
 use crate::common::app_mode::AppMode;
-use crate::common::class::Stance;
+use crate::common::class::{Stance, TALLEST_CLASS_EYE_HEIGHT};
 use crate::common::net::has_authority;
 use crate::common::round_settings::{BotSkill, BotsAtStartup, RoundSettings};
 use lightyear::prelude::server::ClientOf;
@@ -284,13 +284,17 @@ pub struct Gear<'a> {
     pub loaded: &'a [WeaponId],
     /// What is carried and its ammo, read only when a rocket jump is weighed.
     pub arms: Option<(&'a Equipped, &'a Ammo)>,
+    /// Its eye is not the shared height rocket jumps are baked from, so its shot would not land
+    /// where the bake's did.
+    pub unbaked_eye: bool,
 }
 
 impl Gear<'_> {
     /// A rocket jump needs its launcher loaded, and unless `careless`, a body it would not kill.
     fn can_take(&self, link: &Link, careless: bool) -> bool {
         let Some(leap) = link.leap.filter(|leap| leap.rocket.is_some()) else { return true };
-        leap.rocket.is_some_and(|rocket| self.has_loaded(rocket)) && (careless || !self.would_die(&leap))
+        !self.unbaked_eye
+            && leap.rocket.is_some_and(|rocket| self.has_loaded(rocket)) && (careless || !self.would_die(&leap))
     }
 
     fn has_loaded(&self, weapon: WeaponId) -> bool {
@@ -465,6 +469,7 @@ pub fn steer_bots(
             self_damage: rules.as_deref().map_or(1.0, |rules| rules.0.self_damage),
             loaded: &[],
             arms: arms.map(|(equipped, ammo, _)| (equipped, ammo)),
+            unbaked_eye: player.eye != TALLEST_CLASS_EYE_HEIGHT,
         };
         let walking = nav.as_deref().and_then(|nav| {
             plan(&mut route, nav.graph(), nav.generation(), feet, intent.goal, &costs.copied().unwrap_or_default(), &gear, &intent.crowd);
@@ -514,7 +519,7 @@ pub fn steer_bots(
         }
         // A leap's own facing is part of what makes it land, so looking elsewhere waits for it.
         if let Some(target) = intent.look_at.filter(|_| !leaping) {
-            let eye = body.current + Vec3::Y * player.duck.eye_from_center(*stance);
+            let eye = body.current + Vec3::Y * player.duck.eye_from_center(*stance, player.eye);
             let (yaw, pitch) = aim_at(eye, target);
             input.movement = movement_toward(world, yaw);
             (input.yaw, input.pitch) = (yaw, pitch);
@@ -568,8 +573,8 @@ fn retire_bots(mut commands: Commands, bodies: Query<(Entity, &BotOf)>, seats: Q
 #[derive(Resource, Default, Debug)]
 pub struct ShowBots(pub bool);
 
-fn toggle_bot_routes(keys: Res<ButtonInput<KeyCode>>, mut show: ResMut<ShowBots>) {
-    if keys.just_pressed(KeyCode::F8) {
+fn toggle_bot_routes(actions: Res<crate::common::keybind::Actions>, mut show: ResMut<ShowBots>) {
+    if actions.just_pressed(crate::common::keybind::Action::BotRoutes) {
         show.0 = !show.0;
     }
 }
@@ -657,20 +662,6 @@ pub(crate) fn fill_empty_slots(
     }
 }
 
-/// A debug key until bots can be added from a menu: `B` seats a bot, `Shift+B` retires the newest.
-fn seat_bots_from_the_keyboard(mut commands: Commands, keys: Res<ButtonInput<KeyCode>>, seats: Query<Entity, With<BotSeat>>) {
-    if !keys.just_pressed(KeyCode::KeyB) {
-        return;
-    }
-    if keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]) {
-        if let Some(newest) = seats.iter().max() {
-            commands.entity(newest).despawn();
-        }
-    } else {
-        commands.spawn((BotSeat, Name::new("Bot seat")));
-    }
-}
-
 /// Rolls every bot's mind again when the skill changes, and gives a bot standing in a round its
 /// new one at once rather than at its next life.
 fn reroll_for_the_skill(mut commands: Commands, settings: Res<RoundSettings>, mut last: Local<Option<BotSkill>>, seats: Query<Entity, With<BotSeat>>, bodies: Query<(Entity, &BotOf)>) {
@@ -698,6 +689,7 @@ pub struct BotPlugin;
 
 impl Plugin for BotPlugin {
     fn build(&self, app: &mut App) {
+        crate::common::keybind::ensure(app);
         app.init_resource::<RoundSettings>()
             .init_resource::<ShowBots>()
             .add_systems(Startup, seat_the_startup_bots)
@@ -705,7 +697,7 @@ impl Plugin for BotPlugin {
             .add_systems(FixedPreUpdate, steer_bots.run_if(has_authority).run_if(in_state(AppMode::Play)))
             .add_systems(FixedUpdate, retire_bots.before(step_player).run_if(has_authority))
             .add_systems(Update, reroll_for_the_skill.run_if(has_authority))
-            .add_systems(Update, (seat_bots_from_the_keyboard, fill_empty_slots).chain().run_if(has_authority).run_if(in_state(AppMode::Play)));
+            .add_systems(Update, fill_empty_slots.run_if(has_authority).run_if(in_state(AppMode::Play)));
     }
 }
 
@@ -753,7 +745,7 @@ mod tests {
             .id();
         world.run_system_once(steer_bots).unwrap();
         let input = world.get::<Inputs>(body).unwrap().0;
-        let eye = Vec3::Y + Vec3::Y * Player::default().duck.eye_from_center(Stance::Standing);
+        let eye = Vec3::Y + Vec3::Y * Player::default().duck.eye_from_center(Stance::Standing, Player::default().eye);
         assert!((input.yaw - aim_at(eye, target).0).abs() < 1e-5, "the bot does not face what it looks at");
         assert!(input.attack_held, "the bot's trigger is not held");
         assert_eq!(input.movement, Vec2::ZERO, "a bot with no goal walks");
@@ -923,7 +915,7 @@ mod tests {
                 return;
             }
             let upright = mover.stance == Stance::Standing && mover.player.duck.amount == 0.0;
-            let gear = Gear { speed: mover.player.velocity.xz().length(), held, ready: held.is_some(), upright, health: 150, armor: 0, self_damage: 1.0, loaded: &loaded, arms: None };
+            let gear = Gear { speed: mover.player.velocity.xz().length(), held, ready: held.is_some(), upright, health: 150, armor: 0, self_damage: 1.0, loaded: &loaded, arms: None, unbaked_eye: false };
             plan(&mut route, &graph, 0, feet, Some(Goal::Pickup(0)), &RouteCosts::default(), &gear, &[]);
             let input = follow(&mut route, &graph, feet, &gear, dt).unwrap_or_default();
             held = input.select.or(held);

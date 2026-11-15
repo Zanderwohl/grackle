@@ -80,6 +80,7 @@ pub struct PropCameraPlugin;
 
 impl Plugin for PropCameraPlugin {
     fn build(&self, app: &mut App) {
+        crate::common::keybind::ensure(app);
         app.init_resource::<MapViewpoints>()
             .init_resource::<OrbitPivot>()
             .init_resource::<ViewmodelPreview>()
@@ -237,14 +238,14 @@ fn frame_on_request(
 }
 
 fn reset_the_hovered_view(
-    keys: Res<ButtonInput<KeyCode>>,
+    actions: Res<crate::common::keybind::Actions>,
     mouse: Res<CurrentMouseInput>,
     build: Res<PropBuild>,
     mut saved: ResMut<MapViewpoints>,
     mut pivot: ResMut<OrbitPivot>,
     mut cameras: Query<(Entity, &mut Transform, &mut Projection, &Camera, &Multicam)>,
 ) {
-    if !keys.just_pressed(KeyCode::Numpad0) {
+    if !actions.just_pressed(crate::common::keybind::Action::ResetView) {
         return;
     }
     let Some(hovered) = mouse.in_camera else {
