@@ -23,7 +23,6 @@ use crate::game::decal::{blended_material, decal_image, surface_hit, Decal, Deca
 use crate::game::hitscan::{aim, eye};
 use crate::game::player::{Inputs, LocalPlayer, PhysicsBody, Player};
 use crate::game::score::Standing;
-use crate::common::player_settings::PlayerSettings;
 use crate::get;
 use crate::tool::bakes::BakedRoomGeometry;
 
@@ -224,29 +223,20 @@ fn write_centered(pixmap: &mut tiny_skia::Pixmap, font: &FontVec, text: &str) {
     }
 }
 
-/// The name as this machine's settings have it, and the color as the HUD's.
+/// From the standing, so a dealt name is painted too.
 fn paint_our_spray(
     ours: Option<Single<&PlayerId, (With<LocalPlayer>, With<Player>)>>,
     standings: Query<&Standing>,
-    settings: Option<Res<PlayerSettings>>,
     font: Res<SprayFont>,
     mut spray: ResMut<OurSpray>,
-    mut seen: Local<Option<(Option<String>, Swatch)>>,
 ) {
     let Some(id) = ours else { return };
     let Some(standing) = standings.iter().find(|standing| standing.id == **id) else { return };
-    // The name as typed, before cleaning, so a still frame clones nothing.
-    let raw = settings.as_deref().map(|settings| settings.name.as_str());
     let swatch = Swatch::of_body(standing.team, Some(standing.color));
-    if seen.as_ref().is_some_and(|(seen_name, seen_swatch)| seen_name.as_deref() == raw && *seen_swatch == swatch) {
+    if spray.painted_from.as_ref().is_some_and(|(name, painted)| *painted == swatch && *name == name_on_the_spray(&standing.name)) {
         return;
     }
-    *seen = Some((raw.map(str::to_owned), swatch));
-    let name = settings.map(|settings| settings.clone().cleaned().name).unwrap_or_default();
-    let wanted = (name_on_the_spray(&name), Swatch::of_body(standing.team, Some(standing.color)));
-    if spray.painted_from.as_ref() == Some(&wanted) {
-        return;
-    }
+    let wanted = (name_on_the_spray(&standing.name), swatch);
     spray.png = paint(&wanted.0, wanted.1, font.0.as_ref());
     spray.painted_from = Some(wanted);
 }
