@@ -236,7 +236,8 @@ pub struct BotThought {
     pub runner_up: Option<Candidate>,
     /// The best score each want had, with the commitment bonus, for the wants that had one.
     pub pulls: Vec<(Want, f32)>,
-    /// Seconds until it thinks again with nothing having happened.
+    /// Game time it thinks again at with nothing having happened. A time rather than a countdown,
+    /// so a tick it does not think does not touch the component.
     next: f32,
     /// What it last thought from, so news makes it think at once.
     health: u32,
@@ -266,20 +267,44 @@ fn floor_under(graph: &NavGraph, at: Vec3) -> Option<CellId> {
     [Stance::Standing.half_extents().y, 1.6, 0.0, 2.5].into_iter().find_map(|drop| graph.cell_at(at - Vec3::Y * drop))
 }
 
-type Standing<'w, 's, 'a> = Query<'w, 's, (&'a WorldProp, &'a Pickup, Option<&'a GivesWeapon>)>;
+type Standing<'w, 's, 'a> = Query<'w, 's, (Entity, &'a WorldProp, &'a Pickup, Option<&'a GivesWeapon>)>;
 
-/// What a pickup the bake knows of is, if it is in stock, matched by place to what stands in the
-/// world.
-fn live_pickup(baked: &crate::game::nav_field::Pickup, standing: &Standing, cache: Option<&PropCache>) -> Option<Live> {
-    let (prop, pickup, gives) =
-        standing.iter().find(|(prop, ..)| (prop.at - baked.feet).xz().length() <= SAME_PLACE && (prop.at.y - baked.feet.y).abs() <= 2.0)?;
-    if pickup.taken {
-        return None;
+/// Whether a prop standing at `at` is the pickup the bake knows of at `baked`.
+fn stands_for(at: Vec3, baked: &crate::game::nav_field::Pickup) -> bool {
+    (at - baked.feet).xz().length() <= SAME_PLACE && (at.y - baked.feet.y).abs() <= 2.0
+}
+
+/// Which standing prop each baked pickup is, matched by place, kept until the graph or the
+/// pickups standing change.
+#[derive(Default)]
+pub struct PickupIndex {
+    generation: Option<u64>,
+    standing: usize,
+    of: Vec<Option<Entity>>,
+}
+
+impl PickupIndex {
+    fn keep(&mut self, baked: &[crate::game::nav_field::Pickup], standing: &Standing, generation: u64, moved: bool) {
+        let count = standing.iter().len();
+        let gone = self.of.iter().flatten().any(|entity| !standing.contains(*entity));
+        if !moved && !gone && self.generation == Some(generation) && self.standing == count && self.of.len() == baked.len() {
+            return;
+        }
+        self.of = baked.iter().map(|baked| standing.iter().find(|(_, prop, ..)| stands_for(prop.at, baked)).map(|(entity, ..)| entity)).collect();
+        (self.generation, self.standing) = (Some(generation), count);
     }
-    Some(match gives {
-        Some(gives) => Live::Weapon(gives.weapon),
-        None => Live::Kind(cache?.get(&prop.model)?.pickup.kind),
-    })
+
+    /// What the baked pickup at `index` is, if it is in stock.
+    fn live(&self, index: usize, standing: &Standing, cache: Option<&PropCache>) -> Option<Live> {
+        let (_, prop, pickup, gives) = standing.get((*self.of.get(index)?)?).ok()?;
+        if pickup.taken {
+            return None;
+        }
+        Some(match gives {
+            Some(gives) => Live::Weapon(gives.weapon),
+            None => Live::Kind(cache?.get(&prop.model)?.pickup.kind),
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -346,7 +371,9 @@ pub fn think(
     cache: Option<Res<PropCache>>,
     rules: Option<Res<MovementRules>>,
     standing: Standing,
+    moved: Query<(), Or<(Added<Pickup>, Changed<WorldProp>)>>,
     mut index: Local<MapIndex>,
+    mut pickups_index: Local<PickupIndex>,
     mut bots: Query<
         (
             (&PhysicsBody, &Stance, &BotSenses, &BotMind, &BotRoute, Option<&PlayerId>),
@@ -365,14 +392,19 @@ pub fn think(
     let dt = time.delta_secs();
     index.keep(graph, nav.generation());
     let baked = &graph.fields().pickups;
+    pickups_index.keep(baked, &standing, nav.generation(), !moved.is_empty());
+    let pickups_index = &*pickups_index;
     let cache = cache.as_deref();
     // Matched only once some bot thinks this tick.
     let mut live: Option<Vec<Option<Live>>> = None;
     let speed = running_speed(&rules.as_deref().cloned().unwrap_or_default());
 
     for ((body, stance, senses, mind, route, id), (health, armor, equipped, ammo), (mut intent, mut thought)) in &mut bots {
-        let thought = thought.as_mut();
-        thought.rested.retain(|(_, until)| *until > now);
+        // Written through only where something changes, so a tick it does not think leaves it
+        // unchanged for whatever draws it.
+        if thought.rested.iter().any(|(_, until)| *until <= now) {
+            thought.rested.retain(|(_, until)| *until > now);
+        }
         let current = thought.chosen.map(|chosen| (chosen.want, chosen.goal));
         let arrived = route.is_done() && !route.is_lost();
         if let Some((want, goal)) = current {
@@ -395,24 +427,32 @@ pub fn think(
         }
 
         let hp = health.map_or(u32::MAX, Damageable::health);
-        let noticed: Vec<PlayerId> = senses.noticed(now, mind).map(|known| known.who).collect();
-        let taken = matches!(intent.goal, Some(Goal::Pickup(pickup)) if baked.get(pickup as usize).and_then(|baked| live_pickup(baked, &standing, cache)).is_none());
-        let done_now = route.is_done() && !thought.was_done;
-        thought.was_done = route.is_done();
-        let news = hp < thought.health || noticed.iter().any(|who| !thought.noticed.contains(who)) || done_now || taken;
-        thought.health = hp;
-        thought.noticed = noticed;
-        thought.next -= dt;
-        if !news && thought.next > 0.0 {
+        let taken = matches!(intent.goal, Some(Goal::Pickup(pickup)) if pickups_index.live(pickup as usize, &standing, cache).is_none());
+        let done = route.is_done();
+        let done_now = done && !thought.was_done;
+        let newly_noticed = senses.noticed(now, mind).any(|known| !thought.noticed.contains(&known.who));
+        let news = hp < thought.health || newly_noticed || done_now || taken;
+        if thought.was_done != done {
+            thought.was_done = done;
+        }
+        if thought.health != hp {
+            thought.health = hp;
+        }
+        if !senses.noticed(now, mind).map(|known| known.who).eq(thought.noticed.iter().copied()) {
+            thought.noticed = senses.noticed(now, mind).map(|known| known.who).collect();
+        }
+        if !news && now < thought.next {
             continue;
         }
-        thought.next = if route.is_lost() {
-            LOST_RETRY
-        } else {
-            // Spread across ticks so a room of bots does not all think at once.
-            THINK_SECONDS * (0.75 + 0.5 * id.map_or(0.5, |id| (id.0 % 7) as f32 / 6.0))
-        };
-        let live = live.get_or_insert_with(|| baked.iter().map(|baked| live_pickup(baked, &standing, cache)).collect());
+        let thought = thought.as_mut();
+        thought.next = now
+            + if route.is_lost() {
+                LOST_RETRY
+            } else {
+                // Spread across ticks so a room of bots does not all think at once.
+                THINK_SECONDS * (0.75 + 0.5 * id.map_or(0.5, |id| (id.0 % 7) as f32 / 6.0))
+            };
+        let live = live.get_or_insert_with(|| (0..baked.len()).map(|index| pickups_index.live(index, &standing, cache)).collect());
 
         let feet = body.current - Vec3::Y * stance.half_extents().y;
         let here = graph.cell_at(feet);
@@ -462,7 +502,8 @@ pub fn think(
 
         let threatened = senses.known.iter().any(|known| known.in_sight || (known.how == Sense::Hurt && now - known.last <= UNDER_FIRE));
         let exposure = |cell: CellId| graph.field(cell, crate::game::nav_field::Field::Exposure);
-        let cover = here.and_then(|here| {
+        // Only a bot under threat goes for cover, so only one looks for it.
+        let cover = here.filter(|_| threatened).and_then(|here| {
             let mine = exposure(here)?;
             let (best, least) = index
                 .near(graph, feet, COVER_RADIUS)
@@ -480,7 +521,7 @@ pub fn think(
             .iter()
             .map(|cell| graph.cells()[*cell as usize].feet)
             .filter(|at| !thought.resting(Goal::Place(*at)))
-            .min_by(|a, b| a.distance(feet).total_cmp(&b.distance(feet)))
+            .min_by(|a, b| a.distance_squared(feet).total_cmp(&b.distance_squared(feet)))
             .map(|at| {
                 let left = match thought.held {
                     Some((held, seconds)) if same_goal(held, Goal::Place(at)) => 1.0 - seconds / mind.drives.patience,
@@ -509,7 +550,7 @@ pub fn think(
         };
         let ranked = rank(&candidates(&situation, &mind.drives), current, &mind.drives);
         (thought.chosen, thought.runner_up) = choose(&ranked);
-        thought.pulls = Want::ALL.iter().filter_map(|want| Some((*want, ranked.iter().find(|candidate| candidate.want == *want)?.score))).collect();
+        thought.pulls = pulls(&ranked);
         let goal = thought.chosen.map(|chosen| chosen.goal);
         // A hunt's place moves a little with every sighting; replanning for each would be a search
         // a tick.
@@ -521,6 +562,17 @@ pub fn think(
             intent.goal = goal;
         }
     }
+}
+
+/// The best score each want had in `ranked`, which is best first, in [`Want::ALL`]'s order.
+fn pulls(ranked: &[Candidate]) -> Vec<(Want, f32)> {
+    let mut best = [None; Want::ALL.len()];
+    for candidate in ranked {
+        if let Some(slot) = Want::ALL.iter().position(|want| *want == candidate.want) {
+            best[slot].get_or_insert(candidate.score);
+        }
+    }
+    Want::ALL.iter().zip(best).filter_map(|(want, score)| Some((*want, score?))).collect()
 }
 
 pub struct BotThinkPlugin;
@@ -638,7 +690,7 @@ mod tests {
         assert_ne!(world.get::<BotIntent>(bot).unwrap().goal, Some(sealed), "a goal with no way to it was kept");
         let thought = world.get::<BotThought>(bot).unwrap();
         assert!(thought.resting(sealed), "it would be chosen again at once");
-        assert!(thought.next >= LOST_RETRY, "a stranded bot would search the graph again within the second");
+        assert!(thought.next - world.resource::<Time>().elapsed_secs() >= LOST_RETRY, "a stranded bot would search the graph again within the second");
     }
 
     /// Breaks if filing cells by square loses any near a bot, or offers one out of reach: it finds
