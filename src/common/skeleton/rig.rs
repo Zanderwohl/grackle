@@ -431,7 +431,7 @@ impl PosedBone {
 
 /// Joint rotations away from rest. Sparse: a pose names only the joints it
 /// moves, and is valid on any skeleton with those bones.
-#[derive(Component, Clone, Debug, Default)]
+#[derive(Component, Clone, Debug, Default, PartialEq)]
 pub struct Pose {
     /// The body's offset from standing, in hip-heights so it means the same on
     /// every build.
@@ -462,26 +462,33 @@ impl Pose {
     /// A joint only one side names blends toward rest. Slerp takes the short
     /// way, since a long way round bends a knee backwards in transit.
     pub fn lerp(from: &Pose, to: &Pose, t: f32) -> Pose {
-        let t = t.clamp(0.0, 1.0);
         let mut blended = Pose {
-            root_offset: from.root_offset.lerp(to.root_offset, t),
+            root_offset: from.root_offset,
             joints: HashMap::with_capacity(from.joints.len().max(to.joints.len())),
         };
-
-        // Each joint once: a joint both sides name is blended on the first
-        // pass and skipped on the second, rather than slerped twice.
-        for name in from.joints.keys() {
-            blended
-                .joints
-                .insert(*name, from.joint(name).slerp(to.joint(name), t));
-        }
-        for name in to.joints.keys().filter(|name| !from.joints.contains_key(*name)) {
-            blended
-                .joints
-                .insert(*name, Quat::IDENTITY.slerp(to.joint(name), t));
-        }
-
+        blended.joints.extend(from.joints.iter().map(|(name, rotation)| (*name, *rotation)));
+        blended.blend_toward(to, t);
         blended
+    }
+
+    /// `*self = Pose::lerp(self, to, t)`, in place.
+    pub fn blend_toward(&mut self, to: &Pose, t: f32) {
+        let t = t.clamp(0.0, 1.0);
+        self.root_offset = self.root_offset.lerp(to.root_offset, t);
+        // Each joint once: a joint both sides name is blended here and skipped
+        // below, rather than slerped twice.
+        for (name, rotation) in self.joints.iter_mut() {
+            *rotation = rotation.slerp(to.joint(name), t);
+        }
+        for (name, rotation) in &to.joints {
+            self.joints.entry(*name).or_insert_with(|| Quat::IDENTITY.slerp(*rotation, t));
+        }
+    }
+
+    /// `*self = from.clone()`, keeping this pose's storage.
+    pub fn copy_from(&mut self, from: &Pose) {
+        self.root_offset = from.root_offset;
+        self.joints.clone_from(&from.joints);
     }
 
     pub fn with(mut self, name: &'static str, rotation: Quat) -> Pose {
@@ -491,6 +498,49 @@ impl Pose {
 
     pub fn posed_joints(&self) -> impl Iterator<Item = (&'static str, Quat)> + '_ {
         self.joints.iter().map(|(name, rotation)| (*name, *rotation))
+    }
+}
+
+/// A [`Pose`] borrowed from a per-thread pool and handed back on drop, so a
+/// working copy made every frame keeps its storage. Its contents are whatever
+/// it last held.
+pub(crate) struct ScratchPose(Option<Pose>);
+
+thread_local! {
+    static SCRATCH_POSES: std::cell::RefCell<Vec<Pose>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+impl ScratchPose {
+    pub(crate) fn take() -> ScratchPose {
+        ScratchPose(Some(SCRATCH_POSES.with(|pool| pool.borrow_mut().pop()).unwrap_or_default()))
+    }
+}
+
+impl std::ops::Deref for ScratchPose {
+    type Target = Pose;
+
+    fn deref(&self) -> &Pose {
+        self.0.as_ref().expect("held until drop")
+    }
+}
+
+impl std::ops::DerefMut for ScratchPose {
+    fn deref_mut(&mut self) -> &mut Pose {
+        self.0.as_mut().expect("held until drop")
+    }
+}
+
+impl Drop for ScratchPose {
+    fn drop(&mut self) {
+        if let Some(pose) = self.0.take() {
+            // `try_with`: a thread being torn down has no pool to return to.
+            let _ = SCRATCH_POSES.try_with(|pool| {
+                let mut pool = pool.borrow_mut();
+                if pool.len() < 8 {
+                    pool.push(pose);
+                }
+            });
+        }
     }
 }
 
