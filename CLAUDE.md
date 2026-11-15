@@ -1424,7 +1424,8 @@ GPU path draws them ([`src/material/library.rs`](src/material/library.rs),
   gradient is the map's `SkyTime` (Metadata panel), stops by elevation mixed
   in **Oklab**, on the CPU in [`src/common/sky.rs`](src/common/sky.rs) for
   previews and tests and again in `sky.wesl`; change one, change both. Sky
-  slots are `NotShadowCaster`, so a sun added later can shine in through them.
+  slots are `NotShadowCaster`, so a sun added later can shine in through them,
+  and take no decals (`decal::takes_decals`).
 - **`pit` is a material with no file too** (`pit::PIT`,
   [`src/material/pit.rs`](src/material/pit.rs)): one unlit black
   `StandardMaterial`, so no light, lightmap or ambient brightens it — the
@@ -1452,6 +1453,11 @@ and `PaintedOn` its room's `BakedRoomGeometry` (both `linked_spawn`), with `UV_1
 room's lightmap chart. A root marked `Uncut` is cut next frame; a room rebaked in place recuts
 the lasting decals on it and drops the transient ones.
 
+- **A slot whose material refuses decals is left out of the cut** — sky, so far
+  (`decal::takes_decals`). `TakesDecals` on each `BakedRoomGeometry` notes which slots take
+  them, written only when it differs; a change recuts every decal on that room, transient ones
+  included. A mark whose ray first meets a refusing face is never made (`surface_hit`), so it
+  takes no place in a transient ring.
 - **Three lifetimes, one marker each**: `MapDecal` (an `EditorDecal` feature: a picture under a
   pack's `decals/`, pressed along its `-Z`), `Spray` (its owner's connection, and cleared on leaving Play) and `Transient`
   (bullet holes, scorch and blood: a ring per kind capped by this machine's `PlayerSettings::debris`, fading out over their last

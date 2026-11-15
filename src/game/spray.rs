@@ -19,12 +19,11 @@ use crate::common::decal::Projection;
 use crate::common::net::{has_authority, NetRole};
 use crate::common::swatch::Swatch;
 use crate::game::death::Dying;
-use crate::game::decal::{blended_material, decal_image, surface_hit, Decal, DecalMaterial, Lit, Spray, Uncut};
+use crate::game::decal::{blended_material, decal_image, surface_hit, Decal, DecalMaterial, Lit, Spray, Surfaces, Uncut};
 use crate::game::hitscan::{aim, eye};
 use crate::game::player::{Inputs, LocalPlayer, PhysicsBody, Player};
 use crate::game::score::Standing;
 use crate::get;
-use crate::tool::bakes::BakedRoomGeometry;
 
 /// Pixels on a side.
 pub const PICTURE_SIZE: u32 = 512;
@@ -350,7 +349,7 @@ fn spray(
     mut commands: Commands,
     bodies: Query<(&Inputs, &PhysicsBody, &Player, &crate::common::class::Stance, Option<&ControlledBy>, Has<LocalPlayer>), Without<Dying>>,
     owners: Query<&SprayOwner>,
-    bakes: Query<&BakedRoomGeometry>,
+    bakes: Surfaces,
     mut sprays: Query<(Entity, &mut SprayAt)>,
 ) {
     for (input, body, player, stance, controlled, ours) in &bodies {
