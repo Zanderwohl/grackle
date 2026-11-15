@@ -631,6 +631,15 @@ pub enum RoomSlot {
 impl RoomSlot {
     pub const ALL: [RoomSlot; 3] = [RoomSlot::Floor, RoomSlot::Walls, RoomSlot::Ceiling];
 
+    /// Its place in [`RoomSlot::ALL`].
+    pub fn index(self) -> usize {
+        match self {
+            RoomSlot::Floor => 0,
+            RoomSlot::Walls => 1,
+            RoomSlot::Ceiling => 2,
+        }
+    }
+
     pub fn name_key(self) -> &'static str {
         match self {
             RoomSlot::Floor => "editor.features.room.floor",

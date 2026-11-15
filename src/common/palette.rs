@@ -75,6 +75,11 @@ impl Palette {
     pub fn paint<'a>(&'a self, surfaces: &'a RoomSurfaces, slot: RoomSlot, side: Option<Side>) -> Option<&'a str> {
         self.resolve(surfaces.of(slot)?, side)
     }
+
+    /// In [`RoomSlot::ALL`] order.
+    pub fn paint_slots<'a>(&'a self, surfaces: Option<&'a RoomSurfaces>, side: Option<Side>) -> [Option<&'a str>; 3] {
+        RoomSlot::ALL.map(|slot| surfaces.and_then(|surfaces| self.paint(surfaces, slot, side)))
+    }
 }
 
 /// Ungated, as [`publish_movement_rules`](crate::editor::map_metadata::publish_movement_rules) is:

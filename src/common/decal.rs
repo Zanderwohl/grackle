@@ -7,7 +7,9 @@ use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::common::lightmap::Atlas;
+use crate::common::sky::SKYBOX;
 use crate::common::world_surface::{self, Face};
+use crate::tool::room::RoomSlot;
 
 /// Meters a piece stands off its wall, on top of its material's depth bias.
 const LIFT: f32 = 0.001;
@@ -83,9 +85,16 @@ impl Piece {
     }
 }
 
-/// `faces` cut to `projection`. `atlas` must be `Atlas::of(faces)`, the layout the room's
-/// lightmap is in; every cut vertex lies on its face, so its chart gives `UV_1` exactly.
-pub fn cut(projection: &Projection, faces: &[Face], atlas: &Atlas) -> Piece {
+/// `material` as the palette resolves it, not a role. Sky is drawn at infinite distance, so a mark
+/// on it would hang in the air.
+pub fn takes_decals(material: Option<&str>) -> bool {
+    material != Some(SKYBOX)
+}
+
+/// `faces` cut to `projection`, leaving out the faces of any slot `takes` refuses. `atlas` must
+/// be `Atlas::of(faces)`, the layout the room's lightmap is in; every cut vertex lies on its face,
+/// so its chart gives `UV_1` exactly.
+pub fn cut(projection: &Projection, faces: &[Face], atlas: &Atlas, takes: impl Fn(RoomSlot) -> bool) -> Piece {
     let (right, up, out) = projection.frame();
     let half = Vec3::new(projection.size.x, projection.size.y, projection.depth) * 0.5;
     let planes = [(right, half.x), (-right, half.x), (up, half.y), (-up, half.y), (out, half.z), (-out, half.z)];
@@ -93,7 +102,7 @@ pub fn cut(projection: &Projection, faces: &[Face], atlas: &Atlas) -> Piece {
 
     for (index, face) in faces.iter().enumerate() {
         let facing = face.plane.normal.dot(out);
-        if facing < MIN_FACING {
+        if facing < MIN_FACING || !takes(RoomSlot::of(face.plane.normal)) {
             continue;
         }
         let mut polygon = face.vertices.clone();
@@ -142,11 +151,23 @@ fn clip(polygon: &[Vec3], inside: impl Fn(Vec3) -> f32) -> Vec<Vec3> {
 /// The first face `faces` puts in the way of `range` meters from `origin` along unit
 /// `direction`, from the side it faces: where, and the face's normal.
 pub fn hit<'a>(faces: impl IntoIterator<Item = &'a Face>, origin: Vec3, direction: Vec3, range: f32) -> Option<(Vec3, Vec3)> {
+    hit_tagged(faces.into_iter().map(|face| (face, ())), origin, direction, range).map(|(at, normal, ())| (at, normal))
+}
+
+/// [`hit`], returning the tag of the face hit.
+pub fn hit_tagged<'a, T>(
+    faces: impl IntoIterator<Item = (&'a Face, T)>,
+    origin: Vec3,
+    direction: Vec3,
+    range: f32,
+) -> Option<(Vec3, Vec3, T)> {
     faces
         .into_iter()
-        .filter_map(|face| world_surface::meets(face, origin, direction).filter(|t| *t <= range).map(|t| (t, face.plane.normal)))
+        .filter_map(|(face, tag)| {
+            world_surface::meets(face, origin, direction).filter(|t| *t <= range).map(|t| (t, face.plane.normal, tag))
+        })
         .min_by(|a, b| a.0.total_cmp(&b.0))
-        .map(|(t, normal)| (origin + direction * t, normal))
+        .map(|(t, normal, tag)| (origin + direction * t, normal, tag))
 }
 
 /// Whether two axis-aligned boxes overlap, touching included.
@@ -184,7 +205,7 @@ mod tests {
     fn a_mark_in_the_middle_of_a_wall_is_its_full_size() {
         let faces = room_faces();
         let projection = Projection::on(Vec3::new(2.0, 1.5, 0.0), Vec3::Z, 0.5, 0.2, Vec3::NEG_Z);
-        let piece = cut(&projection, &faces, &Atlas::of(&faces));
+        let piece = cut(&projection, &faces, &Atlas::of(&faces), |_| true);
         assert!((area(&piece) - 0.25).abs() < 1e-4, "{}", area(&piece));
         for uv in &piece.uvs {
             assert!(uv.iter().all(|c| (-1e-4..=1.0001).contains(c)), "{uv:?}");
@@ -196,9 +217,23 @@ mod tests {
         let faces = room_faces();
         // On the floor, against the wall at z = 0: half of it would hang in the wall.
         let projection = Projection::on(Vec3::new(2.0, 0.0, 0.0), Vec3::Y, 1.0, 0.4, Vec3::NEG_Z);
-        let piece = cut(&projection, &faces, &Atlas::of(&faces));
+        let piece = cut(&projection, &faces, &Atlas::of(&faces), |_| true);
         assert!((area(&piece) - 0.5).abs() < 1e-4, "{}", area(&piece));
         assert!(piece.normals.iter().all(|n| *n == [0.0, 1.0, 0.0]));
+    }
+
+    #[test]
+    fn a_mark_in_a_corner_leaves_out_a_slot_that_refuses_it() {
+        let faces = room_faces();
+        // Pressed in at 45°, so both the floor and the wall face it well enough to take a piece.
+        let projection = Projection::on(Vec3::new(2.0, 0.0, 0.0), Vec3::new(0.0, 1.0, 1.0).normalize(), 1.0, 0.4, Vec3::NEG_Z);
+        let both = cut(&projection, &faces, &Atlas::of(&faces), |_| true);
+        assert!(both.normals.contains(&[0.0, 1.0, 0.0]) && both.normals.contains(&[0.0, 0.0, 1.0]));
+        let refused = cut(&projection, &faces, &Atlas::of(&faces), |slot| slot != RoomSlot::Floor);
+        assert!(!refused.is_empty() && refused.normals.iter().all(|n| *n == [0.0, 0.0, 1.0]), "{:?}", refused.normals);
+        assert!(area(&refused) < area(&both));
+        assert!(!takes_decals(Some(SKYBOX)));
+        assert!(takes_decals(Some("concrete")) && takes_decals(None));
     }
 
     #[test]
