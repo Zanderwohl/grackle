@@ -271,13 +271,16 @@ fn draw_damage_numbers(
         let Ok(screen) = camera.world_to_viewport(view, number.at) else { continue };
 
         let alpha = (opacity(number.remaining) * 255.0) as u8;
-        painter.text(
-            egui::pos2(screen.x, screen.y - rise(number.remaining, height)),
-            egui::Align2::CENTER_CENTER,
+        // Laid out in the placeholder color and painted in the faded one, so egui's galley cache,
+        // which is keyed on color too, is not missed on every frame of the fade.
+        let galley = painter.layout_no_wrap(
             number.amount.to_string(),
             egui::FontId::new(DAMAGE_NUMBER_SIZE, crate::common::fonts::display_family()),
-            egui::Color32::from_rgba_unmultiplied(255, 40, 40, alpha),
+            egui::Color32::PLACEHOLDER,
         );
+        let at = egui::pos2(screen.x, screen.y - rise(number.remaining, height));
+        let rect = egui::Align2::CENTER_CENTER.anchor_size(at, galley.size());
+        painter.galley(rect.min, galley, egui::Color32::from_rgba_unmultiplied(255, 40, 40, alpha));
     }
 }
 
