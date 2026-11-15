@@ -435,10 +435,11 @@ killed_by = "You were killed by { name }"
 using = "Using { weapon }"
 
 [kill_feed]
-killed = "{ killer } > { victim }"
-killed_with_help = "{ killer } + { assist } > { victim }"
-finished_off = "{ assist } finished off { victim }"
-died = "{ victim } died"
+# `{ icon }` is where the icon for what killed goes.
+killed = "{ killer } { icon } { victim }"
+killed_with_help = "{ killer } + { assist } { icon } { victim }"
+finished_off = "{ assist } finished off { icon } { victim }"
+died = "{ icon } { victim } died"
 
 [scoreboard]
 player = "Player { id }"
@@ -1323,6 +1324,7 @@ none = "None"
 key = "Key"
 name_key = "Name key"
 model = "Model"
+icon = "Icon"
 bucket = "Bucket"
 deploy = "Deploy"
 clip = "Clip"
@@ -1411,3 +1413,4 @@ meters_per_second_per_damage = " m/s per damage"
 collides = "{ key } collides with { with }, already loaded, and is left out"
 bucket = "{ key } is in bucket { bucket }, which no key selects (1–{ most }), and is left out"
 deploy = "{ key } deploys in { deploy } s, and is left out"
+icon = "No pack has icons/{ icon }.svg, so its kills draw the skull"

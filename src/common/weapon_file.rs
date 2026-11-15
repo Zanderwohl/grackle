@@ -47,6 +47,8 @@ pub struct WeaponEntry {
     /// startup. A bad name draws nothing.
     #[serde(default)]
     pub model: Option<String>,
+    #[serde(default)]
+    pub icon: Option<String>,
     pub bucket: u8,
     pub deploy: f32,
     pub magazine: Magazine,
@@ -61,6 +63,7 @@ impl WeaponEntry {
             key: key.to_string(),
             name_key: self.name_key,
             model: self.model,
+            icon: self.icon,
             bucket: self.bucket,
             deploy: self.deploy,
             primary: self.primary,
@@ -108,7 +111,18 @@ struct SlotEntry {
 /// Lowest priority first. A missing file is normal; one that will not parse
 /// is logged.
 pub fn load_catalog(assets: &Assets, packs: &[PathBuf]) -> WeaponCatalog {
-    catalog_of(assets, packs, &read_pack_weapons(assets, packs))
+    let catalog = catalog_of(assets, packs, &read_pack_weapons(assets, packs));
+    for weapon in &catalog.weapons {
+        if let Some(icon) = weapon.icon.as_deref().filter(|icon| !icon_exists(assets, icon)) {
+            warn!("{}: no pack has icons/{icon}.svg; its kills draw the skull", weapon.key);
+        }
+    }
+    catalog
+}
+
+/// Not a [`problem`]: a weapon with a missing icon still plays, and its kills draw the skull.
+pub fn icon_exists(assets: &Assets, icon: &str) -> bool {
+    assets.read_from_packs(&format!("icons/{icon}.svg")).is_some()
 }
 
 /// Every pack's weapons as written, lowest priority first and in key order

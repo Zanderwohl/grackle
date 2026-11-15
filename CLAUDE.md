@@ -502,9 +502,11 @@ The **kill feed** ([`src/game/kill_feed.rs`](src/game/kill_feed.rs)) is up to fi
 at the top right of the safe zone, in the order they happened, oldest at the top. A line is up
 for ten seconds, or twenty if it names us; the latest two naming us are kept, and the other
 slots go to the latest of the rest, so ours are bumped less. It is built from the `Died` every
-machine gets, so spectators and every mode see it. "Killer > victim" or "killer + assist > victim" is painted in
-the killer's color; "assist finished off victim" (killed by themself or the map, with help) and
-"victim died" are cream. Each line is a **`Plate`** ([`src/game/plate.rs`](src/game/plate.rs)):
+machine gets, so spectators and every mode see it. "Killer [icon] victim" or "killer + assist [icon] victim" is
+painted in the killer's color; "assist finished off [icon] victim" (killed by themself or the map, with help) and
+"[icon] victim" are cream. The icon is what killed ([`src/game/kill_icon.rs`](src/game/kill_icon.rs)): a
+weapon's `icon` in `weapons.toml`, a white SVG under `icons/` rasterized at runtime, else the flame for
+afterburn, the explosion for splash and the skull for the map, a suicide or a weapon with none. Each line is a **`Plate`** ([`src/game/plate.rs`](src/game/plate.rs)):
 a node with `PlateText` children, given its leaning panel after layout, repainted when its size
 or `swatch` changes, its text black or white by `Swatch::text`. Its lines and panel stay hidden
 until the panel is laid out; the plate's own `Visibility` is its owner's, which is how a name tag

@@ -62,6 +62,7 @@ pub mod pause_menu;
 pub mod hud;
 pub mod name_tag;
 pub mod kill_feed;
+pub mod kill_icon;
 pub mod plate;
 pub mod pickup_beam;
 pub mod rounds;

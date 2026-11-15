@@ -1,7 +1,8 @@
 //! Recent deaths, at most [`LINES`], at the top right of the [`SafeZone`], oldest at the top: each a
-//! [`Plate`] in the killer's color reading "killer > victim" or "killer + assist > victim". A body
-//! that killed itself or was killed by the map with somebody's help reads "assist finished off
-//! victim", and without help "victim died", both in the neutral cream.
+//! [`Plate`] in the killer's color reading "killer [icon] victim" or "killer + assist [icon]
+//! victim", the icon being what killed ([`kill_icon::icon_for`]). A body that killed itself or was
+//! killed by the map with somebody's help reads "assist finished off [icon] victim", and without
+//! help "[icon] victim", both in the neutral cream.
 //!
 //! A line naming us as killer, assist or victim is up for [`OUR_LIFETIME`] and any other for
 //! [`LIFETIME`]. The latest [`OURS_SHOWN`] of ours are always kept, and the rest of the slots go to
@@ -25,10 +26,12 @@ use crate::common::fonts::DisplayFont;
 use crate::common::lang::fill_uncached;
 use crate::common::swatch::Swatch;
 use crate::game::hud::{SafeZone, MARGIN_X, MARGIN_Y};
+use crate::common::weapon::WeaponCatalog;
 use crate::game::kill_cam::our_id;
+use crate::game::kill_icon::{self, KillIcons};
 use crate::game::player::{DeathCam, LocalPlayer, OurLastBody};
 use crate::game::respawn::OurIdentity;
-use crate::game::plate::{padding_with_room, plate_node, plate_text, Plate};
+use crate::game::plate::{padding_with_room, plate_node, plate_text, Plate, PlateIcon};
 use crate::game::score::Standing;
 use crate::get;
 
@@ -40,6 +43,12 @@ pub const OUR_LIFETIME: f32 = 20.0;
 /// How many lines naming us are kept, at most.
 pub const OURS_SHOWN: usize = 2;
 const TEXT: f32 = 24.0;
+/// Logical pixels on a side.
+const ICON: f32 = 28.0;
+/// Logical pixels between the icon and the words either side of it.
+const ICON_GAP: f32 = 8.0;
+/// Stands for the icon while a line's words are filled in, and is where they are split.
+const ICON_MARK: char = '\u{E000}';
 /// Logical pixels between a line's text and its panel's stroke, above and below.
 const ROOM: f32 = 4.0;
 /// Logical pixels from one plate's drop shadow to the next panel's stroke. A plate's box runs
@@ -53,6 +62,7 @@ pub struct KillFeedPlugin;
 impl Plugin for KillFeedPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<KillFeed>()
+            .add_plugins(kill_icon::KillIconPlugin)
             .add_systems(OnEnter(AppMode::Play), forget_the_feed)
             .add_systems(Update, (list_the_dead, show_the_feed).chain().run_if(in_state(AppMode::Play)));
     }
@@ -69,9 +79,30 @@ pub struct KillFeed {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+struct Words {
+    before: String,
+    icon: String,
+    after: String,
+}
+
+impl Words {
+    /// A translation without the `{ icon }` slot puts the icon last.
+    fn fill(key: &str, names: &[(&str, &str)], icon: &str) -> Self {
+        let names: Vec<(&str, String)> = names.iter().map(|(slot, name)| (*slot, name.replace(ICON_MARK, ""))).collect();
+        let mark = ICON_MARK.to_string();
+        let mut pairs: Vec<(&str, &str)> = names.iter().map(|(slot, name)| (*slot, name.as_str())).collect();
+        pairs.push(("icon", &mark));
+        let filled = fill_uncached(key, &pairs);
+        let (before, after) = filled.split_once(ICON_MARK).unwrap_or((&filled, ""));
+        // A second slot would draw the mark as a missing glyph.
+        Words { before: before.trim_end().to_owned(), icon: icon.to_owned(), after: after.replace(ICON_MARK, "").trim_start().to_owned() }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
 struct FeedLine {
     number: u64,
-    words: String,
+    words: Words,
     swatch: Swatch,
     /// Whether it names us.
     ours: bool,
@@ -86,7 +117,7 @@ impl FeedLine {
 }
 
 impl KillFeed {
-    fn push(&mut self, words: String, swatch: Swatch, ours: bool) {
+    fn push(&mut self, words: Words, swatch: Swatch, ours: bool) {
         self.lines.push_back(FeedLine { number: self.next, words, swatch, ours, age: 0.0 });
         self.next += 1;
         self.bump();
@@ -134,7 +165,8 @@ fn forget_the_feed(mut feed: ResMut<KillFeed>) {
 }
 
 /// What a death reads as, and the color it is painted in; `None` for something that was nobody.
-fn line_for(died: &Died, known: &HashMap<PlayerId, (String, Swatch)>) -> Option<(String, Swatch)> {
+fn line_for(died: &Died, known: &HashMap<PlayerId, (String, Swatch)>, catalog: Option<&WeaponCatalog>) -> Option<(Words, Swatch)> {
+    let icon = kill_icon::icon_for(&died.cause, catalog);
     let victim_id = died.victim_id?;
     let name = |id: PlayerId| known.get(&id).map_or_else(|| get!("scoreboard.player", "id", id.0), |(name, _)| name.clone());
     let victim = name(victim_id);
@@ -147,13 +179,13 @@ fn line_for(died: &Died, known: &HashMap<PlayerId, (String, Swatch)>) -> Option<
         (DamageSource::Player(killer), helper) if killer != victim_id => {
             let swatch = known.get(&killer).map_or_else(Swatch::neutral, |(_, swatch)| *swatch);
             let words = match helper {
-                Some(helper) => fill_uncached("kill_feed.killed_with_help", &[("killer", &name(killer)), ("assist", &name(helper)), ("victim", &victim)]),
-                None => fill_uncached("kill_feed.killed", &[("killer", &name(killer)), ("victim", &victim)]),
+                Some(helper) => Words::fill("kill_feed.killed_with_help", &[("killer", &name(killer)), ("assist", &name(helper)), ("victim", &victim)], icon),
+                None => Words::fill("kill_feed.killed", &[("killer", &name(killer)), ("victim", &victim)], icon),
             };
             (words, swatch)
         }
-        (_, Some(helper)) => (fill_uncached("kill_feed.finished_off", &[("assist", &name(helper)), ("victim", &victim)]), Swatch::neutral()),
-        (_, None) => (fill_uncached("kill_feed.died", &[("victim", &victim)]), Swatch::neutral()),
+        (_, Some(helper)) => (Words::fill("kill_feed.finished_off", &[("assist", &name(helper)), ("victim", &victim)], icon), Swatch::neutral()),
+        (_, None) => (Words::fill("kill_feed.died", &[("victim", &victim)], icon), Swatch::neutral()),
     })
 }
 
@@ -173,6 +205,7 @@ fn list_the_dead(
     body: Option<Single<&PlayerId, With<LocalPlayer>>>,
     last: Option<Res<OurLastBody>>,
     death_cam: Option<Res<DeathCam>>,
+    catalog: Option<Res<WeaponCatalog>>,
     mut feed: ResMut<KillFeed>,
 ) {
     let quiet = feed.bypass_change_detection();
@@ -187,7 +220,7 @@ fn list_the_dead(
     // A client spectating since it joined has no body to know itself by, and no line is its own.
     let us = our_id(body.map(|body| **body), identity.as_deref(), last.as_deref(), death_cam.as_deref());
     for died in deaths.read() {
-        if let Some((words, swatch)) = line_for(died, &feed.known) {
+        if let Some((words, swatch)) = line_for(died, &feed.known, catalog.as_deref()) {
             feed.push(words, swatch, names(died, us));
         }
     }
@@ -195,10 +228,14 @@ fn list_the_dead(
 
 /// Puts the column up once there is a safe zone, takes down the plates of lines bumped off and
 /// adds a plate at the bottom for each new one.
+#[allow(clippy::too_many_arguments)]
 fn show_the_feed(
     mut commands: Commands,
     font: Res<DisplayFont>,
     feed: Res<KillFeed>,
+    mut icons: ResMut<KillIcons>,
+    pack: Option<Res<crate::common::assets::Assets>>,
+    mut images: Option<ResMut<Assets<Image>>>,
     zone: Option<Single<Entity, With<SafeZone>>>,
     column: Option<Single<(Entity, Option<&Children>, Ref<FeedColumn>), With<FeedColumn>>>,
     plates: Query<&ShowsLine>,
@@ -234,18 +271,39 @@ fn show_the_feed(
         }
     }
     for line in feed.lines.iter().filter(|line| !shown.contains(&line.number)) {
-        commands.entity(column).with_child((
+        let Words { before, icon, after } = &line.words;
+        let image = match (pack.as_deref(), images.as_deref_mut()) {
+            (Some(pack), Some(images)) => icons.get(icon, |relative| pack.read_from_packs(relative), images),
+            _ => None,
+        };
+        let mut plate = commands.spawn((
             ShowsLine(line.number),
             Plate::new(line.swatch),
             Node {
                 padding: padding_with_room(ROOM),
                 // Gaps cannot be negative, so the plates overlap their empty edges by margin.
                 margin: UiRect::top(Val::Px(GAP - 2.0 * STROKE_OVERHANG)),
+                flex_direction: FlexDirection::Row,
+                column_gap: Val::Px(ICON_GAP),
                 ..plate_node()
             },
             Name::new("Kill feed line"),
-            children![plate_text(&font.0, line.words.clone(), TEXT)],
         ));
+        plate.with_children(|plate| {
+            if !before.is_empty() {
+                plate.spawn(plate_text(&font.0, before.clone(), TEXT));
+            }
+            // Without an image, the node holds the icon's place.
+            let mut slot = plate.spawn((PlateIcon, Node { width: Val::Px(ICON), height: Val::Px(ICON), ..default() }, Pickable::IGNORE));
+            if let Some(image) = image {
+                slot.insert(ImageNode::new(image));
+            }
+            if !after.is_empty() {
+                plate.spawn(plate_text(&font.0, after.clone(), TEXT));
+            }
+        });
+        let plate = plate.id();
+        commands.entity(column).add_child(plate);
     }
 }
 
@@ -254,7 +312,22 @@ mod tests {
     use super::*;
     use crate::common::player_color::PlayerColor;
     use crate::common::team::Team;
+    use crate::common::damage::{Cause, How};
+    use crate::common::weapon::WeaponId;
+    use crate::game::kill_icon::{FLAME, SKULL};
     use bevy::ecs::system::RunSystemOnce;
+
+    impl From<&str> for Words {
+        fn from(words: &str) -> Self {
+            Words { before: words.into(), icon: SKULL.into(), after: String::new() }
+        }
+    }
+
+    impl From<String> for Words {
+        fn from(words: String) -> Self {
+            words.as_str().into()
+        }
+    }
 
     fn standing(id: u64, name: &str, team: Option<Team>) -> Standing {
         Standing {
@@ -276,12 +349,12 @@ mod tests {
         Died { victim: Entity::PLACEHOLDER, victim_name: None, victim_id: Some(PlayerId(victim)), killer, assist, at: Vec3::ZERO, cause: Default::default() }
     }
 
-    fn lines(deaths: &[Died]) -> Vec<Option<(String, Swatch)>> {
+    fn lines(deaths: &[Died]) -> Vec<Option<(Words, Swatch)>> {
         let mut feed = KillFeed::default();
         feed.learn(&standing(1, "Ana", Some(Team::Red)));
         feed.learn(&standing(2, "Bo", Some(Team::Blue)));
         feed.learn(&standing(3, "Cy", None));
-        deaths.iter().map(|died| line_for(died, &feed.known)).collect()
+        deaths.iter().map(|died| line_for(died, &feed.known, None)).collect()
     }
 
     /// Breaks if somebody whose standing went before their death was read (gone to Spectate,
@@ -299,8 +372,8 @@ mod tests {
         world.write_message(died(2, DamageSource::Player(PlayerId(1)), None));
         world.run_system_once(list_the_dead).unwrap();
 
-        let lines: Vec<(String, Swatch)> = world.resource::<KillFeed>().lines.iter().map(|line| (line.words.clone(), line.swatch)).collect();
-        let killed = fill_uncached("kill_feed.killed", &[("killer", "Ana"), ("victim", "Bo")]);
+        let lines: Vec<(Words, Swatch)> = world.resource::<KillFeed>().lines.iter().map(|line| (line.words.clone(), line.swatch)).collect();
+        let killed = Words::fill("kill_feed.killed", &[("killer", "Ana"), ("victim", "Bo")], SKULL);
         assert_eq!(lines, [(killed, Swatch::team(Team::Red))]);
     }
 
@@ -318,7 +391,7 @@ mod tests {
             died(1, player(3), Some(player(3))),
             died(3, player(9), None),
         ]);
-        let fill = |key: &str, pairs: &[(&str, &str)]| fill_uncached(key, pairs);
+        let fill = |key: &str, pairs: &[(&str, &str)]| Words::fill(key, pairs, SKULL);
         let red = Swatch::team(Team::Red);
         assert_eq!(got[0], Some((fill("kill_feed.killed", &[("killer", "Ana"), ("victim", "Bo")]), red)));
         assert_eq!(got[1], Some((fill("kill_feed.killed_with_help", &[("killer", "Ana"), ("assist", "Cy"), ("victim", "Bo")]), red)));
@@ -329,7 +402,8 @@ mod tests {
         assert_eq!(got[5], Some((fill("kill_feed.killed", &[("killer", "Cy"), ("victim", "Ana")]), teamless)), "the killer counted as their own assist");
         let nobody = get!("scoreboard.player", "id", 9);
         assert_eq!(got[6], Some((fill("kill_feed.killed", &[("killer", &nobody), ("victim", "Cy")]), Swatch::neutral())));
-        assert!(!got[0].as_ref().unwrap().0.starts_with('<'), "missing lang key: {:?}", got[0]);
+        let killed = &got[0].as_ref().unwrap().0;
+        assert_eq!((killed.before.as_str(), killed.icon.as_str(), killed.after.as_str()), ("Ana", SKULL, "Bo"), "split wrong, or a missing lang key");
     }
 
     #[test]
@@ -340,7 +414,7 @@ mod tests {
     }
 
     fn words(feed: &KillFeed) -> Vec<&str> {
-        feed.lines.iter().map(|line| line.words.as_str()).collect()
+        feed.lines.iter().map(|line| line.words.before.as_str()).collect()
     }
 
     /// Breaks if lines naming us are bumped by others, more than two of them are kept, they are not
@@ -388,7 +462,7 @@ mod tests {
         feed.age(LIFETIME * 0.3);
         assert_eq!(feed.lines.len(), 2, "gone early");
         feed.age(LIFETIME * 0.2);
-        let left: Vec<&str> = feed.lines.iter().map(|line| line.words.as_str()).collect();
+        let left: Vec<&str> = feed.lines.iter().map(|line| line.words.before.as_str()).collect();
         assert_eq!(left, ["new"]);
     }
 
@@ -399,6 +473,7 @@ mod tests {
         let mut world = World::new();
         world.init_resource::<DisplayFont>();
         world.init_resource::<KillFeed>();
+        world.init_resource::<KillIcons>();
         world.spawn(SafeZone);
         world.run_system_once(show_the_feed).unwrap();
 
@@ -408,10 +483,47 @@ mod tests {
             plates.iter().map(|plate| world.get::<Children>(*plate).unwrap()[0]).map(|text| world.get::<Text>(text).unwrap().0.clone()).collect()
         };
         for index in 0..LINES + 1 {
-            world.resource_mut::<KillFeed>().push(format!("line {index}"), Swatch::neutral(), false);
+            world.resource_mut::<KillFeed>().push(format!("line {index}").into(), Swatch::neutral(), false);
             world.run_system_once(show_the_feed).unwrap();
         }
         let expected: Vec<String> = (1..=LINES).map(|index| format!("line {index}")).collect();
         assert_eq!(shown(&mut world), expected);
+    }
+
+    /// Breaks if a line stops drawing what killed, or a name could move the icon.
+    #[test]
+    fn a_line_draws_what_killed_between_the_names() {
+        let mut feed = KillFeed::default();
+        feed.learn(&standing(1, "An\u{E000}a", None));
+        feed.learn(&standing(2, "Bo", None));
+        let catalog = crate::common::weapon_file::default_catalog();
+        let mut burned = died(2, DamageSource::Player(PlayerId(1)), None);
+        burned.cause = Cause::of(Some(WeaponId::of("flamethrower")), How::Burn);
+        let (words, _) = line_for(&burned, &feed.known, Some(&catalog)).unwrap();
+        assert_eq!(words, Words { before: "Ana".into(), icon: FLAME.into(), after: "Bo".into() });
+        burned.cause.how = How::Flame;
+        assert_eq!(line_for(&burned, &feed.known, Some(&catalog)).unwrap().0.icon, "kill_flamethrower");
+    }
+
+    /// Breaks if a plate stops standing its icon between its two lots of words.
+    #[test]
+    fn the_icon_stands_between_the_words() {
+        let mut world = World::new();
+        world.init_resource::<DisplayFont>();
+        world.init_resource::<KillFeed>();
+        world.init_resource::<KillIcons>();
+        world.init_resource::<Assets<Image>>();
+        world.init_resource::<crate::common::assets::Assets>();
+        world.spawn(SafeZone);
+        world.run_system_once(show_the_feed).unwrap();
+        let words = Words { before: "Ana".into(), icon: "kill_rocket".into(), after: "Bo".into() };
+        world.resource_mut::<KillFeed>().push(words, Swatch::neutral(), false);
+        world.run_system_once(show_the_feed).unwrap();
+
+        let plate = world.query_filtered::<&Children, With<ShowsLine>>().single(&world).unwrap().to_vec();
+        assert_eq!(plate.len(), 3);
+        assert_eq!(world.get::<Text>(plate[0]).unwrap().0, "Ana");
+        assert!(world.get::<PlateIcon>(plate[1]).is_some() && world.get::<ImageNode>(plate[1]).is_some(), "no icon drawn");
+        assert_eq!(world.get::<Text>(plate[2]).unwrap().0, "Bo");
     }
 }

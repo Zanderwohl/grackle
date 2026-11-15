@@ -77,6 +77,15 @@ pub fn atom(ctx: &egui::Context, name: &str) -> egui::Atom<'static> {
     atom.atom_size(egui::vec2(ICON_SIZE, ICON_SIZE))
 }
 
+/// `svg` in a `size`-texel square. Premultiplied, as every tiny-skia pixmap is.
+pub fn render_svg(svg: &[u8], size: u32) -> Result<resvg::tiny_skia::Pixmap, resvg::usvg::Error> {
+    let tree = resvg::usvg::Tree::from_data(svg, &resvg::usvg::Options::default())?;
+    let mut pixmap = resvg::tiny_skia::Pixmap::new(size, size).ok_or(resvg::usvg::Error::InvalidSize)?;
+    let scale = size as f32 / tree.size().width().max(tree.size().height());
+    resvg::render(&tree, resvg::tiny_skia::Transform::from_scale(scale, scale), &mut pixmap.as_mut());
+    Ok(pixmap)
+}
+
 fn load_wanted_icons(mut contexts: EguiContexts, assets: Res<Assets>, mut installed: Local<bool>) {
     let Ok(ctx) = contexts.ctx_mut() else { return };
     if !*installed {
