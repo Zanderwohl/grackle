@@ -17,7 +17,7 @@ use crate::common::skeleton::{
 };
 use crate::common::skeleton::AnimationClock;
 use crate::editor::animation_grid::{
-    cells, showing, AnimationGrid, AnimationGridMarker, GridCell, RosterTeam,
+    cell_table, cells, showing, AnimationGrid, AnimationGridMarker, GridCell, RosterTeam,
 };
 use crate::editor::editable::{FeatureTrait, PointRef};
 use crate::tool::point_placement::{add_point_placement_tool, PlaceablePoint};
@@ -112,14 +112,19 @@ pub fn sync_animation_grids(
     grids: Query<(Entity, &Transform, Option<&RosterTeam>), With<AnimationGridMarker>>,
     bodies: Query<&OfGrid>,
     mut last_cycle: Local<Option<u64>>,
+    mut standing: Local<Vec<bool>>,
 ) {
     // The same boundary `drive_carousels` uses, so a refill lands on a shuffle.
     let cycle = showing(clock.seconds()).cycle;
     let shuffled = last_cycle.replace(cycle) != Some(cycle);
+    if grids.is_empty() {
+        return;
+    }
 
-    let cells = cells();
+    let cells = cell_table();
     for (grid, placed_at, teams) in &grids {
-        let mut standing = vec![false; cells.len()];
+        standing.clear();
+        standing.resize(cells.len(), false);
         for body in &bodies {
             if body.grid != grid {
                 continue;
@@ -129,17 +134,17 @@ pub fn sync_animation_grids(
             }
         }
 
-        let missing: Vec<usize> = (0..cells.len()).filter(|cell| !standing[*cell]).collect();
-        if missing.is_empty() {
+        let missing = standing.iter().filter(|stands| !**stands).count();
+        if missing == 0 {
             continue;
         }
         // Short but not empty: waits for the shuffle.
-        if missing.len() < cells.len() && !shuffled {
+        if missing < cells.len() && !shuffled {
             continue;
         }
 
         let teams = teams.copied().unwrap_or_default();
-        for cell in missing {
+        for cell in (0..cells.len()).filter(|cell| !standing[*cell]) {
             let mut body = commands.spawn(carousel_body(grid, cell, &cells[cell], placed_at, &builds));
             if let Some(team) = teams.team_for(cell) {
                 body.insert(team);

@@ -68,6 +68,20 @@ impl SavedMetadata {
         }
     }
 
+    /// `*self == SavedMetadata::of(metadata)`, without cloning the metadata.
+    pub fn matches(&self, metadata: &MapMetadata) -> bool {
+        // Destructured so a new field cannot be left out of the comparison.
+        let SavedMetadata { display_name, authors, game_mode, movement, palette, sky, sun, brightness } = self;
+        *display_name == metadata.display_name
+            && *authors == metadata.authors
+            && game_mode == metadata.game_mode.prefix()
+            && *movement == metadata.movement
+            && *palette == metadata.palette
+            && *sky == metadata.sky
+            && *sun == metadata.sun
+            && *brightness == metadata.brightness
+    }
+
     pub fn into_metadata(self) -> MapMetadata {
         let mut metadata = MapMetadata::default();
         metadata.display_name = self.display_name.filter(|name| !name.trim().is_empty());
@@ -339,6 +353,8 @@ mod tests {
         assert_eq!(as_values(&loaded.timeline), as_values(&timeline), "{text}");
         assert_eq!(loaded.timeline.id_counter(), timeline.id_counter());
         assert_eq!(SavedMetadata::of(&loaded.metadata), SavedMetadata::of(&metadata), "{text}");
+        assert!(SavedMetadata::of(&metadata).matches(&metadata));
+        assert!(!SavedMetadata::of(&MapMetadata::default()).matches(&metadata));
 
         let dir = std::env::temp_dir().join("grackle-save-tests");
         std::fs::create_dir_all(&dir).unwrap();
