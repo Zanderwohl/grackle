@@ -27,7 +27,6 @@ use crate::common::player_settings::{DebrisDecals, PlayerSettings};
 use crate::common::skeleton::Skeleton;
 use crate::editor::decal::MapDecalSpec;
 use crate::game::ragdoll::{GibImpact, GIB_SPLAT_SPEED};
-use crate::game::warm_up::{warm_up_camera, WarmUp, WarmUpPlugin};
 use crate::tool::bakes::BakedRoomGeometry;
 use crate::tool::sun_bake::{keep_lightmap, SunBake};
 
@@ -121,7 +120,22 @@ impl TransientKind {
     fn pictures(self) -> &'static [&'static str] {
         match self {
             TransientKind::BulletHole => &["bullet_hole_1.png", "bullet_hole_2.png"],
-            TransientKind::Blood => &["blood_1.png", "blood_2.png", "blood_3.png", "blood_4.png"],
+            TransientKind::Blood => &[
+                "blood_1.png",
+                "blood_2.png",
+                "blood_3.png",
+                "blood_4.png",
+                "blood_5.png",
+                "blood_6.png",
+                "blood_7.png",
+                "blood_8.png",
+                "blood_9.png",
+                "blood_10.png",
+                "blood_11.png",
+                "blood_12.png",
+                "blood_13.png",
+                "blood_14.png",
+            ],
             TransientKind::Scorch => &["scorch_1.png", "scorch_2.png"],
         }
     }
@@ -645,9 +659,7 @@ fn age_transients(
     }
 }
 
-/// Draws every decal material once, with and without a lightmap, through a camera set up as the
-/// play camera is. Bevy compiles a pipeline on the frame something is first drawn with it,
-/// synchronously on macOS and wasm. Follows the lens warm-up in [`crate::game::forward_camera`].
+/// Every decal material, with and without a lightmap, for [`crate::game::warm_up`].
 fn warm_up_decals(
     mut commands: Commands,
     art: Res<DecalArt>,
@@ -658,7 +670,6 @@ fn warm_up_decals(
     use bevy::camera::visibility::{NoFrustumCulling, RenderLayers};
 
     let layer = RenderLayers::layer(crate::common::render_layers::WARM_UP);
-    commands.spawn(warm_up_camera(&mut images, "Decal warm-up camera"));
     // Laid out as a cut piece is, with all three corners in one place so nothing is rasterized.
     let point = decal::Piece {
         positions: vec![[0.0, 0.0, -1.0]; 3],
@@ -674,7 +685,7 @@ fn warm_up_decals(
     let multiplied = art.transient.iter().flatten().cloned();
     for (material, lit) in multiplied.map(|m| (m, false)).chain([(blended.clone(), false), (blended, true)]) {
         let mut piece = commands.spawn((
-            WarmUp::default(),
+            crate::game::warm_up::WarmUp,
             Mesh3d(mesh.clone()),
             MeshMaterial3d(material),
             layer.clone(),
@@ -703,7 +714,7 @@ pub struct DecalPlugin;
 
 impl Plugin for DecalPlugin {
     fn build(&self, app: &mut App) {
-        WarmUpPlugin::add_once(app);
+        crate::game::warm_up::ensure(app);
         app.init_resource::<DecalArt>()
             .init_resource::<TransientDecals>()
             .init_resource::<MapDecalArt>()

@@ -21,7 +21,7 @@ use crate::common::movement_rules::MovementRules;
 use crate::common::skeleton::Skeleton;
 use crate::game::decal::HitBodies;
 use crate::game::ragdoll::Ragdoll;
-use crate::game::warm_up::{warm_up_camera, WarmUp, WarmUpPlugin};
+use crate::game::warm_up::{self, WarmUp};
 
 /// Meters per second a severed end must move for it to bleed.
 pub const BLEED_SPEED: f32 = 5.0;
@@ -553,9 +553,8 @@ fn end_the_bursts(
 }
 
 /// See [`crate::game::warm_up`].
-fn warm_up_the_blood(mut commands: Commands, effects: Res<BloodEffects>, mut images: ResMut<Assets<Image>>) {
+fn warm_up_the_blood(mut commands: Commands, effects: Res<BloodEffects>) {
     let layer = RenderLayers::layer(crate::common::render_layers::WARM_UP);
-    commands.spawn(warm_up_camera(&mut images, "Blood warm-up camera"));
     let looks = [
         (&effects.trail, &effects.splat),
         (&effects.burst, &effects.splat),
@@ -565,7 +564,7 @@ fn warm_up_the_blood(mut commands: Commands, effects: Res<BloodEffects>, mut ima
         let mut properties = EffectProperties::default();
         properties.set("velocity", (Vec3::NEG_Z * BLEED_SPEED * 2.0).into());
         commands.spawn((
-            WarmUp::default(),
+            WarmUp,
             ParticleEffect::new(effect.clone()),
             EffectMaterial { images: vec![image.clone()] },
             properties,
@@ -588,7 +587,7 @@ pub struct GibBloodPlugin;
 
 impl Plugin for GibBloodPlugin {
     fn build(&self, app: &mut App) {
-        WarmUpPlugin::add_once(app);
+        warm_up::ensure(app);
         app.add_plugins(HanabiPlugin)
             .add_systems(Startup, (make_the_effects, warm_up_the_blood).chain())
             // Ungated: corpses arrive from the wire whenever.

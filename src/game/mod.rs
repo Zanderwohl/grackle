@@ -65,6 +65,7 @@ pub mod score;
 pub mod telemetry;
 pub mod spectate;
 pub mod spray;
+pub mod streak;
 pub mod tab_board;
 pub mod team_choice;
 pub mod team_picker;
