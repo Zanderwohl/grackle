@@ -31,16 +31,27 @@ pub fn ranked(places: &mut [VolumeOrder]) {
     }
 }
 
-/// Every frame, writing only what moved: a written order is a changed one, and
-/// a changed one is rebaked.
+/// Writing only what moved: a written order is a changed one, and a changed one
+/// is rebaked. Skipped on a frame where neither the order nor any volume, copy or
+/// their parenting changed.
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn place_volumes(
     timeline: Res<FeatureTimeline>,
     volumes: Query<(Entity, Option<&VolumeOrder>), Or<(With<Room>, With<Block>)>>,
     parents: Query<&ChildOf>,
     tags: Query<&FeatureTag>,
     copies: Query<&MirrorCopy>,
+    added: Query<(), Or<(Added<Room>, Added<Block>, Added<FeatureTag>, Changed<MirrorCopy>)>>,
+    reparented: Query<(), (Changed<ChildOf>, Or<(With<Room>, With<Block>, With<MirrorCopy>)>)>,
+    mut removed_rooms: RemovedComponents<Room>,
+    mut removed_blocks: RemovedComponents<Block>,
+    mut removed_orders: RemovedComponents<VolumeOrder>,
     mut commands: Commands,
 ) {
+    let removed = removed_rooms.read().count() + removed_blocks.read().count() + removed_orders.read().count() > 0;
+    if !timeline.is_changed() && !removed && added.is_empty() && reparented.is_empty() {
+        return;
+    }
     let positions = positions(&timeline);
     let mut placed = Vec::new();
     for (entity, current) in &volumes {

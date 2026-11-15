@@ -469,7 +469,9 @@ impl RoomDragState {
         for (handle, mut tfm) in &mut handles {
             for (pos, axis) in &centers {
                 if handle.axis == *axis {
-                    tfm.translation = *pos;
+                    if tfm.translation != *pos {
+                        tfm.translation = *pos;
+                    }
                     break;
                 }
             }

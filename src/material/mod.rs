@@ -239,6 +239,9 @@ fn publish_saved_materials(
     mut baked: ResMut<gpu::BakedTextures>,
     mut standard: ResMut<Assets<StandardMaterial>>,
 ) {
+    if material.saved_names.is_empty() {
+        return;
+    }
     for name in std::mem::take(&mut material.saved_names) {
         library.forget(&name, &mut baked, &mut standard);
     }

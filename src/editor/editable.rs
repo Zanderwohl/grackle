@@ -88,6 +88,17 @@ fn checkpoint_when_idle(
     }
 }
 
+/// Inserts `value` unless the entity already holds an equal one. `apply_to_entity` runs on every edit
+/// of anything a feature is built on, and an unchanged component written anyway reads as changed to
+/// every bake.
+pub fn insert_if_changed<C: Component + PartialEq>(commands: &mut EntityCommands, value: C) {
+    commands.queue(move |mut entity: EntityWorldMut| {
+        if entity.get::<C>() != Some(&value) {
+            entity.insert(value);
+        }
+    });
+}
+
 /// `--map`: the blueprint to open in place of the new-map template.
 #[derive(Resource, Clone, Debug, Default)]
 pub struct StartupMap(pub Option<PathBuf>);
@@ -258,6 +269,9 @@ pub struct FeatureTimeline {
     /// an edit above it cannot move it. View state: not saved, not sent, not in undo snapshots.
     rollback: Option<FeatureId>,
     pending_despawns: Vec<Entity>,
+    /// Bumped whenever `sync_entities` resolves, spawns or despawns a feature, which it does with
+    /// change detection bypassed, so a cache of resolved geometry can tell.
+    entity_generation: u64,
     /// The row being renamed in the Features panel. View state, like the bar.
     renaming: Option<Renaming>,
     /// Whole-map snapshots, oldest first. In memory only.
@@ -320,6 +334,7 @@ impl Default for FeatureTimeline {
             selection_affected: None,
             rollback: None,
             pending_despawns: vec![],
+            entity_generation: 0,
             renaming: None,
             undo: vec![],
             redo: vec![],
@@ -587,6 +602,10 @@ impl FeatureTimeline {
         &self.features
     }
 
+    pub fn entity_generation(&self) -> u64 {
+        self.entity_generation
+    }
+
     pub fn feature_order(&self) -> &[FeatureId] {
         &self.feature_order
     }
@@ -656,7 +675,7 @@ impl FeatureTimeline {
         self.checkpoint
             .as_ref()
             .and_then(|checkpoint| checkpoint.settings.as_ref())
-            .is_some_and(|settings| *settings != SavedMetadata::of(metadata))
+            .is_some_and(|settings| !settings.matches(metadata))
     }
 
     /// The one place history grows, so the one place it is capped at [`UNDO_DEPTH`].
@@ -860,7 +879,7 @@ impl FeatureTimeline {
         }
     }
     
-    /// The Features panel. Says whether it changed the timeline, because the
+    /// The Features panel. Says whether it edited the timeline, because the
     /// caller hands it one with change detection bypassed — see
     /// `EditorPanels::ui`.
     pub fn ui(
@@ -881,7 +900,7 @@ impl FeatureTimeline {
 
             if is_active {
                 let selected_idx = selected_idx.unwrap();
-                let prior_order: Vec<FeatureId> = features.feature_order[..selected_idx].to_vec();
+                let prior_order = &features.feature_order[..selected_idx];
 
                 // Resizable, opening at half the tab; bounds are relative to the tab so neither half can vanish.
                 let available = ui.available_height();
@@ -897,7 +916,7 @@ impl FeatureTimeline {
                             let edited = feature_editor_frame(ui, |ui| {
                                 ui.heading(feature.label());
                                 ui.add_space(FEATURE_EDITOR_PADDING * 0.5);
-                                feature.object_mut().editor_ui(ui, &features.features, &prior_order, &mut retarget_request)
+                                feature.object_mut().editor_ui(ui, &features.features, prior_order, &mut retarget_request)
                             });
                             if let Some(label) = retarget_request {
                                 *retarget_out = Some((selected_id, label));
@@ -926,7 +945,6 @@ impl FeatureTimeline {
             }
         }
 
-        let mut selection_changed = false;
         let mut clicked: Option<(FeatureId, egui::Modifiers)> = None;
         let mut cleared = false;
         // Taken out so a row can edit it while the loop borrows the timeline.
@@ -1086,10 +1104,8 @@ impl FeatureTimeline {
 
         if let Some((id, modifiers)) = clicked {
             features.click_row(id, modifiers);
-            selection_changed = true;
         } else if cleared {
             features.select(None);
-            selection_changed = true;
         }
 
         let row_action = pending.borrow_mut().take();
@@ -1111,7 +1127,9 @@ impl FeatureTimeline {
             None => {}
         }
 
-        was_edited || selection_changed || acted
+        // A selection alone is not an edit: it would make the undo checkpoint and `map_sync`
+        // serialize the whole map for nothing.
+        was_edited || acted
     }
 
     fn undo_redo_shortcuts(
@@ -1138,17 +1156,14 @@ impl FeatureTimeline {
         }
 
         let shown = features.shown_len();
-        let order: Vec<(usize, FeatureId)> = features.feature_order.iter()
-            .enumerate()
-            .map(|(i, id)| (i, *id))
-            .collect();
-
-        for (i, id) in order {
+        for i in 0..features.feature_order.len() {
+            let id = features.feature_order[i];
             let should_exist = i < shown;
             let needs_spawn = should_exist
                 && features.features.get(&id).is_some_and(|a| a.object.entity().is_none());
 
             if needs_spawn {
+                features.entity_generation += 1;
                 let mut feature = features.features.remove(&id).unwrap();
                 feature.object.resolve_references(&features.features);
                 let entity = commands.spawn(FeatureTag { feature_id: id._id }).id();
@@ -1160,6 +1175,7 @@ impl FeatureTimeline {
                     if let Some(entity) = feature.object.entity() {
                         commands.entity(entity).despawn();
                         feature.object.set_entity(None);
+                        features.entity_generation += 1;
                     }
                     features.features.insert(id, feature);
                 }
@@ -1703,6 +1719,20 @@ fn dashed_line(gizmos: &mut Gizmos, start: Vec3, end: Vec3, color: Color, dash: 
 mod tests {
     use super::*;
     use crate::editor::global_point::GlobalPoint;
+
+    #[test]
+    fn an_equal_component_is_not_written_again() {
+        use bevy::ecs::system::RunSystemOnce;
+        let mut world = World::new();
+        let entity = world.spawn(Transform::from_xyz(1.0, 2.0, 3.0)).id();
+        world.clear_trackers();
+        let write = move |value: Transform| move |mut commands: Commands| insert_if_changed(&mut commands.entity(entity), value);
+        world.run_system_once(write(Transform::from_xyz(1.0, 2.0, 3.0))).unwrap();
+        assert!(!world.entity(entity).get_ref::<Transform>().unwrap().is_changed());
+        world.run_system_once(write(Transform::from_xyz(4.0, 2.0, 3.0))).unwrap();
+        assert!(world.entity(entity).get_ref::<Transform>().unwrap().is_changed());
+        assert_eq!(world.get::<Transform>(entity).unwrap().translation.x, 4.0);
+    }
 
     fn x_of(timeline: &FeatureTimeline, id: FeatureId) -> Option<f32> {
         timeline.get_feature(&id).map(|f| f.object().get_point("").unwrap().x)

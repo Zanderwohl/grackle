@@ -4,7 +4,7 @@ use crate::common::world_surface;
 use crate::editor::editable::{FeatureId, FeatureTimeline};
 use crate::editor::input::CurrentMouseInput;
 use crate::editor::multicam::{CameraAxis, Multicam};
-use crate::common::world_surface::Volume;
+use crate::common::world_surface::{Face, Volume};
 use crate::editor::volume_order::place;
 use crate::tool::room::{MapVolumes, VolumeOrder};
 use crate::tool::show::GizmoVisibility;
@@ -130,6 +130,70 @@ fn wall_hit(volumes: &[Volume], index: usize, ray: &Ray3d) -> Option<(f32, Vec3)
     world_surface::ray_from_inside(&world_surface::share(volumes, index), ray)
 }
 
+/// The volumes [`find_nearest_feature_hit`] picks rooms against, with each one's share of the
+/// surface cut the first time a ray reaches its box. Valid for one state of the timeline: the
+/// owner rebuilds it whenever [`PickCache::key`] would change.
+pub struct PickCache {
+    key: (bevy::ecs::change_detection::Tick, u64),
+    volumes: Vec<Volume>,
+    /// Each feature's volumes, by index into `volumes`, ascending.
+    owned: std::collections::HashMap<FeatureId, Vec<usize>>,
+    shares: Vec<Option<Vec<Face>>>,
+}
+
+impl PickCache {
+    /// What the volumes depend on: the timeline's last change, and its entity generation, which
+    /// counts the references resolved with change detection bypassed.
+    pub fn key(last_changed: bevy::ecs::change_detection::Tick, features: &FeatureTimeline) -> (bevy::ecs::change_detection::Tick, u64) {
+        (last_changed, features.entity_generation())
+    }
+
+    fn of(features: &FeatureTimeline, key: (bevy::ecs::change_detection::Tick, u64)) -> Self {
+        // Hidden volumes too: they still cut their neighbors. A Mirror's copies
+        // are unpickable, but they cut, at their source's place.
+        let positions = crate::editor::volume_order::positions(features);
+        let mut placed: Vec<(VolumeOrder, Volume, Option<FeatureId>)> = Vec::new();
+        for (id, feature) in features.active_features() {
+            let at = |source: FeatureId| positions.get(&source).copied().unwrap_or(0);
+            let own = place(at(id), &[]);
+            placed.extend(feature.object().volumes().into_iter().map(|volume| (own.clone(), volume, Some(id))));
+            for copy in feature.object().standing_copies() {
+                let order = place(at(copy.source), &copy.images);
+                placed.extend(copy.object.volumes().into_iter().map(|volume| (order.clone(), volume, None)));
+            }
+        }
+        world_surface::sort_by_place(&mut placed);
+        let (volumes, owners): (Vec<Volume>, Vec<Option<FeatureId>>) = placed.into_iter().map(|(_, volume, owner)| (volume, owner)).unzip();
+        let mut owned: std::collections::HashMap<FeatureId, Vec<usize>> = std::collections::HashMap::new();
+        for (index, owner) in owners.into_iter().enumerate() {
+            if let Some(owner) = owner {
+                owned.entry(owner).or_default().push(index);
+            }
+        }
+        let shares = vec![None; volumes.len()];
+        PickCache { key, volumes, owned, shares }
+    }
+
+    /// Kept if `features` is still at `key`, rebuilt otherwise.
+    pub fn refresh<'a>(cache: &'a mut Option<PickCache>, features: &FeatureTimeline, key: (bevy::ecs::change_detection::Tick, u64)) -> &'a mut PickCache {
+        if cache.as_ref().is_none_or(|cache| cache.key != key) {
+            *cache = Some(PickCache::of(features, key));
+        }
+        cache.as_mut().expect("filled above")
+    }
+
+    /// [`wall_hit`], cutting the share only once.
+    fn wall_hit(&mut self, index: usize, ray: &Ray3d) -> Option<(f32, Vec3)> {
+        let (min, max) = self.volumes[index].shape.bounds();
+        if !ray_intersects_aabb(ray, min, max) {
+            return None;
+        }
+        let volumes = &self.volumes;
+        let share = self.shares[index].get_or_insert_with(|| world_surface::share(volumes, index));
+        world_surface::ray_from_inside(&*share, ray)
+    }
+}
+
 /// Find the closest reference point to the mouse ray within `pick_radius`.
 pub fn find_hovered_point(
     ray: &Ray3d,
@@ -182,6 +246,7 @@ pub fn find_hovered_point_filtered(
 ) -> Option<(FeatureId, String, Vec3)> {
     let mut best_dist = pick_radius;
     let mut best: Option<(FeatureId, String, Vec3)> = None;
+    let allowed: std::collections::HashSet<FeatureId> = allowed.iter().copied().collect();
 
     for (feature_id, feature) in features.active_features() {
         if !allowed.contains(&feature_id) { continue; }
@@ -208,6 +273,7 @@ pub fn draw_picking_gizmos_filtered(
 ) {
     let dim_color = Color::srgb_u8(200, 200, 200);
     let highlight_color = Color::srgb_u8(0, 230, 0);
+    let allowed: std::collections::HashSet<FeatureId> = allowed.iter().copied().collect();
 
     for (feature_id, feature) in features.active_features() {
         if !allowed.contains(&feature_id) { continue; }
@@ -288,25 +354,20 @@ pub fn find_nearest_feature_hit(
     features: &FeatureTimeline,
     visibility: &GizmoVisibility,
 ) -> Option<(FeatureId, Vec3)> {
+    let mut cache = PickCache::of(features, Default::default());
+    find_nearest_feature_hit_in(ray, features, visibility, &mut cache)
+}
+
+/// [`find_nearest_feature_hit`] against volumes already gathered for this state of `features`.
+pub fn find_nearest_feature_hit_in(
+    ray: &Ray3d,
+    features: &FeatureTimeline,
+    visibility: &GizmoVisibility,
+    cache: &mut PickCache,
+) -> Option<(FeatureId, Vec3)> {
     let dir = Vec3::from(ray.direction);
     let mut best_t = f32::MAX;
     let mut best: Option<(FeatureId, Vec3)> = None;
-
-    // Hidden volumes too: they still cut their neighbors. A Mirror's copies
-    // are unpickable, but they cut, at their source's place.
-    let positions = crate::editor::volume_order::positions(features);
-    let mut placed: Vec<(VolumeOrder, Volume, Option<FeatureId>)> = Vec::new();
-    for (id, feature) in features.active_features() {
-        let at = |source: FeatureId| positions.get(&source).copied().unwrap_or(0);
-        let own = place(at(id), &[]);
-        placed.extend(feature.object().volumes().into_iter().map(|volume| (own.clone(), volume, Some(id))));
-        for copy in feature.object().standing_copies() {
-            let order = place(at(copy.source), &copy.images);
-            placed.extend(copy.object.volumes().into_iter().map(|volume| (order.clone(), volume, None)));
-        }
-    }
-    world_surface::sort_by_place(&mut placed);
-    let (volumes, owners): (Vec<Volume>, Vec<Option<FeatureId>>) = placed.into_iter().map(|(_, volume, owner)| (volume, owner)).unzip();
 
     for (feature_id, feature) in features.active_features() {
         let key = feature.object().type_key();
@@ -329,9 +390,9 @@ pub fn find_nearest_feature_hit(
 
         match key {
             "editor_room" | "footprint_room" | "block" => {
-                let own = owners.iter().enumerate().filter(|(_, owner)| **owner == Some(feature_id));
-                for (index, _) in own {
-                    if let Some((t, hit)) = wall_hit(&volumes, index, ray) {
+                let own = cache.owned.get(&feature_id).cloned().unwrap_or_default();
+                for index in own {
+                    if let Some((t, hit)) = cache.wall_hit(index, ray) {
                         if t < best_t {
                             best_t = t;
                             best = Some((feature_id, hit));

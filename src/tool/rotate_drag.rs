@@ -197,10 +197,12 @@ impl RotateDragState {
 
         for (ring, mut tfm) in &mut rings {
             if state.grab.as_ref().is_some_and(|g| g.axis == ring.axis) {
-                tfm.translation = pos;
+                if tfm.translation != pos {
+                    tfm.translation = pos;
+                }
                 continue;
             }
-            *tfm = ring_transform(pos, angles, ring.axis);
+            tfm.set_if_neq(ring_transform(pos, angles, ring.axis));
         }
     }
 
