@@ -121,6 +121,9 @@ pub struct PropDoc {
     pub pickup: PickupSpec,
     #[serde(default, skip_serializing_if = "is_default")]
     pub hat: HatSpec,
+    /// A key in `taunts.toml`: the taunt a weapon of this model offers first while held.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub taunt: Option<String>,
     /// Stored rather than derived from the highest id in use, so deleting the
     /// last feature cannot make the next one reuse its id.
     #[serde(default)]
@@ -151,6 +154,7 @@ impl PropDoc {
             breakable: BreakableSpec::default(),
             pickup: PickupSpec::default(),
             hat: HatSpec::default(),
+            taunt: None,
             next_id: 0,
             bones: vec![],
             animations: ClipSet::default(),
@@ -646,13 +650,49 @@ pub fn prop_path(pack: &Path, name: &str) -> PathBuf {
     pack.join(PROPS_DIR).join(format!("{name}.{PROP_EXTENSION}"))
 }
 
-/// The editor's file dialog goes through [`parse`] instead.
-pub fn load(assets: &Assets, pack: &Path, name: &str) -> Result<PropDoc, PropFileError> {
+/// The prop from the highest-priority pack that has it, read by `read`, and its file. A malformed
+/// file is logged and passed over.
+pub fn from_the_packs<T>(
+    assets: &Assets,
+    name: &str,
+    read: impl Fn(&Assets, &Path, &str) -> Result<T, PropFileError>,
+) -> Option<(T, PathBuf)> {
+    // Highest priority last, so an overriding pack wins.
+    let mut found = None;
+    for pack in crate::common::assets::default_packs().iter() {
+        match read(assets, pack, name) {
+            Ok(read) => found = Some((read, prop_path(pack, name))),
+            Err(PropFileError::Asset(_)) => {}
+            Err(e) => error!("{e}"),
+        }
+    }
+    found
+}
+
+/// The `taunt` a prop names, without building the rest of the document.
+pub fn taunt_named_by(assets: &Assets, name: &str) -> Option<String> {
+    #[derive(Deserialize)]
+    struct OnlyTheTaunt {
+        #[serde(default)]
+        taunt: Option<String>,
+    }
+    let read = |assets: &Assets, pack: &Path, name: &str| {
+        let text = read_text(assets, pack, name)?;
+        toml::from_str::<OnlyTheTaunt>(&text).map_err(|e| PropFileError::Malformed(format!("props/{name}: {e}")))
+    };
+    from_the_packs(assets, name, read).and_then(|(read, _)| read.taunt)
+}
+
+fn read_text(assets: &Assets, pack: &Path, name: &str) -> Result<String, PropFileError> {
     let relative = format!("{PROPS_DIR}/{name}.{PROP_EXTENSION}");
     let bytes = assets.0.read(pack, &relative).map_err(PropFileError::Asset)?;
-    let text = String::from_utf8(bytes)
-        .map_err(|e| PropFileError::Malformed(format!("{relative}: {e}")))?;
-    parse(&text).map_err(|e| PropFileError::Malformed(format!("{relative}: {e}")))
+    String::from_utf8(bytes).map_err(|e| PropFileError::Malformed(format!("{relative}: {e}")))
+}
+
+/// The editor's file dialog goes through [`parse`] instead.
+pub fn load(assets: &Assets, pack: &Path, name: &str) -> Result<PropDoc, PropFileError> {
+    let text = read_text(assets, pack, name)?;
+    parse(&text).map_err(|e| PropFileError::Malformed(format!("{PROPS_DIR}/{name}.{PROP_EXTENSION}: {e}")))
 }
 
 pub fn parse(text: &str) -> Result<PropDoc, toml::de::Error> {
@@ -681,6 +721,15 @@ mod tests {
     use crate::prop::profile::Placement;
     use crate::prop::solid::Shape;
     use crate::prop::surface::{Style, Surface, Tint};
+
+    /// Written after the `[[features]]` tables, it would be read back into the last feature.
+    #[test]
+    fn a_named_taunt_survives_a_save() {
+        let mut doc = sample();
+        doc.taunt = Some("twirl".into());
+        let text = to_text(&doc).unwrap();
+        assert_eq!(parse(&text).unwrap().taunt.as_deref(), Some("twirl"), "{text}");
+    }
 
     fn sample() -> PropDoc {
         let mut doc = PropDoc::new("weapon.names.rocket_launcher");

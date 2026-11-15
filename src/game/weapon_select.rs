@@ -114,7 +114,7 @@ pub fn choose_weapons(
     paused: Option<Res<MouseHeld>>,
     taunt_menu: Option<Res<crate::game::taunt_menu::TauntMenu>>,
     catalog: Res<WeaponCatalog>,
-    ours: Option<Single<(Entity, &Equipped), With<LocalPlayer>>>,
+    ours: Option<Single<(Entity, &Equipped, Option<&crate::game::condition::Condition>), With<LocalPlayer>>>,
     mut selection: ResMut<WeaponSelection>,
     mut travel: Local<f32>,
     mut latch: ResMut<InputLatch>,
@@ -131,7 +131,14 @@ pub fn choose_weapons(
         selection.forget();
         return;
     };
-    let (body, equipped) = ours.into_inner();
+    let (body, equipped, condition) = ours.into_inner();
+    // The authority refuses a switch mid-taunt.
+    if condition.is_some_and(|condition| !condition.may_switch_weapons()) {
+        *travel = 0.0;
+        selection.forget();
+        selection.highlight = equipped.held();
+        return;
+    }
 
     if selection.body != Some(body) {
         *selection = WeaponSelection { body: Some(body), ..default() };

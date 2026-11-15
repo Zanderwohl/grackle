@@ -21,7 +21,7 @@ use crate::common::skeleton::play::{
 use crate::common::skeleton::rig::ScratchPose;
 use crate::common::skeleton::{Pose, Skeleton};
 use crate::common::weapon::{Equipped, WeaponCatalog, WeaponId};
-use crate::common::taunt::Taunts;
+use crate::common::taunt::{Taunts, WeaponTaunts};
 use crate::game::condition::Condition;
 use crate::game::player::{LocalPlayer, Player, ViewMode};
 use crate::game::skeleton::SkeletonRoot;
@@ -208,6 +208,11 @@ impl HeldModel {
     }
 
     #[cfg(test)]
+    pub(crate) fn with_hold(hold: HoldSpec) -> HeldModel {
+        HeldModel { weapon: Some(WeaponId::of("held")), resolved: true, hold, ..default() }
+    }
+
+    #[cfg(test)]
     pub(crate) fn with_clips(names: &[&str]) -> HeldModel {
         let clips = names.iter().map(|name| (name.to_string(), Handle::default())).collect();
         HeldModel { clips, ..default() }
@@ -224,8 +229,10 @@ impl Plugin for HeldWeaponPlugin {
             .init_resource::<SurfaceMaterials>()
             .init_resource::<SharedWeaponClips>()
             .init_resource::<crate::common::clip_file::NamedClips>()
+            .init_resource::<WeaponTaunts>()
             .add_systems(Startup, load_shared_weapon_clips)
             .add_systems(Update, (dress_held_weapons, show_held_weapons).chain())
+            .add_systems(Update, learn_weapon_taunts)
             .add_systems(Update, bake_what_we_carry.run_if(crate::common::app_mode::simulating))
             // Before propagation, with the bone meshes, or a held part is drawn
             // a frame behind the hand.
@@ -259,6 +266,40 @@ fn wanted_model<'a>(equipped: &Equipped, catalog: &'a WeaponCatalog) -> Wanted<'
         Some(model) => Wanted::Model(model),
         None => Wanted::Nothing,
     }
+}
+
+/// A model the server sent or the prop editor saved is read from the cache; the rest are read off
+/// the packs once each, since any later change to one reaches the cache.
+fn learn_weapon_taunts(
+    catalog: Res<WeaponCatalog>,
+    cache: Res<PropCache>,
+    packs: Res<PackAssets>,
+    mut taunts: ResMut<WeaponTaunts>,
+    mut learned_at: Local<Option<u64>>,
+    mut on_disk: Local<std::collections::HashMap<String, Option<String>>>,
+) {
+    if !catalog.is_changed() && *learned_at == Some(cache.generation()) {
+        return;
+    }
+    *learned_at = Some(cache.generation());
+    let learned = WeaponTaunts(
+        catalog
+            .weapons
+            .iter()
+            .filter_map(|weapon| {
+                let model = weapon.model.as_deref()?;
+                let taunt = match cache.get(model) {
+                    Some(baked) => baked.taunt.clone(),
+                    None => on_disk
+                        .entry(model.to_owned())
+                        .or_insert_with(|| crate::prop::document::taunt_named_by(&packs, model))
+                        .clone(),
+                };
+                Some((weapon.id, taunt?))
+            })
+            .collect(),
+    );
+    taunts.set_if_neq(learned);
 }
 
 /// Every carried weapon, not only the one in hand: a prop is photographed when

@@ -271,6 +271,9 @@ pub const SEEDS: &[Seed] = &[
     },
 ];
 
+/// Humanoid clips generated key by key rather than sampled from a pose, by file name.
+pub const WRITTEN: &[(&str, fn() -> Clip)] = &[(super::pistol_twirl::TAUNT_TWIRL, super::pistol_twirl::clip)];
+
 const RAPTOR: &str = "raptor";
 
 /// A raptor state's seed, looping, from [`super::raptor_seed::pose`].
@@ -554,7 +557,7 @@ fn bake_a_loop(seed: Seed, skeleton: &Skeleton, heading: f32) -> Clip {
 /// Starts from [`FIRST_KEYS`] even keys and keys the worst sample of every segment that
 /// misses until none does. Each new key bends the spline on the segments beside it too,
 /// which is why every sample is checked again each round.
-fn fit(times: &[f32], values: &[Vec3], length: f32, looping: bool, tolerance: f32, apart: impl Fn(Vec3, usize) -> f32) -> Vec<usize> {
+pub(super) fn fit(times: &[f32], values: &[Vec3], length: f32, looping: bool, tolerance: f32, apart: impl Fn(Vec3, usize) -> f32) -> Vec<usize> {
     use super::play::sample_key;
     let count = times.len() - 1;
     let mut kept: Vec<usize> = (0..FIRST_KEYS.min(count)).map(|key| key * count / FIRST_KEYS.min(count)).collect();

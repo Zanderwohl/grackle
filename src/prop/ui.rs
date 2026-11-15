@@ -27,6 +27,7 @@ use crate::common::file_menu::{dialog_directory, file_menu, FileAction};
 use crate::common::net::NetRole;
 use crate::editor::multicam::{Insets, MulticamState};
 use crate::get;
+use crate::common::taunt::Taunts;
 use crate::prop::archetype::{Archetype, Collider, ColliderShape, PickupKind, PickupStyle};
 use crate::prop::document::{self, Pick, PropDoc, PropEditor, PROP_EXTENSION};
 use crate::prop::plane::{OriginPlane, PickedPlane, Plane, PlaneRef};
@@ -177,6 +178,7 @@ struct PropTabs<'a> {
     requests: &'a mut PropRequests,
     session: &'a mut SketchSession,
     tool: Option<Task>,
+    taunts: Option<&'a Taunts>,
 }
 
 impl<'a> TabViewer for PropTabs<'a> {
@@ -220,7 +222,7 @@ impl<'a> TabViewer for PropTabs<'a> {
             PropTab::Hold => match self.editor.doc().archetype {
                 Archetype::Held => {
                     let front = self.build.bounds().map(front_of);
-                    hold(ui, self.editor, *self.figure, self.preview, front)
+                    hold(ui, self.editor, *self.figure, self.preview, front, self.taunts)
                 }
                 Archetype::Hat => hat_fit(ui, self.editor, *self.figure),
                 // Nothing holds or wears a placed prop.
@@ -253,6 +255,14 @@ impl Plugin for PropUiPlugin {
 
 /// Bundled to keep [`panels`] inside Bevy's parameter limit.
 #[derive(bevy::ecs::system::SystemParam)]
+struct Shared<'w> {
+    // Optional: a build with no `NetPlugin` is a closed game, its own authority.
+    role: Option<Res<'w, NetRole>>,
+    taunts: Option<Res<'w, Taunts>>,
+}
+
+/// Bundled to keep [`panels`] inside Bevy's parameter limit.
+#[derive(bevy::ecs::system::SystemParam)]
 struct Picking<'w> {
     plane: ResMut<'w, PickedPlane>,
     tool: ResMut<'w, ActiveTool>,
@@ -273,8 +283,7 @@ fn panels(
     dialog: Res<PropFileDialog>,
     mut frame: MessageWriter<FrameTheProp>,
     mut next_mode: ResMut<NextState<AppMode>>,
-    // Optional: a build with no `NetPlugin` is a closed game, its own authority.
-    role: Option<Res<NetRole>>,
+    shared: Shared,
     mut exit: MessageWriter<AppExit>,
     mut session: ResMut<SketchSession>,
 ) {
@@ -305,6 +314,7 @@ fn panels(
         requests: &mut requests,
         session: &mut session,
         tool: picking.tool.0,
+        taunts: shared.taunts.as_deref(),
     };
     let workspace = layout.workspace;
 
@@ -319,7 +329,7 @@ fn panels(
                 mode_menu(
                     ui,
                     AppMode::Prop,
-                    role.as_deref(),
+                    shared.role.as_deref(),
                     &mut tabs.requests.mode,
                 );
                 ui.separator();
@@ -2125,6 +2135,23 @@ fn front_of((min, max): (Vec3, Vec3)) -> Vec3 {
     Vec3::new(middle.x, middle.y, min.z)
 }
 
+/// A key with no entry in `taunts.toml` is still shown, so it can be seen and cleared.
+fn taunt_ui(ui: &mut Ui, editor: &mut PropEditor, taunts: Option<&Taunts>) {
+    let mut taunt = editor.doc().taunt.clone();
+    let none = get!("prop.hold.no_taunt");
+    egui::ComboBox::from_id_salt("prop_taunt")
+        .selected_text(taunt.clone().unwrap_or_else(|| none.clone()))
+        .show_ui(ui, |ui| {
+            ui.selectable_value(&mut taunt, None, none);
+            for entry in taunts.map_or(&[][..], |taunts| &taunts.0[..]) {
+                ui.selectable_value(&mut taunt, Some(entry.key.clone()), &entry.key);
+            }
+        });
+    if taunt != editor.doc().taunt {
+        editor.edit(|doc| doc.taunt = taunt);
+    }
+}
+
 /// The override checkbox edits the entry for the class standing in the viewport.
 fn hold(
     ui: &mut Ui,
@@ -2132,6 +2159,7 @@ fn hold(
     figure: ScaleFigure,
     preview: &mut ViewmodelPreview,
     front: Option<Vec3>,
+    taunts: Option<&Taunts>,
 ) {
     let base = editor.doc().hold.clone();
 
@@ -2179,6 +2207,8 @@ fn hold(
                 editor.doc_mut().muzzle = muzzle;
             }
         });
+
+        section(ui, "hold_taunt", get!("prop.hold.taunt"), |ui| taunt_ui(ui, editor, taunts));
 
         section(ui, "hold_carry", get!("prop.hold.carry"), |ui| {
             // In arm lengths, not meters. Fine speed because the useful range

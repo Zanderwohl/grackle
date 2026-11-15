@@ -30,6 +30,7 @@ pub mod ik;
 pub mod interpolation;
 pub mod joints;
 pub mod mesh;
+pub mod pistol_twirl;
 pub mod play;
 pub mod rig;
 pub mod rig_file;

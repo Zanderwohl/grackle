@@ -1,5 +1,5 @@
-//! The taunt menu: `G` puts it up, `G` again plays the default taunt (the first the body's rig
-//! has a clip for) and a digit plays the one over it. Up, it owns the digits, so a press does not
+//! The taunt menu: `G` puts it up, `G` again plays the default taunt (the held weapon's own, else
+//! the first the body's rig has a clip for) and a digit plays the one over it. Up, it owns the digits, so a press does not
 //! also choose a weapon. `G` while taunting ends the taunt instead.
 //!
 //! What is on this machine's screen, so local: choosing writes a [`TauntRequest`] onto the latch
@@ -16,7 +16,8 @@ use crate::common::player_color::PlayerColor;
 use crate::common::skeleton::rig::HUMANOID;
 use crate::common::skeleton::Skeleton;
 use crate::common::swatch::{Ink, Swatch};
-use crate::common::taunt::{TauntId, TauntRequest, Taunts};
+use crate::common::taunt::{TauntId, TauntRequest, Taunts, WeaponTaunts};
+use crate::common::weapon::Equipped;
 use crate::common::team::Team;
 use crate::common::ui_shape::{Corner, ShapeMaterial, ShapeStyle};
 use crate::game::condition::Condition;
@@ -69,10 +70,19 @@ impl TauntMenu {
     }
 }
 
-/// The taunts a rig is offered, by digit: `None` without a body or a table.
-fn offered(taunts: Option<&Taunts>, rig: Option<&Skeleton>) -> Vec<TauntId> {
+fn offered(
+    taunts: Option<&Taunts>,
+    weapons: Option<&WeaponTaunts>,
+    rig: Option<&Skeleton>,
+    equipped: Option<&Equipped>,
+) -> Vec<(TauntId, Option<String>)> {
     let kind = rig.map_or(HUMANOID, Skeleton::kind);
-    taunts.map_or_else(Vec::new, |taunts| taunts.offered(kind).map(|taunt| taunt.id).collect())
+    let none = WeaponTaunts::default();
+    let weapons = weapons.unwrap_or(&none);
+    let held = equipped.and_then(Equipped::held);
+    taunts.map_or_else(Vec::new, |taunts| {
+        taunts.offered(kind, weapons, held).map(|taunt| (taunt.id, taunt.icon.clone())).collect()
+    })
 }
 
 /// What a frame's keys do to the menu and the latch, given what was up and whether a taunt is
@@ -109,19 +119,20 @@ pub fn answer_the_taunt_keys(
     actions: Res<Actions>,
     held: Option<Res<MouseHeld>>,
     taunts: Option<Res<Taunts>>,
-    ours: Option<Single<(Entity, &Condition, Option<&Skeleton>), With<LocalPlayer>>>,
+    weapons: Option<Res<WeaponTaunts>>,
+    ours: Option<Single<(Entity, &Condition, Option<&Skeleton>, Option<&Equipped>), With<LocalPlayer>>>,
     mut menu: ResMut<TauntMenu>,
     mut latch: ResMut<InputLatch>,
 ) {
     let held = held.is_some_and(|held| held.any());
-    let Some((body, condition, rig)) = ours.filter(|_| !held).map(|ours| ours.into_inner()) else {
+    let Some((body, condition, rig, equipped)) = ours.filter(|_| !held).map(|ours| ours.into_inner()) else {
         menu.set_if_neq(TauntMenu::default());
         return;
     };
     let open = menu.open && menu.body == Some(body);
 
     let digit = DIGITS.iter().position(|action| actions.just_pressed(*action));
-    let offered = offered(taunts.as_deref(), rig);
+    let offered: Vec<TauntId> = offered(taunts.as_deref(), weapons.as_deref(), rig, equipped).into_iter().map(|(id, _)| id).collect();
     let (next, request) = answer(open, condition.taunt.is_some(), &offered, actions.just_pressed(Action::Taunt), digit);
     if request.is_some() {
         latch.0.taunt = request;
@@ -157,9 +168,10 @@ fn show_the_taunt_menu(
     mut commands: Commands,
     menu: Res<TauntMenu>,
     taunts: Option<Res<Taunts>>,
+    weapons: Option<Res<WeaponTaunts>>,
     font: Res<DisplayFont>,
     zone: Option<Single<Entity, With<SafeZone>>>,
-    ours: Option<Single<(Option<&Skeleton>, Option<&Team>, Option<&PlayerColor>), With<LocalPlayer>>>,
+    ours: Option<Single<(Option<&Skeleton>, Option<&Equipped>, Option<&Team>, Option<&PlayerColor>), With<LocalPlayer>>>,
     mut roots: Query<(Entity, &mut Node), With<TauntMenuRoot>>,
     mut icons: ResMut<KillIcons>,
     pack: Option<Res<crate::common::assets::Assets>>,
@@ -197,14 +209,10 @@ fn show_the_taunt_menu(
         node.display = display;
     }
     // Kept while down, so putting it up again builds nothing.
-    let Some((rig, team, color)) = ours else { return };
+    let Some((rig, equipped, team, color)) = ours else { return };
 
     let swatch = Swatch::of_body(team.copied(), color.copied());
-    let kind = rig.map_or(HUMANOID, Skeleton::kind);
-    let shown: Vec<(TauntId, Option<String>)> = taunts
-        .as_deref()
-        .map_or_else(Vec::new, |taunts| taunts.offered(kind).map(|taunt| (taunt.id, taunt.icon.clone())).collect());
-    let wanted = (shown, swatch);
+    let wanted = (offered(taunts.as_deref(), weapons.as_deref(), rig, equipped), swatch);
     if built_from.as_ref() == Some(&wanted) {
         return;
     }
