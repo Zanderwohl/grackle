@@ -90,12 +90,12 @@ fn hold_the_round_for_its_bakes(
     }
 }
 
-fn show_the_wait(mut contexts: EguiContexts, mut prep: ResMut<RoundPrep>, progress: Res<BakeProgress>, keys: Res<ButtonInput<KeyCode>>) {
+fn show_the_wait(mut contexts: EguiContexts, mut prep: ResMut<RoundPrep>, progress: Res<BakeProgress>, actions: Res<crate::common::keybind::Actions>) {
     if !prep.is_waiting() {
         return;
     }
     let Ok(ctx) = contexts.ctx_mut() else { return };
-    let mut cancel = keys.just_pressed(KeyCode::Escape);
+    let mut cancel = actions.just_pressed(crate::common::keybind::Action::Cancel);
     egui::Modal::new(egui::Id::new("round_prep")).show(ctx, |ui| {
         ui.set_width(WINDOW_WIDTH);
         ui.heading(get!("round_prep.title"));
@@ -136,6 +136,7 @@ pub struct RoundPrepPlugin;
 
 impl Plugin for RoundPrepPlugin {
     fn build(&self, app: &mut App) {
+        crate::common::keybind::ensure(app);
         app.init_resource::<RoundPrep>()
             .add_systems(PreUpdate, hold_the_round_for_its_bakes)
             .add_systems(EguiPrimaryContextPass, show_the_wait);

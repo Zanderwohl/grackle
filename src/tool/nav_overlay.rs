@@ -498,8 +498,8 @@ fn probe_under_the_pointer(
 }
 
 /// A debug key: the overlay over the floor while playing, for tuning bots against.
-fn show_in_play(keys: Res<ButtonInput<KeyCode>>, mut overlay: ResMut<NavOverlay>) {
-    if keys.just_pressed(KeyCode::F7) {
+fn show_in_play(actions: Res<crate::common::keybind::Actions>, mut overlay: ResMut<NavOverlay>) {
+    if actions.just_pressed(crate::common::keybind::Action::NavOverlay) {
         overlay.in_play = !overlay.in_play;
     }
 }
@@ -672,6 +672,7 @@ pub struct NavOverlayPlugin;
 
 impl Plugin for NavOverlayPlugin {
     fn build(&self, app: &mut App) {
+        crate::common::keybind::ensure(app);
         app.init_resource::<NavOverlay>()
             .init_resource::<NavBaseline>()
             .init_resource::<NavProbe>()

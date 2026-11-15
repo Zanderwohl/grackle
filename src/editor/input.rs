@@ -6,12 +6,14 @@ use bevy::input::mouse::MouseMotion;
 use bevy::camera::RenderTarget;
 use bevy::picking::pointer::{PointerId, PointerLocation};
 use crate::common::app_mode::authoring;
+use crate::common::keybind::{Action, Actions};
 use crate::editor::multicam::Multicam;
 
 pub struct EditorInputPlugin;
 
 impl Plugin for EditorInputPlugin {
     fn build(&self, app: &mut App) {
+        crate::common::keybind::ensure(app);
         app
             .init_resource::<CurrentMouseInput>()
             .init_resource::<CurrentKeyboardInput>()
@@ -20,7 +22,7 @@ impl Plugin for EditorInputPlugin {
             .add_systems(PreUpdate, (
                 Self::mouse_input,
                 Self::keyboard_input,
-            ).run_if(authoring))
+            ).after(crate::common::keybind::ResolveActions).run_if(authoring))
         ;
     }
 }
@@ -133,13 +135,13 @@ impl CurrentKeyboardInput {
         }
     }
 
-    pub fn update(&mut self, keys: &Res<ButtonInput<KeyCode>>) {
-        self.forward = keys.pressed(KeyCode::KeyW);
-        self.left = keys.pressed(KeyCode::KeyA);
-        self.right = keys.pressed(KeyCode::KeyD);
-        self.backward = keys.pressed(KeyCode::KeyS);
-        self.up = keys.pressed(KeyCode::KeyE);
-        self.down = keys.pressed(KeyCode::KeyQ);
+    pub fn update(&mut self, actions: &Actions) {
+        self.forward = actions.pressed(Action::FlyForward);
+        self.left = actions.pressed(Action::FlyLeft);
+        self.right = actions.pressed(Action::FlyRight);
+        self.backward = actions.pressed(Action::FlyBack);
+        self.up = actions.pressed(Action::FlyUp);
+        self.down = actions.pressed(Action::FlyDown);
     }
 }
 
@@ -248,12 +250,12 @@ impl EditorInputPlugin {
     
     fn keyboard_input(
         mut current_input: ResMut<CurrentKeyboardInput>,
-        keys: Res<ButtonInput<KeyCode>>,
+        actions: Res<Actions>,
     ) {
-        current_input.modify = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
-        current_input.update(&keys);
-        current_input.confirm = keys.just_released(KeyCode::Enter) || keys.just_released(KeyCode::NumpadEnter);
-        current_input.cancel = keys.just_released(KeyCode::Escape);
+        current_input.modify = actions.pressed(Action::Modify);
+        current_input.update(&actions);
+        current_input.confirm = actions.just_released(Action::Confirm);
+        current_input.cancel = actions.just_released(Action::Cancel);
     }
 }
 

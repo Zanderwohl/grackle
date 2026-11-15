@@ -73,6 +73,7 @@ pub struct PropEditorPlugin;
 
 impl Plugin for PropEditorPlugin {
     fn build(&self, app: &mut App) {
+        crate::common::keybind::ensure(app);
         crate::common::air_lit::ensure(app);
         // Also initialized by `GamePlugin`; done again here so reading pack
         // files does not depend on the game layer being wired up first.

@@ -16,6 +16,7 @@ pub struct PerfPlugin;
 
 impl Plugin for PerfPlugin {
     fn build(&self, app: &mut App) {
+        crate::common::keybind::ensure(app);
         app
             .add_plugins(FrameTimeDiagnosticsPlugin::new(256))
             .init_state::<DebugState>()
@@ -29,11 +30,11 @@ impl Plugin for PerfPlugin {
 }
 
 fn toggle_perf(
-    keyboard: Res<ButtonInput<KeyCode>>,
+    actions: Res<crate::common::keybind::Actions>,
     state: Res<State<DebugState>>,
     mut next_state: ResMut<NextState<DebugState>>,
 ) {
-    if keyboard.just_pressed(KeyCode::F3) {
+    if actions.just_pressed(crate::common::keybind::Action::PerfOverlay) {
         match state.get() {
             DebugState::Off => {
                 next_state.set(DebugState::AllPerf);

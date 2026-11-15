@@ -70,11 +70,10 @@ fn ask_where_to_save(current_file: &CurrentFilePath) {
 /// The map editor's file and undo chords. Its own system because [`EditorPanels::ui`] is at Bevy's
 /// parameter limit; the request goes through `CurrentFilePath` so the menu's code answers it.
 fn file_shortcuts(
-    keys: Res<ButtonInput<KeyCode>>,
-    egui: Res<bevy_egui::input::EguiWantsInput>,
+    actions: Res<crate::common::keybind::Actions>,
     mut current_file: ResMut<CurrentFilePath>,
 ) {
-    if let Some(action) = FileAction::from_chords(chords(&keys, egui.wants_keyboard_input())) {
+    if let Some(action) = FileAction::from_chords(chords(&actions)) {
         // Only on `Some`: a frame with nothing held must not clear a request the menu made this frame.
         current_file.requested_op = Some(action);
     }
@@ -247,6 +246,7 @@ impl<'a> TabViewer for TabViewerAndResources<'a> {
 pub struct EditorPanelPlugin;
 impl Plugin for EditorPanelPlugin {
     fn build(&self, app: &mut App) {
+        crate::common::keybind::ensure(app);
         app
             .init_resource::<EditorPanels>()
             .init_resource::<RoundSettings>()

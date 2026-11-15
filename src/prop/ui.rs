@@ -237,6 +237,7 @@ pub struct PropUiPlugin;
 
 impl Plugin for PropUiPlugin {
     fn build(&self, app: &mut App) {
+        crate::common::keybind::ensure(app);
         app.init_resource::<PropPanels>()
             .init_resource::<PropFileDialog>()
             .add_systems(
@@ -2635,8 +2636,7 @@ pub fn ask_where_to_save(editor: &PropEditor, dialog: &PropFileDialog) {
 /// one action.
 #[allow(clippy::too_many_arguments)]
 fn prop_shortcuts(
-    keys: Res<ButtonInput<KeyCode>>,
-    egui: Res<bevy_egui::input::EguiWantsInput>,
+    actions: Res<crate::common::keybind::Actions>,
     dialog: Res<PropFileDialog>,
     mut editor: ResMut<PropEditor>,
     mut frame: MessageWriter<FrameTheProp>,
@@ -2644,15 +2644,15 @@ fn prop_shortcuts(
     build: Res<PropBuild>,
     mut session: ResMut<SketchSession>,
 ) {
-    let typing = egui.wants_keyboard_input();
-    if !typing && tool.0.is_some() {
-        if keys.just_pressed(KeyCode::Escape) {
+    use crate::common::keybind::Action;
+    if tool.0.is_some() {
+        if actions.just_pressed(Action::Cancel) {
             cancel(&mut tool, &mut editor);
-        } else if keys.any_just_pressed([KeyCode::Enter, KeyCode::NumpadEnter]) {
+        } else if actions.just_pressed(Action::Confirm) {
             advance(&mut tool, &mut editor, &build.evaluated, &mut session, true);
         }
     }
-    let chords = chords(&keys, typing);
+    let chords = chords(&actions);
     handle_edit(
         match (chords.redo, chords.undo) {
             (true, _) => Some(EditAction::Redo),
@@ -2661,9 +2661,8 @@ fn prop_shortcuts(
         },
         &mut editor,
     );
-    // `FrameTheProp` falls back to the whole prop with nothing picked. A bare
-    // key, so not while typing.
-    if !typing && keys.just_pressed(KeyCode::KeyF) {
+    // `FrameTheProp` falls back to the whole prop with nothing picked.
+    if actions.just_pressed(Action::FrameProp) {
         frame.write(FrameTheProp { selected: true });
     }
     if let Some(action) = FileAction::from_chords(chords) {

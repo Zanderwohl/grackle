@@ -2,11 +2,11 @@
 //! preview, click to commit, or hold shift to pick a reference point and place
 //! relative to it. A tool supplies only a [`PlaceablePoint`].
 
+use crate::common::keybind::{Action, Actions};
 use std::marker::PhantomData;
 
 use bevy::app::App;
 use bevy::prelude::*;
-use bevy_egui::input::EguiWantsInput;
 
 use crate::common::app_mode::AppMode;
 use crate::editor::editable::{FeatureId, FeatureTimeline, FeatureTrait, PointRef};
@@ -100,14 +100,13 @@ impl<F: PlaceablePoint> PointPlacementTool<F> {
         mut tool: ResMut<Self>,
         cameras: Query<(Entity, &Multicam)>,
         mouse_input: Res<CurrentMouseInput>,
-        keys: Res<ButtonInput<KeyCode>>,
+        actions: Res<Actions>,
         mut features: ResMut<FeatureTimeline>,
         rooms: MapVolumes,
         mut next_tool: ResMut<NextState<Tools>>,
-        egui: Res<EguiWantsInput>,
     ) {
-        let shift_held = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
-        let shift_just_pressed = keys.just_pressed(KeyCode::ShiftLeft) || keys.just_pressed(KeyCode::ShiftRight);
+        let shift_held = actions.pressed(Action::Modify);
+        let shift_just_pressed = actions.just_pressed(Action::Modify);
 
         tool.cursor = compute_cursor(
             &mouse_input, &cameras, tool.last_position,
@@ -121,7 +120,7 @@ impl<F: PlaceablePoint> PointPlacementTool<F> {
                     tool.hovered_point = None;
                     tool.flew = false;
                 } else if let Some(cursor) = tool.cursor {
-                    if commit_at_cursor(&mouse_input, &keys, egui.wants_keyboard_input()) {
+                    if commit_at_cursor(&mouse_input, &actions) {
                         let id = features.apply_feature(F::from_position(cursor));
                         features.select(Some(id));
                         tool.last_position = cursor;
@@ -168,8 +167,7 @@ impl<F: PlaceablePoint> PointPlacementTool<F> {
                 let (Some(ref_feature), Some(ref_resolved)) = (tool.reference_feature, tool.reference_resolved) else {
                     return;
                 };
-                let typing = egui.wants_keyboard_input();
-                if let Some(at) = relative_commit(&mouse_input, &keys, typing, tool.cursor, ref_resolved) {
+                if let Some(at) = relative_commit(&mouse_input, &actions, tool.cursor, ref_resolved) {
                     let d = at - ref_resolved;
                     let mut pr = PointRef::reference_with_offset(ref_feature, d.x, d.y, d.z);
                     if !tool.reference_key.is_empty() {

@@ -42,6 +42,7 @@ pub struct TabBoardPlugin;
 
 impl Plugin for TabBoardPlugin {
     fn build(&self, app: &mut App) {
+        crate::common::keybind::ensure(app);
         app.init_resource::<TabBoard>()
             .init_resource::<MonoFont>()
             .add_systems(
@@ -56,8 +57,8 @@ impl Plugin for TabBoardPlugin {
 
 /// Not while paused: the menu has the screen, and comes down onto the board
 /// again if Tab is still held.
-fn hold_the_board(keys: Res<ButtonInput<KeyCode>>, paused: Option<Res<MouseHeld>>, mut board: ResMut<TabBoard>) {
-    board.set_if_neq(TabBoard { up: keys.pressed(KeyCode::Tab) && not_paused(paused) });
+fn hold_the_board(actions: Res<crate::common::keybind::Actions>, paused: Option<Res<MouseHeld>>, mut board: ResMut<TabBoard>) {
+    board.set_if_neq(TabBoard { up: actions.pressed(crate::common::keybind::Action::Scoreboard) && not_paused(paused) });
 }
 
 /// Up with the round, like the HUD, so it can be held from the death cam or

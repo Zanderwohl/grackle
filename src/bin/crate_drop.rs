@@ -14,7 +14,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             eprintln!("Editor Startup Error:\n{}", message);
             std::process::exit(1);
         });
-    common::lang::change_lang_or_fallback(&editor_params.lang, &common::lang::default_packs());
+    common::lang::change_lang_or_fallback(editor_params.lang.as_deref().unwrap_or(common::lang::FALLBACK_LANG), &common::lang::default_packs());
     
     App::new()
         .add_plugins(DefaultPlugins

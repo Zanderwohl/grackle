@@ -487,8 +487,8 @@ fn retire_bots(mut commands: Commands, bodies: Query<(Entity, &BotOf)>, seats: Q
 #[derive(Resource, Default, Debug)]
 pub struct ShowBots(pub bool);
 
-fn toggle_bot_routes(keys: Res<ButtonInput<KeyCode>>, mut show: ResMut<ShowBots>) {
-    if keys.just_pressed(KeyCode::F8) {
+fn toggle_bot_routes(actions: Res<crate::common::keybind::Actions>, mut show: ResMut<ShowBots>) {
+    if actions.just_pressed(crate::common::keybind::Action::BotRoutes) {
         show.0 = !show.0;
     }
 }
@@ -576,20 +576,6 @@ pub(crate) fn fill_empty_slots(
     }
 }
 
-/// A debug key until bots can be added from a menu: `B` seats a bot, `Shift+B` retires the newest.
-fn seat_bots_from_the_keyboard(mut commands: Commands, keys: Res<ButtonInput<KeyCode>>, seats: Query<Entity, With<BotSeat>>) {
-    if !keys.just_pressed(KeyCode::KeyB) {
-        return;
-    }
-    if keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]) {
-        if let Some(newest) = seats.iter().max() {
-            commands.entity(newest).despawn();
-        }
-    } else {
-        commands.spawn((BotSeat, Name::new("Bot seat")));
-    }
-}
-
 /// Rolls every bot's mind again when the skill changes, and gives a bot standing in a round its
 /// new one at once rather than at its next life.
 fn reroll_for_the_skill(mut commands: Commands, settings: Res<RoundSettings>, mut last: Local<Option<BotSkill>>, seats: Query<Entity, With<BotSeat>>, bodies: Query<(Entity, &BotOf)>) {
@@ -617,6 +603,7 @@ pub struct BotPlugin;
 
 impl Plugin for BotPlugin {
     fn build(&self, app: &mut App) {
+        crate::common::keybind::ensure(app);
         app.init_resource::<RoundSettings>()
             .init_resource::<ShowBots>()
             .add_systems(Startup, seat_the_startup_bots)
@@ -624,7 +611,7 @@ impl Plugin for BotPlugin {
             .add_systems(FixedPreUpdate, steer_bots.run_if(has_authority).run_if(in_state(AppMode::Play)))
             .add_systems(FixedUpdate, retire_bots.before(step_player).run_if(has_authority))
             .add_systems(Update, reroll_for_the_skill.run_if(has_authority))
-            .add_systems(Update, (seat_bots_from_the_keyboard, fill_empty_slots).chain().run_if(has_authority).run_if(in_state(AppMode::Play)));
+            .add_systems(Update, fill_empty_slots.run_if(has_authority).run_if(in_state(AppMode::Play)));
     }
 }
 

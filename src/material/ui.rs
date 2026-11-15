@@ -39,6 +39,7 @@ pub struct MaterialUiPlugin;
 
 impl Plugin for MaterialUiPlugin {
     fn build(&self, app: &mut App) {
+        crate::common::keybind::ensure(app);
         app.init_resource::<MaterialFileDialog>()
             .add_systems(
                 bevy_egui::EguiPrimaryContextPass,
@@ -114,12 +115,11 @@ fn panels(
 
 /// Chords go through the menus' handlers, so a chord and its menu entry are one action.
 fn material_shortcuts(
-    keys: Res<ButtonInput<KeyCode>>,
-    egui: Res<bevy_egui::input::EguiWantsInput>,
+    actions: Res<crate::common::keybind::Actions>,
     dialog: Res<MaterialFileDialog>,
     mut material: NonSendMut<MaterialEditor>,
 ) {
-    let chords = chords(&keys, egui.wants_keyboard_input());
+    let chords = chords(&actions);
     handle_edit(
         match (chords.redo, chords.undo) {
             (true, _) => Some(EditAction::Redo),
