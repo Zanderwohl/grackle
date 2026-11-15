@@ -63,7 +63,7 @@ impl Plugin for PropSyncPlugin {
             (
                 send_models_to_new_clients,
                 broadcast_model_changes,
-                adopt_the_servers_models,
+                adopt_the_servers_models.run_if(the_server_sent_models),
             ),
         );
     }
@@ -168,27 +168,39 @@ fn broadcast_model_changes(
 }
 
 /// Guarded on authority rather than on holding a receiver, which a listen
-/// server also has.
+/// server also has. A run condition, so the idle frame holds none of the asset
+/// stores.
+fn the_server_sent_models(role: Res<NetRole>, receivers: Query<&MessageReceiver<ModelSnapshot>>) -> bool {
+    !role.is_authority() && receivers.iter().any(MessageReceiver::has_messages)
+}
+
+/// The text each model was last adopted from and the bake that made, so a
+/// resend of the same model is not baked again. The bake is compared too: a
+/// cache entry replaced since by anything else is adopted afresh.
+#[derive(Default)]
+struct AdoptedFromTheServer(std::collections::HashMap<String, (String, u64)>);
+
 fn adopt_the_servers_models(
-    role: Res<NetRole>,
     mut receivers: Query<&mut MessageReceiver<ModelSnapshot>>,
     mut cache: ResMut<PropCache>,
     mut surfaces: ResMut<SurfaceMaterials>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<LitMaterial>>,
     mut clips: ResMut<Assets<crate::common::skeleton::clip::Clip>>,
+    mut adopted: Local<AdoptedFromTheServer>,
 ) {
-    if role.is_authority() {
-        return;
-    }
-
     for mut receiver in &mut receivers {
         for message in receiver.receive() {
             info!("Adopting the server's models: {} of them", message.0.len());
             for (name, text) in &message.0 {
+                let current = cache.get(name).map(|baked| baked.bake);
+                if adopted.0.get(name).is_some_and(|(known, bake)| known == text && Some(*bake) == current) {
+                    continue;
+                }
                 match document::parse(text) {
                     Ok(doc) => {
-                        cache.adopt(name, &doc, &mut meshes, &mut materials, &mut surfaces, &mut clips, None)
+                        cache.adopt(name, &doc, &mut meshes, &mut materials, &mut surfaces, &mut clips, None);
+                        adopted.0.insert(name.clone(), (text.clone(), cache.bakes()));
                     }
                     Err(e) => error!("the server's prop {name} will not parse: {e}"),
                 }

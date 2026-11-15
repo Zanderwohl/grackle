@@ -213,7 +213,15 @@ impl Plugin for ThumbnailPlugin {
     fn build(&self, app: &mut App) {
         // Ungated: a prop baked mid-round is as much in need of a picture.
         app.init_resource::<Thumbnails>()
-            .add_systems(Update, (look_at_new_bakes, finish_reading, photograph).chain());
+            .add_systems(
+                Update,
+                (
+                    look_at_new_bakes,
+                    finish_reading.run_if(|t: Res<Thumbnails>| !t.reading.is_empty() || !t.unbaked_reading.is_empty()),
+                    photograph.run_if(|t: Res<Thumbnails>| t.sitting.is_some() || !t.queue.is_empty()),
+                )
+                    .chain(),
+            );
     }
 }
 
