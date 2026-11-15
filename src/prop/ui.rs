@@ -219,7 +219,7 @@ impl<'a> TabViewer for PropTabs<'a> {
             PropTab::Bones => bones_ui(ui, self.editor, self.build),
             PropTab::Hold => match self.editor.doc().archetype {
                 Archetype::Held => {
-                    let front = self.build.evaluated.bounds().map(front_of);
+                    let front = self.build.bounds().map(front_of);
                     hold(ui, self.editor, *self.figure, self.preview, front)
                 }
                 Archetype::Hat => hat_fit(ui, self.editor, *self.figure),
@@ -505,23 +505,41 @@ struct Row {
 }
 
 fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild, session: &mut SketchSession) {
-    let entries: Vec<Row> = editor
-        .doc()
-        .features
+    // `PropDoc::dependants` and `legal_range` per row, without walking the list for each.
+    let features = &editor.doc().features;
+    let index_of: std::collections::HashMap<PropFeatureId, usize> =
+        features.iter().enumerate().map(|(at, feature)| (feature.id, at)).collect();
+    let depends_on: Vec<Vec<PropFeatureId>> = features.iter().map(|feature| feature.op.depends_on()).collect();
+    let mut dependants_of: std::collections::HashMap<PropFeatureId, Vec<PropFeatureId>> = Default::default();
+    for (feature, depends) in features.iter().zip(&depends_on) {
+        for operand in depends {
+            let named_by = dependants_of.entry(*operand).or_default();
+            // Once per feature, however often it names the operand.
+            if named_by.last() != Some(&feature.id) {
+                named_by.push(feature.id);
+            }
+        }
+    }
+    let entries: Vec<Row> = features
         .iter()
-        .map(|feature| {
-            let dependants = editor.doc().dependants(feature.id);
+        .zip(&depends_on)
+        .enumerate()
+        .map(|(at, (feature, depends))| {
+            let dependants = dependants_of.get(&feature.id).map_or(&[][..], Vec::as_slice);
+            let legal = crate::common::reorder::legal_range(
+                features.len(),
+                at,
+                depends.iter().filter_map(|operand| index_of.get(operand).copied()),
+                dependants.iter().filter_map(|dependant| index_of.get(dependant).copied()),
+            );
             Row {
                 id: feature.id,
                 sketch: matches!(feature.op, FeatureOp::Sketch { .. }),
                 name: feature.name.clone(),
                 enabled: feature.enabled,
                 dependants: dependants.len(),
-                pins: feature.op.depends_on().into_iter().chain(dependants).collect(),
-                legal: editor
-                    .doc()
-                    .legal_range(feature.id)
-                    .unwrap_or(0..=0),
+                pins: depends.iter().chain(dependants).copied().collect(),
+                legal,
                 operands: feature
                     .op
                     .consumes()
@@ -995,7 +1013,7 @@ fn sketch_toolbar(ui: &mut Ui, editor: &mut PropEditor, session: &mut SketchSess
 /// A point's numbers are editable, which is how a corner is put somewhere exact.
 fn sketch_inspector(ui: &mut Ui, editor: &mut PropEditor, session: &mut SketchSession, id: PropFeatureId) {
     let Some(sketch) = sketch_of(editor.doc(), id).cloned() else { return };
-    let arrangement = session.arrangement(&sketch).clone();
+    let arrangement = session.arrangement(&sketch);
     section(ui, "drawing", get!("prop.inspector.sections.drawing"), |ui| {
         ui.label(get!("prop.inspector.drawing", "points", sketch.points.len(), "lines", sketch.entities.len()));
         ui.label(get!("prop.sketch.regions", "count", arrangement.regions.len()));
@@ -1004,7 +1022,7 @@ fn sketch_inspector(ui: &mut Ui, editor: &mut PropEditor, session: &mut SketchSe
         let mut action = None;
         section(ui, "sketch_regions", get!("prop.inspector.sections.swept_regions"), |ui| {
             let ids: Vec<SketchId> = sketch.regions.iter().map(|region| region.id).collect();
-            action = region_rows(ui, &sketch, &arrangement, id, &ids, None);
+            action = region_rows(ui, &sketch, arrangement, id, &ids, None);
         });
         if let Some(action) = action {
             apply_region_action(editor, action);
@@ -1720,13 +1738,13 @@ fn prop_overview(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
         });
         archetype_sections(ui, editor);
         section(ui, "size", get!("prop.inspector.sections.size"), |ui| {
-            if let Some((min, max)) = build.evaluated.bounds() {
+            if let Some((min, max)) = build.bounds() {
                 let size = max - min;
                 ui.label(format!("{:.3} × {:.3} × {:.3} m", size.x, size.y, size.z));
             }
             ui.label(get!("prop.stats.features", "count", editor.doc().features.len()));
             ui.label(get!("prop.stats.bodies", "count", build.evaluated.bodies.len()));
-            ui.label(get!("prop.stats.triangles", "count", build.evaluated.triangle_count()));
+            ui.label(get!("prop.stats.triangles", "count", build.triangle_count()));
         });
     });
 
@@ -2271,8 +2289,8 @@ fn status_line(ui: &mut Ui, editor: &PropEditor, build: &PropBuild) {
         ui.separator();
         ui.label(get!("prop.stats.bodies", "count", build.evaluated.bodies.len()));
         ui.separator();
-        ui.label(get!("prop.stats.triangles", "count", build.evaluated.triangle_count()));
-        if let Some((min, max)) = build.evaluated.bounds() {
+        ui.label(get!("prop.stats.triangles", "count", build.triangle_count()));
+        if let Some((min, max)) = build.bounds() {
             ui.separator();
             let size = max - min;
             ui.label(format!("{:.3} × {:.3} × {:.3} m", size.x, size.y, size.z));

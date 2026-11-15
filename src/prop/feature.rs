@@ -400,7 +400,10 @@ impl Evaluated {
         self.face_under(ray.origin, *ray.direction).map(|(_, _, distance)| distance)
     }
 
-    fn face_under(&self, origin: Vec3, direction: Vec3) -> Option<(PropFeatureId, &Polygon, f32)> {
+    /// The nearest face hit and how far down the ray: what [`Evaluated::face_distance`],
+    /// [`Evaluated::surface_under`] and [`Evaluated::region_under`] each cast for, so one cast
+    /// can serve all three.
+    pub fn face_under(&self, origin: Vec3, direction: Vec3) -> Option<(PropFeatureId, &Polygon, f32)> {
         self.bodies
             .iter()
             .flat_map(|(id, solid)| solid.polygons().iter().map(move |polygon| (*id, polygon)))
@@ -417,7 +420,15 @@ impl Evaluated {
     /// What a click on a body's surface lands on: the body, and the named flat
     /// face there if one matches. One that a boolean made has none.
     pub fn surface_under(&self, ray: Ray3d) -> Option<(PropFeatureId, Option<GeomRef>)> {
-        let (body, polygon, distance) = self.face_under(ray.origin, *ray.direction)?;
+        self.surface_of_hit(ray, self.face_under(ray.origin, *ray.direction)?)
+    }
+
+    /// [`Evaluated::surface_under`] for a hit already cast down `ray`.
+    pub fn surface_of_hit(
+        &self,
+        ray: Ray3d,
+        (body, polygon, distance): (PropFeatureId, &Polygon, f32),
+    ) -> Option<(PropFeatureId, Option<GeomRef>)> {
         let wires = self.wires.iter().find(|(id, _)| *id == body).map(|(_, wires)| wires.as_slice())?;
         Some((body, face_at(wires, ray.get_point(distance), polygon.plane.normal)))
     }
@@ -426,7 +437,11 @@ impl Evaluated {
     /// in front of it. A region on a face wins over that face: picking it is
     /// the reason it was drawn there.
     pub fn region_under(&self, ray: Ray3d) -> Option<(PropFeatureId, &Region)> {
-        let face = self.face_distance(ray);
+        self.region_in_front_of(ray, self.face_distance(ray))
+    }
+
+    /// [`Evaluated::region_under`] with the nearest face's distance already cast for.
+    pub fn region_in_front_of(&self, ray: Ray3d, face: Option<f32>) -> Option<(PropFeatureId, &Region)> {
         self.sketches
             .iter()
             .filter_map(|placed| {
