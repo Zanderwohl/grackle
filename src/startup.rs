@@ -7,7 +7,8 @@ use crate::common::round_settings::ServerConfig;
 use crate::constants::DEFAULT_PORT_TEXT;
 
 pub struct EditorParams {
-    pub lang: String,
+    /// `None` leaves it to the saved settings.
+    pub lang: Option<String>,
     pub game_id: String,
     /// Defaults to `Solo`: laying out a room must not involve a socket.
     pub net: NetRole,
@@ -47,8 +48,7 @@ impl EditorParams {
                 Arg::new("lang")
                     .long("lang")
                     .short('l')
-                    .default_value("en-US")
-                    .help("Language file to use for editor UI.")
+                    .help("Language file to use for editor UI, for this run. Without it, the one chosen in Settings.")
             )
             .arg(
                 Arg::new("game_id")
@@ -172,7 +172,7 @@ impl EditorParams {
                 _ => error.to_string(),
             })?;
 
-        let lang = matches.get_one::<String>("lang").ok_or("invalid language")?;
+        let lang = matches.get_one::<String>("lang").cloned();
         let game_id = matches.get_one::<String>("game_id").ok_or("invalid game_id")?;
 
         let net = match (matches.get_one::<String>("serve"), matches.get_one::<String>("connect")) {
@@ -210,7 +210,7 @@ impl EditorParams {
         };
 
         Ok(Self {
-            lang: lang.to_owned(),
+            lang,
             game_id: game_id.to_owned(),
             net,
             start_playing: matches.get_flag("play"),
@@ -345,7 +345,7 @@ mod tests {
     #[test]
     fn the_older_flags_survive() {
         let params = parse(&["--lang", "de-DE", "--game", "unlock"]).unwrap();
-        assert_eq!(params.lang, "de-DE");
+        assert_eq!(params.lang.as_deref(), Some("de-DE"));
         assert_eq!(params.game_id, "unlock");
     }
 }

@@ -107,8 +107,7 @@ anybody out**: the cap counts people only, so a slot a bot fills is open, and
 somebody joining takes a filler's seat and body in the same frame, before
 `give_bodies_to_whoever_needs_one` stands theirs up. A spectator takes no
 slot; somebody still choosing does. A **time limit** in seconds ends the round
-as the frag limit does. `B` seats a bot by hand
-(counted against the slots) and `Shift+B` retires the newest.
+as the frag limit does.
 `--server-config PATH` reads all of it, and bots to seat by hand, from a TOML
 file (`ServerConfig`; [`assets/default/servers/bot_arena.toml`](assets/default/servers/bot_arena.toml) is the
 example), refusing a bad one at startup. **An unattended round** is
@@ -379,14 +378,61 @@ third mode key would be something to remember in exchange for saving a click
 on something nobody does mid-fight. `--prop` opens it at startup, which is the
 only way to reach it from a script.
 
-**Both editors answer the same chords**, defined once in
-[`src/common/shortcuts.rs`](src/common/shortcuts.rs): `Ctrl+S` saves,
-`Ctrl+Shift+S` saves as, `Ctrl+Z` undoes and `Ctrl+Shift+Z` or `Ctrl+Y` redoes,
-with `Super` counting as the modifier too. **Nothing fires while egui wants the
-keyboard** — `Ctrl+Z` in a text field means undo the text, and stealing it
-loses work rather than merely looking wrong. `typing` is passed in rather than
-read from `EguiWantsInput` inside the module, so the chords are testable
-without an egui context.
+**No system reads a key; every system reads an action.**
+[`src/common/keybind/`](src/common/keybind/mod.rs) is three layers: a
+`Keymap` (`assets/user/shortcuts.toml`, defaults in `keymap.rs`) says which
+`Chord`s — a `KeyCode` or a `MouseButton` with Ctrl/Super, Shift and Alt —
+fire which `Action`; `resolve_actions` reads Bevy's `ButtonInput`s in
+`PreUpdate` (`ResolveActions`, after `InputSystems`) into the `Actions`
+resource, pressed, just pressed and just released per action; systems read
+`Actions`. That is before `RunFixedMainLoop`, so `gather_input` sees a press in
+the frame it arrived and the indirection costs no latency. egui only *draws*
+bindings: a menu's hint comes from `keybind::hint`, out of a copy of the keymap
+the Settings plugin puts in egui's memory. A new key is an `Action` variant (the
+`actions!` table: its file name, its `Context`, whether it is exact), a default
+in `keymap.rs` and a `keybind.action.*` string — the tests fail on a missing
+one — and any plugin reading `Actions` calls `keybind::ensure`, since plugins
+stand alone in tests. A test that runs a system directly calls
+`keybind::resolve_now` first.
+
+- **Keys are positions** (`KeyCode`), so WASD stays put on any layout; `Ctrl+Z`
+  is positional too.
+- **Editor commands are exact, game actions are loose.** `Ctrl+Shift+S` is not
+  `Ctrl+S`, but `R` reloads while crouched on Ctrl. Where two loose actions
+  match one press, the one whose chord the other extends is dropped, so a
+  `Shift+G` binding does not also taunt.
+- **Clashes are by `Context`** (everywhere, editors, map, prop,
+  animation, play): `F` in Play and `F` in the prop editor are never live at
+  once, so they do not clash. The Shortcuts page marks a clash in red.
+- **Escape and Enter are fixed** (`Action::FIXED`: pause, cancel, confirm):
+  read from the table like any action, never rebindable, never saved, so the
+  key that gives the mouse back is always the same key.
+- **Nothing on a key fires while egui wants the keyboard**, mouse buttons
+  and bare modifiers (Shift-click) still do — `Ctrl+Z` in a text field means undo the text. Read from the
+  previous frame's `EguiWantsInput`, since egui drops a text field's focus on
+  the frame the Escape arrives. **Nothing at all fires while the Settings
+  window is open** (`Quiet`), so a key being bound does nothing else.
+- The editor's pointer gestures (`CurrentMouseInput`: click, drag, orbit,
+  pan) still read the mouse buttons; the mouse wheel is read where it is used.
+
+[`src/common/shortcuts.rs`](src/common/shortcuts.rs) turns the document
+actions into the `EditorChords` every authoring mode answers: save, save as,
+new, undo, redo.
+
+**The Settings window** ([`src/common/settings/`](src/common/settings/mod.rs),
+ported from redwing) is **Edit → Settings…** in every authoring mode, or
+`Ctrl+,`. A floating window, not a dock tab, because every mode opens it. It
+edits a draft — nothing is saved or in force until Apply, and Close with
+changes asks. Pages: **General** (the language, in
+`assets/user/settings.toml`; `--lang` overrides it for one run),
+**Shortcuts** (`keybind/sheet.rs`: click a binding, press a key, mouse button
+or chord; a modifier let go alone is bound alone; a mouse button is bound
+only when pressed on the prompt, and a press elsewhere stops the wait; Escape
+stops it too; keys are captured from Bevy's input, not egui's) and **Developer** (every pack's
+`icons/*.svg` in a grid with its name). Not reachable in Play yet, where the
+cursor is grabbed; leaving the editors closes it, dropping an unapplied
+draft, since an open window there could not be closed and would keep every
+action quiet.
 
 **Every authoring mode has the same Edit menu**, just right of File:
 [`src/common/edit_menu.rs`](src/common/edit_menu.rs), with Undo, Redo and
@@ -587,6 +633,10 @@ just the camera's viewport — so the four editor viewports clear only on the
 lowest-order one, the same way the viewmodel and HUD cameras already set
 `ClearColorConfig::None`. Let each clear and every view but the top one is
 blank, with no error.
+
+Every key named in this file is a default binding; Settings → Shortcuts
+rebinds it. Debug views and cheats (`Action::is_debug`) are listed in a
+section of their own there, but clash by their context like any action.
 
 Four more keys while playing: **`.`** brings the team picker back (see "Teams"), **`F`** swaps between first and third person
 (`ViewPreference` in [`src/game/player.rs`](src/game/player.rs), which a
@@ -3358,6 +3408,8 @@ key that has slots — fill those in by hand.
   `Prop` feature's placeholder cube is on it too.
 - Panels are `egui_dock` tabs — add a `TabKinds` variant in
   [`src/editor/panels.rs`](src/editor/panels.rs), not a floating `egui::Window`.
+  A dialog is the exception: a modal question (the connect dialog) or a window
+  every mode opens (Settings), which no one mode's dock can hold.
 - Asset paths are relative to the working directory (`assets/default/...`), so
   binaries must run from the repo root.
 - **Every binary links `lib.rs`; none re-declares the module tree.** `main.rs`

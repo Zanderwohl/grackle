@@ -43,6 +43,7 @@ pub struct PauseMenuPlugin;
 
 impl Plugin for PauseMenuPlugin {
     fn build(&self, app: &mut App) {
+        crate::common::keybind::ensure(app);
         app.init_resource::<PauseMenu>()
             .init_resource::<MouseHeld>()
             .init_resource::<DisplayFont>()
@@ -62,8 +63,8 @@ impl Plugin for PauseMenuPlugin {
     }
 }
 
-fn toggle_pause(keys: Res<ButtonInput<KeyCode>>, mut menu: ResMut<PauseMenu>) {
-    if keys.just_pressed(KeyCode::Escape) {
+fn toggle_pause(actions: Res<crate::common::keybind::Actions>, mut menu: ResMut<PauseMenu>) {
+    if actions.just_pressed(crate::common::keybind::Action::Pause) {
         menu.open = !menu.open;
     }
 }
@@ -165,6 +166,7 @@ mod tests {
         app.world_mut()
             .resource_mut::<ButtonInput<KeyCode>>()
             .press(KeyCode::Escape);
+        crate::common::keybind::resolve_now(app.world_mut());
         app.world_mut().run_schedule(Update);
         app.world_mut().flush();
         app.world_mut()

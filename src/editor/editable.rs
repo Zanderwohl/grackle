@@ -29,6 +29,7 @@ lazy_static! {
 pub struct EditorStepsPlugin;
 impl Plugin for EditorStepsPlugin {
     fn build(&self, app: &mut App) {
+        crate::common::keybind::ensure(app);
         app
             .init_resource::<FeatureTimeline>()
             .init_resource::<MapMetadata>()
@@ -1133,12 +1134,11 @@ impl FeatureTimeline {
     }
 
     fn undo_redo_shortcuts(
-        keys: Res<ButtonInput<KeyCode>>,
-        egui: Res<bevy_egui::input::EguiWantsInput>,
+        actions: Res<crate::common::keybind::Actions>,
         mut features: ResMut<FeatureTimeline>,
         mut metadata: ResMut<MapMetadata>,
     ) {
-        let chords = chords(&keys, egui.wants_keyboard_input());
+        let chords = chords(&actions);
         if chords.redo {
             features.redo(&mut metadata);
         } else if chords.undo {

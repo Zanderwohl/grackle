@@ -60,6 +60,8 @@ pub mod air_light;
 pub mod air_lit;
 pub mod render_layers;
 pub mod shortcuts;
+pub mod keybind;
+pub mod settings;
 pub mod reorder;
 pub mod toolbar;
 pub mod icons;

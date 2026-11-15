@@ -10,6 +10,7 @@
 use bevy::prelude::*;
 
 use crate::common::app_mode::AppMode;
+use crate::common::keybind::{Action, Actions};
 use crate::common::fonts::DisplayFont;
 use crate::common::player_color::PlayerColor;
 use crate::common::skeleton::rig::HUMANOID;
@@ -40,6 +41,7 @@ pub struct TauntMenuPlugin;
 
 impl Plugin for TauntMenuPlugin {
     fn build(&self, app: &mut App) {
+        crate::common::keybind::ensure(app);
         app.init_resource::<TauntMenu>()
             .add_systems(Update, show_the_taunt_menu.run_if(in_state(AppMode::Play)))
             .add_systems(OnExit(AppMode::Play), close_the_menu);
@@ -104,7 +106,7 @@ fn answer(open: bool, taunting: bool, offered: &[TauntId], g: bool, digit: Optio
 /// Before `gather_input` and `choose_weapons`, so the menu has the keys first.
 #[allow(clippy::type_complexity)]
 pub fn answer_the_taunt_keys(
-    keys: Res<ButtonInput<KeyCode>>,
+    actions: Res<Actions>,
     held: Option<Res<MouseHeld>>,
     taunts: Option<Res<Taunts>>,
     ours: Option<Single<(Entity, &Condition, Option<&Skeleton>), With<LocalPlayer>>>,
@@ -118,9 +120,9 @@ pub fn answer_the_taunt_keys(
     };
     let open = menu.open && menu.body == Some(body);
 
-    let digit = DIGITS.iter().position(|key| keys.just_pressed(*key));
+    let digit = DIGITS.iter().position(|action| actions.just_pressed(*action));
     let offered = offered(taunts.as_deref(), rig);
-    let (next, request) = answer(open, condition.taunt.is_some(), &offered, keys.just_pressed(KeyCode::KeyG), digit);
+    let (next, request) = answer(open, condition.taunt.is_some(), &offered, actions.just_pressed(Action::Taunt), digit);
     if request.is_some() {
         latch.0.taunt = request;
     }

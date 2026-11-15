@@ -238,6 +238,7 @@ pub struct HudPlugin;
 
 impl Plugin for HudPlugin {
     fn build(&self, app: &mut App) {
+        crate::common::keybind::ensure(app);
         app.init_resource::<SafeZoneOutline>()
             .init_resource::<DisplayFont>()
             .add_systems(
@@ -534,10 +535,10 @@ fn paint_the_zones(
 }
 
 fn toggle_safe_zone_outline(
-    keys: Res<ButtonInput<KeyCode>>,
+    actions: Res<crate::common::keybind::Actions>,
     mut outline: ResMut<SafeZoneOutline>,
 ) {
-    if keys.just_pressed(KeyCode::F9) {
+    if actions.just_pressed(crate::common::keybind::Action::SafeZone) {
         outline.0 = !outline.0;
     }
 }

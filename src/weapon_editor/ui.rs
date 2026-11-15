@@ -30,6 +30,7 @@ pub struct WeaponUiPlugin;
 
 impl Plugin for WeaponUiPlugin {
     fn build(&self, app: &mut App) {
+        crate::common::keybind::ensure(app);
         app.init_resource::<WeaponPanels>()
             // A prop saved in another mode is read again.
             .add_systems(OnEnter(AppMode::Weapon), |mut panels: ResMut<WeaponPanels>| panels.browser.model = None)
@@ -679,13 +680,12 @@ fn drawings(ui: &mut Ui, mounted: &Mounted) {
 
 /// Chords go through the menus' handlers, so a chord and its menu entry are one action.
 fn weapon_shortcuts(
-    keys: Res<ButtonInput<KeyCode>>,
-    egui: Res<bevy_egui::input::EguiWantsInput>,
+    actions: Res<crate::common::keybind::Actions>,
     mut editor: ResMut<WeaponEditor>,
     mut published: ResMut<PublishedCatalog>,
     assets: Res<Assets>,
 ) {
-    let chords = chords(&keys, egui.wants_keyboard_input());
+    let chords = chords(&actions);
     handle_edit(
         match (chords.redo, chords.undo) {
             (true, _) => Some(EditAction::Redo),

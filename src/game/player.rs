@@ -1,4 +1,5 @@
 use bevy::core_pipeline::tonemapping::Tonemapping;
+use crate::common::keybind::{Action, Actions};
 use bevy::camera::Hdr;
 use bevy::input::mouse::MouseMotion;
 use bevy::camera::visibility::RenderLayers;
@@ -552,47 +553,33 @@ pub fn despawn_the_view(mut commands: Commands, cameras: Query<Entity, With<Play
     }
 }
 
-/// Read the keyboard into [`InputLatch`], once per frame.
+/// Read the actions into [`InputLatch`], once per frame.
 ///
 /// Runs before the fixed loop so a press reaches the same frame's steps.
-pub fn gather_input(
-    keys: Res<ButtonInput<KeyCode>>,
-    buttons: Res<ButtonInput<MouseButton>>,
-    mut latch: ResMut<InputLatch>,
-) {
+pub fn gather_input(actions: Res<Actions>, mut latch: ResMut<InputLatch>) {
     let input = &mut latch.0;
-    let mut movement = Vec2::ZERO;
-    if keys.pressed(KeyCode::KeyW) {
-        movement.y += 1.0;
-    }
-    if keys.pressed(KeyCode::KeyS) {
-        movement.y -= 1.0;
-    }
-    if keys.pressed(KeyCode::KeyA) {
-        movement.x -= 1.0;
-    }
-    if keys.pressed(KeyCode::KeyD) {
-        movement.x += 1.0;
-    }
-    input.movement = movement;
+    input.movement = Vec2::new(
+        actions.axis(Action::MoveLeft, Action::MoveRight),
+        actions.axis(Action::MoveBack, Action::MoveForward),
+    );
 
     // Accumulated, so a press between two fixed steps survives the frames
     // either side.
-    input.jump |= keys.pressed(KeyCode::Space);
+    input.jump |= actions.pressed(Action::Jump);
 
     // The edge, not the state: one press is one shot.
-    input.attack |= buttons.just_pressed(MouseButton::Left);
-    input.attack_held = buttons.pressed(MouseButton::Left);
-    input.alt_attack |= buttons.just_pressed(MouseButton::Right);
-    input.alt_attack_held = buttons.pressed(MouseButton::Right);
+    input.attack |= actions.just_pressed(Action::Fire);
+    input.attack_held = actions.pressed(Action::Fire);
+    input.alt_attack |= actions.just_pressed(Action::AltFire);
+    input.alt_attack_held = actions.pressed(Action::AltFire);
 
-    input.reload |= keys.just_pressed(KeyCode::KeyR);
-    input.humiliate |= keys.just_pressed(KeyCode::KeyH);
-    input.suicide |= keys.just_pressed(KeyCode::KeyO);
-    input.spray |= keys.just_pressed(KeyCode::KeyT);
+    input.reload |= actions.just_pressed(Action::Reload);
+    input.humiliate |= actions.just_pressed(Action::Humiliate);
+    input.suicide |= actions.just_pressed(Action::Suicide);
+    input.spray |= actions.just_pressed(Action::Spray);
 
-    input.sprint = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
-    input.crouch = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
+    input.sprint = actions.pressed(Action::Sprint);
+    input.crouch = actions.pressed(Action::Crouch);
 }
 
 /// Read the mouse into the latch, once per frame.
@@ -661,8 +648,8 @@ pub fn face_bodies(mut bodies: Query<(&Player, &mut Transform)>) {
 }
 
 /// `F` swaps between looking out of the body and looking at it.
-pub fn toggle_view(keys: Res<ButtonInput<KeyCode>>, mut preference: ResMut<ViewPreference>) {
-    if !keys.just_pressed(KeyCode::KeyF) {
+pub fn toggle_view(actions: Res<Actions>, mut preference: ResMut<ViewPreference>) {
+    if !actions.just_pressed(Action::ToggleView) {
         return;
     }
     preference.0 = match preference.0 {
@@ -1673,6 +1660,7 @@ mod tests {
             app.world_mut()
                 .resource_mut::<ButtonInput<KeyCode>>()
                 .press(KeyCode::KeyF);
+            crate::common::keybind::resolve_now(app.world_mut());
             app.world_mut().run_system_once(toggle_view).unwrap();
             // Released too: a held key is not pressed again.
             let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();

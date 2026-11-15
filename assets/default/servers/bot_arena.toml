@@ -3,7 +3,7 @@
 #
 # `slots`           players in a round, the host and bots included, 1 to 32.
 # `fill_with_bots`  keep the slots nobody has taken filled with bots.
-# `bots`            bots seated by hand at startup, as `B` seats them: they
+# `bots`            bots seated by hand at startup: they
 #                   count against the slots and stay across rounds.
 # `time_limit`      seconds before the round ends; absent or 0 is no limit.
 #
