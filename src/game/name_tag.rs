@@ -26,7 +26,7 @@ use crate::common::swatch::Swatch;
 use crate::common::team::Team;
 use crate::common::ui_shape::{Corner, ShapeMaterial};
 use crate::game::bot::{BotOf, ShowBots};
-use crate::game::bot_think::BotThought;
+use crate::game::bot_think::{BotThought, Candidate, Want};
 use crate::game::collision::CollisionWorld;
 use crate::game::death::Dying;
 use crate::game::hud::{hud_text, leaning_panel, panel_style, SafeZone, WindowSafeZone, MARGIN_Y, WINDOW_MARGIN, ZONE_DROP, ZONE_STROKE};
@@ -75,11 +75,12 @@ struct NameTag {
     unseen: f32,
     /// The size and colors the panel was built for.
     drawn: Option<(Vec2, Swatch)>,
+    words: Words,
 }
 
 impl NameTag {
     fn of(body: Entity) -> Self {
-        Self { body, unseen: 0.0, drawn: None }
+        Self { body, unseen: 0.0, drawn: None, words: Words::default() }
     }
 
     /// Whether it stays up.
@@ -106,6 +107,70 @@ struct WatchedBanner;
 struct WatchedPlate {
     /// The size and colors the panel was built for.
     drawn: Option<(Vec2, Swatch)>,
+    words: Words,
+}
+
+/// What a bot's goal line is built from.
+#[derive(Clone, Copy, PartialEq)]
+struct GoalKey {
+    chosen: Option<(Want, f32)>,
+    runner_up: Option<(Want, f32)>,
+}
+
+impl GoalKey {
+    fn of(thought: &BotThought) -> Self {
+        let pair = |candidate: Candidate| (candidate.want, candidate.score);
+        Self { chosen: thought.chosen.map(pair), runner_up: thought.runner_up.map(pair) }
+    }
+}
+
+/// A plate's lines, kept with what each was built from so a still frame builds no string.
+#[derive(Default)]
+struct Words {
+    name: String,
+    /// The id and language an unnamed player's "Player {id}" was built for; `None` while named.
+    unnamed: Option<(PlayerId, u64)>,
+    goal: Option<String>,
+    goal_from: Option<(GoalKey, u64)>,
+}
+
+impl Words {
+    fn refresh(&mut self, id: PlayerId, standings: &Query<&Standing>, thought: Option<&BotThought>) {
+        self.refresh_name(id, standings);
+        self.refresh_goal(thought);
+    }
+
+    fn refresh_name(&mut self, id: PlayerId, standings: &Query<&Standing>) {
+        let named = standings.iter().find(|standing| standing.id == id).map(|standing| standing.name.as_str()).filter(|name| !name.is_empty());
+        match named {
+            Some(name) => {
+                self.unnamed = None;
+                if self.name != name {
+                    name.clone_into(&mut self.name);
+                }
+            }
+            None => {
+                let key = Some((id, crate::common::lang::generation()));
+                if self.unnamed != key {
+                    self.unnamed = key;
+                    self.name = get!("scoreboard.player", "id", id.0);
+                }
+            }
+        }
+    }
+
+    fn refresh_goal(&mut self, thought: Option<&BotThought>) {
+        let Some(thought) = thought else {
+            self.goal_from = None;
+            self.goal = None;
+            return;
+        };
+        let key = Some((GoalKey::of(thought), crate::common::lang::generation()));
+        if self.goal_from != key || self.goal.is_none() {
+            self.goal_from = key;
+            self.goal = Some(thought_line(thought));
+        }
+    }
 }
 
 fn plate_lines(font: &Handle<Font>) -> impl Bundle {
@@ -164,7 +229,7 @@ struct Plates<'w, 's> {
 impl Plates<'_, '_> {
     /// Writes the lines and repaints the panel for a new size or color. False while layout has
     /// yet to give what was just written a width, which is when the plate should stay hidden.
-    fn fill(&mut self, children: &Children, name: &str, goal: Option<String>, swatch: Swatch, size: Vec2, drawn: &mut Option<(Vec2, Swatch)>) -> bool {
+    fn fill(&mut self, children: &Children, name: &str, goal: Option<&str>, swatch: Swatch, size: Vec2, drawn: &mut Option<(Vec2, Swatch)>) -> bool {
         let mut rewritten = false;
         for &child in children {
             if let Ok((mut text, mut ink)) = self.texts.get_mut(child) {
@@ -176,9 +241,9 @@ impl Plates<'_, '_> {
             }
             if let Ok((mut text, mut ink, mut node)) = self.goals.get_mut(child) {
                 let display = if goal.is_some() { Display::Flex } else { Display::None };
-                let words = goal.clone().unwrap_or_default();
+                let words = goal.unwrap_or_default();
                 if text.0 != words || node.display != display {
-                    text.0 = words;
+                    words.clone_into(&mut text.0);
                     node.display = display;
                     rewritten = true;
                 }
@@ -188,7 +253,9 @@ impl Plates<'_, '_> {
         if rewritten || size == Vec2::ZERO {
             return false;
         }
-        if *drawn != Some((size, swatch))
+        // Within half a pixel the old panel still fits; layout's sizes jitter by fractions.
+        let fits = drawn.is_some_and(|(drawn_size, drawn_swatch)| drawn_swatch == swatch && (drawn_size - size).abs().max_element() <= 0.5);
+        if !fits
             && let Some(materials) = self.materials.as_deref_mut()
             && let Some(panel) = children.iter().find(|child| self.panels.contains(*child))
         {
@@ -213,30 +280,22 @@ fn name_tag(body: Entity, font: &Handle<Font>) -> impl Bundle {
     )
 }
 
-/// What "Player {id}" a body with no standing yet is called, as on the scoreboard.
-fn name_of<'a>(id: PlayerId, standings: impl IntoIterator<Item = &'a Standing>) -> String {
-    standings
-        .into_iter()
-        .find(|standing| standing.id == id)
-        .map_or_else(|| get!("scoreboard.player", "id", id.0), Standing::display_name)
-}
-
-/// What a bot wants, scored, and the different want that came closest.
+/// What a bot wants, scored, and the different want that came closest. Filled uncached: the
+/// scores would crowd the lang cache.
 fn thought_line(thought: &BotThought) -> String {
+    use crate::common::lang::fill_uncached;
     let score = |score: f32| format!("{score:.2}");
     match (thought.chosen, thought.runner_up) {
         (None, _) => get!("bot.thought.none"),
-        (Some(chosen), None) => get!("bot.thought.alone", "want", chosen.want.name(), "score", score(chosen.score)),
-        (Some(chosen), Some(other)) => get!(
+        (Some(chosen), None) => fill_uncached("bot.thought.alone", &[("want", &chosen.want.name()), ("score", &score(chosen.score))]),
+        (Some(chosen), Some(other)) => fill_uncached(
             "bot.thought.over",
-            "want",
-            chosen.want.name(),
-            "score",
-            score(chosen.score),
-            "other",
-            other.want.name(),
-            "against",
-            score(other.score)
+            &[
+                ("want", &chosen.want.name()),
+                ("score", &score(chosen.score)),
+                ("other", &other.want.name()),
+                ("against", &score(other.score)),
+            ],
         ),
     }
 }
@@ -324,11 +383,11 @@ fn place_the_tags(
     for (mut tag, mut node, mut visibility, computed, children) in &mut tags {
         let Ok((&id, drawn, boxes, physics, team, color)) = people.get(tag.body) else { continue };
 
-        let name = name_of(id, &standings);
         let swatch = Swatch::of_body(team.copied(), color.copied());
-        let goal = thoughts.get(tag.body).ok().filter(|_| show.0).map(thought_line);
         let size = computed.size() * computed.inverse_scale_factor();
-        if !plates.fill(children, &name, goal, swatch, size, &mut tag.drawn) {
+        let tag = &mut *tag;
+        tag.words.refresh(id, &standings, thoughts.get(tag.body).ok().filter(|_| show.0));
+        if !plates.fill(children, &tag.words.name, tag.words.goal.as_deref(), swatch, size, &mut tag.drawn) {
             visibility.set_if_neq(Visibility::Hidden);
             continue;
         }
@@ -377,10 +436,11 @@ fn name_whoever_is_watched(
         return;
     };
     let Some((mut drawn, computed, lines)) = children.first().and_then(|inner| plate.get_mut(*inner).ok()) else { return };
-    let goal = thoughts.get(body).ok().map(thought_line);
     let size = computed.size() * computed.inverse_scale_factor();
     let swatch = Swatch::of_body(team.copied(), color.copied());
-    let ready = plates.fill(lines, &name_of(id, &standings), goal, swatch, size, &mut drawn.drawn);
+    let plate = &mut *drawn;
+    plate.words.refresh(id, &standings, thoughts.get(body).ok());
+    let ready = plates.fill(lines, &plate.words.name, plate.words.goal.as_deref(), swatch, size, &mut plate.drawn);
     visibility.set_if_neq(if ready { Visibility::Inherited } else { Visibility::Hidden });
 }
 
@@ -454,7 +514,18 @@ mod tests {
             damage_taken: 0,
             healing: 0,
         };
-        assert_eq!(name_of(PlayerId(3), [&named]), "Grackle");
-        assert_eq!(name_of(PlayerId(4), [&named]), get!("scoreboard.player", "id", 4));
+        use bevy::ecs::system::RunSystemOnce;
+        let mut world = World::new();
+        world.spawn(named);
+        let names = world
+            .run_system_once(|standings: Query<&Standing>| {
+                let mut words = Words::default();
+                words.refresh_name(PlayerId(3), &standings);
+                let three = words.name.clone();
+                words.refresh_name(PlayerId(4), &standings);
+                (three, words.name.clone())
+            })
+            .unwrap();
+        assert_eq!(names, ("Grackle".to_owned(), get!("scoreboard.player", "id", 4)));
     }
 }
