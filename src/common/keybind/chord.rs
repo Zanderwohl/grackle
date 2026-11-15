@@ -302,7 +302,8 @@ mod tests {
         assert_eq!(names.len(), count);
     }
 
-    /// Fails if Shift+B fires a command bound to B, or B fails while sprinting.
+    /// Fails if Shift+B fires a command bound to B, or a game key bound to B
+    /// fails while sprinting.
     #[test]
     fn exact_and_loose_matching() {
         let b = Chord::key(KeyCode::KeyB);

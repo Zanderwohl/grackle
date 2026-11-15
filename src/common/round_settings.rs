@@ -90,7 +90,7 @@ pub struct ServerConfig {
     pub slots: u32,
     pub fill_with_bots: bool,
     pub bot_skill: BotSkill,
-    /// Seated as `B` seats them, so they count against the slots and stay across rounds.
+    /// Seated by hand, so they count against the slots and stay across rounds.
     pub bots: u32,
     /// Seconds; absent or zero is no limit.
     pub time_limit: Option<f32>,

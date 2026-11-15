@@ -107,8 +107,7 @@ anybody out**: the cap counts people only, so a slot a bot fills is open, and
 somebody joining takes a filler's seat and body in the same frame, before
 `give_bodies_to_whoever_needs_one` stands theirs up. A spectator takes no
 slot; somebody still choosing does. A **time limit** in seconds ends the round
-as the frag limit does. `B` seats a bot by hand
-(counted against the slots) and `Shift+B` retires the newest.
+as the frag limit does.
 `--server-config PATH` reads all of it, and bots to seat by hand, from a TOML
 file (`ServerConfig`; [`assets/default/servers/bot_arena.toml`](assets/default/servers/bot_arena.toml) is the
 example), refusing a bad one at startup. **An unattended round** is
@@ -400,9 +399,9 @@ stand alone in tests. A test that runs a system directly calls
   is positional too.
 - **Editor commands are exact, game actions are loose.** `Ctrl+Shift+S` is not
   `Ctrl+S`, but `R` reloads while crouched on Ctrl. Where two loose actions
-  match one press, the one whose chord the other extends is dropped, so
-  `Shift+B` retires a bot without also seating one.
-- **Clashes are by `Context`** (everywhere, every editor, map, prop,
+  match one press, the one whose chord the other extends is dropped, so a
+  `Shift+G` binding does not also taunt.
+- **Clashes are by `Context`** (everywhere, editors, map, prop,
   animation, play): `F` in Play and `F` in the prop editor are never live at
   once, so they do not clash. The Shortcuts page marks a clash in red.
 - **Escape and Enter are fixed** (`Action::FIXED`: pause, cancel, confirm):

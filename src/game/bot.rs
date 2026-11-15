@@ -576,17 +576,6 @@ pub(crate) fn fill_empty_slots(
     }
 }
 
-/// A debug key until bots can be added from a menu: `B` seats a bot, `Shift+B` retires the newest.
-fn seat_bots_from_the_keyboard(mut commands: Commands, actions: Res<crate::common::keybind::Actions>, seats: Query<Entity, With<BotSeat>>) {
-    if actions.just_pressed(crate::common::keybind::Action::RetireBot) {
-        if let Some(newest) = seats.iter().max() {
-            commands.entity(newest).despawn();
-        }
-    } else if actions.just_pressed(crate::common::keybind::Action::SeatBot) {
-        commands.spawn((BotSeat, Name::new("Bot seat")));
-    }
-}
-
 /// Rolls every bot's mind again when the skill changes, and gives a bot standing in a round its
 /// new one at once rather than at its next life.
 fn reroll_for_the_skill(mut commands: Commands, settings: Res<RoundSettings>, mut last: Local<Option<BotSkill>>, seats: Query<Entity, With<BotSeat>>, bodies: Query<(Entity, &BotOf)>) {
@@ -622,7 +611,7 @@ impl Plugin for BotPlugin {
             .add_systems(FixedPreUpdate, steer_bots.run_if(has_authority).run_if(in_state(AppMode::Play)))
             .add_systems(FixedUpdate, retire_bots.before(step_player).run_if(has_authority))
             .add_systems(Update, reroll_for_the_skill.run_if(has_authority))
-            .add_systems(Update, (seat_bots_from_the_keyboard, fill_empty_slots).chain().run_if(has_authority).run_if(in_state(AppMode::Play)));
+            .add_systems(Update, fill_empty_slots.run_if(has_authority).run_if(in_state(AppMode::Play)));
     }
 }
 

@@ -99,8 +99,6 @@ fn defaults(action: Action) -> Vec<Chord> {
         Action::Pause => vec![key(K::Escape)],
         Action::Humiliate => vec![key(K::KeyH)],
         Action::Suicide => vec![key(K::KeyO)],
-        Action::SeatBot => vec![key(K::KeyB)],
-        Action::RetireBot => vec![key(K::KeyB).with_shift()],
         Action::NavOverlay => vec![key(K::F7)],
         Action::BotRoutes => vec![key(K::F8)],
         Action::SafeZone => vec![key(K::F9)],

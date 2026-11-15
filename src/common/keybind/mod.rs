@@ -22,8 +22,8 @@
 //! An editor command matches exactly its modifiers, so `Ctrl+Shift+S` is not
 //! also `Ctrl+S`. A game action matches at least them, so `R` reloads while
 //! crouched on Ctrl ([`Action::exact`]). When two loose actions match one
-//! press, the one whose chord the other extends is dropped, so `Shift+B` does
-//! not also fire `B`.
+//! press, the one whose chord the other extends is dropped, so a `Shift+G`
+//! binding does not also fire `G`.
 
 pub mod chord;
 pub mod keymap;
@@ -172,8 +172,6 @@ actions! {
     ShowBones => "show_bones", Everywhere, false, true;
     Humiliate => "humiliate", Play, false, true;
     Suicide => "suicide", Play, false, true;
-    SeatBot => "seat_bot", Play, false, true;
-    RetireBot => "retire_bot", Play, false, true;
     NavOverlay => "nav_overlay", Play, false, true;
     BotRoutes => "bot_routes", Play, false, true;
     SafeZone => "safe_zone", Play, false, true;
@@ -453,13 +451,16 @@ mod tests {
         assert!(fired.contains(&Action::Reload), "{fired:?}");
     }
 
-    /// Fails if `Shift+B` also seats a bot.
+    /// Fails if a `Shift+G` binding also fires the action on `G`.
     #[test]
     fn the_longer_chord_shadows_the_shorter() {
-        let fired = fired(&[KeyCode::ShiftLeft], KeyCode::KeyB);
-        assert!(fired.contains(&Action::RetireBot));
-        assert!(!fired.contains(&Action::SeatBot), "{fired:?}");
-        assert!(super::tests::fired(&[], KeyCode::KeyB).contains(&Action::SeatBot));
+        let mut keymap = Keymap::default();
+        keymap.bind(Action::Spray, 0, Chord::key(KeyCode::KeyG).with_shift());
+        let read = |held: &[KeyCode]| Actions::read(&keymap, Some(&keys(held, KeyCode::KeyG)), None, false);
+        let shifted = read(&[KeyCode::ShiftLeft]);
+        assert!(shifted.just_pressed(Action::Spray));
+        assert!(!shifted.just_pressed(Action::Taunt), "Shift+G also taunted");
+        assert!(read(&[]).just_pressed(Action::Taunt));
     }
 
     #[test]
