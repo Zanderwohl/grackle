@@ -14,7 +14,7 @@ use crate::common::movement_rules::MovementRules;
 use crate::common::net::has_authority;
 use crate::common::projectile::ProjectileSpec;
 use crate::common::rotation::wrap_angle;
-use crate::common::weapon::{Ammo, Equipped, HitscanSpec, Mounted, WeaponAction, WeaponCatalog, WeaponId};
+use crate::common::weapon::{Ammo, Equipped, HitscanSpec, Mounted, Weapon, WeaponAction, WeaponCatalog, WeaponId};
 use crate::game::bot::{aim_at, BotIntent, BotOf};
 use crate::game::bot_sense::{in_view, look, BotMind, BotSenses, Sense};
 use crate::game::bot_think::think;
@@ -84,76 +84,112 @@ impl Default for Aim {
     }
 }
 
-const TURN_RATE: std::ops::Range<f32> = 3.5..9.0;
-const AIM_ERROR: std::ops::Range<f32> = 0.03..0.14;
-const SETTLE: std::ops::Range<f32> = 0.3..0.9;
+// Hard rolls aim error at or just under 0.09 to 0.11 rad, where results drop off
+// (documentation/bot-brain.md).
+const TURN_RATE: std::ops::Range<f32> = 3.0..8.0;
+const AIM_ERROR: std::ops::Range<f32> = 0.06..0.17;
+const SETTLE: std::ops::Range<f32> = 0.5..1.1;
 const EASE: std::ops::Range<f32> = 0.06..0.16;
-const TRACKING: std::ops::Range<f32> = 0.55..0.9;
+const TRACKING: std::ops::Range<f32> = 0.45..0.8;
 
 impl Aim {
     pub fn temperament(skill: BotSkill) -> Self {
         let preference = [Preference::Nearest, Preference::Attacker, Preference::Facing][rand::random_range(0..3)];
         Aim {
-            turn_rate: rand::random_range(TURN_RATE),
-            error: rand::random_range(AIM_ERROR),
+            turn_rate: rand::random_range(skill.within(TURN_RATE, Better::Higher)),
+            error: rand::random_range(skill.within(AIM_ERROR, Better::Lower)),
             settle: rand::random_range(skill.within(SETTLE, Better::Lower)),
-            ease: rand::random_range(EASE),
-            tracking: rand::random_range(TRACKING),
+            ease: rand::random_range(skill.within(EASE, Better::Lower)),
+            tracking: rand::random_range(skill.within(TRACKING, Better::Higher)),
             preference,
         }
     }
 }
 
 /// How a bot moves while it fights, rolled per seat inside its [`BotMind`]. A fight is legs: a
-/// strafe one way, or standing to aim, each held for a while. A full reversal takes a body about
-/// a fifth of a second, so legs much shorter than a second read as jittering, not dodging.
+/// strafe one way, or drifting slowly while it aims, each held for a while. A full reversal takes a
+/// body about a fifth of a second, so legs much shorter than a second read as jittering, not
+/// dodging.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
 pub struct Footwork {
-    /// The share of legs spent strafing rather than standing, 0 to 1.
+    /// The share of legs spent strafing rather than drifting, 0 to 1.
     pub restlessness: f32,
     /// Seconds a leg lasts on average; each is rolled between 0.6 and 1.4 times it.
     pub stride: f32,
     /// The chance that a strafe goes back the way the last one came, rather than on.
     pub reversal: f32,
+    /// The share of the held weapon's best damage a bot insists on, 0 to 1: it keeps as far off as
+    /// that allows (see [`comfortable_range`]), so a high one fights close and a low one from afar.
+    pub comfort: f32,
+    /// Seconds for its legs to go from still to a full run, or from a run to still.
+    pub ramp: f32,
+    /// How hard a drifting leg pushes sideways, 0 to 1.
+    pub drift: f32,
 }
 
 impl Default for Footwork {
     fn default() -> Self {
-        Footwork { restlessness: 0.6, stride: 1.3, reversal: 0.6 }
+        Footwork { restlessness: 0.6, stride: 1.3, reversal: 0.6, comfort: 0.7, ramp: 0.2, drift: 0.3 }
     }
 }
 
 const RESTLESSNESS: std::ops::Range<f32> = 0.3..0.85;
 const STRIDE: std::ops::Range<f32> = 0.9..2.0;
 const REVERSAL: std::ops::Range<f32> = 0.4..0.8;
+const COMFORT: std::ops::Range<f32> = 0.55..0.9;
+const RAMP: std::ops::Range<f32> = 0.12..0.3;
+const DRIFT: std::ops::Range<f32> = 0.15..0.45;
 /// Seconds of tracking a target before the first strafe: nobody starts dodging the instant they
 /// see somebody.
 const FIRST_STEP: f32 = 0.35;
 
 impl Footwork {
-    pub fn temperament() -> Self {
+    pub fn temperament(skill: BotSkill) -> Self {
         Footwork {
             restlessness: rand::random_range(RESTLESSNESS),
             stride: rand::random_range(STRIDE),
             reversal: rand::random_range(REVERSAL),
+            comfort: rand::random_range(skill.within(COMFORT, Better::Higher)),
+            ramp: rand::random_range(RAMP),
+            drift: rand::random_range(skill.within(DRIFT, Better::Lower)),
         }
     }
 
-    /// The next leg after one strafing `last` (`0` for none yet): a side or `0`, and its seconds.
+    /// The next leg after one toward `last` (`0` for none yet): how hard sideways, `-1` to `1`,
+    /// and its seconds. A leg that does not strafe drifts at [`Footwork::drift`].
     pub fn next_leg(&self, last: f32) -> (f32, f32) {
         let seconds = self.stride * rand::random_range(0.6..1.4);
-        if rand::random::<f32>() >= self.restlessness {
-            return (0.0, seconds);
-        }
         let side = if last == 0.0 {
             if rand::random::<bool>() { 1.0 } else { -1.0 }
         } else if rand::random::<f32>() < self.reversal {
-            -last
+            -last.signum()
         } else {
-            last
+            last.signum()
         };
-        (side, seconds)
+        let push = if rand::random::<f32>() < self.restlessness { 1.0 } else { self.drift };
+        (side * push, seconds)
     }
+}
+
+/// Meters between the distances [`comfortable_range`] tries, and the furthest it tries.
+const RANGE_STEP: f32 = 0.5;
+const FURTHEST_TRIED: f32 = 60.0;
+/// Meters a bot keeps from whoever it fights at least, whatever it holds, and at most.
+pub const CLOSEST_STANDOFF: f32 = 3.0;
+pub const FURTHEST_STANDOFF: f32 = 25.0;
+
+/// The furthest a weapon still does `comfort` of its best damage from, within
+/// [`CLOSEST_STANDOFF`] and [`FURTHEST_STANDOFF`]. Every weapon's [`worth`] peaks close in, so its
+/// best distance alone walks a bot onto its target. `None` for a weapon that reaches nobody.
+pub fn comfortable_range(weapon: &Weapon, comfort: f32) -> Option<f32> {
+    let worth_at = |distance: f32| worth(&weapon.primary, distance).max(worth(&weapon.secondary, distance));
+    let distances = (2..=(FURTHEST_TRIED / RANGE_STEP) as u32).map(|step| step as f32 * RANGE_STEP);
+    let best = distances.clone().map(worth_at).fold(0.0, f32::max);
+    if best <= 0.0 {
+        return None;
+    }
+    let furthest = distances.filter(|distance| worth_at(*distance) >= comfort * best).last()?;
+    Some(furthest.clamp(CLOSEST_STANDOFF, FURTHEST_STANDOFF))
 }
 
 /// How a bot meets a projectile coming at it with an airblast in hand, rolled per seat inside its
@@ -180,8 +216,8 @@ const TIMING: std::ops::Range<f32> = 0.04..0.35;
 const REFLECT_AT: f32 = 0.6;
 
 impl Reflexes {
-    pub fn temperament() -> Self {
-        Reflexes { attempt: rand::random_range(ATTEMPT), timing: rand::random_range(TIMING) }
+    pub fn temperament(skill: BotSkill) -> Self {
+        Reflexes { attempt: rand::random_range(skill.within(ATTEMPT, Better::Higher)), timing: rand::random_range(TIMING) }
     }
 
     /// Judges a projectile first seen at `now`: whether it is tried for, and seconds early, a
@@ -234,13 +270,15 @@ pub struct BotAim {
     lean: f32,
     /// Which way the target's body lay last tick, for how fast it crosses the view.
     last_bearing: Option<(f32, f32)>,
-    /// `-1` left, `1` right, `0` standing, and seconds until the leg ends.
+    /// `-1` left to `1` right, and seconds until the leg ends.
     strafe: f32,
     strafe_for: f32,
     /// The side of the last strafing leg, for whether the next goes back or on.
     last_side: f32,
     /// The projectile it is meeting with an airblast, or deciding not to.
     incoming: Option<Incoming>,
+    /// The weapon whose [`comfortable_range`] was last worked out, and that range.
+    standoff: Option<(WeaponId, Option<f32>)>,
 }
 
 /// Turns `(yaw, pitch)` toward `(to_yaw, to_pitch)` by at most `step` radians, the short way.
@@ -382,6 +420,7 @@ pub fn fight(
 ) {
     let now = time.elapsed_secs();
     let dt = time.delta_secs();
+    let retuned = catalog.as_ref().is_some_and(|catalog| catalog.is_changed());
     let gravity = rules.as_deref().map_or(MovementRules::default().gravity, |rules| rules.gravity);
     for (bot, senses, mind, arms, mut intent, mut aim) in &mut bots {
         let Ok((body, stance, player, _)) = bodies.get(bot) else { continue };
@@ -455,7 +494,9 @@ pub fn fight(
             intent.fire = false;
             intent.alt_fire = false;
             intent.strafe = 0.0;
+            intent.advance = 0.0;
             intent.select = None;
+            intent.standoff = standoff(&mut aim, arms.and_then(|(equipped, _)| equipped.held()), catalog.as_deref(), mind.footwork.comfort, retuned);
             intent.reload = arms.is_some_and(|(equipped, ammo)| {
                 equipped.held().and_then(|held| Some((catalog.as_deref()?.get(held)?.magazine.clip?, ammo.at(held)?))).is_some_and(|(clip, state)| state.clip * 2 < clip && state.reserve > 0)
             });
@@ -510,26 +551,50 @@ pub fn fight(
         aim.strafe_for -= dt;
         if aim.strafe_for <= 0.0 {
             (aim.strafe, aim.strafe_for) = mind.footwork.next_leg(aim.last_side);
-            if aim.strafe != 0.0 {
-                aim.last_side = aim.strafe;
-            }
+            aim.last_side = aim.strafe;
         }
         let right = Vec3::new(aim.yaw.cos(), 0.0, -aim.yaw.sin());
+        let forward = Vec3::new(-aim.yaw.sin(), 0.0, -aim.yaw.cos());
         let standing = body.current - Vec3::Y * stance.half_extents().y;
-        let safe = |side: f32| {
+        let safe = |toward: Vec3| {
             nav.as_deref().is_some_and(|nav| {
-                nav.graph().cell_at(standing + right * side * STRAFE_CHECK).is_some_and(|cell| nav.graph().cells()[cell as usize].hurt == 0)
+                nav.graph().cell_at(standing + toward * STRAFE_CHECK).is_some_and(|cell| nav.graph().cells()[cell as usize].hurt == 0)
             })
         };
         // Turned back from an edge, the new side is a leg of its own, so it is not flipped
         // again the next time the aim swings the check across the edge.
-        if aim.strafe != 0.0 && !safe(aim.strafe) {
-            aim.strafe = if safe(-aim.strafe) { -aim.strafe } else { 0.0 };
+        if aim.strafe != 0.0 && !safe(right * aim.strafe.signum()) {
+            aim.strafe = if safe(-right * aim.strafe.signum()) { -aim.strafe } else { 0.0 };
             aim.last_side = aim.strafe;
             aim.strafe_for = mind.footwork.stride;
         }
         intent.strafe = aim.strafe;
+
+        intent.standoff = standoff(&mut aim, choice.map(|(weapon, ..)| weapon), catalog.as_deref(), mind.footwork.comfort, retuned);
+        let advance = intent.standoff.map_or(0.0, |range| advance_toward(standing.distance(feet), range));
+        intent.advance = if advance != 0.0 && safe(forward * advance.signum()) { advance } else { 0.0 };
     }
+}
+
+/// The [`comfortable_range`] of `weapon`, worked out again only when the weapon changes or the
+/// catalog was `retuned`.
+fn standoff(aim: &mut BotAim, weapon: Option<WeaponId>, catalog: Option<&WeaponCatalog>, comfort: f32, retuned: bool) -> Option<f32> {
+    if retuned || aim.standoff.map(|(held, _)| held) != weapon {
+        let range = weapon.zip(catalog).and_then(|(weapon, catalog)| comfortable_range(catalog.get(weapon)?, comfort));
+        aim.standoff = weapon.map(|weapon| (weapon, range));
+    }
+    aim.standoff.and_then(|(_, range)| range)
+}
+
+/// Of a bot's standoff, the meters off it that push it at full speed toward it, and the share of
+/// that within which it does not bother.
+const STANDOFF_SLACK: f32 = 0.5;
+const STANDOFF_IGNORED: f32 = 0.2;
+
+/// How hard to walk forward, `-1` to `1`, at `distance` from a target to hold `standoff`.
+pub fn advance_toward(distance: f32, standoff: f32) -> f32 {
+    let push = ((distance - standoff) / (standoff * STANDOFF_SLACK).max(1.0)).clamp(-1.0, 1.0);
+    if push.abs() < STANDOFF_IGNORED { 0.0 } else { push }
 }
 
 pub struct BotFightPlugin;
@@ -804,28 +869,51 @@ mod tests {
         assert!(arriving(eye, Vec3::NEG_Z * 10.0, Vec3::NEG_Z * 20.0, 1.0).is_none(), "going away");
     }
 
-    /// Breaks if legs get short enough to jitter, or footwork stops standing still or always
-    /// turns back.
+    /// Breaks if legs get short enough to jitter, a leg plants the bot, footwork stops drifting
+    /// between strafes, or it always turns back.
     #[test]
     fn a_fight_is_legs_long_enough_to_read() {
         let footwork = Footwork::default();
-        let (mut last, mut standing, mut strafes, mut reversals) = (0.0, 0, 0, 0);
+        let (mut last, mut drifting, mut reversals) = (0.0_f32, 0, 0);
         for _ in 0..4000 {
             let (side, seconds) = footwork.next_leg(last);
             assert!(seconds >= footwork.stride * 0.6 && seconds > 0.5, "a leg of {seconds} s");
-            if side == 0.0 {
-                standing += 1;
-                continue;
-            }
+            assert!(side.abs() == 1.0 || side.abs() == footwork.drift, "a leg of {side}");
+            drifting += (side.abs() < 1.0) as u32;
             if last != 0.0 {
-                strafes += 1;
-                reversals += (side == -last) as u32;
+                reversals += (side.signum() == -last.signum()) as u32;
             }
             last = side;
         }
-        let stood = standing as f32 / 4000.0;
-        assert!((stood - (1.0 - footwork.restlessness)).abs() < 0.05, "stood {stood}");
-        let reversed = reversals as f32 / strafes as f32;
+        let drifted = drifting as f32 / 4000.0;
+        assert!((drifted - (1.0 - footwork.restlessness)).abs() < 0.05, "drifted {drifted}");
+        let reversed = reversals as f32 / 3999.0;
         assert!((reversed - footwork.reversal).abs() < 0.05, "reversed {reversed}");
+    }
+
+    /// Breaks if every weapon's standoff is point blank, which walks a bot onto its target, or a
+    /// standoff lies past where its weapon reaches.
+    #[test]
+    fn a_bot_keeps_back_as_far_as_its_weapon_allows() {
+        let catalog = catalog();
+        for weapon in &catalog.weapons {
+            let Some(range) = comfortable_range(weapon, Footwork::default().comfort) else { continue };
+            let key = &weapon.key;
+            assert!((CLOSEST_STANDOFF..=FURTHEST_STANDOFF).contains(&range), "{key} keeps {range} m");
+            let reach = (worth(&weapon.primary, range) + worth(&weapon.secondary, range)) > 0.0;
+            assert!(reach || range == CLOSEST_STANDOFF, "{key} keeps {range} m, out of its own reach");
+        }
+        let far = |comfort| catalog.weapons.iter().filter_map(|weapon| comfortable_range(weapon, comfort)).fold(0.0, f32::max);
+        assert!(far(0.7) > 8.0, "nothing is fought from further than {} m", far(0.7));
+        assert!(far(0.6) >= far(0.85), "a bot insisting on more damage keeps further off");
+    }
+
+    /// Breaks if a bot inside its standoff walks in, outside it walks off, or twitches back and
+    /// forth about it.
+    #[test]
+    fn a_bot_walks_to_its_standoff_and_rests_there() {
+        assert!(advance_toward(2.0, 10.0) < -0.9, "too close, it does not back off");
+        assert!(advance_toward(25.0, 10.0) > 0.9, "too far, it does not close");
+        assert_eq!(advance_toward(10.4, 10.0), 0.0, "at its standoff it still walks");
     }
 }

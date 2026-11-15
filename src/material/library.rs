@@ -174,6 +174,8 @@ pub fn paint_rooms(
     pit: Res<Pit>,
     rooms: Query<(&RoomSurfaces, Option<&Side>)>,
     parts: Query<(Entity, &RoomSlotMesh, Option<&MeshMaterial3d<StandardMaterial>>, Has<MeshMaterial3d<SkyMaterial>>)>,
+    // Baking waits on the GPU gate; see `gpu::submitting`.
+    _main_thread: bevy::ecs::system::NonSendMarker,
 ) {
     for (entity, part, drawn, drawn_as_sky) in &parts {
         let named =

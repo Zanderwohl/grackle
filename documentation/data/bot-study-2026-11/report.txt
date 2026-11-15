@@ -1,0 +1,218 @@
+1080 bot-rounds, 295 rounds, 1080 brains
+                  rounds  bot_rounds
+map      players                    
+cloister 2            73         146
+         4            49         196
+         8            25         200
+foundry  2            75         150
+         4            49         196
+         8            24         192
+
+Spearman, trait against kills minus deaths per minute (centered per round)
+                     trait  rho_all  p_all  rho_2p   p_2p  rho_4p   p_4p  rho_8p   p_8p
+            mind.aim.error   -0.311 0.0000  -0.160 0.0058  -0.305 0.0000  -0.412 0.0000
+           mind.aim.settle   -0.113 0.0002  -0.001 0.9825  -0.172 0.0006  -0.129 0.0108
+             mind.reaction   -0.088 0.0039  -0.031 0.5959  -0.041 0.4232  -0.164 0.0011
+     mind.footwork.comfort    0.084 0.0060   0.065 0.2668   0.059 0.2415   0.103 0.0407
+        mind.drives.health    0.068 0.0259  -0.002 0.9715   0.087 0.0866   0.099 0.0505
+        mind.aim.turn_rate    0.067 0.0272   0.103 0.0757   0.064 0.2076   0.051 0.3139
+       mind.footwork.drift   -0.063 0.0371  -0.094 0.1064   0.021 0.6802  -0.109 0.0303
+             mind.aim.ease   -0.060 0.0492  -0.072 0.2179  -0.126 0.0128  -0.006 0.9073
+         mind.drives.armor   -0.058 0.0565  -0.093 0.1109  -0.026 0.6063  -0.072 0.1520
+mind.footwork.restlessness   -0.058 0.0561  -0.066 0.2582  -0.005 0.9210  -0.108 0.0328
+                route.hurt   -0.057 0.0592  -0.011 0.8568  -0.089 0.0798  -0.052 0.3006
+      mind.footwork.stride    0.054 0.0751  -0.007 0.9100   0.031 0.5412   0.100 0.0480
+         route.self_damage    0.051 0.0920   0.152 0.0086   0.052 0.3062   0.008 0.8691
+         mind.drives.cover   -0.051 0.0913  -0.035 0.5494  -0.075 0.1382  -0.036 0.4808
+     mind.reflexes.attempt    0.046 0.1350  -0.032 0.5837   0.022 0.6591   0.089 0.0786
+          mind.drives.arms   -0.043 0.1589  -0.110 0.0595  -0.032 0.5335  -0.006 0.9066
+         mind.aim.tracking    0.040 0.1894   0.006 0.9132   0.022 0.6645   0.065 0.1964
+              route.danger   -0.031 0.3068  -0.045 0.4446  -0.058 0.2519  -0.013 0.7945
+  mind.drives.stubbornness   -0.030 0.3302  -0.088 0.1289  -0.078 0.1235   0.044 0.3806
+      mind.drives.patience   -0.027 0.3775   0.020 0.7354  -0.017 0.7441  -0.053 0.2992
+        mind.drives.ambush   -0.020 0.5064  -0.040 0.4979  -0.014 0.7758  -0.019 0.7066
+      mind.reflexes.timing   -0.018 0.5537  -0.056 0.3384  -0.039 0.4415   0.000 0.9977
+         route.misjudgment   -0.014 0.6562   0.025 0.6652  -0.069 0.1716   0.002 0.9699
+          mind.drives.roam   -0.013 0.6719  -0.007 0.9059  -0.017 0.7387  -0.033 0.5201
+        mind.footwork.ramp    0.013 0.6723   0.076 0.1945  -0.028 0.5749   0.002 0.9623
+          mind.drives.hunt   -0.011 0.7123  -0.001 0.9855   0.046 0.3622  -0.053 0.2920
+            route.exposure    0.007 0.8146   0.055 0.3471   0.076 0.1324  -0.075 0.1383
+    route.shortsightedness   -0.005 0.8769   0.012 0.8356  -0.018 0.7214   0.012 0.8166
+    mind.footwork.reversal    0.003 0.9246   0.048 0.4132  -0.073 0.1465   0.066 0.1938
+
+OLS: kills minus deaths per minute on standardized traits, round fixed effects, clustered by brain
+R² within 0.271, n=1080
+                            coef      se       p
+m_aim_error              -0.5162  0.0475  0.0000
+m_aim_settle             -0.2078  0.0458  0.0000
+m_reaction               -0.1307  0.0433  0.0025
+m_footwork_comfort        0.1086  0.0448  0.0154
+m_aim_ease               -0.1126  0.0465  0.0154
+m_aim_turn_rate           0.1122  0.0475  0.0182
+m_drives_health           0.1093  0.0484  0.0238
+m_footwork_drift         -0.0950  0.0437  0.0296
+m_drives_cover           -0.0791  0.0423  0.0615
+m_aim_tracking            0.0835  0.0455  0.0664
+r_self_damage             0.0771  0.0455  0.0906
+m_drives_hunt            -0.0665  0.0434  0.1254
+r_hurt                   -0.0660  0.0433  0.1277
+m_drives_ambush          -0.0701  0.0462  0.1291
+m_footwork_restlessness  -0.0709  0.0468  0.1295
+m_reflexes_attempt        0.0673  0.0485  0.1651
+m_drives_arms            -0.0557  0.0455  0.2207
+r_danger                 -0.0582  0.0486  0.2311
+m_drives_patience        -0.0492  0.0442  0.2650
+m_drives_armor           -0.0511  0.0468  0.2750
+m_footwork_stride         0.0462  0.0448  0.3027
+m_drives_stubbornness    -0.0356  0.0445  0.4226
+m_reflexes_timing        -0.0331  0.0446  0.4578
+m_footwork_reversal       0.0328  0.0493  0.5053
+m_drives_roam            -0.0297  0.0462  0.5199
+C(preference)[T.Nearest] -0.0684  0.1129  0.5449
+r_shortsightedness       -0.0226  0.0451  0.6160
+r_exposure                0.0151  0.0462  0.7436
+m_footwork_ramp          -0.0089  0.0414  0.8292
+r_misjudgment            -0.0094  0.0437  0.8296
+C(preference)[T.Facing]   0.0052  0.1056  0.9605
+
+OLS: placing on standardized traits
+                            coef      se       p
+m_aim_error              -0.1370  0.0145  0.0000
+m_footwork_comfort        0.0541  0.0145  0.0002
+m_drives_arms            -0.0523  0.0141  0.0002
+r_self_damage             0.0518  0.0145  0.0004
+m_aim_settle             -0.0502  0.0145  0.0005
+m_reaction               -0.0455  0.0140  0.0011
+m_drives_hunt             0.0381  0.0145  0.0087
+m_aim_turn_rate           0.0297  0.0140  0.0337
+m_aim_tracking            0.0283  0.0146  0.0526
+m_footwork_drift         -0.0244  0.0141  0.0826
+r_hurt                   -0.0238  0.0146  0.1014
+r_danger                 -0.0233  0.0145  0.1075
+m_footwork_stride         0.0202  0.0147  0.1677
+r_exposure                0.0193  0.0148  0.1927
+m_drives_cover           -0.0170  0.0140  0.2242
+C(preference)[T.Nearest] -0.0456  0.0378  0.2277
+C(preference)[T.Facing]  -0.0372  0.0348  0.2847
+m_drives_stubbornness    -0.0149  0.0144  0.2998
+m_aim_ease               -0.0137  0.0143  0.3366
+m_footwork_restlessness  -0.0123  0.0144  0.3901
+m_reflexes_attempt        0.0121  0.0145  0.4063
+m_footwork_reversal       0.0119  0.0146  0.4156
+m_drives_roam            -0.0115  0.0151  0.4443
+m_drives_ambush          -0.0089  0.0148  0.5464
+m_reflexes_timing        -0.0069  0.0141  0.6241
+m_drives_patience        -0.0050  0.0139  0.7179
+m_drives_armor            0.0039  0.0144  0.7876
+r_misjudgment            -0.0018  0.0144  0.9000
+m_drives_health           0.0016  0.0146  0.9151
+r_shortsightedness        0.0007  0.0146  0.9607
+m_footwork_ramp           0.0000  0.0147  0.9976
+
+OLS within 2-player rounds (148 rounds): strongest eight
+                   coef       p
+m_aim_error     -0.1927  0.0078
+m_drives_arms   -0.1942  0.0115
+r_self_damage    0.1785  0.0188
+m_drives_armor  -0.1600  0.0245
+m_aim_turn_rate  0.1562  0.0388
+m_footwork_ramp  0.1302  0.0415
+r_danger        -0.1474  0.0510
+r_exposure       0.1287  0.1104
+
+OLS within 4-player rounds (98 rounds): strongest eight
+                      coef       p
+m_aim_error        -0.4228  0.0000
+m_aim_settle       -0.2530  0.0000
+m_aim_ease         -0.1377  0.0168
+m_drives_cover     -0.1259  0.0423
+r_hurt             -0.0976  0.0691
+m_drives_health     0.1002  0.1150
+m_footwork_comfort  0.0946  0.1206
+r_exposure          0.0756  0.1821
+
+OLS within 8-player rounds (49 rounds): strongest eight
+                      coef       p
+m_aim_error        -0.7348  0.0000
+m_reaction         -0.2555  0.0005
+m_aim_settle       -0.2351  0.0059
+m_drives_hunt      -0.1874  0.0093
+m_drives_health     0.1832  0.0214
+m_footwork_drift   -0.1616  0.0368
+m_aim_ease         -0.1712  0.0471
+m_reflexes_attempt  0.1650  0.0495
+
+Boosted trees, out of sample by brain: R² 0.112
+m_aim_error           0.3117
+m_aim_settle          0.0635
+players               0.0617
+r_self_damage         0.0544
+m_reaction            0.0408
+m_aim_ease            0.0374
+m_footwork_comfort    0.0317
+r_danger              0.0302
+m_reflexes_attempt    0.0265
+m_aim_turn_rate       0.0257
+m_drives_health       0.0255
+m_reflexes_timing     0.0243
+
+1v1 duels decided: 133
+                  trait    rho      p
+            m_aim_error -0.209 0.0157
+          m_drives_arms -0.183 0.0346
+          r_self_damage  0.179 0.0396
+m_footwork_restlessness -0.137 0.1166
+  m_drives_stubbornness -0.129 0.1380
+       m_footwork_drift -0.129 0.1405
+    m_footwork_reversal  0.121 0.1651
+          m_drives_roam -0.116 0.1823
+             r_exposure  0.111 0.2023
+        m_aim_turn_rate  0.103 0.2397
+      m_reflexes_timing -0.095 0.2757
+        m_footwork_ramp  0.090 0.3044
+
+Skill index (mean of the 10 narrowed traits, better end up) against centered kd_rate: rho 0.193, p 1.5e-10
+           kd_rate_c  placing  kill_share
+skill_bin                                
+lowest        -0.271    0.410       0.919
+low           -0.197    0.452       0.961
+middle        -0.044    0.475       0.980
+high           0.227    0.555       1.041
+highest        0.286    0.607       1.081
+
+Behavior (centered per round) against centered kd_rate
+              behavior  rho_vs_kd      p    mean
+            taken_rate     -0.553 0.0000 516.653
+     picked.armor_pack      0.128 0.0000   0.696
+      picked.ammo_pack      0.132 0.0000   0.224
+           want.health      0.248 0.0000   0.089
+           held.pistol     -0.242 0.0000   0.389
+            dealt_rate      0.525 0.0000 474.804
+          held.shotgun      0.293 0.0000   0.144
+    picked.health_pack      0.369 0.0000   1.446
+   picked.flamethrower     -0.113 0.0002   0.923
+             want.arms     -0.097 0.0014   0.353
+picked.rocket_launcher     -0.088 0.0039   0.859
+            want.cover     -0.080 0.0089   0.053
+      held.laser_rifle      0.079 0.0095   0.052
+  picked.pill_launcher     -0.074 0.0149   0.947
+     held.flamethrower     -0.071 0.0205   0.032
+             want.hunt      0.070 0.0208   0.328
+    picked.laser_rifle     -0.070 0.0216   0.307
+        picked.shotgun     -0.055 0.0687   0.961
+  held.rocket_launcher      0.055 0.0716   0.165
+    held.pill_launcher      0.040 0.1891   0.163
+             want.roam      0.026 0.3869   0.082
+              held.rpg     -0.024 0.4221   0.055
+            picked.rpg     -0.011 0.7104   0.823
+            want.armor      0.009 0.7638   0.095
+         kill_distance     -0.002 0.9429   6.509
+
+Trait against behavior, Spearman |rho| >= 0.2 only
+  m_drives_health: want.health +0.51, picked.health_pack +0.40, want.cover -0.24
+  m_drives_armor: want.armor +0.53, picked.armor_pack +0.44
+  m_drives_arms: want.arms +0.65, picked.shotgun +0.51, held.pistol -0.48, picked.pill_launcher +0.41, picked.flamethrower +0.40, picked.rpg +0.40, picked.rocket_launcher +0.39, want.armor -0.39, want.hunt -0.36, held.rpg +0.32, held.flamethrower +0.32, want.health -0.31, picked.armor_pack -0.30, picked.laser_rifle +0.24, held.pill_launcher +0.24, held.rocket_launcher +0.23, held.shotgun +0.22
+  m_drives_hunt: want.hunt +0.59, held.pistol +0.29, dealt_rate +0.23, want.roam -0.23, want.arms -0.22, picked.rpg -0.22, picked.shotgun -0.21
+  m_drives_cover: want.cover +0.67
+  m_drives_roam: want.roam +0.25
+  m_aim_error: dealt_rate -0.34

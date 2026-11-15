@@ -6,7 +6,7 @@ use bevy::prelude::*;
 
 use crate::common::app_mode::AppMode;
 use crate::common::class::Stance;
-use crate::common::round_settings::BotSkill;
+use crate::common::round_settings::{Better, BotSkill};
 use crate::common::damage::{DamageDealt, DamageSource, PlayerId};
 use crate::common::effects::Effect;
 use crate::common::hitbox::Hitboxes;
@@ -41,7 +41,7 @@ pub const REMEMBERS_NOISES: f32 = 3.0;
 /// is nearer. A hit gives a direction, not a distance.
 const HURT_GUESS: f32 = 10.0;
 /// Seconds between noticing something and acting on it, the range a temperament rolls in.
-const REACTION: std::ops::Range<f32> = 0.2..0.4;
+const REACTION: std::ops::Range<f32> = 0.25..0.45;
 
 /// Rolled per seat and kept across lives, like [`RouteCosts`](crate::game::bot::RouteCosts).
 #[derive(Component, Clone, Copy, Debug, PartialEq, serde::Serialize)]
@@ -62,7 +62,13 @@ impl Default for BotMind {
 
 impl BotMind {
     pub fn temperament(skill: BotSkill) -> Self {
-        BotMind { reaction: rand::random_range(REACTION), drives: Drives::temperament(skill), aim: Aim::temperament(skill), footwork: Footwork::temperament(), reflexes: Reflexes::temperament() }
+        BotMind {
+            reaction: rand::random_range(skill.within(REACTION, Better::Lower)),
+            drives: Drives::temperament(skill),
+            aim: Aim::temperament(skill),
+            footwork: Footwork::temperament(skill),
+            reflexes: Reflexes::temperament(skill),
+        }
     }
 }
 
@@ -583,5 +589,34 @@ mod tests {
         assert_eq!(senses.known.len(), 1, "forgot too soon");
         senses.forget(10.0 + REMEMBERS + 0.1);
         assert!(senses.known.is_empty(), "never forgot");
+    }
+
+    /// Breaks if a Hard bot can roll a worse skill trait than an Easy one.
+    #[test]
+    fn a_harder_bot_rolls_every_skill_trait_better() {
+        let roll = |skill| (0..64).map(|_| BotMind::temperament(skill)).collect::<Vec<_>>();
+        let (easy, hard) = (roll(BotSkill::Easy), roll(BotSkill::Hard));
+        let worst = |minds: &[BotMind], trait_of: fn(&BotMind) -> f32| minds.iter().map(trait_of).fold(f32::NEG_INFINITY, f32::max);
+        let best = |minds: &[BotMind], trait_of: fn(&BotMind) -> f32| minds.iter().map(trait_of).fold(f32::INFINITY, f32::min);
+        let lower: [(&str, fn(&BotMind) -> f32); 5] = [
+            ("reaction", |m| m.reaction),
+            ("error", |m| m.aim.error),
+            ("settle", |m| m.aim.settle),
+            ("ease", |m| m.aim.ease),
+            ("drift", |m| m.footwork.drift),
+        ];
+        for (name, trait_of) in lower {
+            assert!(worst(&hard, trait_of) < best(&easy, trait_of), "a Hard bot's {name} overlaps an Easy one's");
+        }
+        let higher: [(&str, fn(&BotMind) -> f32); 5] = [
+            ("turn rate", |m| m.aim.turn_rate),
+            ("tracking", |m| m.aim.tracking),
+            ("attempt", |m| m.reflexes.attempt),
+            ("comfort", |m| m.footwork.comfort),
+            ("health drive", |m| m.drives.health),
+        ];
+        for (name, trait_of) in higher {
+            assert!(worst(&easy, trait_of) < best(&hard, trait_of), "an Easy bot's {name} overlaps a Hard one's");
+        }
     }
 }
