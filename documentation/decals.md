@@ -141,4 +141,4 @@ under a pack's `decals/`; a texture-graph material is to come.
 - [x] Map `EditorDecal` feature, its tool and mirroring; a picture dropdown of every pack's `decals/`
 - [ ] Turn a new map decal onto the surface it was placed on (it starts pressed onto the floor)
 - [ ] Map decals naming a palette role or a texture-graph material
-- [x] The transient caps as a player setting (`DebrisDecals`, 0 to 512 each, in the Player tab)
+- [x] The transient caps as a player setting (`DebrisDecals`, 0 to 512 each, in the Settings window's Graphics page)

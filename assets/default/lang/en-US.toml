@@ -245,16 +245,6 @@ frags = "Frags"
 deaths = "Deaths"
 none = "No rounds played"
 
-[editor.player]
-title = "Player"
-name = "Name"
-auto_reload = "Auto-reload"
-field_of_view = "Field of view"
-debris = "Debris decals"
-bullet_holes = "Bullet holes"
-blood = "Blood"
-scorch = "Scorch marks"
-
 [editor.metadata]
 title = "Metadata"
 display_name = "Display name"
@@ -1445,6 +1435,7 @@ close = "Close"
 
 [settings.page]
 general = "General"
+graphics = "Graphics"
 shortcuts = "Shortcuts"
 fonts = "Fonts"
 developer = "Developer"
@@ -1453,6 +1444,16 @@ attribution = "Attribution"
 [settings.general]
 interface = "Interface"
 language = "Language"
+player = "Player"
+name = "Name"
+auto_reload = "Auto-reload"
+field_of_view = "Field of view"
+
+[settings.graphics]
+debris = "Debris decals"
+bullet_holes = "Bullet holes"
+blood = "Blood"
+scorch = "Scorch marks"
 
 [settings.fonts]
 sample = "The quick brown fox jumps over the lazy dog 0123456789"
