@@ -14,7 +14,7 @@ use bevy::transform::TransformSystems;
 use crate::common::app_mode::AppMode;
 use crate::common::class::Stance;
 use crate::common::effects::Effect;
-use crate::common::damage::{Cause, Damage, DamageSource, How, KillShove, PlayerId};
+use crate::common::damage::{Cause, Damage, DamageSource, How, KillShove, PlayerId, CRIT_MULTIPLIER};
 use crate::common::hitbox::Hitboxes;
 use crate::common::hitscan::{trace, Hit, HitZone};
 use crate::game::collision::CollisionWorld;
@@ -101,11 +101,16 @@ pub(crate) fn trace_past(
     trace(ray, range, others)
 }
 
-fn damage_for(zone: HitZone, spec: &HitscanSpec) -> u32 {
-    match zone {
-        HitZone::Body => spec.damage,
-        HitZone::Head => spec.damage * spec.headshot_multiplier,
+/// `distance` is meters from the eye. A crit ignores it and the hit zone.
+fn damage_for(zone: HitZone, spec: &HitscanSpec, distance: f32, critical: bool) -> f32 {
+    if critical {
+        return spec.damage as f32 * CRIT_MULTIPLIER;
     }
+    let multiplier = match zone {
+        HitZone::Body => 1.0,
+        HitZone::Head => spec.headshot_multiplier as f32,
+    };
+    spec.damage as f32 * multiplier * spec.scale_at(distance)
 }
 
 /// One shot per [`WeaponActionFired`] carrying a hitscan action, of one ray
@@ -162,7 +167,7 @@ pub fn fire_hitscan(
 
             let Some(hit) = hit else { continue };
 
-            let worth = damage_for(hit.zone, &spec) as f32 * spec.scale_at(ray.origin.distance(hit.point));
+            let worth = damage_for(hit.zone, &spec, ray.origin.distance(hit.point), shot.critical);
             match dealt.iter().position(|asked| asked.target == hit.target) {
                 Some(index) => worths[index] += worth,
                 None => {
@@ -174,7 +179,7 @@ pub fn fire_hitscan(
                     point: hit.point,
                     from: Some(ray.origin),
                     kill_shove,
-                    cause: Cause::of(shot.weapon, How::Hitscan),
+                    cause: Cause { critical: shot.critical, ..Cause::of(shot.weapon, How::Hitscan) },
                     });
                 }
             }
@@ -379,11 +384,16 @@ mod tests {
     }
 
     fn fire_action(world: &mut World, shooter: Entity, action: WeaponAction) {
+        fire_critical(world, shooter, action, false);
+    }
+
+    fn fire_critical(world: &mut World, shooter: Entity, action: WeaponAction, critical: bool) {
         world.write_message(WeaponActionFired {
             shooter,
             button: crate::game::weapon::Button::Primary,
             action,
             weapon: None,
+            critical,
         });
         world.run_system_once(fire_hitscan).unwrap();
     }
@@ -646,6 +656,26 @@ mod tests {
         let (mut world, shooter, _) = a_shooter_and_a_target(target_boxes(20.0));
         fire_action(&mut world, shooter, WeaponAction::Hitscan(FALLING_SHOTGUN));
         assert_eq!(asked_for(&mut world)[0].amount, 32);
+    }
+
+    /// Breaks if a crit stops tripling the base, or ramp-up or falloff reach it.
+    #[test]
+    fn a_crit_is_three_times_the_base_at_any_distance() {
+        for distance in [1.0, 20.0] {
+            let (mut world, shooter, _) = a_shooter_and_a_target(target_boxes(distance));
+            fire_critical(&mut world, shooter, WeaponAction::Hitscan(FALLING_SHOTGUN), true);
+            let asked = asked_for(&mut world);
+            assert_eq!(asked[0].amount, 3 * 9 * SHOTGUN.damage, "at {distance} m");
+            assert!(asked[0].cause.critical);
+        }
+    }
+
+    /// Breaks if a crit's multiplier stacks on a headshot's or gives way to it.
+    #[test]
+    fn a_critical_headshot_is_three_times_the_base() {
+        let sharper = HitscanSpec { headshot_multiplier: 4, ..LASER };
+        assert_eq!(damage_for(HitZone::Head, &sharper, 10.0, true), sharper.damage as f32 * 3.0);
+        assert_eq!(damage_for(HitZone::Body, &sharper, 10.0, true), sharper.damage as f32 * 3.0);
     }
 
     /// Breaks if the pitch sign is backwards.

@@ -64,6 +64,8 @@ no person playing.
   frags. Ties all win. A mode with no scoreboard has no winners and skips the post-game.
 - Every body that is not a winner's has `Condition::humiliated` forced on, which already means
   third person, no firing, the `humiliated` clip, and running allowed.
+- Every winner's body has `Condition::crit_boosted`, so each hitscan and projectile it fires is
+  a critical hit (see "What a weapon is" in CLAUDE.md).
 - A bot's drives change for the phase (`Drives::in_the_post_game`): a winner's hunt is 1 and a
   loser's cover is 1, whatever its temperament rolled.
 - `record_damage`, `record_frags` and `record_healing` run only in `Live`.

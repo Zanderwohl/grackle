@@ -2540,6 +2540,15 @@ rounds a body's share once, after they are added; a projectile measures from
 where its shooter is to the blast, and never scales the shooter's own. Bots
 weigh a weapon by the same curve.
 
+**A critical hit belongs to the shot**: `WeaponActionFired::critical`, copied
+onto a projectile and its `Explosion`, and recorded in `Cause::critical`. It
+is `CRIT_MULTIPLIER` (3) times the base in place of any ramp-up or falloff by
+distance, and a headshot does not stack on it; a blast's splash falloff still
+applies, the shooter's own splash and anybody's knockback are not raised, and a
+reflected projectile is a crit only if the reflector's airblast was. A body fires them while
+its `Condition::crit_boosted` is set, which only the post-game does, for the
+winners.
+
 `ProjectileSpec` ([`src/common/projectile.rs`](src/common/projectile.rs)) is
 a handful of numbers, and the rocket launcher's two barrels, the pipe bomb and the
 TF2C-style RPG are all values of it. A grenade is a rocket that falls, spins,
@@ -2849,6 +2858,15 @@ radius over a quarter second, burning yellow-orange, red, dark red, black, gray 
 fades out (`BURN`). The clouds are white SVGs, `particles/svg/cloud_{1..8}.svg`, rasterized into
 one sheet at startup; a pack without them draws the airblast's puffs. The damage sphere is drawn
 on `F6`.
+
+**A projectile may trail clouds** ([`src/game/rocket_trail.rs`](src/game/rocket_trail.rs)):
+`trail = "cloud"` on its spec in `weapons.toml` (the rocket launcher and the RPG). The blast's
+clouds, lasting longer and burning on to white, then fading as they grow, with no gravity, left where it passed, a dozen per meter. The emitter is its own
+entity replaying the projectile's drawn path 10 cm behind it, so our own shot trails from the
+barrel; when the projectile goes it runs on to where the projectile was going a tick on, stopped
+at a wall, since the drawn position lags the simulated one, and stops; it is despawned once its
+clouds fade. It cuts across a
+bounce, so nothing that bounces has one (`only_projectiles_that_never_bounce_trail`).
 
 `ProjectileEmitter` fires a spec along its own forward on an interval.
 Nothing places one: the player's key for it is gone, and it is meant to come

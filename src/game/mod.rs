@@ -38,6 +38,7 @@ pub mod flame_jet;
 pub mod gib_blood;
 pub mod gust_ring;
 pub mod blast_cloud;
+pub mod rocket_trail;
 pub mod hat;
 pub mod held;
 pub mod hitbox;
@@ -1000,6 +1001,7 @@ mod tests {
             direct: None,
             weapon: None,
             reflected: false,
+            critical: false,
             spare: None,
         });
     }

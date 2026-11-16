@@ -67,6 +67,19 @@ pub struct ProjectileSpec {
     /// Meters. How big it is drawn and how far off a wall it stops.
     #[reflect(@Unit::Meters)]
     pub radius: f32,
+    /// Its emitter cuts across a bounce, so a projectile that bounces should have none.
+    #[serde(default)]
+    pub trail: Trail,
+}
+
+/// Drawing only; see [`crate::game::rocket_trail`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Reflect, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[reflect(Default)]
+pub enum Trail {
+    #[default]
+    None,
+    Cloud,
 }
 
 /// What the weapon editor starts a new one from.
@@ -89,6 +102,7 @@ impl Default for ProjectileSpec {
             falloff: None,
             knockback: 9.0,
             radius: 0.12,
+            trail: Trail::None,
         }
     }
 }
@@ -113,6 +127,7 @@ impl ProjectileSpec {
         falloff: None,
         knockback: 9.0,
         radius: 0.12,
+        trail: Trail::Cloud,
     };
 
     pub const RPG: Self = Self {
@@ -138,6 +153,7 @@ impl ProjectileSpec {
         falloff: None,
         knockback: 10.0,
         radius: 0.14,
+        trail: Trail::None,
     };
 }
 
