@@ -5,7 +5,7 @@ use crate::common::stable_hash;
 use crate::game::nav::NavGraph;
 use crate::tool::bake_cache;
 
-pub const FORMAT: u32 = 7;
+pub const FORMAT: u32 = 8;
 
 const FOLDER: &str = "nav";
 

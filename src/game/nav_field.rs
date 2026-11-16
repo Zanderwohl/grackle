@@ -14,9 +14,11 @@ use serde::{Deserialize, Serialize};
 use crate::common::class::{Stance, CROUCH_EYE_HEIGHT, TALLEST_CLASS_EYE_HEIGHT};
 use crate::common::movement_rules::MovementRules;
 use crate::common::trigger::{TriggerEffect, TriggerVolume};
+use crate::common::weapon::WeaponId;
 use crate::game::collision::CollisionWorld;
 use crate::game::condition::Condition;
 use crate::game::explosion::push_speed;
+use crate::game::nav_derived;
 use crate::game::world_prop;
 use crate::game::nav::{center_on, Reach, CellId, NavGraph, MOST_TICKS, SAME_FLOOR, SPACING, TICK};
 use crate::game::player::{step, Duck, Mover, PhysicsBody, Player, PlayerInput, STEP_HEIGHT};
@@ -78,6 +80,15 @@ pub enum Field {
     Height,
     /// Seconds to the pickup at this index in [`Fields::pickups`].
     Distance(usize),
+    /// Meters: the median of the distances to what this cell sees or is seen from.
+    RangeMedian,
+    /// Meters: the 25th percentile of the same.
+    RangeLow,
+    /// Meters: the 75th percentile of the same.
+    RangeHigh,
+    /// Seconds of walking to the nearest cell out of sight of everything that sees this one;
+    /// infinite past [`nav_derived::ESCAPE_MOST`].
+    Escape,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -86,19 +97,26 @@ pub struct Pickup {
     pub feet: Vec3,
     /// What it is taken through.
     pub reach: Reach,
+    /// The weapon it gives, if it is a weapon.
+    #[serde(default)]
+    pub weapon: Option<WeaponId>,
 }
 
 impl Pickup {
     /// A weapon, taken through the sphere it hovers in.
     pub fn weapon(label: String, feet: Vec3) -> Self {
         let reach = Reach { center: feet + Vec3::Y * world_prop::WEAPON_HOVER, radius: world_prop::WEAPON_PICKUP_RADIUS };
-        Pickup { label, feet, reach }
+        Pickup { label, feet, reach, weapon: None }
+    }
+
+    pub fn giving(self, weapon: WeaponId) -> Self {
+        Pickup { weapon: Some(weapon), ..self }
     }
 
     /// A placed prop. Taken through its colliders, which the bake does not read; the sphere a prop
     /// without them is taken through stands in.
     pub fn prop(label: String, at: Vec3) -> Self {
-        Pickup { label, feet: at, reach: Reach { center: at, radius: world_prop::DEFAULT_PICKUP_RADIUS } }
+        Pickup { label, feet: at, reach: Reach { center: at, radius: world_prop::DEFAULT_PICKUP_RADIUS }, weapon: None }
     }
 }
 
@@ -192,6 +210,14 @@ pub struct Fields {
     /// Per pickup, then per cell; infinite where the pickup cannot be reached.
     pub distances: Vec<Vec<f32>>,
     pub sightlines: Sightlines,
+    pub range_low: Vec<f32>,
+    pub range_median: Vec<f32>,
+    pub range_high: Vec<f32>,
+    pub escape: Vec<f32>,
+    /// Where [`Field::Escape`] leads.
+    pub escape_to: Vec<Option<CellId>>,
+    /// The spawns' feet the bake was given.
+    pub spawns: Vec<Vec3>,
 }
 
 impl Fields {
@@ -214,8 +240,17 @@ impl Fields {
             Field::Knockback => at(&self.knockback),
             Field::Height => at(&self.height),
             Field::Distance(pickup) => self.distances.get(pickup).and_then(at),
+            Field::RangeMedian => at(&self.range_median),
+            Field::RangeLow => at(&self.range_low),
+            Field::RangeHigh => at(&self.range_high),
+            Field::Escape => at(&self.escape),
             Field::Hurt => None,
         }
+    }
+
+    /// The cell [`Field::Escape`] is the seconds to, `None` where there is none or it is unbaked.
+    pub fn escape_to(&self, id: CellId) -> Option<CellId> {
+        self.escape_to.get(id as usize).copied().flatten()
     }
 }
 
@@ -227,6 +262,7 @@ pub struct FieldBake {
     viewpoint_of: Vec<u32>,
     knockback: Vec<f32>,
     pickups: Vec<Pickup>,
+    spawns: Vec<Vec3>,
     /// The cells routes run between: spawns and pickups, once each.
     ends: Vec<CellId>,
     /// Out of each cell and into it, as `(cell, seconds)`, built once for every search.
@@ -254,6 +290,7 @@ impl FieldBake {
             viewpoint_of,
             knockback: Vec::new(),
             pickups,
+            spawns,
             ends,
             links: None,
             distances: Vec::new(),
@@ -336,7 +373,7 @@ impl FieldBake {
         let knockback = self.viewpoint_of.iter().map(|viewpoint| self.knockback[*viewpoint as usize]).collect();
         let routes = self.routes;
         let traffic = self.on.into_iter().map(|on| if routes == 0 { 0.0 } else { on as f32 / routes as f32 }).collect();
-        Fields { knockback, traffic, pickups: self.pickups, distances: self.distances, ..default() }
+        Fields { knockback, traffic, pickups: self.pickups, distances: self.distances, spawns: self.spawns, ..default() }
     }
 }
 
@@ -353,11 +390,15 @@ pub struct Sight {
     pub feet_exposure: Vec<f32>,
     pub watch: Vec<f32>,
     pub sightlines: Sightlines,
+    pub ranges: nav_derived::Ranges,
+    pub escapes: nav_derived::Escapes,
 }
 
 impl Fields {
     pub fn add_sight(&mut self, sight: Sight) {
-        let Sight { sight, exposure, crouched_sight, crouched_exposure, cover, height, feet_sight, feet_exposure, watch, sightlines } = sight;
+        let Sight { sight, exposure, crouched_sight, crouched_exposure, cover, height, feet_sight, feet_exposure, watch, sightlines, ranges, escapes } = sight;
+        (self.range_low, self.range_median, self.range_high) = (ranges.low, ranges.median, ranges.high);
+        (self.escape, self.escape_to) = (escapes.seconds, escapes.to);
         (self.sight, self.exposure, self.crouched_sight, self.crouched_exposure) = (sight, exposure, crouched_sight, crouched_exposure);
         (self.cover, self.height, self.sightlines) = (cover, height, sightlines);
         (self.feet_sight, self.feet_exposure, self.watch) = (feet_sight, feet_exposure, watch);
@@ -490,6 +531,7 @@ impl SightBake {
         let per_cell = |values: &[f32]| sightlines.viewpoint_of.iter().map(|viewpoint| values[*viewpoint as usize]).collect::<Vec<f32>>();
         let exposure = per_cell(&exposure);
         let cover = cover(graph, &exposure);
+        let (ranges, escapes) = (nav_derived::ranges(&sightlines), nav_derived::escapes(graph, &sightlines));
         Sight {
             sight: per_cell(&sight),
             exposure,
@@ -501,6 +543,8 @@ impl SightBake {
             feet_exposure: per_cell(&feet_exposure),
             watch: per_cell(&watch),
             sightlines,
+            ranges,
+            escapes,
         }
     }
 }

@@ -47,6 +47,7 @@ pub mod flinch;
 pub mod forward_camera;
 pub mod hitscan;
 pub mod nav;
+pub mod nav_derived;
 pub mod nav_field;
 pub mod nav_rating;
 pub mod projectile;

@@ -142,7 +142,8 @@ writer of `BotIntent::goal`: health, armor, arms, a hunt, cover, an ambush or a
 roam, each scored by its temperament's `Drives`, the one it has getting a
 commitment bonus, and shown with its score and the runner-up on its `F8` tag. A route is weighed by `RouteCosts` —
 seconds of travel, plus that time again per weighted unit of exposure,
-knockback danger and Hurt in the cells entered — so risk is priced, not
+knockback danger and Hurt in the cells entered, and, in exposed cells, for how far
+their engagement range is off the held weapon's standoff — so risk is priced, not
 forbidden. Each seat rolls its own temperament (every weight scaled by 0.1 to
 1.5) and keeps it across lives, so bots are neither alike nor perfect. A
 temperament also has a **misjudgment**, 0 to 0.8: each 4 m stretch of floor
@@ -153,8 +154,16 @@ and a line to each enemy it knows of: solid while seen, dashed when only hurt
 by them, fading as it forgets. The nav graph they walk — walks, steps, drops and jumps, the last two found by running the movement step — is baked (`src/game/nav.rs`,
 the third bake), with knockback, pickup distance, traffic and, as a fourth bake,
 sightlines on it (`src/game/nav_field.rs`), rated into kinds of place — cramped,
-precarious, an ambush — for the map's statistics (`src/game/nav_rating.rs`); all
-of it is drawn over the floor from its section of the Bakes panel. The plan is
+precarious, an ambush, a death trap — for the map's statistics (`src/game/nav_rating.rs`); all
+of it is drawn over the floor from its section of the Bakes panel. Three fields are
+derived from the sightlines and links in the bake's last pass, with no more rays
+(`src/game/nav_derived.rs`, [documentation/nav-derived-fields.md](documentation/nav-derived-fields.md)):
+**engagement range**, the median and quartiles of the distances a cell sees and
+is seen across; **escape**, the walking seconds to the nearest cell that nothing
+seeing this one sees, and that cell (none past 4 s); and, asked for rather than
+stored, each spawn's **first weapon**, the nearest weapon pickup it does not start
+with, the seconds to it and the exposure on the way (`first_weapons`, which a
+baked pickup's `WeaponId` and the bake's `Fields::spawns` make possible). The plan is
 [documentation/bots.md](documentation/bots.md). The brain — senses with a 90°
 view, goals scored by utility with a commitment bonus, and aim with human
 limits — is planned in [documentation/bot-brain.md](documentation/bot-brain.md).
@@ -170,9 +179,13 @@ rockets led and put at the feet, fire held without a clear ray, the weapon by
 range, a strafe onto floor the graph has, and an airblast at a rocket it sees
 coming, tried for and timed by its rolled `Reflexes`, so it often misses. **A
 bot keeps its distance**: it hunts from a place at its weapon's
-`comfortable_range` with a clear line to the quarry, walks in or backs off to
+`comfortable_range` with a clear line to the quarry, preferring one whose median
+engagement range is near that standoff, walks in or backs off to
 hold that range once its route is done, and routes round the floor beside
-enemies it knows of (`BotIntent::crowd`). `steer_bots` adds the strafe across
+enemies it knows of (`BotIntent::crowd`). A threatened bot's cover is its cell's
+escape, the nearest place out of sight of all that sees it, else the least seen
+cell within 10 m; and a bot carrying only what it spawned with wants a weapon it
+does not carry more the nearer that weapon is. `steer_bots` adds the strafe across
 the look, and eases the route's speed, the strafe and the walk in or out over
 the bot's `Footwork::ramp` (`BotStride`), so it neither stops dead nor flips
 a strafe in a tick.

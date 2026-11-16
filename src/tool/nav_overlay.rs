@@ -20,6 +20,9 @@ use crate::editor::input::CurrentMouseInput;
 use crate::editor::multicam::editor_only;
 use crate::game::collision::CollisionWorld;
 use crate::game::nav::{CellId, LinkKind, NavGraph, SPACING};
+use crate::common::game_rules::GameRules;
+use crate::common::weapon::{WeaponCatalog, WeaponId};
+use crate::game::nav_derived::{self, FirstWeapon, RANGE_BANDS};
 use crate::game::nav_field::{self, Field};
 use crate::game::nav_rating::{MapStatistics, Rating};
 use crate::get;
@@ -45,6 +48,10 @@ const ROCKET_JUMP: Color = Color::srgb(1.0, 0.35, 0.2);
 
 /// Share of routes at which the traffic scale is full.
 const TRAFFIC_FULL: f32 = 0.5;
+/// Meters of median engagement range at which the range scale is full.
+const RANGE_FULL: f32 = 30.0;
+/// Seconds of escape at which the escape scale is full.
+const ESCAPE_FULL: f32 = 3.0;
 
 /// The low end of every single-hue scale.
 const DARK: Color = Color::srgb(0.06, 0.06, 0.08);
@@ -76,6 +83,10 @@ pub enum Shown {
     Danger,
     Height,
     Traffic,
+    /// Median engagement range: short in orange, long in blue.
+    Range,
+    /// Seconds to somewhere out of sight; none within reach at full.
+    Escape,
     /// Seconds to the pickup at this index.
     Distance(usize),
     Rating(Rating),
@@ -129,7 +140,7 @@ impl Body {
 }
 
 impl Shown {
-    const LISTED: [Shown; 10] = [
+    const LISTED: [Shown; 12] = [
         Shown::Off,
         Shown::CellsAndLinks,
         Shown::Sight,
@@ -140,6 +151,8 @@ impl Shown {
         Shown::Danger,
         Shown::Height,
         Shown::Traffic,
+        Shown::Range,
+        Shown::Escape,
     ];
 
     fn label(self) -> String {
@@ -154,6 +167,8 @@ impl Shown {
             Shown::Danger => get!("nav.overlay.danger"),
             Shown::Height => get!("nav.overlay.height"),
             Shown::Traffic => get!("nav.overlay.traffic"),
+            Shown::Range => get!("nav.overlay.range"),
+            Shown::Escape => get!("nav.overlay.escape"),
             Shown::Distance(_) => get!("nav.overlay.distance"),
             Shown::Rating(_) => get!("nav.overlay.rating"),
         }
@@ -205,6 +220,8 @@ impl NavOverlay {
             Shown::Height => self.height,
             Shown::Danger => 1.0,
             Shown::Traffic => TRAFFIC_FULL,
+            Shown::Range => RANGE_FULL,
+            Shown::Escape => ESCAPE_FULL,
             _ => self.area,
         }
     }
@@ -219,6 +236,8 @@ impl NavOverlay {
             Shown::Danger => Field::Knockback,
             Shown::Height => Field::Height,
             Shown::Traffic => Field::Traffic,
+            Shown::Range => Field::RangeMedian,
+            Shown::Escape => Field::Escape,
             Shown::Distance(pickup) => Field::Distance(pickup),
             _ => return None,
         };
@@ -240,6 +259,8 @@ impl NavOverlay {
             Shown::Danger => self.value(graph, id).map(|value| ramp(share(value), SEEN)),
             Shown::Height => self.value(graph, id).map(|value| ramp(share(value), HIGH)),
             Shown::Traffic => self.value(graph, id).map(|value| ramp(share(value), BUSY)),
+            Shown::Range => self.value(graph, id).map(|value| if value <= 0.0 { DARK } else { LESS.mix(&MORE, share(value)) }),
+            Shown::Escape => self.value(graph, id).map(|value| ramp(if value.is_finite() { share(value) } else { 1.0 }, SEEN)),
             Shown::Distance(_) => self.value(graph, id).filter(|value| value.is_finite()).map(|value| ramp(1.0 - share(value), NEAR)),
             Shown::Rating(rating) => rating.holds(graph, id).map(|holds| if holds { RATED } else { DARK }),
         };
@@ -517,12 +538,23 @@ pub struct NavCommands {
     cells: usize,
     links: usize,
     statistics: MapStatistics,
+    first_weapons: Vec<(Option<String>, FirstWeapon)>,
+}
+
+/// [`nav_derived::first_weapons`] for the graph and starting weapons it was last worked out for.
+#[derive(Resource, Default)]
+pub struct FirstWeapons {
+    of: Option<(u64, Vec<WeaponId>)>,
+    rows: Vec<FirstWeapon>,
 }
 
 /// The nav section's reads and writes, bundled to stay inside the panels' parameter limit.
 #[derive(SystemParam)]
 pub struct NavPanel<'w> {
     nav: ResMut<'w, NavBake>,
+    first_weapons: ResMut<'w, FirstWeapons>,
+    catalog: Option<Res<'w, WeaponCatalog>>,
+    rules: Option<Res<'w, GameRules>>,
     overlay: ResMut<'w, NavOverlay>,
     baseline: ResMut<'w, NavBaseline>,
     bake: MessageWriter<'w, BakeNav>,
@@ -530,9 +562,24 @@ pub struct NavPanel<'w> {
 }
 
 impl NavPanel<'_> {
-    pub fn commands(&self) -> NavCommands {
+    pub fn commands(&mut self) -> NavCommands {
+        let starting = match (&self.catalog, &self.rules) {
+            (Some(catalog), Some(rules)) => nav_derived::starting_weapons(catalog, rules),
+            _ => Vec::new(),
+        };
+        let key = (self.nav.generation(), starting);
+        if self.first_weapons.of.as_ref() != Some(&key) {
+            self.first_weapons.rows = nav_derived::first_weapons(self.nav.graph(), &key.1);
+            self.first_weapons.of = Some(key);
+        }
         let graph = self.nav.graph();
         let links = self.nav.link_count();
+        let first_weapons = self
+            .first_weapons
+            .rows
+            .iter()
+            .map(|row| (row.pickup.and_then(|pickup| graph.fields().pickups.get(pickup)).map(|pickup| pickup.label.clone()), row.clone()))
+            .collect();
         NavCommands {
             auto: self.nav.auto(),
             overlay: self.overlay.clone(),
@@ -545,6 +592,7 @@ impl NavPanel<'_> {
             cells: graph.cells().len(),
             links,
             statistics: self.nav.statistics().clone(),
+            first_weapons,
         }
     }
 
@@ -646,11 +694,11 @@ pub fn section(ui: &mut egui::Ui, commands: &mut NavCommands) {
             }
         });
         ui.label(get!("nav.summary", "cells", commands.cells, "links", commands.links));
-        statistics(ui, &commands.statistics);
+        statistics(ui, &commands.statistics, &commands.first_weapons);
     });
 }
 
-fn statistics(ui: &mut egui::Ui, statistics: &MapStatistics) {
+fn statistics(ui: &mut egui::Ui, statistics: &MapStatistics, first_weapons: &[(Option<String>, FirstWeapon)]) {
     egui::CollapsingHeader::new(get!("nav.statistics.title")).id_salt("nav_statistics").show(ui, |ui| {
         egui::Grid::new("nav_statistics_grid").num_columns(2).show(ui, |ui| {
             ui.label(get!("nav.statistics.floor"));
@@ -664,8 +712,41 @@ fn statistics(ui: &mut egui::Ui, statistics: &MapStatistics) {
                 ui.label(share.map_or_else(|| get!("nav.statistics.unbaked"), |share| format!("{:.0}%", share * 100.0)));
                 ui.end_row();
             }
+            for (band, label) in range_band_labels().into_iter().enumerate() {
+                ui.label(label);
+                ui.label(statistics.range_bands.map_or_else(|| get!("nav.statistics.unbaked"), |bands| format!("{:.0}%", bands[band] * 100.0)));
+                ui.end_row();
+            }
         });
+        if !first_weapons.is_empty() {
+            ui.label(get!("nav.statistics.first_weapons"));
+            egui::Grid::new("nav_first_weapons_grid").num_columns(2).show(ui, |ui| {
+                for (number, (label, row)) in first_weapons.iter().enumerate() {
+                    ui.label(get!("nav.statistics.spawn", "number", number + 1));
+                    ui.label(match label {
+                        Some(label) => format!("{label}: {:.1} s, {:.0} / {:.0} m²", row.seconds, row.mean_exposure, row.most_exposure),
+                        None => get!("nav.statistics.no_weapon"),
+                    });
+                    ui.end_row();
+                }
+            });
+        }
     });
+}
+
+/// One per range band, in [`nav_derived::range_bands`]'s order.
+pub fn range_band_labels() -> Vec<String> {
+    let mut low = 0.0;
+    let mut labels: Vec<String> = RANGE_BANDS
+        .iter()
+        .map(|high| {
+            let label = get!("nav.statistics.range_band", "low", low, "high", high);
+            low = *high;
+            label
+        })
+        .collect();
+    labels.push(get!("nav.statistics.range_beyond", "low", low));
+    labels
 }
 
 pub struct NavOverlayPlugin;
@@ -674,6 +755,7 @@ impl Plugin for NavOverlayPlugin {
     fn build(&self, app: &mut App) {
         crate::common::keybind::ensure(app);
         app.init_resource::<NavOverlay>()
+            .init_resource::<FirstWeapons>()
             .init_resource::<NavBaseline>()
             .init_resource::<NavProbe>()
             // Ungated: the overlay is on a layer only the editor viewports draw, unless asked for in Play.
