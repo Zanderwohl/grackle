@@ -495,6 +495,7 @@ pub(crate) fn effect_origin(
 fn aim_the_jets(
     mut commands: Commands,
     time: Res<Time>,
+    particles: Res<Time<EffectSimulation>>,
     catalog: Res<WeaponCatalog>,
     world: Res<CollisionWorld>,
     view: Option<Res<ViewMode>>,
@@ -511,6 +512,8 @@ fn aim_the_jets(
     mut jets: Query<(Entity, &mut FlameJet, &mut Transform, &mut EffectProperties, Option<&mut EffectSpawner>), Without<Player>>,
 ) {
     let dt = time.delta_secs();
+    // On the particles' clock, so a jet is not taken down while the kill cam holds its flames.
+    let idle_dt = particles.delta_secs();
     for (entity, mut jet, mut transform, mut properties, spawner) in &mut jets {
         jet.lit_for -= dt;
         let found = bodies.get(jet.body).ok().and_then(|body| {
@@ -518,7 +521,7 @@ fn aim_the_jets(
             Some((body, spec))
         });
         let lit = jet.lit_for > 0.0 && found.is_some();
-        jet.idle = if lit { 0.0 } else { jet.idle + dt };
+        jet.idle = if lit { 0.0 } else { jet.idle + idle_dt };
         if jet.idle >= LAST_FLAME_GONE {
             commands.entity(entity).despawn();
             continue;
@@ -596,7 +599,7 @@ fn hull_middle(drawn: &Transform, boxes: &Hitboxes, tick: Option<&PhysicsBody>) 
 #[allow(clippy::type_complexity)]
 fn follow_the_burning(
     mut commands: Commands,
-    time: Res<Time>,
+    time: Res<Time<EffectSimulation>>,
     bodies: Query<(&Transform, &Hitboxes, Has<OnFire>, Option<&Player>, Option<&PhysicsBody>)>,
     mut afterburns: Query<
         (Entity, &mut Afterburn, &mut Transform, &mut EffectProperties, Option<&mut EffectSpawner>),
@@ -675,7 +678,7 @@ fn corpse_fire_box(least: Vec3, most: Vec3) -> (Vec3, Vec3) {
 
 fn follow_the_burnt_corpses(
     mut commands: Commands,
-    time: Res<Time>,
+    time: Res<Time<EffectSimulation>>,
     corpses: Query<&Ragdoll>,
     mut fires: Query<(Entity, &mut CorpseFire, &mut Transform, &mut EffectProperties, Option<&mut EffectSpawner>)>,
 ) {

@@ -92,6 +92,18 @@ records drawn `GlobalTransform`s and puts old ones back for the render.
   passes its last frame. Materials known to the ghost: `StandardMaterial` and `LitMaterial`;
   anything else is not ghosted and vanishes early.
 - **Recording stops once time has stopped**: only the frame at the frozen view time is needed.
+- **Particles are slowed, not replayed.** Hanabi simulates them on the GPU, so there is nothing
+  to record. Instead `pace_the_particles` sets `Time<EffectSimulation>`'s speed to `Replay::speed`
+  (the slope of `slowed`: 1 down to 0), so particles slow and stop with the view. Once the replay
+  ends the clock runs fast until it has caught up with `Time`, so particles do not stay behind the
+  meshes. The emitters' idle timers count on the same clock, so an emitter is not despawned while
+  its frozen particles are on screen.
+- **An emitter that follows something is replayed like a mesh**: its `GlobalTransform` is
+  recorded and played back, so flames and blood leave the replayed body rather than the live one.
+- **A burst is held until the particles' clock reaches it** (`HeldBursts`): blast clouds, gust
+  rings, gib bursts and hit spurts are set off when the particles reach the moment they happened,
+  not when the message arrives. Their emitters are `Unreplayed`, since they are already placed in
+  step with the view.
 - What is not replayed: UI (the HUD, name tags, damage numbers), gizmos, lights, and material
   changes such as a fading decal. All of it is drawn live.
 
@@ -108,6 +120,8 @@ records drawn `GlobalTransform`s and puts old ones back for the render.
 - [x] `Replay` + `ReplayHistory`: record, play, restore in `First`
 - [x] Hide meshes born after the view time; ghost meshes despawned before it
 - [x] The death cam's pivot follows the replayed corpse
+- [x] Particles' clock follows the replay's speed; emitters age on it
+- [x] Particle bursts set off after the view time wait for the view to reach them
 - [x] Respawn cuts the kill cam short at any phase
 - [x] Tests: framing, the rate curve, replay restore leaves live transforms untouched, respawn cut
 - [x] Watched in a round against bots: the swing, the glide, ghosts of rockets, the hand-off

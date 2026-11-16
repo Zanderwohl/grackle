@@ -2410,6 +2410,10 @@ world mesh's `GlobalTransform` is recorded after propagation and an older one,
 tweened, written in its place before visibility; the live values are put back
 in `First`, so nothing that simulates reads a replayed one. A mesh born after
 the view time is drawn out of sight and one despawned before it by a ghost.
+Particles cannot be recorded, so `Time<EffectSimulation>` runs at the
+replay's speed instead and catches up afterward; the emitters' idle timers
+count on it, a burst waits for that clock to reach it (`HeldBursts`), and an
+emitter that follows a body is replayed like a mesh.
 Without `Replay` nothing is recorded and the history is empty. Two parts of the
 shape are not placeholders, and both live in
 [`src/game/respawn.rs`](src/game/respawn.rs):
