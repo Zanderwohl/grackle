@@ -235,6 +235,8 @@ pub struct PlayerInput {
     pub taunt: Option<crate::common::taunt::TauntRequest>,
     /// A debug key until there is a kill command.
     pub suicide: bool,
+    /// As `suicide`, but the body is blown apart through the torso.
+    pub explode: bool,
     /// Put this player's spray on the wall in front of them, or move it there.
     pub spray: bool,
     /// Look direction about world Y, radians. An input because facing decides
@@ -576,6 +578,7 @@ pub fn gather_input(actions: Res<Actions>, mut latch: ResMut<InputLatch>) {
     input.reload |= actions.just_pressed(Action::Reload);
     input.humiliate |= actions.just_pressed(Action::Humiliate);
     input.suicide |= actions.just_pressed(Action::Suicide);
+    input.explode |= actions.just_pressed(Action::Explode);
     input.spray |= actions.just_pressed(Action::Spray);
 
     input.sprint = actions.pressed(Action::Sprint);
@@ -627,6 +630,7 @@ pub fn write_client_inputs(
     latch.0.humiliate = false;
     latch.0.taunt = None;
     latch.0.suicide = false;
+    latch.0.explode = false;
     latch.0.spray = false;
     latch.0.select = None;
 }

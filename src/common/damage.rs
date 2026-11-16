@@ -246,6 +246,8 @@ pub enum How {
     Trigger,
     /// Emptied outright: a Kill trigger, a suicide, a team switch.
     Kill,
+    /// Emptied outright by the explode key, which blows the body apart.
+    Exploded,
 }
 
 /// A weapon cannot know whether a hit is fatal, only `apply_damage` can, so
@@ -265,6 +267,8 @@ pub struct Kill {
     pub target: Entity,
     pub source: DamageSource,
     pub point: Vec3,
+    /// [`How::Kill`], or [`How::Exploded`] for the explode key.
+    pub how: How,
 }
 
 /// Anything that goes off writes one; only [`crate::game::explosion`] knows
@@ -290,6 +294,8 @@ pub struct Explosion {
     pub weapon: Option<crate::common::weapon::WeaponId>,
     /// Airblasted back before it went off.
     pub reflected: bool,
+    /// A body the blast does not touch: the explode key's own, which its `Kill` empties.
+    pub spare: Option<Entity>,
 }
 
 #[derive(Message, Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]

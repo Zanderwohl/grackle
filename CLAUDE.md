@@ -609,8 +609,9 @@ at the top right of the safe zone, in the order they happened, oldest at the top
 for ten seconds, or twenty if it names us; the latest two naming us are kept, and the other
 slots go to the latest of the rest, so ours are bumped less. It is built from the `Died` every
 machine gets, so spectators and every mode see it. "Killer [icon] victim" or "killer + assist [icon] victim" is
-painted in the killer's color; "assist finished off [icon] victim" (killed by themself or the map, with help) and
-"[icon] victim" are cream. The icon is what killed ([`src/game/kill_icon.rs`](src/game/kill_icon.rs)): a
+painted in the killer's color; "assist finished off [icon] victim" (killed by themself or the map, with help),
+"[icon] victim died" and, from the explode key (`How::Exploded`), "[icon] victim exploded" are cream. Those three
+are arrays of wordings in the lang file, one picked per line by a seed drawn when the line is made. The icon is what killed ([`src/game/kill_icon.rs`](src/game/kill_icon.rs)): a
 weapon's `icon` in `weapons.toml`, a white SVG under `icons/` rasterized at runtime, else the flame for
 afterburn, the explosion for splash and the skull for the map, a suicide or a weapon with none. Each line is a **`Plate`** ([`src/game/plate.rs`](src/game/plate.rs)):
 a node with `PlateText` children, given its leaning panel after layout, repainted when its size
@@ -730,7 +731,7 @@ follows, so it should claim `weapon` and leave the arms that hold it unclaimed.
 **Nobody switches weapons while taunting** (`Condition::may_switch_weapons`):
 `select_weapons` drops the request, the selector stays shut, and a weapon
 picked up mid-taunt is carried but not drawn. **`O`** is
-suicide, **`T`** puts your spray on the surface you look at within 2 m, or moves it there (see "Decals"), 1000 damage credited to yourself, a debug key for the death cam; nobody
+suicide and **`P`** the same death blown apart through the torso (`BlownApart::Torso`) by a rocket-sized blast there, which hurts whoever is near, **`T`** puts your spray on the surface you look at within 2 m, or moves it there (see "Decals"), 1000 damage credited to yourself, a debug key for the death cam; nobody
 crouches while taunting; each taunt states what it claims, whether it
 shows the weapon, how far you can move, and how far your body (never the
 camera) can turn, and optionally a `view`: degrees left of the body's facing
@@ -1529,6 +1530,10 @@ beside each value.
   slots that differ (`lang::placeholders_in`, the check
   `every_language_keeps_its_placeholders` makes) and keys `en-US` lacks. An
   `en-US` file is checked against nothing.
+- **An array of strings is a list leaf**: a field per entry, `−` on each but
+  the last and `+` under them, edited in place so a list written one entry per
+  line stays that way. A key's right-click menu turns text into a list of one
+  and a list of one back. Its slots are checked as the union over its entries.
 - Undo is whole-file text snapshots taken when idle, as the map's is. **Saving
   remerges the strings in force** (`remerge`), so the editor's own labels change
   at once; that is a few small files parsed.
@@ -3491,6 +3496,14 @@ get!("room.messages.ghost", "me", a, "other", b)   // fills { me } / { other }
 Placeholder syntax in the TOML files is `{ name }`. A missing key renders as
 `<tools.select>` rather than panicking, so a wrong key is visible on screen and
 not a crash.
+
+**A key may hold an array of strings**, one of which is wanted at random (the
+kill feed's blameless deaths). `get!` takes the first, since it is asked every
+frame and a fresh pick each time would flicker. `get_random!(key, seed, ...)`
+takes the entry at `seed` modulo the array's length, and a plain string for any
+seed; it never draws a number itself. The caller draws one seed (any integer)
+per line or widget and keeps it, so an immediate-mode UI shows the same entry
+every frame.
 
 Files live at `assets/<pack>/lang/<code>.toml`. Loading merges two layers: every
 pack's `en-US` first as a base, then the chosen language on top, each walking

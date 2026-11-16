@@ -10,11 +10,15 @@
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::common::damage::{Cause, Damage, DamageDealt, DamageLog, DamageSource, Damageable, Died, How, PlayerId};
-use crate::common::skeleton::AnimationClock;
+use crate::common::damage::{Cause, Damage, DamageDealt, DamageLog, DamageSource, Damageable, Died, Explosion, How, Kill, PlayerId};
+use crate::common::skeleton::{AnimationClock, Pose, Skeleton};
+use crate::game::skeleton::{skeleton_root, SkeletonRoot};
 use crate::game::player::Inputs;
 
 const SUICIDE_DAMAGE: u32 = 1000;
+
+/// The weapon whose primary projectile's blast the explode key sets off.
+const EXPLODES_AS: crate::common::weapon::WeaponId = crate::common::weapon::WeaponId::of("rocket_launcher");
 
 /// Credited to yourself, which the team rule always lets through.
 pub fn suicide(
@@ -31,6 +35,53 @@ pub fn suicide(
                 from: None,
                 kill_shove: None,
                 cause: Cause::of(None, How::Kill),
+            });
+        }
+    }
+}
+
+/// A [`Kill`] rather than a [`Damage`], so neither armor nor the mode's
+/// self-damage scaling can leave a living body marked to be blown apart. The
+/// blast spares the body, so the kill's cause stays [`How::Exploded`]. Ordered
+/// before `explode`, so its shove lands on the pieces `raise_ragdolls` makes
+/// this tick.
+pub fn explode_yourself(
+    mut commands: Commands,
+    catalog: Option<Res<crate::common::weapon::WeaponCatalog>>,
+    bodies: Query<
+        (Entity, &Inputs, &PlayerId, &GlobalTransform, Option<(&Skeleton, &Pose)>, Option<&SkeletonRoot>),
+        Without<Dying>,
+    >,
+    mut kills: MessageWriter<Kill>,
+    mut blasts: MessageWriter<Explosion>,
+) {
+    let rocket = catalog.as_deref().and_then(|catalog| match &catalog.get(EXPLODES_AS)?.primary.action {
+        crate::common::weapon::WeaponAction::Projectile(spec) => Some(*spec),
+        _ => None,
+    });
+    for (body, input, id, placed, rig, offset) in &bodies {
+        if !input.explode {
+            continue;
+        }
+        let source = DamageSource::Player(*id);
+        let at = rig
+            .and_then(|(skeleton, pose)| crate::game::ragdoll::torso_center(skeleton, pose, &skeleton_root(placed, offset)))
+            .unwrap_or(placed.translation());
+        commands.entity(body).try_insert(crate::game::ragdoll::BlownApart::Torso);
+        kills.write(Kill { target: body, source, point: at, how: How::Exploded });
+        if let Some(spec) = rocket {
+            blasts.write(Explosion {
+                at,
+                radius: spec.explosion_radius,
+                damage: spec.damage,
+                at_edge: spec.splash_at_edge,
+                scale: 1.0,
+                knockback: spec.knockback,
+                source,
+                direct: None,
+                weapon: None,
+                reflected: false,
+                spare: Some(body),
             });
         }
     }
@@ -274,6 +325,39 @@ mod tests {
         assert_eq!(written[0].target, us);
         assert_eq!(written[0].source, DamageSource::Player(PlayerId(3)));
         assert!(written[0].amount >= 1000);
+    }
+
+    #[test]
+    fn exploding_kills_yourself_through_the_torso() {
+        let mut world = a_world();
+        world.init_resource::<Messages<Kill>>();
+        world.init_resource::<Messages<Explosion>>();
+        world.insert_resource(crate::common::weapon_file::default_catalog());
+        let us = world
+            .spawn((
+                lightyear::prelude::input::native::ActionState(crate::game::player::PlayerInput { explode: true, ..default() }),
+                PlayerId(3),
+                GlobalTransform::default(),
+            ))
+            .id();
+        let them = world.spawn((Inputs::default(), PlayerId(4), GlobalTransform::default())).id();
+
+        world.run_system_once(explode_yourself).unwrap();
+
+        let messages = world.resource::<Messages<Kill>>();
+        let written: Vec<Kill> = messages.get_cursor().read(messages).copied().collect();
+        assert_eq!(written.len(), 1);
+        assert_eq!(written[0].target, us);
+        assert_eq!(written[0].source, DamageSource::Player(PlayerId(3)));
+        assert_eq!(world.get::<crate::game::ragdoll::BlownApart>(us), Some(&crate::game::ragdoll::BlownApart::Torso));
+        assert!(world.get::<crate::game::ragdoll::BlownApart>(them).is_none());
+
+        let messages = world.resource::<Messages<Explosion>>();
+        let blasts: Vec<Explosion> = messages.get_cursor().read(messages).copied().collect();
+        assert_eq!(blasts.len(), 1);
+        assert_eq!(blasts[0].source, DamageSource::Player(PlayerId(3)));
+        assert!(blasts[0].knockback > 0.0 && blasts[0].radius > 0.0);
+        assert_eq!(blasts[0].spare, Some(us), "the blast would hurt the body it tears apart");
     }
 
     /// A body in its dying tick is not killed a second time.

@@ -261,7 +261,7 @@ pub(crate) fn seat_whoever_chose(
             Chair::Link(link) => links.get_mut(link).expect("found above").1.seat = seat,
         }
         if let Some((body, _, placed)) = bodies.iter().find(|(_, id, _)| **id == who.id) {
-            kills.write(Kill { target: body, source: DamageSource::Player(who.id), point: placed.translation() });
+            kills.write(Kill { target: body, source: DamageSource::Player(who.id), point: placed.translation(), how: crate::common::damage::How::Kill });
         }
     }
 }

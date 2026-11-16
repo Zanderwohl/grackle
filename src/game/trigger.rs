@@ -80,7 +80,7 @@ fn act_on_bodies_in_triggers(
             }
         }
         if killed {
-            kills.write(Kill { target: body, source: DamageSource::World, point: center });
+            kills.write(Kill { target: body, source: DamageSource::World, point: center, how: How::Kill });
             continue;
         }
         let amount = match scalding {
