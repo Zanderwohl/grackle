@@ -12,6 +12,7 @@ use egui_dock::{DockArea, DockState, TabViewer};
 use strum::IntoEnumIterator;
 use strum_macros::Display;
 use crate::common::mode::GameMode;
+use crate::common::music::MusicLibrary;
 use crate::common::movement_rules::SprintPolicy;
 use crate::common::sky::{SkyTime, LEAST_AMBIENT};
 use crate::common::shortcuts::chords;
@@ -124,6 +125,7 @@ enum TabKinds {
 #[derive(SystemParam)]
 struct PanelMessages<'w> {
     rounds: Res<'w, RoundHistory>,
+    music: Res<'w, MusicLibrary>,
     round: ResMut<'w, RoundSettings>,
     room: MessageWriter<'w, CalculateRoomGeometry>,
     clear_room: MessageWriter<'w, ClearRoomGeometry>,
@@ -163,6 +165,7 @@ struct TabViewerAndResources<'a> {
     /// A client watches the server's map, so its panels are read-only.
     spectating: bool,
     rounds: &'a RoundHistory,
+    music: &'a MusicLibrary,
     round: &'a mut RoundSettings,
 }
 
@@ -208,7 +211,7 @@ impl<'a> TabViewer for TabViewerAndResources<'a> {
                 ShowPlugin::ui(ui, self.multicam_state, self.gizmo_visibility);
             }
             TabKinds::Metadata => {
-                map_metadata_panel_ui(ui, self.map_metadata);
+                map_metadata_panel_ui(ui, self.map_metadata, self.music);
             }
             TabKinds::Round => {
                 round_panel_ui(ui, self.round);
@@ -235,6 +238,7 @@ impl Plugin for EditorPanelPlugin {
         app
             .init_resource::<EditorPanels>()
             .init_resource::<RoundSettings>()
+            .init_resource::<MusicLibrary>()
             .init_resource::<CurrentFilePath>()
             .add_systems(Startup, EditorPanels::set_multicam_size)
             .add_systems(Startup, crate::common::assets::create_the_user_pack)
@@ -374,6 +378,7 @@ impl EditorPanels {
             timeline_touched: false,
             spectating: !net_role.is_authority(),
             rounds: &messages.rounds,
+            music: &messages.music,
             // Through `bypass_change_detection`: held every frame, it would read as changed every
             // frame.
             round: messages.round.bypass_change_detection(),
@@ -758,7 +763,7 @@ fn rounds_panel_ui(ui: &mut egui::Ui, history: &RoundHistory) {
     }
 }
 
-fn map_metadata_panel_ui(ui: &mut egui::Ui, meta: &mut MapMetadata) {
+fn map_metadata_panel_ui(ui: &mut egui::Ui, meta: &mut MapMetadata, music: &MusicLibrary) {
     egui::ScrollArea::vertical().show(ui, |ui| {
         egui::Grid::new("editor_map_metadata_grid")
             .num_columns(2)
@@ -873,6 +878,49 @@ fn map_metadata_panel_ui(ui: &mut egui::Ui, meta: &mut MapMetadata) {
         ui.add_space(8.0);
         ui.heading(get!("editor.metadata.palette.title"));
         palette_ui(ui, &mut meta.palette);
+
+        ui.add_space(8.0);
+        ui.heading(get!("editor.metadata.music.title"));
+        music_ui(ui, &mut meta.music, music);
+    });
+}
+
+/// The map's track list. A track no pack here holds stays listed, in the error color, since the
+/// server's packs may differ from this machine's.
+fn music_ui(ui: &mut egui::Ui, list: &mut Vec<String>, library: &MusicLibrary) {
+    let mut remove = None;
+    for (index, path) in list.iter().enumerate() {
+        ui.horizontal(|ui| {
+            if ui.button("×").clicked() {
+                remove = Some(index);
+            }
+            let label = library.label(path);
+            match library.track(path) {
+                Some(_) => ui.label(label),
+                None => ui.colored_label(ui.visuals().error_fg_color, label).on_hover_text(get!("editor.metadata.music.missing")),
+            };
+        });
+    }
+    if let Some(index) = remove {
+        list.remove(index);
+    }
+    let unlisted: Vec<&str> = library.tracks().map(|track| track.path.as_str()).filter(|path| !list.iter().any(|listed| listed == path)).collect();
+    ui.horizontal(|ui| {
+        ui.add_enabled_ui(!unlisted.is_empty(), |ui| {
+            egui::ComboBox::from_id_salt("editor_map_music_add")
+                .selected_text(get!("editor.metadata.music.add"))
+                .width((ui.available_width() - 60.0).max(80.0))
+                .show_ui(ui, |ui| {
+                    for path in &unlisted {
+                        if ui.selectable_label(false, library.label(path)).clicked() {
+                            list.push((*path).to_owned());
+                        }
+                    }
+                });
+            if ui.button(get!("editor.metadata.music.add_all")).clicked() {
+                list.extend(unlisted.iter().map(|path| (*path).to_owned()));
+            }
+        });
     });
 }
 

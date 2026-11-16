@@ -458,6 +458,8 @@ changes asks. Pages: **General** (the language, in
 `assets/user/settings.toml`; `--lang` overrides it for one run; and the
 player's name, auto-reload and field of view, which are `PlayerSettings`),
 **Graphics** (the debris decal caps, also `PlayerSettings`),
+**Sound** (master, effects and music volume and mute music on LAN, also
+`PlayerSettings`),
 **Shortcuts** (`keybind/sheet.rs`: click a binding, press a key, mouse button
 or chord; a modifier let go alone is bound alone; a mouse button is bound
 only when pressed on the prompt, and a press elsewhere stops the wait; Escape
@@ -1446,6 +1448,23 @@ fails for a shipped font folder without one. `credits::credits` draws
 Grackle's own credit, the music and the fonts into any `Ui`; Settings shows
 it on its **Attribution** page, and its **Fonts** page draws a sample in each
 font.
+
+**A map names its music** (`MapMetadata::music`, the Metadata tab): tracks by
+their path within a pack (`music/Pump/Pump.mp3`), so any pack's copy answers.
+The authority picks from that list and sends a `MusicCue`, never while only
+bots play (a person joining restarts the match, and the music with it)
+([`src/game/soundtrack.rs`](src/game/soundtrack.rs)) on `MatchChannel`: one
+with under five seconds of the pre-game left, played over anything, and one each
+time somebody new comes within one frag of the limit, never the opening track,
+played only where nothing is playing — each machine's own question, since the
+server cannot hear a client. A machine whose packs lack the track plays
+nothing; nothing checks or sends tracks yet. Volumes and **mute music on LAN**
+are `PlayerSettings::sound` (Settings → **Sound**), the mute on by default:
+a client is on a local network when its server is at a loopback, private or
+link-local address, or it named a `.local` host. A host is never muted, since
+it may be the machine on the room's speakers. Bevy plays
+MP3, FLAC and WAV through the features named in `Cargo.toml`, Ogg Vorbis by
+default; an Opus file is listed but will not decode.
 
 ## Editing a material
 

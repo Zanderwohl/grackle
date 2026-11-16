@@ -52,6 +52,8 @@ pub struct SavedMetadata {
     sun: SunPosition,
     #[serde(default)]
     brightness: Brightness,
+    #[serde(default)]
+    music: Vec<String>,
 }
 
 impl SavedMetadata {
@@ -65,13 +67,14 @@ impl SavedMetadata {
             sky: metadata.sky,
             sun: metadata.sun,
             brightness: metadata.brightness,
+            music: metadata.music.clone(),
         }
     }
 
     /// `*self == SavedMetadata::of(metadata)`, without cloning the metadata.
     pub fn matches(&self, metadata: &MapMetadata) -> bool {
         // Destructured so a new field cannot be left out of the comparison.
-        let SavedMetadata { display_name, authors, game_mode, movement, palette, sky, sun, brightness } = self;
+        let SavedMetadata { display_name, authors, game_mode, movement, palette, sky, sun, brightness, music } = self;
         *display_name == metadata.display_name
             && *authors == metadata.authors
             && game_mode == metadata.game_mode.prefix()
@@ -80,6 +83,7 @@ impl SavedMetadata {
             && *sky == metadata.sky
             && *sun == metadata.sun
             && *brightness == metadata.brightness
+            && *music == metadata.music
     }
 
     pub fn into_metadata(self) -> MapMetadata {
@@ -94,6 +98,7 @@ impl SavedMetadata {
         metadata.sky = self.sky;
         metadata.sun = self.sun;
         metadata.brightness = self.brightness;
+        metadata.music = self.music;
         metadata.normalize_authors_ui_text();
         metadata
     }
@@ -347,6 +352,7 @@ mod tests {
         metadata.sky = SkyTime::Evening;
         metadata.sun = SunPosition { altitude: 12.5, azimuth: 270.0 };
         metadata.brightness = Brightness { ambient: 20.0, sun: 300.0, sky: 80.0 };
+        metadata.music = vec!["music/Pump/Pump.mp3".into(), "music/mine.ogg".into()];
 
         let text = to_text(&timeline, &metadata).unwrap();
         let loaded = parse(&text).unwrap();
@@ -378,6 +384,7 @@ mod tests {
         assert_eq!(metadata.sky, SkyTime::Day);
         assert_eq!(metadata.sun, SunPosition::default());
         assert_eq!(metadata.brightness, Brightness::default());
+        assert!(metadata.music.is_empty());
     }
 
     #[test]

@@ -1256,6 +1256,12 @@ unsided = "No side"
 add = "Add"
 new_role = "role"
 
+[editor.metadata.music]
+title = "Music"
+add = "Add a track"
+add_all = "Add all"
+missing = "No pack on this machine has this track"
+
 [weapon_editor]
 primary = "Primary"
 secondary = "Secondary"
@@ -1444,6 +1450,7 @@ shortcuts = "Shortcuts"
 fonts = "Fonts"
 developer = "Developer"
 attribution = "Attribution"
+sound = "Sound"
 
 [settings.general]
 interface = "Interface"
@@ -1458,6 +1465,13 @@ debris = "Debris decals"
 bullet_holes = "Bullet holes"
 blood = "Blood"
 scorch = "Scorch marks"
+
+[settings.sound]
+volume = "Volume"
+master = "Master"
+effects = "Sound effects"
+music = "Music"
+mute_music_on_lan = "Mute music on LAN"
 
 [settings.fonts]
 sample = "The quick brown fox jumps over the lazy dog 0123456789"

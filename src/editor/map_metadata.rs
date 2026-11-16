@@ -18,6 +18,8 @@ pub struct MapMetadata {
     pub sky: SkyTime,
     pub sun: SunPosition,
     pub brightness: Brightness,
+    /// [`Track::path`](crate::common::music::Track::path)s, the same in every pack.
+    pub music: Vec<String>,
     /// The panel's comma-separated authors text, refreshed when `authors` is replaced from disk.
     authors_ui_text: String,
     authors_ui_synced_from: Vec<String>,
@@ -36,6 +38,7 @@ impl Default for MapMetadata {
             sky: SkyTime::default(),
             sun: SunPosition::default(),
             brightness: Brightness::default(),
+            music: Vec::new(),
             authors_ui_text,
             authors_ui_synced_from: vec!["anonymous".to_string()],
         }
