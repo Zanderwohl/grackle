@@ -451,13 +451,10 @@ new, undo, redo.
 
 **The Settings window** ([`src/common/settings/`](src/common/settings/mod.rs),
 ported from redwing) is **Edit → Settings…** in every authoring mode, or
-`Ctrl+,` — for a client too, whose other Edit entries are grayed out. A
-floating window, not a dock tab, because every mode opens it. It
+`Ctrl+,`. A floating window, not a dock tab, because every mode opens it. It
 edits a draft — nothing is saved or in force until Apply, and Close with
 changes asks. Pages: **General** (the language, in
-`assets/user/settings.toml`; `--lang` overrides it for one run; and the
-player's name, auto-reload and field of view, which are `PlayerSettings`),
-**Graphics** (the debris decal caps, also `PlayerSettings`),
+`assets/user/settings.toml`; `--lang` overrides it for one run),
 **Shortcuts** (`keybind/sheet.rs`: click a binding, press a key, mouse button
 or chord; a modifier let go alone is bound alone; a mouse button is bound
 only when pressed on the prompt, and a press elsewhere stops the wait; Escape

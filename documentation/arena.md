@@ -445,12 +445,11 @@ not saved and not sent: a client that joined late has only the rounds it saw.
 
 ## Player settings
 
-**What the person at a machine has chosen**, in the Settings window
-(**Edit → Settings…**): a name (anything, no uniqueness, cut to 24 characters),
-auto-reload (on by default) and the field of view under **General**, the
-debris decal caps under **Graphics**. `PlayerSettings`
+**What the person at a machine has chosen**, in the map editor's **Player**
+tab: a name (anything, no uniqueness, cut to 24 characters) and auto-reload
+(on by default). `PlayerSettings`
 ([`player_settings.rs`](../src/common/player_settings.rs)) is a resource kept
-in `assets/user/player.toml` and saved when Apply changes it, natively only.
+in `assets/user/player.toml` and saved on every change, natively only.
 `--profile N` (1–9) reads and writes `assets/user/player-N.toml` instead,
 so two copies on one machine can join as two named players.
 

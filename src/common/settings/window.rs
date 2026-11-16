@@ -17,7 +17,6 @@ use crate::common::credits;
 use crate::common::fonts::{self, PackFonts};
 use crate::common::music::MusicLibrary;
 use crate::common::pack_fonts::PackFont;
-use crate::common::player_settings::{self, PlayerSettings, NAME_LIMIT};
 use crate::common::icons;
 use crate::common::keybind::sheet::Sheet;
 use crate::common::keybind::{self, Action, Actions, Held, Keymap, Quiet, ResolveActions};
@@ -38,7 +37,6 @@ const SAMPLE_SIZE: f32 = 28.0;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum Page {
     General,
-    Graphics,
     Shortcuts,
     Fonts,
     Developer,
@@ -46,12 +44,11 @@ enum Page {
 }
 
 impl Page {
-    const ALL: [Page; 6] = [Page::General, Page::Graphics, Page::Shortcuts, Page::Fonts, Page::Developer, Page::Attribution];
+    const ALL: [Page; 5] = [Page::General, Page::Shortcuts, Page::Fonts, Page::Developer, Page::Attribution];
 
     fn name(self) -> String {
         match self {
             Page::General => get!("settings.page.general"),
-            Page::Graphics => get!("settings.page.graphics"),
             Page::Shortcuts => get!("settings.page.shortcuts"),
             Page::Fonts => get!("settings.page.fonts"),
             Page::Developer => get!("settings.page.developer"),
@@ -67,9 +64,6 @@ pub struct SettingsWindow {
     open: bool,
     draft: Settings,
     keys_draft: Keymap,
-    /// `None` where the app has no `PlayerSettingsPlugin`, and the page
-    /// shows no player settings.
-    player_draft: Option<PlayerSettings>,
     asking: bool,
     problem: Option<String>,
     page: Page,
@@ -81,15 +75,6 @@ pub struct SettingsWindow {
     sample: Option<String>,
     /// Apply wrote the keymap this frame.
     keys_applied: bool,
-    /// Apply wrote the player settings this frame, so they are saved and sent.
-    player_applied: bool,
-}
-
-/// What the drafts are copies of; written only by Apply.
-pub struct InForce<'a> {
-    pub settings: &'a mut Settings,
-    pub keymap: &'a mut Keymap,
-    pub player: Option<&'a mut PlayerSettings>,
 }
 
 impl Default for SettingsWindow {
@@ -98,7 +83,6 @@ impl Default for SettingsWindow {
             open: false,
             draft: Settings::default(),
             keys_draft: Keymap::default(),
-            player_draft: None,
             asking: false,
             problem: None,
             page: Page::General,
@@ -107,7 +91,6 @@ impl Default for SettingsWindow {
             icons: Vec::new(),
             sample: None,
             keys_applied: false,
-            player_applied: false,
         }
     }
 }
@@ -119,14 +102,13 @@ impl SettingsWindow {
 
     /// Starts from what is in force, so a draft abandoned by Close does not
     /// come back.
-    fn open(&mut self, ctx: &egui::Context, now: &InForce) {
+    fn open(&mut self, ctx: &egui::Context, settings: &Settings, keymap: &Keymap) {
         if self.open {
             ctx.move_to_top(egui::LayerId::new(egui::Order::Middle, Id::new(WINDOW_ID)));
             return;
         }
-        self.draft = now.settings.clone();
-        self.keys_draft = now.keymap.clone();
-        self.player_draft = now.player.as_deref().cloned();
+        self.draft = settings.clone();
+        self.keys_draft = keymap.clone();
         self.sheet.stop();
         self.asking = false;
         self.problem = None;
@@ -135,31 +117,22 @@ impl SettingsWindow {
         self.open = true;
     }
 
-    fn has_unsaved_changes(&self, now: &InForce) -> bool {
-        self.draft != *now.settings || self.keys_draft != *now.keymap || self.player_draft.as_ref() != now.player.as_deref()
+    fn has_unsaved_changes(&self, settings: &Settings, keymap: &Keymap) -> bool {
+        self.draft != *settings || self.keys_draft != *keymap
     }
 
-    /// A failed save keeps the draft, so Apply can be pressed again.
-    /// `PlayerSettingsPlugin` saves the player settings; they are cleaned here
-    /// because the host's own name is shown as it stands.
-    fn apply(&mut self, now: &mut InForce) {
+    /// A failed save keeps the draft, so Apply can be pressed again. The two
+    /// files save independently.
+    fn apply(&mut self, settings: &mut Settings, keymap: &mut Keymap) {
         self.problem = None;
-        let InForce { settings, keymap, player } = now;
-        if let (Some(draft), Some(player)) = (&mut self.player_draft, player) {
-            *draft = draft.clone().cleaned();
-            if *draft != **player {
-                **player = draft.clone();
-                self.player_applied = true;
-            }
-        }
-        if self.draft != **settings {
+        if self.draft != *settings {
             match self.draft.save() {
                 Ok(()) => {
                     if self.draft.language != settings.language {
                         let code = self.draft.language.as_deref().unwrap_or(lang::FALLBACK_LANG);
                         lang::change_lang_or_fallback(code, &lang::default_packs());
                     }
-                    **settings = self.draft.clone();
+                    *settings = self.draft.clone();
                 }
                 Err(problem) => {
                     warn!("{problem}");
@@ -167,10 +140,10 @@ impl SettingsWindow {
                 }
             }
         }
-        if self.keys_draft != **keymap {
+        if self.keys_draft != *keymap {
             match self.keys_draft.save() {
                 Ok(()) => {
-                    **keymap = self.keys_draft.clone();
+                    *keymap = self.keys_draft.clone();
                     self.keys_applied = true;
                 }
                 Err(problem) => {
@@ -190,8 +163,8 @@ impl SettingsWindow {
         self.open = false;
     }
 
-    fn close(&mut self, now: &InForce) {
-        if self.has_unsaved_changes(now) {
+    fn close(&mut self, settings: &Settings, keymap: &Keymap) {
+        if self.has_unsaved_changes(settings, keymap) {
             self.asking = true;
             return;
         }
@@ -199,12 +172,12 @@ impl SettingsWindow {
         self.open = false;
     }
 
-    fn show(&mut self, ctx: &egui::Context, now: &mut InForce, held: Held, packs: Credited) {
+    fn show(&mut self, ctx: &egui::Context, settings: &mut Settings, keymap: &mut Keymap, held: Held, packs: Credited) {
         if !self.open {
             return;
         }
         let mut close_requested = false;
-        let unsaved = self.has_unsaved_changes(now);
+        let unsaved = self.has_unsaved_changes(settings, keymap);
 
         egui::Window::new(get!("settings.window_title"))
             .id(Id::new(WINDOW_ID))
@@ -228,7 +201,7 @@ impl SettingsWindow {
                                     close_requested = true;
                                 }
                                 if ui.add_enabled(unsaved, egui::Button::new(get!("settings.apply"))).clicked() {
-                                    self.apply(now);
+                                    self.apply(settings, keymap);
                                 }
                             });
                         });
@@ -260,7 +233,6 @@ impl SettingsWindow {
                         egui::ScrollArea::vertical().id_salt(self.page).auto_shrink(false).show(ui, |ui| {
                             match self.page {
                                 Page::General => self.general(ui),
-                                Page::Graphics => self.graphics(ui),
                                 Page::Shortcuts => self.sheet.show(ui, &mut self.keys_draft, held),
                                 Page::Developer => self.developer(ui),
                                 Page::Attribution => credits::credits(ui, packs.music, packs.fonts),
@@ -271,9 +243,9 @@ impl SettingsWindow {
             });
 
         if close_requested {
-            self.close(now);
+            self.close(settings, keymap);
         }
-        self.ask_about_unsaved(ctx, now);
+        self.ask_about_unsaved(ctx, settings, keymap);
     }
 
     fn general(&mut self, ui: &mut Ui) {
@@ -295,39 +267,6 @@ impl SettingsWindow {
             });
             ui.end_row();
         });
-
-        let Some(player) = &mut self.player_draft else { return };
-        ui.add_space(GAP.into());
-        ui.heading(get!("settings.general.player"));
-        ui.add_space(5.0);
-        egui::Grid::new("settings_player").num_columns(2).spacing([10.0, 8.0]).show(ui, |ui| {
-            ui.label(get!("settings.general.name"));
-            ui.add(egui::TextEdit::singleline(&mut player.name).char_limit(NAME_LIMIT));
-            ui.end_row();
-
-            ui.label(get!("settings.general.field_of_view"));
-            ui.add(egui::Slider::new(&mut player.field_of_view, player_settings::FIELD_OF_VIEW_RANGE).suffix("\u{b0}"));
-            ui.end_row();
-        });
-        ui.checkbox(&mut player.auto_reload, get!("settings.general.auto_reload"));
-    }
-
-    fn graphics(&mut self, ui: &mut Ui) {
-        ui.heading(get!("settings.graphics.debris"));
-        ui.add_space(5.0);
-        let Some(player) = &mut self.player_draft else { return };
-        let debris = &mut player.debris;
-        egui::Grid::new("settings_debris").num_columns(2).spacing([10.0, 8.0]).show(ui, |ui| {
-            for (label, value) in [
-                (get!("settings.graphics.bullet_holes"), &mut debris.bullet_holes),
-                (get!("settings.graphics.blood"), &mut debris.blood),
-                (get!("settings.graphics.scorch"), &mut debris.scorch),
-            ] {
-                ui.label(label);
-                ui.add(egui::Slider::new(value, player_settings::DEBRIS_RANGE));
-                ui.end_row();
-            }
-        });
     }
 
     fn developer(&mut self, ui: &mut Ui) {
@@ -337,7 +276,7 @@ impl SettingsWindow {
     }
 
     /// A modal, so the draft cannot be edited while it shows.
-    fn ask_about_unsaved(&mut self, ctx: &egui::Context, now: &mut InForce) {
+    fn ask_about_unsaved(&mut self, ctx: &egui::Context, settings: &mut Settings, keymap: &mut Keymap) {
         if !self.asking {
             return;
         }
@@ -355,7 +294,7 @@ impl SettingsWindow {
                         self.open = false;
                     }
                     if ui.button(get!("settings.unsaved.save")).clicked() {
-                        self.apply(now);
+                        self.apply(settings, keymap);
                         self.asking = false;
                         // A failed save keeps the window open with the problem showing.
                         self.open = self.problem.is_some();
@@ -366,12 +305,15 @@ impl SettingsWindow {
     }
 }
 
+/// What the pages show from the packs.
 #[derive(Clone, Copy)]
 struct Credited<'a> {
     music: &'a MusicLibrary,
     fonts: &'a PackFonts,
 }
 
+/// Each attributed font, its name drawn in itself, then the sample in lower
+/// and upper case.
 fn fonts_page(ui: &mut Ui, sample: &mut String, fonts: &PackFonts) {
     ui.add(egui::TextEdit::singleline(sample).desired_width(f32::INFINITY));
     ui.add_space(GAP.into());
@@ -500,7 +442,6 @@ fn draw_settings(
     mut window: ResMut<SettingsWindow>,
     mut settings: ResMut<Settings>,
     mut keymap: ResMut<Keymap>,
-    mut player: Option<ResMut<PlayerSettings>>,
     mut quiet: ResMut<Quiet>,
     keys: Res<ButtonInput<KeyCode>>,
     requested: Option<Res<OpenRequested>>,
@@ -518,16 +459,10 @@ fn draw_settings(
         *published = true;
     }
     let authoring = mode.is_none_or(|mode| mode.get().is_authoring());
-    // Written through only by Apply, so drawing is not an edit.
-    let mut now = InForce {
-        settings: settings.bypass_change_detection(),
-        keymap: keymap.bypass_change_detection(),
-        player: player.as_mut().map(|player| player.bypass_change_detection()),
-    };
     if take_request(ctx) || requested.is_some() {
         commands.remove_resource::<OpenRequested>();
         if authoring {
-            window.open(ctx, &now);
+            window.open(ctx, &settings, &keymap);
         }
     }
     // Play grabs the cursor, so a window left open there could not be closed
@@ -536,15 +471,11 @@ fn draw_settings(
         window.dismiss();
     }
     if window.is_open() {
+        // Written through only by Apply, so drawing is not an edit.
         let packs = Credited { music: &music, fonts: &pack_fonts };
-        window.show(ctx, &mut now, Held::of(&keys), packs);
+        window.show(ctx, &mut settings, keymap.bypass_change_detection(), Held::of(&keys), packs);
         if std::mem::take(&mut window.keys_applied) {
             keymap.set_changed();
-        }
-        if std::mem::take(&mut window.player_applied) {
-            if let Some(player) = &mut player {
-                player.set_changed();
-            }
         }
     }
     quiet.set_if_neq(Quiet(window.is_open()));
@@ -562,13 +493,12 @@ mod tests {
             ..Default::default()
         };
         let mut texts = Vec::new();
-        let (mut settings, mut keymap, mut player) = (Settings::default(), Keymap::default(), PlayerSettings::default());
+        let (mut settings, mut keymap) = (Settings::default(), Keymap::default());
         // Inside the frame, because `Context::run` drains the paint lists.
         let mut output = ctx.run_ui(input, |ui| {
             let ctx = ui.ctx().clone();
             let (music, fonts) = (MusicLibrary::default(), PackFonts::default());
-            let mut now = InForce { settings: &mut settings, keymap: &mut keymap, player: Some(&mut player) };
-            window.show(&ctx, &mut now, Held::default(), Credited { music: &music, fonts: &fonts });
+            window.show(&ctx, &mut settings, &mut keymap, Held::default(), Credited { music: &music, fonts: &fonts });
             ctx.graphics(|graphics| {
                 let Some(list) = graphics.get(egui::LayerId::new(egui::Order::Middle, Id::new(WINDOW_ID))) else { return };
                 for entry in list.all_entries() {
@@ -592,12 +522,10 @@ mod tests {
     fn each_page_shows_its_own_settings_beside_the_list_and_above_the_footer() {
         let ctx = egui::Context::default();
         let mut window = SettingsWindow::default();
-        let (mut settings, mut keymap, mut player) = (Settings::default(), Keymap::default(), PlayerSettings::default());
-        window.open(&ctx, &InForce { settings: &mut settings, keymap: &mut keymap, player: Some(&mut player) });
+        window.open(&ctx, &Settings::default(), &Keymap::default());
 
         for (page, mine, other) in [
             (Page::General, get!("settings.general.language"), get!("settings.developer.icons")),
-            (Page::Graphics, get!("settings.graphics.debris"), get!("settings.general.language")),
             (Page::Shortcuts, get!("keybind.sheet.heading"), get!("settings.general.language")),
             (Page::Developer, get!("settings.developer.icons"), get!("keybind.sheet.heading")),
             (Page::Attribution, get!("credits.music"), get!("settings.developer.icons")),
@@ -631,8 +559,7 @@ mod tests {
     fn the_shortcuts_page_lists_every_action() {
         let ctx = egui::Context::default();
         let mut window = SettingsWindow::default();
-        let (mut settings, mut keymap, mut player) = (Settings::default(), Keymap::default(), PlayerSettings::default());
-        window.open(&ctx, &InForce { settings: &mut settings, keymap: &mut keymap, player: Some(&mut player) });
+        window.open(&ctx, &Settings::default(), &Keymap::default());
         window.page = Page::Shortcuts;
         let mut texts = Vec::new();
         for _ in 0..5 {
@@ -642,34 +569,6 @@ mod tests {
         for &action in Action::ALL.iter().filter(|a| a.context() == keybind::Context::Everywhere && !a.is_debug()) {
             assert!(find(&texts, &action.name()).is_some(), "{action:?} is not listed");
         }
-    }
-
-    /// Fails if a player setting takes effect before Apply, or survives a
-    /// Close that discarded it.
-    #[test]
-    fn player_settings_wait_for_apply_and_close_discards_them() {
-        let ctx = egui::Context::default();
-        let (mut settings, mut keymap, mut player) = (Settings::default(), Keymap::default(), PlayerSettings::default());
-        let mut window = SettingsWindow::default();
-        let mut now = InForce { settings: &mut settings, keymap: &mut keymap, player: Some(&mut player) };
-        window.open(&ctx, &now);
-        let draft = window.player_draft.as_mut().unwrap();
-        draft.name = "Ada".into();
-        draft.debris.blood = 7;
-        assert_eq!(now.player.as_deref(), Some(&PlayerSettings::default()), "the draft reached the settings in force");
-
-        window.close(&now);
-        assert!(window.asking, "Close with changes did not ask");
-        window.asking = false;
-        window.open = false;
-        window.open(&ctx, &now);
-        assert_eq!(window.player_draft, Some(PlayerSettings::default()), "a discarded draft came back");
-
-        window.player_draft.as_mut().unwrap().name = "  Ada  ".into();
-        window.apply(&mut now);
-        assert_eq!(now.player.as_deref().unwrap().name, "Ada", "the name was not cleaned");
-        assert!(std::mem::take(&mut window.player_applied));
-        assert!(!window.has_unsaved_changes(&now));
     }
 
     #[test]
