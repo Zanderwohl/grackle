@@ -1435,11 +1435,16 @@ close = "Close"
 [settings.page]
 general = "General"
 shortcuts = "Shortcuts"
+fonts = "Fonts"
 developer = "Developer"
+attribution = "Attribution"
 
 [settings.general]
 interface = "Interface"
 language = "Language"
+
+[settings.fonts]
+sample = "The quick brown fox jumps over the lazy dog 0123456789"
 
 [settings.developer]
 icons = "Icons"
@@ -1449,6 +1454,20 @@ heading = "Unsaved changes"
 body = "You have unsaved changes to your settings."
 discard = "Discard"
 save = "Save"
+
+[credits]
+title = "Grackle"
+copyright = "(c) 2026 Alexander Lowry"
+rights = "All Rights Reserved."
+built_on = "Built on [Bevy](https://github.com/bevyengine/bevy)."
+bevy_license = "Bevy licensed under the [MIT License](https://github.com/bevyengine/bevy/blob/main/LICENSE-MIT)."
+music = "Music"
+fonts = "Fonts"
+no_music = "No music."
+no_fonts = "No fonts."
+artist = "By { artist }"
+designer = "Designed by { designer }"
+uncredited = "Uncredited"
 
 [keybind.modifier]
 command = "Ctrl"

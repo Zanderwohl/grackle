@@ -1,0 +1,6 @@
+Name: Nova Round
+File: NovaRound-Regular.ttf
+Designer: wmk69
+Copyright: Copyright (c) 2011, wmk69, with Reserved Font Name NovaRound.
+License: SIL Open Font License, Version 1.1
+License File: OFL.txt

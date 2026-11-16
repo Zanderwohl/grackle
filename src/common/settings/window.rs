@@ -13,6 +13,10 @@ use bevy_egui::{EguiContexts, EguiPrimaryContextPass};
 
 use super::Settings;
 use crate::common::app_mode::{authoring, AppMode};
+use crate::common::credits;
+use crate::common::fonts::{self, PackFonts};
+use crate::common::music::MusicLibrary;
+use crate::common::pack_fonts::PackFont;
 use crate::common::icons;
 use crate::common::keybind::sheet::Sheet;
 use crate::common::keybind::{self, Action, Actions, Held, Keymap, Quiet, ResolveActions};
@@ -27,21 +31,28 @@ const MIN_SIZE: egui::Vec2 = egui::vec2(520.0, 560.0);
 /// The space on each side of a line between two panels.
 const GAP: i8 = 8;
 
+const FONT_NAME_SIZE: f32 = 20.0;
+const SAMPLE_SIZE: f32 = 28.0;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum Page {
     General,
     Shortcuts,
+    Fonts,
     Developer,
+    Attribution,
 }
 
 impl Page {
-    const ALL: [Page; 3] = [Page::General, Page::Shortcuts, Page::Developer];
+    const ALL: [Page; 5] = [Page::General, Page::Shortcuts, Page::Fonts, Page::Developer, Page::Attribution];
 
     fn name(self) -> String {
         match self {
             Page::General => get!("settings.page.general"),
             Page::Shortcuts => get!("settings.page.shortcuts"),
+            Page::Fonts => get!("settings.page.fonts"),
             Page::Developer => get!("settings.page.developer"),
+            Page::Attribution => get!("settings.page.attribution"),
         }
     }
 }
@@ -60,6 +71,8 @@ pub struct SettingsWindow {
     /// Read on opening, because reading parses every lang file.
     languages: Vec<Language>,
     icons: Vec<String>,
+    /// What the Fonts page draws in each font; kept while the process runs.
+    sample: Option<String>,
     /// Apply wrote the keymap this frame.
     keys_applied: bool,
 }
@@ -76,6 +89,7 @@ impl Default for SettingsWindow {
             sheet: Sheet::default(),
             languages: Vec::new(),
             icons: Vec::new(),
+            sample: None,
             keys_applied: false,
         }
     }
@@ -158,7 +172,7 @@ impl SettingsWindow {
         self.open = false;
     }
 
-    fn show(&mut self, ctx: &egui::Context, settings: &mut Settings, keymap: &mut Keymap, held: Held) {
+    fn show(&mut self, ctx: &egui::Context, settings: &mut Settings, keymap: &mut Keymap, held: Held, packs: Credited) {
         if !self.open {
             return;
         }
@@ -210,11 +224,19 @@ impl SettingsWindow {
                 egui::CentralPanel::default()
                     .frame(egui::Frame::NONE.inner_margin(egui::Margin { left: GAP, ..Default::default() }))
                     .show(ui, |ui| {
+                        if self.page == Page::Fonts {
+                            // Its own scroll area, so the sample stays in view.
+                            let sample = self.sample.get_or_insert_with(|| get!("settings.fonts.sample"));
+                            fonts_page(ui, sample, packs.fonts);
+                            return;
+                        }
                         egui::ScrollArea::vertical().id_salt(self.page).auto_shrink(false).show(ui, |ui| {
                             match self.page {
                                 Page::General => self.general(ui),
                                 Page::Shortcuts => self.sheet.show(ui, &mut self.keys_draft, held),
                                 Page::Developer => self.developer(ui),
+                                Page::Attribution => credits::credits(ui, packs.music, packs.fonts),
+                                Page::Fonts => {}
                             }
                         });
                     });
@@ -281,6 +303,43 @@ impl SettingsWindow {
             });
         });
     }
+}
+
+/// What the pages show from the packs.
+#[derive(Clone, Copy)]
+struct Credited<'a> {
+    music: &'a MusicLibrary,
+    fonts: &'a PackFonts,
+}
+
+/// Each attributed font, its name drawn in itself, then the sample in lower
+/// and upper case.
+fn fonts_page(ui: &mut Ui, sample: &mut String, fonts: &PackFonts) {
+    ui.add(egui::TextEdit::singleline(sample).desired_width(f32::INFINITY));
+    ui.add_space(GAP.into());
+    let lower = sample.to_lowercase();
+    let upper = sample.to_uppercase();
+    egui::ScrollArea::vertical().id_salt(Page::Fonts).auto_shrink(false).show(ui, |ui| {
+        for font in &fonts.fonts {
+            ui.push_id(&font.folder, |ui| font_sample(ui, font, &lower, &upper));
+            ui.separator();
+        }
+    });
+}
+
+fn font_sample(ui: &mut Ui, font: &PackFont, lower: &str, upper: &str) {
+    let family = fonts::family(ui.ctx(), font);
+    let in_font = |text: &str, size: f32| match &family {
+        Some(family) => egui::RichText::new(text).font(egui::FontId::new(size, family.clone())),
+        None => egui::RichText::new(text).size(size),
+    };
+    let name = &font.attribution.name;
+    ui.horizontal(|ui| {
+        ui.label(name);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| ui.label(in_font(name, FONT_NAME_SIZE)));
+    });
+    ui.label(in_font(lower, SAMPLE_SIZE));
+    ui.label(in_font(upper, SAMPLE_SIZE));
 }
 
 const ICON_CELL: f32 = 84.0;
@@ -350,6 +409,8 @@ impl Plugin for SettingsPlugin {
         keybind::ensure(app);
         app.init_resource::<Settings>()
             .init_resource::<SettingsWindow>()
+            .init_resource::<MusicLibrary>()
+            .init_resource::<PackFonts>()
             .add_systems(PreUpdate, capture_binding.after(InputSystems).before(ResolveActions))
             .add_systems(Update, open_from_the_keyboard.run_if(authoring))
             .add_systems(EguiPrimaryContextPass, draw_settings);
@@ -385,6 +446,7 @@ fn draw_settings(
     keys: Res<ButtonInput<KeyCode>>,
     requested: Option<Res<OpenRequested>>,
     mode: Option<Res<State<AppMode>>>,
+    (music, pack_fonts): (Res<MusicLibrary>, Res<PackFonts>),
     mut published: Local<bool>,
 ) {
     let Ok(ctx) = contexts.ctx_mut() else {
@@ -410,7 +472,8 @@ fn draw_settings(
     }
     if window.is_open() {
         // Written through only by Apply, so drawing is not an edit.
-        window.show(ctx, &mut settings, keymap.bypass_change_detection(), Held::of(&keys));
+        let packs = Credited { music: &music, fonts: &pack_fonts };
+        window.show(ctx, &mut settings, keymap.bypass_change_detection(), Held::of(&keys), packs);
         if std::mem::take(&mut window.keys_applied) {
             keymap.set_changed();
         }
@@ -434,7 +497,8 @@ mod tests {
         // Inside the frame, because `Context::run` drains the paint lists.
         let mut output = ctx.run_ui(input, |ui| {
             let ctx = ui.ctx().clone();
-            window.show(&ctx, &mut settings, &mut keymap, Held::default());
+            let (music, fonts) = (MusicLibrary::default(), PackFonts::default());
+            window.show(&ctx, &mut settings, &mut keymap, Held::default(), Credited { music: &music, fonts: &fonts });
             ctx.graphics(|graphics| {
                 let Some(list) = graphics.get(egui::LayerId::new(egui::Order::Middle, Id::new(WINDOW_ID))) else { return };
                 for entry in list.all_entries() {
@@ -464,6 +528,8 @@ mod tests {
             (Page::General, get!("settings.general.language"), get!("settings.developer.icons")),
             (Page::Shortcuts, get!("keybind.sheet.heading"), get!("settings.general.language")),
             (Page::Developer, get!("settings.developer.icons"), get!("keybind.sheet.heading")),
+            (Page::Attribution, get!("credits.music"), get!("settings.developer.icons")),
+            (Page::Fonts, get!("settings.fonts.sample"), get!("settings.developer.icons")),
         ] {
             window.page = page;
             let mut texts = Vec::new();

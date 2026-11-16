@@ -1391,6 +1391,24 @@ The plan and what is left is
   open map's pickups (`FeatureTrait::weapon_named`); blueprints on disk are not
   read.
 
+## Credits
+
+[`src/common/attribution.rs`](src/common/attribution.rs) lists a pack's files
+under a folder (native only, as the icon grid is; a browser build will read a
+manifest) and reads `attribution.txt`, one `Key: Value` per line.
+**Music** ([`src/common/music.rs`](src/common/music.rs), `MusicLibrary`) is
+`music/{file}.{ext}`, credited to nobody, or every sound file in
+`music/{folder}/` credited by that folder's `attribution.txt`, whatever the
+files are named; a file that is not `Key: Value` lines with a known key is
+kept as text and shown word for word. **Fonts**
+([`src/common/pack_fonts.rs`](src/common/pack_fonts.rs), `PackFonts`) are
+`fonts/{folder}/` with an `attribution.txt` naming its face, and each is an
+egui family of its own (`fonts::family`); `every_shipped_font_is_attributed`
+fails for a shipped font folder without one. `credits::credits` draws
+Grackle's own credit, the music and the fonts into any `Ui`; Settings shows
+it on its **Attribution** page, and its **Fonts** page draws a sample in each
+font.
+
 ## Editing a material
 
 `AppMode::Material` ([`src/material/`](src/material/)) is
