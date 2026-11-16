@@ -66,6 +66,11 @@ impl RoundHistory {
         self.ran_out = true;
     }
 
+    /// The round under way ends without being recorded or counted.
+    pub(crate) fn abandon(&mut self) {
+        self.started = None;
+    }
+
     /// Newest first.
     pub fn rounds(&self) -> impl Iterator<Item = &Round> {
         self.rounds.iter()
@@ -87,18 +92,35 @@ pub struct RoundHistoryPlugin;
 
 impl Plugin for RoundHistoryPlugin {
     fn build(&self, app: &mut App) {
+        // With the match cycle, a round is its live phase, and `MatchCyclePlugin` starts and
+        // records it.
+        let no_cycle = not(resource_exists::<crate::game::match_cycle::MatchCycle>);
         app.init_resource::<RoundHistory>()
-            .add_systems(OnEnter(AppMode::Play), start_the_clock)
-            .add_systems(OnExit(AppMode::Play), record_the_round)
+            .add_systems(OnEnter(AppMode::Play), start_the_clock.run_if(no_cycle.clone()))
+            .add_systems(OnExit(AppMode::Play), record_the_round.run_if(no_cycle))
             .init_resource::<QuitAfterRounds>()
-            .add_systems(Update, (settle_the_last_round, quit_after_enough_rounds, play_the_next_round).run_if(not(in_state(AppMode::Play))));
+            .add_systems(Update, settle_the_last_round.run_if(no_round_running))
+            .add_systems(Update, quit_after_enough_rounds)
+            .add_systems(Update, play_the_next_round.run_if(not(in_state(AppMode::Play))));
     }
 }
 
-fn start_the_clock(time: Res<Time<Real>>, mut history: ResMut<RoundHistory>) {
+/// Out of Play, or in Play between matches.
+fn no_round_running(mode: Res<State<AppMode>>, phase: Option<Res<State<crate::common::match_phase::MatchPhase>>>) -> bool {
+    *mode.get() != AppMode::Play || !crate::common::match_phase::live(phase)
+}
+
+pub(crate) fn start_the_clock(time: Res<Time<Real>>, mut history: ResMut<RoundHistory>) {
     history.started = Some(time.elapsed_secs());
     history.settling = false;
     history.ran_out = false;
+}
+
+/// A new match's fresh standings are not the last round's.
+pub(crate) fn stop_settling(history: Option<ResMut<RoundHistory>>) {
+    if let Some(mut history) = history {
+        history.settling = false;
+    }
 }
 
 /// Only on a change, and only to the standings: a round's length is when it
@@ -118,8 +140,9 @@ fn settle_the_last_round(
 }
 
 /// A mode with no scoreboard has no standings, and leaves no round.
-fn record_the_round(time: Res<Time<Real>>, mut history: ResMut<RoundHistory>, standings: Query<&Standing>) {
-    let length = history.elapsed(time.elapsed_secs()).unwrap_or(0.0);
+pub(crate) fn record_the_round(time: Res<Time<Real>>, mut history: ResMut<RoundHistory>, standings: Query<&Standing>) {
+    // `None` once abandoned.
+    let Some(length) = history.elapsed(time.elapsed_secs()) else { return };
     history.started = None;
     history.ended += 1;
     if standings.is_empty() {
@@ -169,9 +192,20 @@ fn play_the_next_round(
     }
 }
 
-/// A frame after the round is recorded, so it has reached the log.
-fn quit_after_enough_rounds(quit: Res<QuitAfterRounds>, history: Res<RoundHistory>, mut exit: MessageWriter<AppExit>) {
+/// A frame after the round is recorded, so it has reached the log. Out of Play first, so what
+/// closes on leaving it, such as telemetry's round file, does.
+fn quit_after_enough_rounds(
+    quit: Res<QuitAfterRounds>,
+    history: Res<RoundHistory>,
+    mode: Res<State<AppMode>>,
+    mut next: ResMut<NextState<AppMode>>,
+    mut exit: MessageWriter<AppExit>,
+) {
     if quit.0.is_some_and(|rounds| history.ended >= rounds) {
+        if *mode.get() == AppMode::Play {
+            next.set(AppMode::Editor);
+            return;
+        }
         info!("{} rounds played, as asked; quitting", history.ended);
         exit.write(AppExit::Success);
     }

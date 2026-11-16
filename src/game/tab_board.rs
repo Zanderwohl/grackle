@@ -14,6 +14,7 @@ use bevy::prelude::*;
 use crate::common::app_mode::AppMode;
 use crate::common::damage::PlayerId;
 use crate::common::fonts::MonoFont;
+use crate::common::match_phase::{phase_of, MatchPhase};
 use crate::common::swatch::{Ink, Swatch};
 use crate::common::team::Team;
 use crate::common::ui_shape::{Corner, Path, ShapeMaterial, ShapeStyle};
@@ -55,10 +56,17 @@ impl Plugin for TabBoardPlugin {
     }
 }
 
-/// Not while paused: the menu has the screen, and comes down onto the board
-/// again if Tab is still held.
-fn hold_the_board(actions: Res<crate::common::keybind::Actions>, paused: Option<Res<MouseHeld>>, mut board: ResMut<TabBoard>) {
-    board.set_if_neq(TabBoard { up: actions.pressed(crate::common::keybind::Action::Scoreboard) && not_paused(paused) });
+/// Up while Tab is held and throughout the time between rounds. Not while
+/// paused: the menu has the screen, and comes down onto the board again.
+fn hold_the_board(
+    actions: Res<crate::common::keybind::Actions>,
+    paused: Option<Res<MouseHeld>>,
+    phase: Option<Res<State<MatchPhase>>>,
+    mut board: ResMut<TabBoard>,
+) {
+    let between = phase_of(&phase) == Some(MatchPhase::BetweenRounds);
+    let held = actions.pressed(crate::common::keybind::Action::Scoreboard);
+    board.set_if_neq(TabBoard { up: (held || between) && not_paused(paused) });
 }
 
 /// Up with the round, like the HUD, so it can be held from the death cam or
@@ -339,6 +347,17 @@ mod tests {
         press(&mut app, false);
         assert!(!up(&app));
         assert_eq!(app.world().get::<Visibility>(hud), Some(&Visibility::Inherited));
+    }
+
+    #[test]
+    fn the_board_is_up_between_rounds_without_tab() {
+        let mut app = app();
+        app.world_mut().insert_resource(State::new(MatchPhase::BetweenRounds));
+        press(&mut app, false);
+        assert!(up(&app));
+        app.world_mut().insert_resource(State::new(MatchPhase::PreGame));
+        press(&mut app, false);
+        assert!(!up(&app));
     }
 
     /// Escape while holding Tab: the menu takes over, and closing it with Tab

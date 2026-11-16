@@ -7,6 +7,7 @@ use bevy::prelude::*;
 
 use crate::common::app_mode::AppMode;
 use crate::common::class::Stance;
+use crate::common::match_phase::{phase_of, MatchPhase};
 use crate::common::round_settings::{Better, BotSkill};
 use crate::common::damage::{Armor, Damageable, PlayerId};
 use crate::common::movement_rules::MovementRules;
@@ -16,6 +17,7 @@ use crate::game::bot::{BotIntent, BotOf, BotRoute, Goal};
 use crate::game::bot_sense::{sense, BotMind, BotSenses, Sense, REMEMBERS, REMEMBERS_NOISES};
 use crate::game::nav::{CellId, NavGraph};
 use crate::game::collision::CollisionWorld;
+use crate::game::match_cycle::Winners;
 use crate::game::nav_rating::Rating;
 use crate::game::player::{running_speed, PhysicsBody};
 use crate::get;
@@ -133,6 +135,16 @@ impl Drives {
             roam: roll(base.roam),
             stubbornness: roll(base.stubbornness),
             patience: rand::random_range(PATIENCE),
+        }
+    }
+
+    /// In the post-game a winner's hunt and a loser's cover are 1; `winner` is `None` in any other
+    /// phase.
+    pub fn in_the_post_game(&self, winner: Option<bool>) -> Drives {
+        match winner {
+            Some(true) => Drives { hunt: 1.0, ..*self },
+            Some(false) => Drives { cover: 1.0, ..*self },
+            None => *self,
         }
     }
 }
@@ -387,6 +399,7 @@ pub fn think(
     cache: Option<Res<PropCache>>,
     rules: Option<Res<MovementRules>>,
     world: Option<Res<CollisionWorld>>,
+    (phase, winners): (Option<Res<State<MatchPhase>>>, Option<Res<Winners>>),
     standing: Standing,
     moved: Query<(), Or<(Added<Pickup>, Changed<WorldProp>)>>,
     mut index: Local<MapIndex>,
@@ -415,6 +428,7 @@ pub fn think(
     // Matched only once some bot thinks this tick.
     let mut live: Option<Vec<Option<Live>>> = None;
     let speed = running_speed(&rules.as_deref().cloned().unwrap_or_default());
+    let post_game = phase_of(&phase) == Some(MatchPhase::PostGame);
 
     for ((body, stance, senses, mind, route, id), (health, armor, equipped, ammo), (mut intent, mut thought)) in &mut bots {
         // Written through only where something changes, so a tick it does not think leaves it
@@ -591,7 +605,9 @@ pub fn think(
             ambush,
             roam: thought.roam,
         };
-        let ranked = rank(&candidates(&situation, &mind.drives), current, &mind.drives);
+        let winner = post_game.then(|| id.is_some_and(|id| winners.as_ref().is_some_and(|won| won.0.contains(id))));
+        let drives = mind.drives.in_the_post_game(winner);
+        let ranked = rank(&candidates(&situation, &drives), current, &drives);
         (thought.chosen, thought.runner_up) = choose(&ranked);
         thought.pulls = pulls(&ranked);
         let goal = thought.chosen.map(|chosen| chosen.goal);
@@ -660,6 +676,14 @@ impl Plugin for BotThinkPlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_post_game_sets_a_winners_hunt_and_a_losers_cover() {
+        let drives = Drives { hunt: 0.3, cover: 0.4, ..default() };
+        assert_eq!(drives.in_the_post_game(None), drives);
+        assert_eq!(drives.in_the_post_game(Some(true)), Drives { hunt: 1.0, ..drives });
+        assert_eq!(drives.in_the_post_game(Some(false)), Drives { cover: 1.0, ..drives });
+    }
 
     fn calm() -> Situation {
         Situation { health: 1.0, armor: 1.0, roam: Some(Vec3::new(9.0, 0.0, 9.0)), ..default() }

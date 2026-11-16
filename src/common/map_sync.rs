@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use crate::common::net::NetRole;
 use crate::editor::editable::{Feature, FeatureId, FeatureTimeline};
 use crate::editor::map_metadata::MapMetadata;
+use crate::editor::panels::CurrentFilePath;
 use crate::editor::save::SavedMetadata;
 use crate::tool::room::CalculateRoomGeometry;
 
@@ -42,6 +43,16 @@ pub struct MapSnapshot {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct MetadataSnapshot {
     pub metadata: SavedMetadata,
+    /// The server's file's stem, which names a map with no display name; a client has no file.
+    pub file: Option<String>,
+}
+
+/// On a client, the stem of the file the server's map came from.
+#[derive(Resource, Clone, Debug, Default, PartialEq)]
+pub struct ServerMapFile(pub Option<String>);
+
+fn stem(file: Option<&CurrentFilePath>) -> Option<String> {
+    Some(file?.path.as_ref()?.file_stem()?.to_string_lossy().into_owned())
 }
 
 /// Not the whole `FeatureTimeline`: selection, pending despawns and undo
@@ -80,6 +91,7 @@ impl Plugin for MapSyncPlugin {
             .add_direction(NetworkDirection::ServerToClient);
 
         app.init_resource::<LastMapSent>()
+            .init_resource::<ServerMapFile>()
             .add_systems(
                 Update,
                 (
@@ -164,6 +176,7 @@ fn broadcast_map_changes(
 fn send_map_to_new_clients(
     timeline: Res<FeatureTimeline>,
     metadata: Res<MapMetadata>,
+    file: Option<Res<CurrentFilePath>>,
     joined: Query<Entity, (With<ClientOf>, Added<Connected>)>,
     mut sender: ServerMultiMessageSender,
 ) -> Result {
@@ -173,7 +186,7 @@ fn send_map_to_new_clients(
 
     let Some(blueprint) = encode(&timeline) else { return Ok(()) };
     let message = MapSnapshot { blueprint };
-    let settings = MetadataSnapshot { metadata: SavedMetadata::of(&metadata) };
+    let settings = MetadataSnapshot { metadata: SavedMetadata::of(&metadata), file: stem(file.as_deref()) };
 
     for client in &joined {
         info!("Sending the map ({} bytes) to a new client", message.blueprint.len());
@@ -187,20 +200,21 @@ fn send_map_to_new_clients(
 /// value because the panel marks the metadata changed every frame it is open.
 fn broadcast_metadata_changes(
     metadata: Res<MapMetadata>,
+    file: Option<Res<CurrentFilePath>>,
     server: Option<Single<&Endpoint, With<Server>>>,
-    mut last: Local<Option<SavedMetadata>>,
+    mut last: Local<Option<MetadataSnapshot>>,
     mut sender: ServerMultiMessageSender,
 ) -> Result {
     let Some(server) = server else { return Ok(()) };
-    if !metadata.is_changed() {
+    if !metadata.is_changed() && !file.as_ref().is_some_and(|file| file.is_changed()) {
         return Ok(());
     }
-    let current = SavedMetadata::of(&metadata);
+    let current = MetadataSnapshot { metadata: SavedMetadata::of(&metadata), file: stem(file.as_deref()) };
     if last.as_ref() == Some(&current) {
         return Ok(());
     }
     *last = Some(current.clone());
-    sender.send::<_, MapChannel>(&MetadataSnapshot { metadata: current }, &server, &NetworkTarget::All)?;
+    sender.send::<_, MapChannel>(&current, &server, &NetworkTarget::All)?;
     Ok(())
 }
 
@@ -209,12 +223,15 @@ fn adopt_the_servers_metadata(
     role: Res<NetRole>,
     mut receivers: Query<&mut MessageReceiver<MetadataSnapshot>>,
     mut metadata: ResMut<MapMetadata>,
+    mut file: ResMut<ServerMapFile>,
 ) {
     if role.is_authority() {
+        file.set_if_neq(ServerMapFile(None));
         return;
     }
     for mut receiver in &mut receivers {
         for message in receiver.receive() {
+            file.set_if_neq(ServerMapFile(message.file));
             if SavedMetadata::of(&metadata) != message.metadata {
                 *metadata = message.metadata.into_metadata();
             }
@@ -287,7 +304,7 @@ mod tests {
         let mut metadata = MapMetadata::default();
         metadata.display_name = Some("Harvest".into());
         metadata.movement.gravity = 9.81;
-        let sent = MetadataSnapshot { metadata: SavedMetadata::of(&metadata) };
+        let sent = MetadataSnapshot { metadata: SavedMetadata::of(&metadata), file: Some("harvest".into()) };
         let bytes = postcard::to_allocvec(&sent).expect("the settings would not encode");
         let received: MetadataSnapshot =
             postcard::from_bytes(&bytes).expect("the settings would not decode");

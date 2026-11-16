@@ -220,8 +220,13 @@ title = "Round"
 slots = "Slots"
 bots = "Bots"
 fill_with_bots = "Fill empty slots with bots"
+bot_only_matches = "Allow bot-only matches"
 time = "Time"
 time_limit = "Time limit"
+frag_limit = "Frag limit"
+pre_game_length = "Pre-game length"
+post_game_length = "Post-game length"
+between_rounds_length = "Between-rounds length"
 # Shown after the number, not while it is typed.
 seconds_suffix = " s"
 
@@ -450,6 +455,12 @@ kills = "Kills"
 assists = "Assists"
 deaths = "Deaths"
 healing = "Healing"
+
+[match]
+# The pre-game's countdown while nobody is playing.
+waiting = "Waiting for players"
+start = "Start!"
+between_rounds = "Waiting for next round to start."
 
 [hud]
 reloading = "Reloading"

@@ -67,6 +67,7 @@ impl Plugin for NetTransportPlugin {
             .add_plugins(crate::common::protocol::ProtocolPlugin)
             // After the protocol, since it registers a channel and a message.
             .add_plugins(crate::common::match_state::MatchStatePlugin)
+            .add_plugins(crate::common::match_phase::MatchPhaseSyncPlugin)
             .add_plugins(crate::common::player_settings::PlayerSettingsSyncPlugin)
             .add_plugins(crate::game::team_choice::TeamChoiceSyncPlugin)
             .add_plugins(crate::common::map_sync::MapSyncPlugin)

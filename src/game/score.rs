@@ -18,6 +18,7 @@ use crate::common::bot_names::{is_blank, BotNames};
 use crate::common::damage::{DamageDealt, DamageSource, Died, Healed, PlayerId};
 use crate::common::fonts::DisplayFont;
 use crate::common::game_rules::GameRules;
+use crate::common::match_phase::MatchPhase;
 use crate::common::net::{has_authority, NetRole};
 use crate::common::player_color::PlayerColor;
 use crate::common::round_settings::RoundSettings;
@@ -171,11 +172,12 @@ impl Plugin for ScorePlugin {
                 FixedUpdate,
                 // Before the reaping, while a hit's target still says who it was.
                 (record_damage, record_frags)
+                    .run_if(crate::common::match_phase::live)
                     .after(crate::game::death::announce_the_dead)
                     .before(crate::game::death::reap_the_dead)
                     .in_set(DamageSystems::Resolve),
             )
-            .add_systems(Update, record_healing.run_if(in_state(AppMode::Play)).run_if(has_authority))
+            .add_systems(Update, record_healing.run_if(in_state(AppMode::Play)).run_if(crate::common::match_phase::live).run_if(has_authority))
         .add_systems(
             Update,
             (keep_standings.run_if(standings_may_be_out_of_step), end_the_round_at_the_frag_limit)
@@ -193,7 +195,7 @@ impl Plugin for ScorePlugin {
     }
 }
 
-fn clear_standings(mut commands: Commands, standings: Query<Entity, With<Standing>>) {
+pub(crate) fn clear_standings(mut commands: Commands, standings: Query<Entity, With<Standing>>) {
     for standing in &standings {
         commands.entity(standing).despawn();
     }
@@ -338,24 +340,50 @@ fn record_healing(mut healed: MessageReader<Healed>, mut standings: Query<&mut S
     }
 }
 
-/// Back to the editor, through the transition F5 uses, so `match_state`
-/// carries everybody with it.
+/// Ends a live match into its post-game; with no match cycle, back to the editor, through the
+/// transition F5 uses, so `match_state` carries everybody with it.
+struct RoundEnd<'w> {
+    phase: Option<Res<'w, State<MatchPhase>>>,
+    next_phase: Option<ResMut<'w, NextState<MatchPhase>>>,
+    next: ResMut<'w, NextState<AppMode>>,
+}
+
+impl RoundEnd<'_> {
+    /// Whether a limit may end the round now: live, and nothing else already pending.
+    fn may_end(&self) -> bool {
+        match (&self.phase, &self.next_phase) {
+            (Some(phase), Some(next)) => *phase.get() == MatchPhase::Live && matches!(**next, NextState::Unchanged),
+            _ => !matches!(*self.next, NextState::Pending(_)),
+        }
+    }
+
+    fn end(&mut self) {
+        match (&self.phase, self.next_phase.as_mut()) {
+            (Some(_), Some(next)) => next.set(MatchPhase::PostGame),
+            _ => self.next.set(AppMode::Editor),
+        }
+    }
+}
+
 fn end_the_round_at_the_frag_limit(
-    rules: Res<GameRules>,
+    settings: Option<Res<RoundSettings>>,
     standings: Query<&Standing>,
     history: Option<ResMut<RoundHistory>>,
-    mut next: ResMut<NextState<AppMode>>,
+    phase: Option<Res<State<MatchPhase>>>,
+    next_phase: Option<ResMut<NextState<MatchPhase>>>,
+    next: ResMut<NextState<AppMode>>,
 ) {
-    let Some(limit) = rules.frag_limit else { return };
+    let Some(limit) = settings.and_then(|settings| settings.frag_limit) else { return };
     let Some(winner) = standings.iter().find(|standing| standing.frags >= limit as i32) else { return };
-    if matches!(*next, NextState::Pending(_)) {
+    let mut end = RoundEnd { phase, next_phase, next };
+    if !end.may_end() {
         return;
     }
     info!("{} reached {limit} frags; the round is over", winner.id);
     if let Some(mut history) = history {
         history.run_out();
     }
-    next.set(AppMode::Editor);
+    end.end();
 }
 
 /// On the clock [`RoundHistory`] records a round's length by, so a limit of five minutes is a
@@ -364,17 +392,20 @@ fn end_the_round_at_the_time_limit(
     settings: Option<Res<RoundSettings>>,
     history: Option<ResMut<RoundHistory>>,
     time: Res<Time<Real>>,
-    mut next: ResMut<NextState<AppMode>>,
+    phase: Option<Res<State<MatchPhase>>>,
+    next_phase: Option<ResMut<NextState<MatchPhase>>>,
+    next: ResMut<NextState<AppMode>>,
 ) {
     let Some(limit) = settings.and_then(|settings| settings.time_limit) else { return };
     let Some(mut history) = history else { return };
     let Some(elapsed) = history.elapsed(time.elapsed_secs()) else { return };
-    if elapsed < limit || matches!(*next, NextState::Pending(_)) {
+    let mut end = RoundEnd { phase, next_phase, next };
+    if elapsed < limit || !end.may_end() {
         return;
     }
     info!("{limit} seconds are up; the round is over");
     history.run_out();
-    next.set(AppMode::Editor);
+    end.end();
 }
 
 const ROW_TEXT: f32 = 20.0;
@@ -724,7 +755,7 @@ mod tests {
     fn reaching_the_frag_limit_ends_the_round() {
         let mut world = World::new();
         world.init_resource::<NextState<AppMode>>();
-        world.insert_resource(GameRules(crate::common::game_rules::ModeRules { frag_limit: Some(3), ..default() }));
+        world.insert_resource(RoundSettings { frag_limit: Some(3), ..default() });
         let leader = world.spawn(standing(0, 2, 0)).id();
 
         world.run_system_once(end_the_round_at_the_frag_limit).unwrap();

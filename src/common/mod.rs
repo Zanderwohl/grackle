@@ -32,6 +32,7 @@ pub mod lang;
 pub mod log_file;
 pub mod map_sync;
 pub mod match_state;
+pub mod match_phase;
 pub mod effects;
 pub mod net;
 pub mod net_events;
