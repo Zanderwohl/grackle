@@ -722,6 +722,8 @@ fn held_slider(ui: &mut egui::Ui, key: &str, value: &mut u32, range: std::ops::R
 
 /// What ticking Time limit starts at, in seconds.
 const DEFAULT_TIME_LIMIT: f32 = 600.0;
+/// What ticking Frag limit starts at.
+const DEFAULT_FRAG_LIMIT: u32 = 20;
 
 fn round_panel_ui(ui: &mut egui::Ui, settings: &mut RoundSettings) {
     ui.heading(get!("editor.round.slots"));
@@ -729,6 +731,7 @@ fn round_panel_ui(ui: &mut egui::Ui, settings: &mut RoundSettings) {
 
     ui.heading(get!("editor.round.bots"));
     ui.checkbox(&mut settings.fill_with_bots, get!("editor.round.fill_with_bots"));
+    ui.checkbox(&mut settings.bot_only_matches, get!("editor.round.bot_only_matches"));
     let skill_name = |skill: BotSkill| match skill {
         BotSkill::Easy => get!("editor.round.skill.easy"),
         BotSkill::Normal => get!("editor.round.skill.normal"),
@@ -751,6 +754,25 @@ fn round_panel_ui(ui: &mut egui::Ui, settings: &mut RoundSettings) {
             ui.add(egui::DragValue::new(limit).range(1.0..=f32::MAX).speed(1.0).max_decimals(0).suffix(get!("editor.round.seconds_suffix")));
         }
     });
+    ui.horizontal(|ui| {
+        let mut limited = settings.frag_limit.is_some();
+        if ui.checkbox(&mut limited, get!("editor.round.frag_limit")).changed() {
+            settings.frag_limit = limited.then_some(DEFAULT_FRAG_LIMIT);
+        }
+        if let Some(limit) = settings.frag_limit.as_mut() {
+            ui.add(egui::DragValue::new(limit).range(1..=u32::MAX).speed(0.2));
+        }
+    });
+    for (length, key) in [
+        (&mut settings.pre_game_length, "editor.round.pre_game_length"),
+        (&mut settings.post_game_length, "editor.round.post_game_length"),
+        (&mut settings.between_rounds_length, "editor.round.between_rounds_length"),
+    ] {
+        ui.horizontal(|ui| {
+            ui.label(get!(key));
+            ui.add(egui::DragValue::new(length).range(0.0..=f32::MAX).speed(1.0).max_decimals(0).suffix(get!("editor.round.seconds_suffix")));
+        });
+    }
 }
 
 /// Newest first, the newest open.

@@ -8,11 +8,22 @@
 # `bots`            bots seated by hand at startup: they
 #                   count against the slots and stay across rounds.
 # `time_limit`      seconds before the round ends; absent or 0 is no limit.
+# `frag_limit`      frags that end the round (default 20); 0 is no limit.
+# `bot_only_matches`  run matches with no person playing, as long as bots are
+#                   seated. Off by default.
+# `pre_game_length`   seconds of countdown before each match (default 10).
+# `post_game_length`  the most seconds of humiliation after each match
+#                   (default 15).
+# `between_rounds_length`  seconds of the scoreboard after the post-game
+#                   (default 15).
 #
-# This one fills a round with eight bots, the host spectating, for five minutes:
+# This one fills a round with eight bots, the host spectating, for five minutes.
+# The host spectates, so nobody is playing, which needs bot-only matches:
 #
 #     cargo run -- --map assets/default/blueprints/arena.gmb --server-config assets/default/servers/bot_arena.toml --play --spectate --rounds 1
 
 slots = 8
 fill_with_bots = true
 time_limit = 300
+bot_only_matches = true
+pre_game_length = 3

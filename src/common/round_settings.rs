@@ -18,11 +18,31 @@ pub struct RoundSettings {
     /// Real seconds before the round ends, as the Rounds tab times it; `None` runs it until the
     /// mode ends it.
     pub time_limit: Option<f32>,
+    /// Frags that end the round, in every mode for now; `None` is no limit.
+    pub frag_limit: Option<u32>,
+    /// Matches may run with no person playing. See documentation/match-cycle.md.
+    pub bot_only_matches: bool,
+    /// Seconds of countdown before a match goes live.
+    pub pre_game_length: f32,
+    /// The most seconds of humiliation after a match; it ends sooner once every loser is dead.
+    pub post_game_length: f32,
+    /// Seconds of the scoreboard between a post-game and the next pre-game.
+    pub between_rounds_length: f32,
 }
 
 impl Default for RoundSettings {
     fn default() -> Self {
-        RoundSettings { slots: 8, fill_with_bots: false, bot_skill: BotSkill::default(), time_limit: None }
+        RoundSettings {
+            slots: 8,
+            fill_with_bots: false,
+            bot_skill: BotSkill::default(),
+            time_limit: None,
+            frag_limit: Some(20),
+            bot_only_matches: false,
+            pre_game_length: 10.0,
+            post_game_length: 15.0,
+            between_rounds_length: 15.0,
+        }
     }
 }
 
@@ -97,12 +117,32 @@ pub struct ServerConfig {
     pub bots: u32,
     /// Seconds; absent or zero is no limit.
     pub time_limit: Option<f32>,
+    /// Zero is no limit.
+    pub frag_limit: u32,
+    pub bot_only_matches: bool,
+    /// Seconds.
+    pub pre_game_length: f32,
+    /// Seconds.
+    pub post_game_length: f32,
+    /// Seconds.
+    pub between_rounds_length: f32,
 }
 
 impl Default for ServerConfig {
     fn default() -> Self {
         let round = RoundSettings::default();
-        ServerConfig { slots: round.slots, fill_with_bots: round.fill_with_bots, bot_skill: round.bot_skill, bots: 0, time_limit: round.time_limit }
+        ServerConfig {
+            slots: round.slots,
+            fill_with_bots: round.fill_with_bots,
+            bot_skill: round.bot_skill,
+            bots: 0,
+            time_limit: round.time_limit,
+            frag_limit: round.frag_limit.unwrap_or(0),
+            bot_only_matches: round.bot_only_matches,
+            pre_game_length: round.pre_game_length,
+            post_game_length: round.post_game_length,
+            between_rounds_length: round.between_rounds_length,
+        }
     }
 }
 
@@ -117,6 +157,15 @@ impl ServerConfig {
         if config.time_limit.is_some_and(|limit| !(limit >= 0.0)) {
             return Err("time_limit must be a number of seconds, zero or more".to_owned());
         }
+        for (key, length) in [
+            ("pre_game_length", config.pre_game_length),
+            ("post_game_length", config.post_game_length),
+            ("between_rounds_length", config.between_rounds_length),
+        ] {
+            if !(length >= 0.0) {
+                return Err(format!("{key} must be a number of seconds, zero or more"));
+            }
+        }
         Ok(config)
     }
 
@@ -126,6 +175,11 @@ impl ServerConfig {
             fill_with_bots: self.fill_with_bots,
             bot_skill: self.bot_skill,
             time_limit: self.time_limit.filter(|limit| *limit > 0.0),
+            frag_limit: Some(self.frag_limit).filter(|limit| *limit > 0),
+            bot_only_matches: self.bot_only_matches,
+            pre_game_length: self.pre_game_length,
+            post_game_length: self.post_game_length,
+            between_rounds_length: self.between_rounds_length,
         }
     }
 }
@@ -147,10 +201,27 @@ mod tests {
 
     #[test]
     fn a_config_sets_every_round_setting() {
-        let config = ServerConfig::parse("slots = 9\nfill_with_bots = true\nbot_skill = \"hard\"\nbots = 2\ntime_limit = 300").unwrap();
-        assert_eq!(config.round(), RoundSettings { slots: 9, fill_with_bots: true, bot_skill: BotSkill::Hard, time_limit: Some(300.0) });
+        let config = ServerConfig::parse(
+            "slots = 9\nfill_with_bots = true\nbot_skill = \"hard\"\nbots = 2\ntime_limit = 300\nfrag_limit = 30\nbot_only_matches = true\npre_game_length = 5\npost_game_length = 20\nbetween_rounds_length = 8",
+        )
+        .unwrap();
+        assert_eq!(
+            config.round(),
+            RoundSettings {
+                slots: 9,
+                fill_with_bots: true,
+                bot_skill: BotSkill::Hard,
+                time_limit: Some(300.0),
+                frag_limit: Some(30),
+                bot_only_matches: true,
+                pre_game_length: 5.0,
+                post_game_length: 20.0,
+                between_rounds_length: 8.0,
+            }
+        );
         assert_eq!(config.bots, 2);
         assert_eq!(ServerConfig::parse("time_limit = 0").unwrap().round().time_limit, None);
+        assert_eq!(ServerConfig::parse("frag_limit = 0").unwrap().round().frag_limit, None);
     }
 
     /// A typo that parsed as the default would be a setting that silently did nothing.
@@ -160,6 +231,7 @@ mod tests {
         assert!(ServerConfig::parse("slots = 0").is_err());
         assert!(ServerConfig::parse("slots = 99").is_err());
         assert!(ServerConfig::parse("time_limit = -5").is_err());
+        assert!(ServerConfig::parse("pre_game_length = -1").is_err());
         assert!(ServerConfig::parse("bot_skill = \"expert\"").is_err());
     }
 

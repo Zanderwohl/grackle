@@ -159,7 +159,7 @@ struct FeedColumn;
 #[derive(Component)]
 struct ShowsLine(u64);
 
-fn forget_the_feed(mut feed: ResMut<KillFeed>) {
+pub(crate) fn forget_the_feed(mut feed: ResMut<KillFeed>) {
     feed.lines.clear();
     feed.known.clear();
 }

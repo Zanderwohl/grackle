@@ -18,7 +18,6 @@ use serde::Serialize;
 use crate::common::app_mode::AppMode;
 use crate::common::class::Stance;
 use crate::common::damage::{Armor, DamageDealt, DamageSource, Damageable, Died, How, PlayerId};
-use crate::common::game_rules::GameRules;
 use crate::common::net::has_authority;
 use crate::common::round_settings::{BotSkill, RoundSettings};
 use crate::common::weapon::{Equipped, WeaponCatalog, WeaponId};
@@ -285,7 +284,6 @@ fn open_the_round(
     mut round: ResMut<Round>,
     time: Res<Time>,
     settings: Option<Res<RoundSettings>>,
-    rules: Option<Res<GameRules>>,
     metadata: Option<Res<crate::editor::map_metadata::MapMetadata>>,
     file: Option<Res<crate::editor::panels::CurrentFilePath>>,
     recording: Option<Res<RecordRounds>>,
@@ -333,7 +331,7 @@ fn open_the_round(
         fill_with_bots: settings.fill_with_bots,
         bot_skill: settings.bot_skill,
         time_limit: settings.time_limit,
-        frag_limit: rules.and_then(|rules| rules.frag_limit),
+        frag_limit: settings.frag_limit,
     });
 }
 

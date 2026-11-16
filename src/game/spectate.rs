@@ -8,6 +8,7 @@ use bevy::prelude::*;
 
 use crate::common::app_mode::AppMode;
 use crate::common::damage::PlayerId;
+use crate::common::match_phase::{phase_of, shows_the_cameras, MatchPhase, ShotClock};
 use crate::common::team::Side;
 use crate::editor::editable::FeatureTag;
 use crate::editor::mirror::MirrorCopy;
@@ -241,9 +242,12 @@ pub(crate) fn watch(
     }
 }
 
-/// The one writer of [`ThroughCamera`]. None with a body of ours or while
-/// dead; while spectating, the camera [`SpectatorView`] is on; otherwise the
-/// first camera the seat may use.
+/// Seconds the pre-game and the time between rounds show each spectator camera for.
+pub const SHOT_SECONDS: f32 = 5.0;
+
+/// The one writer of [`ThroughCamera`]. In the pre-game and between rounds, each camera the seat
+/// may use in turn. Otherwise none with a body of ours or while dead; while spectating, the camera
+/// [`SpectatorView`] is on; otherwise the first camera the seat may use.
 #[allow(clippy::too_many_arguments)]
 pub fn look_through(
     mut commands: Commands,
@@ -255,11 +259,21 @@ pub fn look_through(
     kill_cam: Option<Res<KillCam>>,
     cameras: Cameras,
     current: Option<Res<ThroughCamera>>,
+    (phase, clock): (Option<Res<State<MatchPhase>>>, Option<Res<ShotClock>>),
 ) {
     let dead = last.is_some() || death_cam.is_some_and(|cam| cam.whose.is_some());
     let waiting = kill_cam.is_some_and(|kill_cam| kill_cam.spectating());
+    let cycling = shows_the_cameras(phase_of(&phase));
+    let shot = cycling
+        .then(|| {
+            let list = cameras_for(&cameras, offer.seat);
+            let index = (clock.as_deref().map_or(0.0, |clock| clock.0) / SHOT_SECONDS) as usize;
+            list.get(index.checked_rem(list.len())?).and_then(|(camera, _)| through(&cameras, *camera))
+        })
+        .flatten();
     let wanted = match (ours.is_empty(), offer.seat) {
         (false, _) => None,
+        (true, _) if shot.is_some() => shot,
         (true, seat) if seat == Seat::Spectating || waiting => match view.at {
             Some(Viewpoint::Camera(camera)) => through(&cameras, camera),
             _ => None,

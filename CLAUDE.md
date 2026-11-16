@@ -58,9 +58,14 @@ in it that constrains code written today: items must record their provenance
 The editor is real and works. **The game barely exists.** There is a damage
 layer, weapons read off disk, teams, and a server-authoritative network layer
 that carries the map, the weapons, the bodies, damage, deaths and corpses.
-Weapons have clips, reserves and reloads. There is no round structure: a body
-that dies leaves a ragdoll and comes back a few seconds later, on the same
-side, as the same player. A client predicts its own movement and is rolled back when the
+Weapons have clips, reserves and reloads. A server in Play runs matches back
+to back — a pre-game countdown with no bodies, the match, a post-game in
+which every loser is humiliated, then the scoreboard between rounds — through `MatchPhase`, a sub-state of Play
+that the authority drives and clients follow
+([`src/game/match_cycle.rs`](src/game/match_cycle.rs),
+[documentation/match-cycle.md](documentation/match-cycle.md)). Within a match
+a body that dies leaves a ragdoll and comes back a few seconds later, on the
+same side, as the same player. A client predicts its own movement and is rolled back when the
 server disagrees. There is also no wasm build yet. Adding the runtime is the
 current frontier, not a finished thing to extend.
 
@@ -99,7 +104,9 @@ start with the launcher drawn. A `Goal` is a place or a pickup. The
 map's, so neither saved nor sent: **slots**, the host and bots included, which
 caps the clients a server takes from when it starts listening, and **fill empty
 slots with bots**, which `fill_empty_slots` keeps true through a round as
-people come and go, with seats marked `FillsASlot`. **Bot skill** — Easy, Normal, Hard or Varied
+people come and go, with seats marked `FillsASlot`; **allow bot-only
+matches** (off by default), without which no match starts while no person is
+playing; and the **pre-game**, **post-game** and **between-rounds** lengths. **Bot skill** — Easy, Normal, Hard or Varied
 (`BotSkill`) — narrows the rolls of the traits that went with a high score over
 295 Varied rounds: aim error (by far), settle, ease, reaction, turn rate,
 tracking, airblast attempt, standoff comfort, drift and the health drive; every other trait
@@ -108,14 +115,15 @@ anybody out**: the cap counts people only, so a slot a bot fills is open, and
 somebody joining takes a filler's seat and body in the same frame, before
 `give_bodies_to_whoever_needs_one` stands theirs up. A spectator takes no
 slot; somebody still choosing does. A **time limit** in seconds ends the round
-as the frag limit does.
+as the **frag limit** does — the server's for now, in every mode, though a
+mode's own `frag_limit` in `modes.toml` still decides whether it keeps a
+scoreboard — into the post-game, not back to the editor.
 `--server-config PATH` reads all of it, and bots to seat by hand, from a TOML
 file (`ServerConfig`; [`assets/default/servers/bot_arena.toml`](assets/default/servers/bot_arena.toml) is the
 example), refusing a bad one at startup. **An unattended round** is
 `--map PATH --server-config PATH --play --spectate --rounds 1`: `--map` opens
 a blueprint as its file, `--spectate` takes the Spectate seat each round,
-`--rounds N` quits once N rounds have ended (with `--play`, starting each
-next round as the last runs out; one left with F5 stays left), and every round's standings are
+`--rounds N` quits once N rounds have ended (the cycle starts each next one), and every round's standings are
 logged as a table as it ends (`rounds::report`). **Telemetry**
 ([`src/game/telemetry.rs`](src/game/telemetry.rs), authority only) puts a RON
 line in the log per kill — victim, killer and assist with health, place and

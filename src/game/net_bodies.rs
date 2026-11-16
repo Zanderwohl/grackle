@@ -28,6 +28,8 @@ use crate::game::bot_think::BotThought;
 use crate::game::weapon::AutoReload;
 use crate::game::respawn::{choose_spawn, placed_spawns, team_name, HueStart, Identity, OurIdentity, Seat};
 use crate::game::score::Standing;
+use crate::common::match_phase::MatchPhase;
+use crate::game::match_cycle::{owed_a_body, Winners};
 use crate::game::team_choice::{seat_for_a_bot, teams_in_play};
 
 /// Spawns bodies for connected clients and marks our own when it arrives.
@@ -147,15 +149,21 @@ pub(crate) fn give_bodies_to_whoever_needs_one(
     rules: Res<GameRules>,
     catalog: Res<WeaponCatalog>,
     timers: Option<Res<RespawnTimers>>,
-    (seats, driven, round, mut taken): (
+    (seats, driven, round, mut taken, phase, winners): (
         Query<(Entity, Option<&RouteCosts>, Option<&BotMind>), With<BotSeat>>,
         Query<&BotOf, With<Player>>,
         Option<Res<RoundSettings>>,
         Local<bevy::ecs::entity::EntityHashSet>,
+        Option<Res<State<MatchPhase>>>,
+        Option<Res<Winners>>,
     ),
     standings: Query<&Standing>,
 ) {
-    let waiting = |who: Identity| timers.as_deref().is_some_and(|timers| timers.waiting(who.id));
+    // Not yet owed one counts as waiting, so identities are still made in the pre-game.
+    let phase = crate::common::match_phase::phase_of(&phase);
+    let waiting = |who: Identity| {
+        timers.as_deref().is_some_and(|timers| timers.waiting(who.id)) || !owed_a_body(phase, winners.as_deref(), who.id)
+    };
     if !role.as_deref().is_none_or(NetRole::is_authority) {
         return;
     }

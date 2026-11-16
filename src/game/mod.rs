@@ -22,6 +22,8 @@ use crate::tool::room::{Block, MapVolumes, Room, VolumeOrder};
 
 pub mod body_mesh;
 pub mod bot;
+pub mod match_cycle;
+pub mod match_banner;
 pub mod bot_sense;
 pub mod bot_think;
 pub mod bot_fight;
