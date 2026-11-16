@@ -6,7 +6,8 @@
 use bevy::prelude::*;
 
 use crate::common::app_mode::AppMode;
-use crate::common::class::Stance;
+use crate::common::class::{Class, Stance};
+use crate::common::game_rules::GameRules;
 use crate::common::match_phase::{phase_of, MatchPhase};
 use crate::common::round_settings::{Better, BotSkill};
 use crate::common::damage::{Armor, Damageable, PlayerId};
@@ -16,6 +17,7 @@ use crate::common::weapon::{Ammo, Equipped, WeaponCatalog, WeaponId};
 use crate::game::bot::{BotIntent, BotOf, BotRoute, Goal};
 use crate::game::bot_sense::{sense, BotMind, BotSenses, Sense, REMEMBERS, REMEMBERS_NOISES};
 use crate::game::nav::{CellId, NavGraph};
+use crate::game::nav_field::Field;
 use crate::game::collision::CollisionWorld;
 use crate::game::match_cycle::Winners;
 use crate::game::nav_rating::Rating;
@@ -58,6 +60,12 @@ const STANDOFF_BAND: f32 = 1.5;
 const STANDOFF_BAND_SHARE: f32 = 0.2;
 /// Of a place to hunt from, the meters off the standoff that count against it, per meter of walk.
 const STANDOFF_PER_WALK: f32 = 0.5;
+/// Of a place to hunt from, the meters off the standoff that count against it, per meter its median
+/// engagement range is off the standoff.
+const RANGE_FIT: f32 = 0.25;
+/// How much more a bot carrying only what it spawned with needs a weapon it does not carry, at
+/// that weapon's nearness.
+const FIRST_WEAPON: f32 = 1.0;
 /// Lines tried from places to hunt from, best first, before giving up and going to the quarry;
 /// a place within [`BLOCKED_NEAR`] meters of one found blocked is passed over, since a wall that
 /// hides one hides its neighbors.
@@ -180,7 +188,10 @@ pub struct Situation {
     pub enemies: Vec<(Vec3, f32)>,
     /// Hurt lately, or an enemy in sight now.
     pub threatened: bool,
-    /// The nearby place much less seen than here, as feet.
+    /// Carrying no weapon it did not spawn with.
+    pub unarmed: bool,
+    /// Where to take cover, as feet: out of sight of all that sees here, else nearby and much less
+    /// seen.
     pub cover: Option<Vec3>,
     /// An ambush place, as feet, the seconds to it, and how much of its hold is left.
     pub ambush: Option<(Vec3, f32, f32)>,
@@ -200,7 +211,7 @@ pub fn candidates(situation: &Situation, drives: &Drives) -> Vec<Candidate> {
             // Armor once health is seen to, not instead of it.
             Offer::Armor => (Want::Armor, (1.0 - s.armor) * s.health * drives.armor),
             Offer::Ammo => (Want::Arms, s.ammo_missing * drives.arms),
-            Offer::Weapon { carried: false, .. } => (Want::Arms, drives.arms),
+            Offer::Weapon { carried: false, .. } => (Want::Arms, drives.arms * (1.0 + if s.unarmed { FIRST_WEAPON * nearness(seconds) } else { 0.0 })),
             Offer::Weapon { carried: true, missing } => (Want::Arms, missing * drives.arms),
         };
         if need > 0.0 {
@@ -399,7 +410,7 @@ pub fn think(
     cache: Option<Res<PropCache>>,
     rules: Option<Res<MovementRules>>,
     world: Option<Res<CollisionWorld>>,
-    (phase, winners): (Option<Res<State<MatchPhase>>>, Option<Res<Winners>>),
+    (phase, winners, game_rules): (Option<Res<State<MatchPhase>>>, Option<Res<Winners>>, Option<Res<GameRules>>),
     standing: Standing,
     moved: Query<(), Or<(Added<Pickup>, Changed<WorldProp>)>>,
     mut index: Local<MapIndex>,
@@ -407,7 +418,7 @@ pub fn think(
     mut bots: Query<
         (
             (&PhysicsBody, &Stance, &BotSenses, &BotMind, &BotRoute, Option<&PlayerId>),
-            (Option<&Damageable>, Option<&Armor>, Option<&Equipped>, Option<&Ammo>),
+            (Option<&Damageable>, Option<&Armor>, Option<&Equipped>, Option<&Ammo>, Option<&Class>),
             (&mut BotIntent, &mut BotThought),
         ),
         With<BotOf>,
@@ -430,7 +441,7 @@ pub fn think(
     let speed = running_speed(&rules.as_deref().cloned().unwrap_or_default());
     let post_game = phase_of(&phase) == Some(MatchPhase::PostGame);
 
-    for ((body, stance, senses, mind, route, id), (health, armor, equipped, ammo), (mut intent, mut thought)) in &mut bots {
+    for ((body, stance, senses, mind, route, id), (health, armor, equipped, ammo, class), (mut intent, mut thought)) in &mut bots {
         // Written through only where something changes, so a tick it does not think leaves it
         // unchanged for whatever draws it.
         if thought.rested.iter().any(|(_, until)| *until <= now) {
@@ -505,6 +516,14 @@ pub fn think(
             }
             _ => 0.0,
         };
+        let unarmed = match (catalog, game_rules.as_deref()) {
+            (Some(catalog), Some(rules)) => {
+                let class = class.copied().unwrap_or_else(|| rules.class_to_play());
+                let (starting, _) = catalog.starting_equipment(class, rules.loadout.as_deref());
+                carried.iter().all(|weapon| starting.carried().contains(weapon))
+            }
+            _ => false,
+        };
 
         let pickups = live
             .iter()
@@ -558,9 +577,14 @@ pub fn think(
             .collect();
 
         let threatened = senses.known.iter().any(|known| known.in_sight || (known.how == Sense::Hurt && now - known.last <= UNDER_FIRE));
-        let exposure = |cell: CellId| graph.field(cell, crate::game::nav_field::Field::Exposure);
-        // Only a bot under threat goes for cover, so only one looks for it.
+        let exposure = |cell: CellId| graph.field(cell, Field::Exposure);
+        // Only a bot under threat goes for cover, so only one looks for it. The nearest place out
+        // of sight of all that sees it, else somewhere much less seen nearby.
         let cover = here.filter(|_| threatened).and_then(|here| {
+            let escape = fields.escape_to(here).filter(|to| *to != here).map(|to| graph.cells()[to as usize].feet);
+            if let Some(at) = escape.filter(|at| !thought.resting(Goal::Place(*at))) {
+                return Some(at);
+            }
             let mine = exposure(here)?;
             let (best, least) = index
                 .near(graph, feet, COVER_RADIUS)
@@ -601,6 +625,7 @@ pub fn think(
             pickups,
             enemies,
             threatened,
+            unarmed,
             cover,
             ambush,
             roam: thought.roam,
@@ -629,11 +654,12 @@ fn hunt_from(graph: &NavGraph, index: &MapIndex, world: Option<&CollisionWorld>,
     let band = STANDOFF_BAND.max(range * STANDOFF_BAND_SHARE);
     let mut places: Vec<(Vec3, f32)> = index
         .near(graph, quarry, range + band)
-        .map(|cell| graph.cells()[cell as usize].feet)
-        .filter_map(|at| {
+        .filter_map(|cell| {
+            let at = graph.cells()[cell as usize].feet;
             let off = (at.distance(quarry) - range).abs();
             let kept = keep.is_some_and(|keep| keep.distance(at) <= SAME_PLACE);
-            (off <= band).then_some((at, if kept { f32::NEG_INFINITY } else { off + STANDOFF_PER_WALK * at.distance(feet) }))
+            let misfit = graph.field(cell, Field::RangeMedian).map_or(0.0, |median| (median - range).abs());
+            (off <= band).then_some((at, if kept { f32::NEG_INFINITY } else { off + STANDOFF_PER_WALK * at.distance(feet) + RANGE_FIT * misfit }))
         })
         .collect();
     places.sort_by(|a, b| a.1.total_cmp(&b.1));
@@ -699,6 +725,18 @@ mod tests {
         let situation = Situation { health: 0.3, pickups: vec![(0, Offer::Health, 20.0), (1, Offer::Health, 3.0)], ..calm() };
         let chosen = picked(&situation, None);
         assert_eq!((chosen.want, chosen.goal), (Want::Health, Goal::Pickup(1)));
+    }
+
+    /// Breaks if a bot holding only its spawn weapon wants a nearby weapon no more than one armed
+    /// already does, or the pull does not fall off with distance.
+    #[test]
+    fn a_bot_with_only_its_spawn_weapon_wants_a_near_weapon_more() {
+        let weapon = |seconds: f32, unarmed: bool| {
+            let situation = Situation { pickups: vec![(0, Offer::Weapon { carried: false, missing: 0.0 }, seconds)], unarmed, ..calm() };
+            candidates(&situation, &Drives::default()).iter().find(|candidate| candidate.want == Want::Arms).unwrap().score
+        };
+        assert!(weapon(1.0, true) > weapon(1.0, false));
+        assert!(weapon(1.0, true) / weapon(1.0, false) > weapon(20.0, true) / weapon(20.0, false), "the pull does not rise with nearness");
     }
 
     /// Breaks if the commitment bonus does not hold: a pack barely nearer than the one it is

@@ -301,7 +301,7 @@ impl NavInputs<'_, '_> {
         let mut pickups: Vec<Pickup> = self
             .weapon_pickups
             .iter()
-            .map(|(placed, spec)| Pickup::weapon(weapon(spec), placed.translation))
+            .map(|(placed, spec)| Pickup::weapon(weapon(spec), placed.translation).giving(spec.weapon))
             .chain(self.prop_pickups.iter().map(|prop| Pickup::prop(prop.model.clone(), prop.at)))
             .collect();
         pickups.sort_by(|a, b| a.label.cmp(&b.label).then(a.feet.to_array().partial_cmp(&b.feet.to_array()).unwrap_or(std::cmp::Ordering::Equal)));

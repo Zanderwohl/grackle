@@ -3,6 +3,7 @@
 //! statistics" in documentation/bots.md.
 
 use crate::game::nav::{CellId, NavGraph, SPACING};
+use crate::game::nav_derived;
 use crate::game::nav_field::Field;
 use crate::get;
 
@@ -20,6 +21,8 @@ pub const VANTAGE: f32 = 20.0;
 /// off the routes is an ambush.
 pub const AMBUSH_EXPOSURE: f32 = 80.0;
 pub const AMBUSH_WATCH: f32 = 10.0;
+/// Seconds of walking out of sight at which an open place is a death trap.
+pub const DEATH_TRAP: f32 = 3.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Rating {
@@ -37,10 +40,13 @@ pub enum Rating {
     Vantage,
     /// Off the routes, little seen, and watching busy floor.
     Ambush,
+    /// Open, and a long walk from anywhere out of sight of what sees it.
+    DeathTrap,
 }
 
 impl Rating {
-    pub const ALL: [Rating; 7] = [Rating::Cramped, Rating::Open, Rating::Precarious, Rating::Busy, Rating::Gauntlet, Rating::Vantage, Rating::Ambush];
+    pub const ALL: [Rating; 8] =
+        [Rating::Cramped, Rating::Open, Rating::Precarious, Rating::Busy, Rating::Gauntlet, Rating::Vantage, Rating::Ambush, Rating::DeathTrap];
 
     pub fn label(self) -> String {
         match self {
@@ -51,6 +57,7 @@ impl Rating {
             Rating::Gauntlet => get!("nav.rating.gauntlet"),
             Rating::Vantage => get!("nav.rating.vantage"),
             Rating::Ambush => get!("nav.rating.ambush"),
+            Rating::DeathTrap => get!("nav.rating.death_trap"),
         }
     }
 
@@ -65,6 +72,7 @@ impl Rating {
             Rating::Gauntlet => Rating::Busy.holds(graph, id)? && Rating::Open.holds(graph, id)?,
             Rating::Vantage => field(Field::FeetAdvantage)? >= VANTAGE,
             Rating::Ambush => !Rating::Busy.holds(graph, id)? && field(Field::Exposure)? < AMBUSH_EXPOSURE && field(Field::Watch)? >= AMBUSH_WATCH,
+            Rating::DeathTrap => Rating::Open.holds(graph, id)? && field(Field::Escape)? >= DEATH_TRAP,
         })
     }
 }
@@ -78,6 +86,8 @@ pub struct MapStatistics {
     pub rise: f32,
     /// Per [`Rating::ALL`], the share of the floor; `None` until baked.
     pub shares: Vec<Option<f32>>,
+    /// The share of the floor in each of [`nav_derived::range_bands`]'s bands; `None` until baked.
+    pub range_bands: Option<[f32; 4]>,
 }
 
 impl MapStatistics {
@@ -91,7 +101,12 @@ impl MapStatistics {
                 Some(holding.iter().filter(|holds| **holds).count() as f32 / cells.len().max(1) as f32)
             })
             .collect();
-        MapStatistics { floor: cells.len() as f32 * SPACING * SPACING, rise: if cells.is_empty() { 0.0 } else { high - low }, shares }
+        MapStatistics {
+            floor: cells.len() as f32 * SPACING * SPACING,
+            rise: if cells.is_empty() { 0.0 } else { high - low },
+            shares,
+            range_bands: nav_derived::range_bands(graph),
+        }
     }
 }
 
@@ -130,6 +145,8 @@ mod tests {
         assert!(!holds(&closet, middle(4.0), Rating::Open));
         assert!(holds(&hall, middle(24.0), Rating::Open));
         assert!(!holds(&hall, middle(24.0), Rating::Cramped));
+        assert!(holds(&hall, middle(24.0), Rating::DeathTrap), "the middle of an empty hall is somewhere to escape from");
+        assert!(!holds(&closet, middle(4.0), Rating::DeathTrap));
     }
 
     /// Breaks if the statistics count a rating the bake has not reached, or lose the floor area.

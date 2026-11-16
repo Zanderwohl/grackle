@@ -12,11 +12,14 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use bevy::prelude::{IVec2, Vec3};
-use grackle::common::movement_rules::MovementRules;
+use grackle::common::game_rules::Modes;
 use grackle::common::trigger::{TriggerEffect, TriggerVolume};
+use grackle::common::weapon::{WeaponCatalog, WeaponId};
+use grackle::common::weapon_file;
 use grackle::editor::save;
 use grackle::game::collision::CollisionWorld;
 use grackle::game::nav::{self, CellId, NavGraph};
+use grackle::game::nav_derived::{self, RANGE_BANDS};
 use grackle::game::nav_field::{self, Field, Pickup};
 use grackle::game::nav_rating::{MapStatistics, Rating};
 
@@ -52,7 +55,8 @@ fn main() {
             }
             "weapon_pickup" => {
                 let label = inner.get("weapon").and_then(|w| w.as_str()).unwrap_or("weapon").to_owned();
-                pickups.push(Pickup::weapon(label, object.get_point("").unwrap()));
+                let id = WeaponId::of(&label);
+                pickups.push(Pickup::weapon(label, object.get_point("").unwrap()).giving(id));
             }
             "prop" => {
                 let label = inner.get("model").and_then(|w| w.as_str()).unwrap_or("prop").to_owned();
@@ -67,22 +71,37 @@ fn main() {
     let mut graph = nav::graph(&world, &faces, &triggers, &rules, &spawns);
     graph.set_fields(nav_field::bake(&world, &graph, &triggers, &rules, pickups.clone(), spawns.clone()));
 
-    report(&graph, &spawns, &pickups, &rules);
+    let catalog = weapon_file::default_catalog();
+    let starting = nav_derived::starting_weapons(&catalog, &Modes::shipped().of(loaded.metadata.game_mode));
+    report(&graph, &spawns, &pickups);
+    first_weapons(&graph, &catalog, &starting);
 }
 
-fn report(graph: &NavGraph, spawns: &[Vec3], pickups: &[Pickup], _rules: &MovementRules) {
+fn report(graph: &NavGraph, spawns: &[Vec3], pickups: &[Pickup]) {
     let statistics = MapStatistics::of(graph);
     println!("floor {:.0} m², rise {:.1} m, {} cells", statistics.floor, statistics.rise, graph.cells().len());
     for (rating, share) in Rating::ALL.iter().zip(&statistics.shares) {
         println!("  {:<10} {:>5.1}%", format!("{rating:?}"), share.unwrap_or(0.0) * 100.0);
     }
-    for field in [Field::Exposure, Field::Sight, Field::Traffic, Field::Cover, Field::Knockback] {
-        let values: Vec<f32> = (0..graph.cells().len() as CellId).filter_map(|id| graph.field(id, field)).collect();
-        let mean = values.iter().sum::<f32>() / values.len().max(1) as f32;
-        let mut sorted = values.clone();
+    for field in [Field::Exposure, Field::Sight, Field::Traffic, Field::Cover, Field::Knockback, Field::RangeMedian, Field::Escape] {
+        let all: Vec<f32> = (0..graph.cells().len() as CellId).filter_map(|id| graph.field(id, field)).collect();
+        let mut sorted: Vec<f32> = all.iter().copied().filter(|value| value.is_finite()).collect();
+        let mean = sorted.iter().sum::<f32>() / sorted.len().max(1) as f32;
         sorted.sort_by(f32::total_cmp);
         let median = sorted.get(sorted.len() / 2).copied().unwrap_or(0.0);
-        println!("  {:<10} mean {:>7.2}  median {:>7.2}  max {:>7.2}", format!("{field:?}"), mean, median, sorted.last().copied().unwrap_or(0.0));
+        let unbounded = all.len() - sorted.len();
+        let none = if unbounded > 0 { format!("  none {:.1}%", unbounded as f32 / all.len() as f32 * 100.0) } else { String::new() };
+        println!("  {:<11} mean {:>7.2}  median {:>7.2}  max {:>7.2}{none}", format!("{field:?}"), mean, median, sorted.last().copied().unwrap_or(0.0));
+    }
+
+    println!("\nengagement range, floor by median band");
+    let lows = std::iter::once(0.0).chain(RANGE_BANDS);
+    let bands: Vec<String> = lows.zip(RANGE_BANDS.map(Some).into_iter().chain([None])).map(|(low, high)| match high {
+        Some(high) => format!("{low:.0}-{high:.0} m"),
+        None => format!("{low:.0}+ m"),
+    }).collect();
+    for (band, share) in bands.iter().zip(statistics.range_bands.unwrap_or_default()) {
+        println!("  {band:<10} {:>5.1}%", share * 100.0);
     }
     for feet in spawns {
         let at = graph.cell_at(*feet);
@@ -107,10 +126,20 @@ fn report(graph: &NavGraph, spawns: &[Vec3], pickups: &[Pickup], _rules: &Moveme
         let traffic = graph.field(id, Field::Traffic)?;
         Some(char::from_digit(((traffic * 10.0) as u32).min(9), 10).unwrap())
     });
-    chart(graph, "rating: c cramped, o open, G gauntlet, b busy, v vantage, A ambush, ! precarious", |graph, id| {
+    chart(graph, "median engagement range, m (0 <5, 1 <10, ... 9 >=45; . sees nothing)", |graph, id| {
+        let range = graph.field(id, Field::RangeMedian)?;
+        Some(if range <= 0.0 { '.' } else { char::from_digit(((range / 5.0) as u32).min(9), 10).unwrap() })
+    });
+    chart(graph, "escape out of sight, in half seconds (0 <0.5 s, 1 <1 s, ...; # none within reach)", |graph, id| {
+        let escape = graph.field(id, Field::Escape)?;
+        Some(if escape.is_finite() { char::from_digit(((escape / 0.5) as u32).min(9), 10).unwrap() } else { '#' })
+    });
+    chart(graph, "rating: c cramped, o open, G gauntlet, b busy, v vantage, A ambush, X death trap, ! precarious", |graph, id| {
         let holds = |rating: Rating| rating.holds(graph, id).unwrap_or(false);
         Some(if holds(Rating::Precarious) {
             '!'
+        } else if holds(Rating::DeathTrap) {
+            'X'
         } else if holds(Rating::Gauntlet) {
             'G'
         } else if holds(Rating::Ambush) {
@@ -145,5 +174,27 @@ fn chart(graph: &NavGraph, title: &str, glyph: impl Fn(&NavGraph, CellId) -> Opt
     for z in min.y..=max.y {
         let row: String = (min.x..=max.x).map(|x| top.get(&IVec2::new(x, z)).and_then(|id| glyph(graph, *id)).unwrap_or(' ')).collect();
         println!("{z:>4} {row}");
+    }
+}
+
+/// Per spawn, the nearest weapon it does not start with, and how exposed the walk there is.
+fn first_weapons(graph: &NavGraph, catalog: &WeaponCatalog, starting: &[WeaponId]) {
+    let names: Vec<String> = starting.iter().map(|id| catalog.get(*id).map_or_else(|| format!("{id:?}"), |weapon| weapon.key.clone())).collect();
+    println!("\nfirst weapon per spawn, starting with {}: seconds, then exposure along the way, mean / most m²", names.join(", "));
+    let rows = nav_derived::first_weapons(graph, starting);
+    for row in &rows {
+        let feet = row.spawn;
+        match row.pickup.and_then(|pickup| graph.fields().pickups.get(pickup)) {
+            Some(pickup) => println!(
+                "  spawn {:>6.1} {:>5.1} {:>6.1}  {:<16} {:>5.1} s  {:>6.1} / {:>6.1}",
+                feet.x, feet.y, feet.z, pickup.label, row.seconds, row.mean_exposure, row.most_exposure
+            ),
+            None => println!("  spawn {:>6.1} {:>5.1} {:>6.1}  none", feet.x, feet.y, feet.z),
+        }
+    }
+    let reached: Vec<_> = rows.iter().filter(|row| row.pickup.is_some()).collect();
+    if !reached.is_empty() {
+        let mean = |value: fn(&&nav_derived::FirstWeapon) -> f32| reached.iter().map(value).sum::<f32>() / reached.len() as f32;
+        println!("  mean {:>32.1} s  {:>6.1} / {:>6.1}", mean(|row| row.seconds), mean(|row| row.mean_exposure), mean(|row| row.most_exposure));
     }
 }

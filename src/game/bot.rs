@@ -129,6 +129,9 @@ pub struct RouteCosts {
     pub hurt: f32,
     /// Per 10 damage a rocket jump does its jumper.
     pub self_damage: f32,
+    /// Per share of its standoff that an exposed cell's median engagement range is off it, at
+    /// 100 m² of exposure and more: a long weapon in a brawl, or a short one across a hall.
+    pub range: f32,
     /// The chance, each time it plans, that the bot forgets to ask whether a rocket jump would
     /// kill it.
     pub shortsightedness: f32,
@@ -141,7 +144,7 @@ pub struct RouteCosts {
 
 impl Default for RouteCosts {
     fn default() -> Self {
-        RouteCosts { exposure: 0.5, danger: 4.0, hurt: 2.0, self_damage: 1.0, shortsightedness: 0.0, misjudgment: 0.0, beliefs: 0 }
+        RouteCosts { exposure: 0.5, danger: 4.0, hurt: 2.0, self_damage: 1.0, range: 0.5, shortsightedness: 0.0, misjudgment: 0.0, beliefs: 0 }
     }
 }
 
@@ -168,6 +171,7 @@ impl RouteCosts {
             danger: roll(base.danger),
             hurt: roll(base.hurt),
             self_damage: roll(base.self_damage),
+            range: roll(base.range),
             shortsightedness: rand::random_range(0.0..MOST_SHORTSIGHTEDNESS),
             misjudgment: rand::random_range(0.0..MOST_MISJUDGMENT),
             beliefs: rand::random(),
@@ -182,6 +186,14 @@ impl RouteCosts {
         let wrong = self.misjudgment * self.belief(graph.cells()[cell as usize].feet);
         let hurt_self = link.leap.map_or(0.0, |leap| leap.damage as f32 / 10.0 * self.self_damage);
         (risk * (1.0 + wrong) + link.seconds * PHANTOM_RISK * wrong.max(0.0)).max(0.0) + hurt_self
+    }
+
+    /// Seconds on top for entering `cell` by `link` holding a weapon whose standoff is `standoff`
+    /// meters: a closet costs a rifle nothing, since nothing there sees it.
+    pub fn misfit(&self, graph: &NavGraph, cell: CellId, link: &Link, standoff: f32) -> f32 {
+        let (Some(median), Some(exposure)) = (graph.field(cell, Field::RangeMedian), graph.field(cell, Field::Exposure)) else { return 0.0 };
+        let off = ((median - standoff).abs() / standoff.max(1.0)).min(1.0);
+        link.seconds * self.range * off * (exposure / 100.0).min(1.0)
     }
 
     /// How wrong this bot is about the stretch of floor at `feet`, -1 to 1: the same for every cell
@@ -287,6 +299,8 @@ pub struct Gear<'a> {
     /// Its eye is not the shared height rocket jumps are baked from, so its shot would not land
     /// where the bake's did.
     pub unbaked_eye: bool,
+    /// Meters the held weapon is most comfortable at.
+    pub standoff: Option<f32>,
 }
 
 impl Gear<'_> {
@@ -327,7 +341,8 @@ fn plan(route: &mut BotRoute, graph: &NavGraph, generation: u64, feet: Vec3, goa
         let at = graph.cells()[cell as usize].feet;
         crowd.iter().map(|enemy| (1.0 - enemy.distance(at) / PERSONAL_SPACE).max(0.0)).sum::<f32>() * CROWDING * link.seconds
     };
-    let extra = |cell, link: &Link| if gear.can_take(link, careless) { costs.extra(graph, cell, link) + crowded(cell, link) } else { f32::INFINITY };
+    let misfit = |cell, link: &Link| gear.standoff.map_or(0.0, |standoff| costs.misfit(graph, cell, link, standoff));
+    let extra = |cell, link: &Link| if gear.can_take(link, careless) { costs.extra(graph, cell, link) + crowded(cell, link) + misfit(cell, link) } else { f32::INFINITY };
     let path = match goal {
         Goal::Place(place) => graph.cell_at(place).and_then(|to| graph.path(from, to, extra)),
         Goal::Pickup(pickup) => graph.path_to_pickup(from, pickup, extra),
@@ -470,6 +485,7 @@ pub fn steer_bots(
             loaded: &[],
             arms: arms.map(|(equipped, ammo, _)| (equipped, ammo)),
             unbaked_eye: player.eye != TALLEST_CLASS_EYE_HEIGHT,
+            standoff: intent.standoff,
         };
         let walking = nav.as_deref().and_then(|nav| {
             plan(&mut route, nav.graph(), nav.generation(), feet, intent.goal, &costs.copied().unwrap_or_default(), &gear, &intent.crowd);
@@ -712,6 +728,32 @@ mod tests {
     use crate::game::condition::Condition;
     use crate::tool::room::Room;
 
+    /// Breaks if a weapon's standoff does not weigh on a route through exposed floor: across the
+    /// middle of a 30 m hall a short standoff costs more than one at the hall's own range, and a
+    /// closet costs neither anything.
+    #[test]
+    fn a_short_weapon_pays_to_cross_a_long_hall() {
+        let bake = |size: Vec3| {
+            let mut world = CollisionWorld::default();
+            let faces = world.rebuild_volumes(&[Volume::air(Room::new(Vec3::ZERO, size))]);
+            let rules = MovementRules::default();
+            let mut graph = nav::graph(&world, &faces, &[], &rules, &[]);
+            graph.set_fields(crate::game::nav_field::bake(&world, &graph, &[], &rules, Vec::new(), Vec::new()));
+            graph
+        };
+        let (hall, closet) = (bake(Vec3::new(30.0, 4.0, 30.0)), bake(Vec3::new(3.0, 3.0, 3.0)));
+        let costs = RouteCosts::default();
+        let cost = |graph: &NavGraph, feet: Vec3, standoff: f32| {
+            let cell = graph.cell_at(feet).unwrap();
+            let link = Link { to: cell, kind: LinkKind::Walk, seconds: 1.0, leap: None, grabs: None };
+            costs.misfit(graph, cell, &link, standoff)
+        };
+        let middle = Vec3::new(15.25, 0.0, 15.25);
+        let median = hall.field(hall.cell_at(middle).unwrap(), Field::RangeMedian).unwrap();
+        assert!(cost(&hall, middle, 3.0) > cost(&hall, middle, median) + 0.1, "a 3 m standoff pays {} and a {median} m one {}", cost(&hall, middle, 3.0), cost(&hall, middle, median));
+        assert!(cost(&closet, Vec3::new(1.25, 0.0, 1.25), 25.0) < 0.05, "a closet costs a rifle {}", cost(&closet, Vec3::new(1.25, 0.0, 1.25), 25.0));
+    }
+
     /// Breaks if aim and movement disagree about which way is forward: facing a point and walking
     /// forward must close on it.
     #[test]
@@ -915,7 +957,7 @@ mod tests {
                 return;
             }
             let upright = mover.stance == Stance::Standing && mover.player.duck.amount == 0.0;
-            let gear = Gear { speed: mover.player.velocity.xz().length(), held, ready: held.is_some(), upright, health: 150, armor: 0, self_damage: 1.0, loaded: &loaded, arms: None, unbaked_eye: false };
+            let gear = Gear { speed: mover.player.velocity.xz().length(), held, ready: held.is_some(), upright, health: 150, armor: 0, self_damage: 1.0, loaded: &loaded, arms: None, unbaked_eye: false, standoff: None };
             plan(&mut route, &graph, 0, feet, Some(Goal::Pickup(0)), &RouteCosts::default(), &gear, &[]);
             let input = follow(&mut route, &graph, feet, &gear, dt).unwrap_or_default();
             held = input.select.or(held);
