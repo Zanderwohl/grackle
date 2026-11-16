@@ -229,9 +229,14 @@ fn in_sight(world: &CollisionWorld, from: Vec3, to: Vec3, distance: f32) -> bool
 }
 
 /// Reads [`Effect`] rather than `Explosion`: `Explosion` exists only on the
-/// authority, `Effect` is relayed to clients.
-fn mark_blasts(mut commands: Commands, mut effects: MessageReader<Effect>) {
+/// authority, `Effect` is relayed to clients. Marks only while `F6` shows them, but drains
+/// either way, so turning it on does not mark what went off before.
+fn mark_blasts(mut commands: Commands, mut effects: MessageReader<Effect>, show: Option<Res<crate::game::skeleton::ShowBones>>) {
+    let shown = show.is_some_and(|show| show.0);
     for effect in effects.read() {
+        if !shown {
+            continue;
+        }
         let (shape, lifetime) = match *effect {
             Effect::Blast { at, radius } => (MarkShape::Blast { at, radius }, BLAST_MARK_LIFETIME),
             Effect::Gust { from, toward, range, spread, .. } => {
@@ -257,21 +262,22 @@ fn fade_blast_marks(
     }
 }
 
-/// A blast as a sphere the size of the damage radius, a gust as its cone on `F6`; what a player
-/// sees of a gust is [`crate::game::gust_ring`].
+/// On `F6`, a blast as a sphere the size of the damage radius and a gust as its cone; what a
+/// player sees of them is [`crate::game::blast_cloud`] and [`crate::game::gust_ring`].
 fn draw_blast_marks(mut gizmos: Gizmos, marks: Query<&EffectMark>, show: Option<Res<crate::game::skeleton::ShowBones>>) {
-    let cones = show.is_some_and(|show| show.0);
+    if !show.is_some_and(|show| show.0) {
+        return;
+    }
     for mark in &marks {
         let alpha = (mark.remaining / mark.lifetime).clamp(0.0, 1.0);
         match mark.shape {
             MarkShape::Blast { at, radius } => {
                 gizmos.sphere(Isometry3d::from_translation(at), radius, Color::srgba(1.0, 0.55, 0.1, alpha));
             }
-            MarkShape::Gust { from, toward, range, spread } if cones => {
+            MarkShape::Gust { from, toward, range, spread } => {
                 let (cone, isometry) = crate::game::flame::cone_gizmo(from, toward, range, spread);
                 gizmos.primitive_3d(&cone, isometry, Color::srgba(0.75, 0.9, 1.0, alpha * 0.6));
             }
-            MarkShape::Gust { .. } => {}
         }
     }
 }
