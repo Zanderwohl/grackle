@@ -27,7 +27,6 @@ use crate::material::picker::material_button;
 use crate::editor::multicam::MulticamState;
 use crate::editor::net_menu::{network_menu, ConnectDialog};
 use crate::editor::save::{self, LoadedBlueprint};
-use crate::common::player_settings::{PlayerSettings, NAME_LIMIT};
 use crate::game::rounds::RoundHistory;
 use crate::get;
 use crate::tool::Tools;
@@ -118,8 +117,6 @@ enum TabKinds {
     Features,
     /// The last rounds' final standings.
     Rounds,
-    /// This machine's player: name and preferences.
-    Player,
 }
 
 /// The panels' writes, and one read, bundled because `ui` hit Bevy's
@@ -128,7 +125,6 @@ enum TabKinds {
 struct PanelMessages<'w> {
     rounds: Res<'w, RoundHistory>,
     round: ResMut<'w, RoundSettings>,
-    player: ResMut<'w, PlayerSettings>,
     room: MessageWriter<'w, CalculateRoomGeometry>,
     clear_room: MessageWriter<'w, ClearRoomGeometry>,
     log_ecs: MessageWriter<'w, LogECS>,
@@ -164,16 +160,10 @@ struct TabViewerAndResources<'a> {
     /// Whether the Features panel changed the timeline, which it holds with
     /// change detection bypassed.
     timeline_touched: bool,
-    /// A client watches the server's map; only its own Player settings stay
-    /// editable.
+    /// A client watches the server's map, so its panels are read-only.
     spectating: bool,
     rounds: &'a RoundHistory,
     round: &'a mut RoundSettings,
-    /// Change detection bypassed, as the timeline's is: held for the whole
-    /// frame it would read as changed every frame, and every change is saved
-    /// and sent.
-    player: &'a mut PlayerSettings,
-    player_touched: bool,
 }
 
 impl<'a> TabViewer for TabViewerAndResources<'a> {
@@ -188,7 +178,6 @@ impl<'a> TabViewer for TabViewerAndResources<'a> {
             TabKinds::Round => "round".to_owned(),
             TabKinds::Features => "features".to_owned(),
             TabKinds::Rounds => "rounds".to_owned(),
-            TabKinds::Player => "player".to_owned(),
         })
     }
 
@@ -201,12 +190,11 @@ impl<'a> TabViewer for TabViewerAndResources<'a> {
             TabKinds::Round => { get!("editor.round.title").into() }
             TabKinds::Features => { get!("editor.timeline.title").into() }
             TabKinds::Rounds => { get!("editor.rounds.title").into() }
-            TabKinds::Player => { get!("editor.player.title").into() }
         }
     }
 
     fn ui(&mut self, ui: &mut Ui, tab: &mut Self::Tab) {
-        if self.spectating && !matches!(tab, TabKinds::Player) {
+        if self.spectating {
             ui.disable();
         }
         match tab {
@@ -235,9 +223,6 @@ impl<'a> TabViewer for TabViewerAndResources<'a> {
             }
             TabKinds::Rounds => {
                 rounds_panel_ui(ui, self.rounds);
-            }
-            TabKinds::Player => {
-                self.player_touched |= player_panel_ui(ui, self.player);
             }
         }
     }
@@ -299,7 +284,7 @@ impl EditorPanels {
         let default_top_tabs = vec![TabKinds::Tools,];
         let default_left_tabs = vec![TabKinds::Features, TabKinds::Bakes,];
         let default_right_tabs = vec![TabKinds::Show, TabKinds::Metadata, TabKinds::Round];
-        let default_bottom_tabs = vec![TabKinds::Rounds, TabKinds::Player];
+        let default_bottom_tabs = vec![TabKinds::Rounds];
         
         Self {
             top_tabs: DockState::new(default_top_tabs),
@@ -389,24 +374,26 @@ impl EditorPanels {
             timeline_touched: false,
             spectating: !net_role.is_authority(),
             rounds: &messages.rounds,
-            // Through `bypass_change_detection`, as `player` is: held every frame, it would read as
-            // changed every frame.
+            // Through `bypass_change_detection`: held every frame, it would read as changed every
+            // frame.
             round: messages.round.bypass_change_detection(),
-            player: messages.player.bypass_change_detection(),
-            player_touched: false,
         };
 
         panels.menu_bar_height = egui::Panel::top("menu_bar")
             .resizable(false)
             .show(&mut viewport_ui, |ui| {
                 egui::MenuBar::new().ui(ui, |ui| {
-                    // The network menu stays live, so a client can leave.
                     ui.add_enabled_ui(net_role.is_authority(), |ui| {
                         file_menu(ui, crate::common::file_menu::ALL, &mut pending_file_op);
-                        edit_menu(ui, edit_available, &mut pending_edit);
+                    });
+                    // Live for a client too, whose Settings hold its name; it can undo nothing.
+                    let edit_available = if net_role.is_authority() { edit_available } else { EditAvailability::default() };
+                    edit_menu(ui, edit_available, &mut pending_edit);
+                    ui.add_enabled_ui(net_role.is_authority(), |ui| {
                         // `Editor` spelled out: this system is gated on it.
                         mode_menu(ui, AppMode::Editor, Some(&net_role), &mut wanted_mode);
                     });
+                    // Live, so a client can leave.
                     network_menu(
                         ui,
                         &net_role,
@@ -497,13 +484,9 @@ impl EditorPanels {
             .height();
 
         let timeline_touched = viewer.timeline_touched;
-        let player_touched = viewer.player_touched;
         drop(viewer);
         if timeline_touched {
             editor_features.set_changed();
-        }
-        if player_touched {
-            messages.player.set_changed();
         }
 
         // `set`, not `set_if_neq`: `mode_menu` never offers the mode already in force.
@@ -679,45 +662,6 @@ impl EditorPanels {
             window,
         );
     }
-}
-
-/// Returns whether anything changed.
-fn player_panel_ui(ui: &mut egui::Ui, settings: &mut PlayerSettings) -> bool {
-    let mut changed = false;
-    ui.horizontal(|ui| {
-        ui.label(get!("editor.player.name"));
-        changed |= ui
-            .add(egui::TextEdit::singleline(&mut settings.name).char_limit(NAME_LIMIT))
-            .changed();
-    });
-    changed |= ui.checkbox(&mut settings.auto_reload, get!("editor.player.auto_reload")).changed();
-    let fov = crate::common::player_settings::FIELD_OF_VIEW_RANGE;
-    changed |= held_slider(ui, "field_of_view", &mut settings.field_of_view, fov, get!("editor.player.field_of_view"), "\u{b0}");
-
-    ui.separator();
-    ui.label(get!("editor.player.debris"));
-    let range = crate::common::player_settings::DEBRIS_RANGE;
-    let debris = &mut settings.debris;
-    changed |= held_slider(ui, "bullet_holes", &mut debris.bullet_holes, range.clone(), get!("editor.player.bullet_holes"), "");
-    changed |= held_slider(ui, "blood", &mut debris.blood, range.clone(), get!("editor.player.blood"), "");
-    changed |= held_slider(ui, "scorch", &mut debris.scorch, range, get!("editor.player.scorch"), "");
-    changed
-}
-
-/// A slider whose value is held aside while it is dragged: every change saves the settings file
-/// and goes to the server. Returns whether `value` changed.
-fn held_slider(ui: &mut egui::Ui, key: &str, value: &mut u32, range: std::ops::RangeInclusive<u32>, text: String, suffix: &str) -> bool {
-    let id = ui.id().with(key);
-    let mut shown = ui.data(|data| data.get_temp::<u32>(id)).unwrap_or(*value);
-    let response = ui.add(egui::Slider::new(&mut shown, range).text(text).suffix(suffix));
-    if response.dragged() {
-        ui.data_mut(|data| data.insert_temp(id, shown));
-        return false;
-    }
-    ui.data_mut(|data| data.remove::<u32>(id));
-    let changed = shown != *value;
-    *value = shown;
-    changed
 }
 
 /// What ticking Time limit starts at, in seconds.

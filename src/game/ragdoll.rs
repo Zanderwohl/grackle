@@ -1393,6 +1393,50 @@ mod tests {
         }
     }
 
+    /// Times corpses on the shipped maps, one shoved at each spawn. Run with `--ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn corpses_on_the_shipped_maps() {
+        use crate::constants::MAP_BLUEPRINT_EXTENSION;
+
+        let skeleton = rig();
+        let head = skeleton.anatomy().head.unwrap();
+        for name in ["arena", "cloister", "waterworks"] {
+            let path = std::path::PathBuf::from(format!("assets/default/blueprints/{name}.{MAP_BLUEPRINT_EXTENSION}"));
+            let mut timeline = crate::editor::save::load(&path).unwrap().timeline;
+            timeline.resolve_all();
+            let volumes: Vec<_> = timeline.active_features().flat_map(|(_, feature)| feature.object().volumes()).collect();
+            let mut world = CollisionWorld::default();
+            world.rebuild_volumes(&volumes);
+            let spawns = timeline
+                .active_features()
+                .filter(|(_, feature)| feature.object().type_key() == "spawn_point")
+                .map(|(_, feature)| feature.object().get_point("").unwrap());
+
+            let mut corpses: Vec<Ragdoll> = spawns
+                .enumerate()
+                .map(|(i, feet)| {
+                    let a = i as f32 * 0.9;
+                    let root = Transform::from_translation(feet).with_rotation(Quat::from_rotation_y(a));
+                    let mut corpse = Ragdoll::from_body(&skeleton, &Pose::rest(), &root, Vec3::ZERO);
+                    let (head, _) = corpse.bone_points(head);
+                    corpse.shove(head, Push::Along(Vec3::new(a.cos() * 9.0, 2.0, a.sin() * 9.0)), 0.4, DT);
+                    corpse
+                })
+                .collect();
+
+            let ticks = 128;
+            let started = std::time::Instant::now();
+            for _ in 0..ticks {
+                for corpse in &mut corpses {
+                    corpse.step(&skeleton, &world, FALL, DT);
+                }
+            }
+            let per_tick = started.elapsed().as_secs_f64() * 1000.0 / ticks as f64;
+            println!("{name}: {} volumes, {} corpses, {per_tick:.3} ms per tick", volumes.len(), corpses.len());
+        }
+    }
+
     /// A shove wakes a settled corpse.
     #[test]
     fn a_shove_wakes_a_settled_corpse() {
