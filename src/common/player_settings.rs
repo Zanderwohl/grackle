@@ -23,8 +23,8 @@ const SETTINGS_FILE: &str = "player.toml";
 pub const NAME_LIMIT: usize = 24;
 
 /// Degrees, vertical.
-pub const DEFAULT_FIELD_OF_VIEW: u32 = 90;
-pub const FIELD_OF_VIEW_RANGE: std::ops::RangeInclusive<u32> = 60..=120;
+pub const DEFAULT_FIELD_OF_VIEW: u32 = 80;
+pub const FIELD_OF_VIEW_RANGE: std::ops::RangeInclusive<u32> = 45..=110;
 /// The most of each kind of debris decal this machine keeps.
 pub const DEBRIS_RANGE: std::ops::RangeInclusive<u32> = 0..=512;
 

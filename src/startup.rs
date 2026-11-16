@@ -33,6 +33,23 @@ pub struct EditorParams {
 }
 
 impl EditorParams {
+    /// Whether the command line said anything about what to open or play, which skips onboarding.
+    /// `--lang`, `--game` and `--profile` do not: a fresh profile is what onboarding is for.
+    pub fn chooses_where_to_start(&self) -> bool {
+        self.start_playing
+            || self.start_animating
+            || self.start_modeling
+            || self.start_texturing
+            || self.start_arming
+            || self.start_translating
+            || self.map.is_some()
+            || self.net != NetRole::Solo
+            || self.server.is_some()
+            || self.start_spectating
+            || self.rounds.is_some()
+            || self.class.is_some()
+    }
+
     pub fn new() -> Result<Self, String> {
         Self::from(std::env::args_os())
     }
@@ -246,6 +263,28 @@ mod tests {
         assert_eq!(parse(&["--profile", "3"]).unwrap().profile, Some(3));
         assert!(parse(&["--profile", "0"]).is_err());
         assert!(parse(&["--profile", "10"]).is_err());
+    }
+
+    #[test]
+    fn only_a_bare_launch_may_onboard() {
+        for bare in [&[][..], &["--profile", "2"], &["--lang", "de-DE"]] {
+            assert!(!parse(bare).unwrap().chooses_where_to_start(), "{bare:?}");
+        }
+        for chosen in [
+            &["--play"][..],
+            &["--prop"],
+            &["--anim"],
+            &["--material"],
+            &["--weapon"],
+            &["--lang-editor"],
+            &["--serve"],
+            &["--connect", "example.net"],
+            &["--map", "assets/default/blueprints/arena.gmb"],
+            &["--spectate"],
+            &["--rounds", "1"],
+        ] {
+            assert!(parse(chosen).unwrap().chooses_where_to_start(), "{chosen:?}");
+        }
     }
 
     #[test]

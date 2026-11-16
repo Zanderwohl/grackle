@@ -116,6 +116,7 @@ fn main() {
             SkeletonPlugin,
             (PerfPlugin, SettingsPlugin, FontsPlugin, grackle::common::music::MusicPlugin, grackle::common::icons::IconsPlugin, UiShapePlugin, grackle::common::player_settings::PlayerSettingsPlugin { profile: editor_params.profile }),
             ))
+        .add_plugins(grackle::onboarding::OnboardingPlugin { skip: editor_params.chooses_where_to_start() })
         .add_systems(Startup, move || {
             // Read before the log existed, so said now.
             if let Some(problem) = &settings_problem {

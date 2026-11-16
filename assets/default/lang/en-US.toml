@@ -855,6 +855,12 @@ smooth_step = "Smooth"
 smoother_step = "Smoother"
 spline = "Spline"
 
+[onboarding]
+title = "GRACKLE"
+name = "Name"
+field_of_view = "Field of view"
+continue = "Continue"
+
 [app_mode]
 editor = "Map Editor"
 prop = "Prop Editor"
@@ -863,6 +869,7 @@ material = "Material Editor"
 weapon = "Weapon Editor"
 lang = "Lang Editor"
 play = "Play"
+onboarding = "Onboarding"
 
 # Every authoring mode's File pulldown. The entries mean whatever the thing
 # you are editing makes of them — a blueprint, a prop, a set of clips — which

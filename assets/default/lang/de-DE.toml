@@ -168,3 +168,9 @@ killed = "{ killer } { icon } { victim }"
 killed_with_help = "{ killer } + { assist } { icon } { victim }"
 finished_off = "{ assist } gab { victim } den Rest { icon }"
 died = "{ icon } { victim } ist gestorben"
+
+[onboarding]
+title = "GRACKLE"
+name = "Name"
+field_of_view = "Sichtfeld"
+continue = "Weiter"
