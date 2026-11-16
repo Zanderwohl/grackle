@@ -104,6 +104,9 @@ records drawn `GlobalTransform`s and puts old ones back for the render.
   rings, gib bursts and hit spurts are set off when the particles reach the moment they happened,
   not when the message arrives. Their emitters are `Unreplayed`, since they are already placed in
   step with the view.
+- **A rocket trail is laid on the particles' clock**: it records its projectile's live path and
+  places its emitter where the path was at the particles' time, so it lays nothing while time is
+  stopped and runs on to its end only once the particles reach the moment the projectile went.
 - What is not replayed: UI (the HUD, name tags, damage numbers), gizmos, lights, and material
   changes such as a fading decal. All of it is drawn live.
 

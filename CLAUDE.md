@@ -2413,7 +2413,8 @@ the view time is drawn out of sight and one despawned before it by a ghost.
 Particles cannot be recorded, so `Time<EffectSimulation>` runs at the
 replay's speed instead and catches up afterward; the emitters' idle timers
 count on it, a burst waits for that clock to reach it (`HeldBursts`), and an
-emitter that follows a body is replayed like a mesh.
+emitter that follows a body is replayed like a mesh. A rocket trail samples its
+projectile's live path at the particles' time.
 Without `Replay` nothing is recorded and the history is empty. Two parts of the
 shape are not placeholders, and both live in
 [`src/game/respawn.rs`](src/game/respawn.rs):
