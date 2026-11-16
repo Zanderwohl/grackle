@@ -74,12 +74,21 @@ struct TrailLook {
 #[derive(Component)]
 struct Trailed;
 
+/// Placed on the particles' clock, so already in step with the kill cam's view.
 #[derive(Component)]
+#[require(crate::game::replay::Unreplayed)]
 struct RocketTrail {
     of: Entity,
-    /// Seconds since the trail started, and where its projectile was drawn then, oldest first.
+    /// Seconds of `Time` since the trail started, and where its projectile was drawn then, oldest
+    /// first.
     path: VecDeque<(f32, Vec3)>,
     clock: f32,
+    /// Seconds of `Time<EffectSimulation>` since the trail started, less how far that clock
+    /// trailed `Time` then: the moment on `path` the clouds are laid at. Behind `clock` while the
+    /// kill cam replays.
+    shown: f32,
+    /// Seconds behind the projectile, along its path, that the emitter is.
+    delay: f32,
     /// Includes the fraction carried to the next frame.
     owed: f32,
     /// Clouds to spawn this frame, handed to Hanabi after it ticks.
@@ -91,8 +100,9 @@ struct RocketTrail {
 }
 
 impl RocketTrail {
-    fn of(projectile: Entity, at: Vec3) -> Self {
-        Self { of: projectile, path: VecDeque::new(), clock: 0.0, owed: 0.0, spawn: 0, ended: None, end: at }
+    /// `lag` is seconds the particles' clock trails `Time`.
+    fn of(projectile: Entity, at: Vec3, lag: f32) -> Self {
+        Self { of: projectile, path: VecDeque::new(), clock: 0.0, shown: -lag, delay: 0.0, owed: 0.0, spawn: 0, ended: None, end: at }
     }
 
     fn move_to(&mut self, transform: &mut Transform, properties: &mut EffectProperties, at: Vec3) {
@@ -201,17 +211,20 @@ fn behind_by(offset: Vec3) -> EffectProperties {
 /// promise a projectile's components in one packet.
 fn start_trails(
     mut commands: Commands,
+    time: Res<Time>,
+    particles: Res<Time<EffectSimulation>>,
     trail_look: Res<TrailLook>,
     cloud_look: Res<CloudLook>,
     projectiles: Query<(Entity, &Projectile, &Transform), Without<Trailed>>,
 ) {
+    let lag = (time.elapsed_secs_f64() - particles.elapsed_secs_f64()).max(0.0) as f32;
     for (entity, projectile, transform) in &projectiles {
         commands.entity(entity).insert(Trailed);
         if projectile.spec.trail != Trail::Cloud {
             continue;
         }
         commands.spawn((
-            RocketTrail::of(entity, transform.translation),
+            RocketTrail::of(entity, transform.translation, lag),
             ParticleEffect::new(trail_look.effect.clone()),
             EffectMaterial { images: vec![cloud_look.sheet.clone()] },
             behind_by(Vec3::ZERO),
@@ -241,38 +254,50 @@ fn back_along(path: &VecDeque<(f32, Vec3)>, delay: f32) -> Option<Vec3> {
 fn follow_projectiles(
     mut commands: Commands,
     time: Res<Time>,
+    particles: Res<Time<EffectSimulation>>,
     world: Option<Res<CollisionWorld>>,
     projectiles: Query<(&Projectile, &Transform, Option<&PhysicsBody>), Without<RocketTrail>>,
     mut trails: Query<(Entity, &mut RocketTrail, &mut Transform, &mut EffectProperties, Has<EffectSpawner>)>,
 ) {
     let dt = time.delta_secs();
+    let particle_dt = particles.delta_secs();
     for (entity, mut trail, mut transform, mut properties, ready) in &mut trails {
-        let Ok((projectile, drawn, body)) = projectiles.get(trail.of) else {
-            trail.spawn = 0;
+        trail.spawn = 0;
+        trail.shown += particle_dt;
+        let gone = match projectiles.get(trail.of) {
+            Ok((projectile, drawn, body)) if trail.ended.is_none() => {
+                trail.clock += dt;
+                let clock = trail.clock;
+                trail.path.push_back((clock, drawn.translation));
+                let simulated = body.map_or(drawn.translation, |body| body.current);
+                trail.end = a_tick_on(simulated, projectile.velocity, world.as_deref());
+                trail.delay = GAP / projectile.velocity.length().max(1.0);
+                false
+            }
+            _ => true,
+        };
+        // Its projectile went at `clock`; the clouds run on to where it was going once the
+        // particles reach that moment.
+        if gone && (trail.shown >= trail.clock || !ready) {
             if trail.ended.is_none() && ready {
                 let end = trail.end;
                 trail.move_to(&mut transform, &mut properties, end);
             }
-            let ended = trail.ended.unwrap_or(0.0) + dt;
+            let ended = trail.ended.map_or(0.0, |ended| ended + particle_dt);
             trail.ended = Some(ended);
             if ended >= LAST_CLOUD_GONE {
                 commands.entity(entity).despawn();
             }
             continue;
-        };
-        trail.clock += dt;
-        let clock = trail.clock;
-        trail.path.push_back((clock, drawn.translation));
-        let simulated = body.map_or(drawn.translation, |body| body.current);
-        trail.end = a_tick_on(simulated, projectile.velocity, world.as_deref());
+        }
         if !ready {
             continue;
         }
 
-        let delay = GAP / projectile.velocity.length().max(1.0);
-        let Some(at) = back_along(&trail.path, delay) else { continue };
-        // Keep one point older than the delay, to interpolate from next frame.
-        while trail.path.len() > 2 && trail.path[1].0 <= clock - delay {
+        let (clock, shown, delay) = (trail.clock, trail.shown, trail.delay);
+        let Some(at) = back_along(&trail.path, clock - shown + delay) else { continue };
+        // Keep one point older than the moment shown, to interpolate from next frame.
+        while trail.path.len() > 2 && trail.path[1].0 <= shown - delay {
             trail.path.pop_front();
         }
         trail.move_to(&mut transform, &mut properties, at);
@@ -348,7 +373,12 @@ mod tests {
     }
 
     fn frame(world: &mut World, dt: f32) {
+        frame_with_particles(world, dt, dt);
+    }
+
+    fn frame_with_particles(world: &mut World, dt: f32, particle_dt: f32) {
         world.resource_mut::<Time>().advance_by(std::time::Duration::from_secs_f32(dt));
+        world.resource_mut::<Time<EffectSimulation>>().advance_by(std::time::Duration::from_secs_f32(particle_dt));
         world.run_system_once(follow_projectiles).unwrap();
         world.flush();
     }
@@ -356,10 +386,11 @@ mod tests {
     /// A rocket at the origin flying along -Z, and its trail.
     fn rocket_and_trail(world: &mut World, speed: f32, ready: bool) -> (Entity, Entity) {
         world.insert_resource(Time::<()>::default());
+        world.insert_resource(Time::<EffectSimulation>::default());
         let spec = crate::common::projectile::ProjectileSpec { initial_speed: speed, ..default() };
         let projectile = crate::game::projectile::fired(spec, Vec3::ZERO, Dir3::NEG_Z, None, None);
         let rocket = world.spawn((projectile, PhysicsBody::at(Vec3::ZERO), Transform::default())).id();
-        let mut trail = world.spawn((RocketTrail::of(rocket, Vec3::ZERO), Transform::default(), EffectProperties::default()));
+        let mut trail = world.spawn((RocketTrail::of(rocket, Vec3::ZERO, 0.0), Transform::default(), EffectProperties::default()));
         if ready {
             trail.insert(EffectSpawner::new(&SpawnerSettings::rate(0.0.into())));
         }
@@ -414,6 +445,34 @@ mod tests {
         assert_eq!(world.get::<RocketTrail>(trail).unwrap().spawn, 0);
         frame(&mut world, LAST_CLOUD_GONE);
         assert!(world.get_entity(trail).is_err(), "the trail outlived its clouds");
+    }
+
+    /// Fails if a trail lays clouds while the particles' clock is stopped, or does not lay them
+    /// along the same path once it runs again.
+    #[test]
+    fn a_trail_waits_for_the_particles_clock() {
+        let mut world = World::new();
+        let (speed, dt) = (20.0, 0.01);
+        let (rocket, trail) = rocket_and_trail(&mut world, speed, true);
+        fly(&mut world, (rocket, trail), speed, 10, dt);
+        let held = world.get::<Transform>(trail).unwrap().translation;
+        let mut frozen = 0;
+        for _ in 0..10 {
+            let mut body = world.get_mut::<PhysicsBody>(rocket).unwrap();
+            body.current += Vec3::NEG_Z * speed * dt;
+            let at = body.current;
+            world.get_mut::<Transform>(rocket).unwrap().translation = at;
+            frame_with_particles(&mut world, dt, 0.0);
+            frozen += std::mem::take(&mut world.get_mut::<RocketTrail>(trail).unwrap().spawn);
+        }
+        assert_eq!(frozen, 0, "laid clouds while the particles were stopped");
+        assert_eq!(world.get::<Transform>(trail).unwrap().translation, held);
+
+        world.despawn(rocket);
+        frame_with_particles(&mut world, 0.0, 0.05);
+        let caught_up = world.get::<Transform>(trail).unwrap().translation;
+        assert!((caught_up.z - (held.z - speed * 0.05)).abs() < 1e-3, "{caught_up} after catching up from {held}");
+        assert!(world.get::<RocketTrail>(trail).unwrap().ended.is_none(), "ran on to the end before reaching it");
     }
 
     /// Fails if the clouds a trail owes while Hanabi sets it up are lost.

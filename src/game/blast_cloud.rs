@@ -19,6 +19,7 @@ use crate::common::effects::Effect;
 use crate::common::icons::{demultiplied, render_svg};
 use crate::game::flame_jet::{sheet_image, sheet_image_as};
 use crate::game::gust_ring::puff_sheet;
+use crate::game::replay::HeldBursts;
 use crate::game::warm_up::{self, WarmUp};
 
 const CLOUDS: u32 = 40;
@@ -79,6 +80,7 @@ pub(crate) struct CloudLook {
 
 /// An emitter, reset for each blast it is given; `idle` is seconds since the last.
 #[derive(Component)]
+#[require(crate::game::replay::Unreplayed)]
 struct BlastCloud {
     idle: f32,
 }
@@ -204,19 +206,30 @@ fn cloud_properties(radius: f32) -> EffectProperties {
 
 /// Reads [`Effect`] rather than `Explosion`, which exists only on the authority. Drains it in
 /// every mode, so a blast from before the round is not drawn when the next one starts.
+#[allow(clippy::too_many_arguments)]
 fn burst(
     mut commands: Commands,
     mode: Res<State<AppMode>>,
+    time: Res<Time>,
+    particles: Res<Time<EffectSimulation>>,
     look: Res<CloudLook>,
     mut effects: MessageReader<Effect>,
+    mut held: Local<HeldBursts<(Vec3, f32)>>,
     mut clouds: Query<(&mut BlastCloud, &mut Transform, &mut EffectProperties, Option<&mut EffectSpawner>)>,
 ) {
     let simulating = mode.get().simulates();
     for effect in effects.read() {
-        let Effect::Blast { at, radius } = *effect else { continue };
-        if !simulating {
-            continue;
+        if let Effect::Blast { at, radius } = *effect
+            && simulating
+        {
+            held.hold(time.elapsed_secs_f64(), (at, radius));
         }
+    }
+    if !simulating {
+        held.clear();
+        return;
+    }
+    for (at, radius) in held.due(particles.elapsed_secs_f64()) {
         // Only a faded emitter is reused, so a new radius changes no cloud still drawn. Hanabi
         // adds the spawner once an emitter has fired.
         let free = clouds.iter_mut().find(|(cloud, .., spawner)| cloud.idle >= LAST_CLOUD_GONE && spawner.is_some());
@@ -241,7 +254,7 @@ fn burst(
     }
 }
 
-fn end_the_clouds(mut commands: Commands, time: Res<Time>, mut clouds: Query<(Entity, &mut BlastCloud)>) {
+fn end_the_clouds(mut commands: Commands, time: Res<Time<EffectSimulation>>, mut clouds: Query<(Entity, &mut BlastCloud)>) {
     for (entity, mut cloud) in &mut clouds {
         cloud.idle += time.delta_secs();
         if cloud.idle >= LAST_CLOUD_GONE + KEPT_IDLE {
@@ -292,6 +305,22 @@ mod tests {
 
     fn shipped(relative: &str) -> Option<Vec<u8>> {
         std::fs::read(format!("assets/default/{relative}")).ok()
+    }
+
+    /// Fails if a cloud's emitter ages on `Time` rather than the particles' clock.
+    #[test]
+    fn a_cloud_is_kept_while_the_particles_clock_is_stopped() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(std::time::Duration::from_millis(100)))
+            // Nothing advances it, as while the kill cam holds.
+            .init_resource::<Time<EffectSimulation>>()
+            .add_systems(Update, end_the_clouds);
+        let cloud = app.world_mut().spawn(BlastCloud { idle: 0.0 }).id();
+        for _ in 0..100 {
+            app.update();
+        }
+        assert!(app.world().get_entity(cloud).is_ok(), "a cloud was taken away while its particles were frozen");
     }
 
     /// Fails if the clouds stop well short of the reach, or still drift fast as they fade.
