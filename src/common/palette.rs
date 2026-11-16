@@ -38,22 +38,41 @@ pub struct RolePaint {
 /// Roles every map has without saying so, so a map with no art pass can still show whose side a
 /// room is on. A map's own role of the same name shadows one.
 static BUILT_IN: LazyLock<BTreeMap<String, RolePaint>> = LazyLock::new(|| {
-    BTreeMap::from([(
-        TEAM_GRID.to_owned(),
-        RolePaint {
-            sides: BTreeMap::from([
-                (Team::Red, "grid_red".to_owned()),
-                (Team::Blue, "grid_blue".to_owned()),
-                (Team::Yellow, "grid_yellow".to_owned()),
-                (Team::Green, "grid_green".to_owned()),
-            ]),
-            unsided: Some("orange".to_owned()),
-        },
-    )])
+    let per_team = |prefix: &str, unsided: &str| RolePaint {
+        sides: [(Team::Red, "red"), (Team::Blue, "blue"), (Team::Yellow, "yellow"), (Team::Green, "green")]
+            .into_iter()
+            .map(|(team, color)| (team, format!("{prefix}{color}")))
+            .collect(),
+        unsided: Some(unsided.to_owned()),
+    };
+    BTreeMap::from([
+        (TEAM_GRID.to_owned(), per_team("grid_", "orange")),
+        (TEAM_BRICK.to_owned(), per_team("painted_brick_", "painted_brick_orange")),
+        (TEAM_TILES.to_owned(), per_team("tiles_", "tiles_orange")),
+        (
+            TEAM_CLADDING.to_owned(),
+            RolePaint {
+                sides: BTreeMap::from([
+                    (Team::Red, "wooden_fence".to_owned()),
+                    (Team::Blue, "corrugated_steel".to_owned()),
+                    (Team::Yellow, "stripes_yellow".to_owned()),
+                    (Team::Green, "stripes_green".to_owned()),
+                ]),
+                unsided: Some("stripes_orange".to_owned()),
+            },
+        ),
+    ])
 });
 
 /// The default grid in each team's color.
 pub const TEAM_GRID: &str = "team_grid";
+/// Painted brick in each team's color, orange where no Mirror claims the room.
+pub const TEAM_BRICK: &str = "team_brick";
+/// Glazed tiles in each team's color, orange where no Mirror claims the room.
+pub const TEAM_TILES: &str = "team_tiles";
+/// A different cladding per team: Red's wooden fence, Blue's corrugated steel, Yellow's and Green's
+/// stripes, orange stripes where no Mirror claims the room.
+pub const TEAM_CLADDING: &str = "team_cladding";
 
 impl Palette {
     /// The map's roles, then the built-in ones it does not shadow.
@@ -132,6 +151,42 @@ mod tests {
         palette.roles.insert(TEAM_GRID.into(), RolePaint { sides: BTreeMap::new(), unsided: Some("concrete".into()) });
         assert_eq!(palette.resolve(TEAM_GRID, Some(Side(Team::Yellow))), Some("concrete"));
         assert_eq!(palette.every_role().filter(|(name, _)| *name == TEAM_GRID).count(), 1);
+    }
+
+    #[test]
+    fn every_map_has_the_team_brick() {
+        let palette = Palette::default();
+        assert_eq!(palette.resolve(TEAM_BRICK, Some(Side(Team::Blue))), Some("painted_brick_blue"));
+        assert_eq!(palette.resolve(TEAM_BRICK, None), Some("painted_brick_orange"));
+    }
+
+    #[test]
+    fn every_map_has_the_team_tiles() {
+        let palette = Palette::default();
+        assert_eq!(palette.resolve(TEAM_TILES, Some(Side(Team::Yellow))), Some("tiles_yellow"));
+        assert_eq!(palette.resolve(TEAM_TILES, None), Some("tiles_orange"));
+    }
+
+    #[test]
+    fn every_map_has_the_team_cladding() {
+        let palette = Palette::default();
+        assert_eq!(palette.resolve(TEAM_CLADDING, Some(Side(Team::Red))), Some("wooden_fence"));
+        assert_eq!(palette.resolve(TEAM_CLADDING, Some(Side(Team::Blue))), Some("corrugated_steel"));
+        assert_eq!(palette.resolve(TEAM_CLADDING, Some(Side(Team::Green))), Some("stripes_green"));
+        assert_eq!(palette.resolve(TEAM_CLADDING, None), Some("stripes_orange"));
+    }
+
+    /// Every material a built-in role names is one the default pack ships.
+    #[test]
+    fn every_built_in_role_paints_with_shipped_materials() {
+        use crate::material::{FILE_EXTENSION, MATERIALS_DIR};
+        let dir = std::path::Path::new("assets/default").join(MATERIALS_DIR);
+        for (role, paint) in BUILT_IN.iter() {
+            for name in paint.sides.values().chain(&paint.unsided) {
+                let path = dir.join(format!("{name}.{FILE_EXTENSION}"));
+                assert!(path.exists(), "{role} paints with {name}, which {} does not hold", dir.display());
+            }
+        }
     }
 
     #[test]

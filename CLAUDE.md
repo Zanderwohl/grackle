@@ -221,7 +221,7 @@ shape is a new producer and not a rewrite of every consumer — see
 | `src/lang_editor/` | The lang editor: a pack's strings for one language. See "Editing a lang file". |
 | `src/common/` | Shared: i18n, geometry, rays, gamemodes, items. |
 | `src/unlock/` | The crate-drop prototype. Orthogonal — see above. |
-| `src/bin/` | `ensure_lang` (fills missing translation keys), `new_map_template` (writes the new-map, demo-scene, arena, cloister and waterworks blueprints), `map_stats` (bakes a blueprint's nav graph headless and prints its statistics and top-down charts of each field), `decal_images` (rasterizes the default pack's decal SVGs), `bake_body_clips` (seeds a pack's body animations from the pose functions they replace, and writes the clips `seed::WRITTEN` generates key by key), `default_materials` (writes the default pack's materials), `crate_drop`. |
+| `src/bin/` | `ensure_lang` (fills missing translation keys), `new_map_template` (writes the new-map, demo-scene, arena, cloister, waterworks and showcase blueprints), `map_stats` (bakes a blueprint's nav graph headless and prints its statistics and top-down charts of each field), `decal_images` (rasterizes the default pack's decal SVGs), `bake_body_clips` (seeds a pack's body animations from the pose functions they replace, and writes the clips `seed::WRITTEN` generates key by key), `default_materials` (writes the default pack's materials), `crate_drop`. |
 | `assets/default/` | The default pack: `lang/`, `blueprints/`, `servers/` (example `--server-config` files). |
 | `assets/user/` | The user pack: gitignored, made at startup, last in `default_packs()` so it overrides the shipped one. A new map or prop is saved here unless the document already has a folder. |
 | `cache/` | Gitignored, derived from the packs and maps: `thumbnail/props/{name}.png`, `nav/{hash}.bin`, `lightmap/{hash}.bin`, `rounds/{map}/*.jsonl`. Safe to delete. |
@@ -344,7 +344,7 @@ light half a meter under its `top_plane_center`, each named. What a new map has 
 the test at the bottom of [`save.rs`](src/editor/save.rs) checks, of this and
 the demo scene alike. Don't pin coordinates there.
 
-**File → Demo Scene** (`demo.gmb`, map editor only) is the busy one: an
+**File → Demo Maps → Demo Scene** (`demo.gmb`, map editor only) is the busy one: an
 animation grid, which is why its room is 24 m square, pickups, and a spawn
 nook on each side wall, Red's authored and Blue's made by a Mirror, with walls
 naming the `spawn_walls` role — the smallest map that exercises sides,
@@ -387,7 +387,16 @@ between two hedges, a stair whose foot met a wall and a pillar in a doorway each
 wedged for the rest of the round, and nothing reported it but the round's kill count.
 `every_waterworks_spawn_stands_clear_and_walks_everywhere` walks it.
 
-All five are text and diff like it. Still, don't edit them by saving over them
+**`showcase.gmb`** (Material Showcase) shows every role and material on walls: four arms off a hub
+open to the sky, Red's built and a quarter-turn Mirror making Blue's, Yellow's and Green's, each
+with a bay per palette role (the built-in ones and its own `team_plaster`) painted with that role,
+and an unmirrored gallery off the hub with an alcove per material no role names. Both lists are
+read when it is written, the materials from the default pack's folder, so run the generator again
+after adding a role or a material. It opens untitled from **File → Demo Maps → Material
+Showcase**, as the demo scene does (`ExampleMap`). `every_showcase_spawn_stands_clear_and_walks_everywhere` walks
+it, Mirror copies included.
+
+All six are text and diff like it. Still, don't edit them by saving over them
 from the editor — they are written by
 `cargo run --bin new_map_template`
 ([`src/bin/new_map_template.rs`](src/bin/new_map_template.rs)), run from the
@@ -403,8 +412,14 @@ is still a gamemode question.
 ## Editor and game in one process
 
 `AppMode` ([`src/common/app_mode.rs`](src/common/app_mode.rs)) is `Editor`,
-`Prop`, `Animation`, `Material`, `Weapon`, `Lang` or `Play`, iterable in that order, which is
-the Mode menu's order. **`F5` swaps between the map editor and Play, and nothing
+`Prop`, `Animation`, `Material`, `Weapon`, `Lang`, `Play` or `Onboarding`, iterable in that order, which is
+the Mode menu's order. **`Onboarding`** ([`src/onboarding.rs`](src/onboarding.rs)) is never in the
+menu: it is the *initial* state, inserted by `OnboardingPlugin` when the saved player name is
+blank and the command line names nothing to open or play (`EditorParams::chooses_where_to_start`:
+any mode flag, `--map`, `--serve`, `--connect`, `--server-config`, `--spectate`, `--rounds` or
+`--class`; not `--lang`, `--game` or `--profile`). It asks for a name and a field of
+view (45°–110°, default 80°), and Continue writes those two fields to `PlayerSettings`, leaving the rest as the Settings window left them, requests File → Demo
+Maps → Demo Scene and enters the map editor. **`F5` swaps between the map editor and Play, and nothing
 else** — the only way back to the editor, as `Escape` belongs to the pause
 menu. From the prop editor it is answered with a line in the log rather than
 starting a round: the key's whole meaning is that it toggles between *two*
@@ -464,18 +479,26 @@ new, undo, redo.
 
 **The Settings window** ([`src/common/settings/`](src/common/settings/mod.rs),
 ported from redwing) is **Edit → Settings…** in every authoring mode, or
-`Ctrl+,`. A floating window, not a dock tab, because every mode opens it. It
+`Ctrl+,` — for a client too, whose other Edit entries are grayed out. A
+floating window, not a dock tab, because every mode opens it. It
 edits a draft — nothing is saved or in force until Apply, and Close with
-changes asks. Pages: **General** (the language, in
-`assets/user/settings.toml`; `--lang` overrides it for one run),
+changes asks. `Escape` is Close (or answers the question by keeping the
+window), unless a binding is waiting for a key or a text field has the
+keyboard; `capture_binding` reads it from the keymap, since every action is quiet. Pages: **General** (the language, in
+`assets/user/settings.toml`; `--lang` overrides it for one run; and the
+player's name, auto-reload and field of view, which are `PlayerSettings`),
+**Graphics** (the debris decal caps, also `PlayerSettings`),
+**Sound** (master, effects and music volume and mute music on LAN, also
+`PlayerSettings`),
 **Shortcuts** (`keybind/sheet.rs`: click a binding, press a key, mouse button
 or chord; a modifier let go alone is bound alone; a mouse button is bound
 only when pressed on the prompt, and a press elsewhere stops the wait; Escape
 stops it too; keys are captured from Bevy's input, not egui's) and **Developer** (every pack's
-`icons/*.svg` in a grid with its name). Not reachable in Play yet, where the
-cursor is grabbed; leaving the editors closes it, dropping an unapplied
-draft, since an open window there could not be closed and would keep every
-action quiet.
+`icons/*.svg` in a grid with its name). In Play it is opened from the pause
+menu (`OpenSettings`), and `MouseHeld::settings` keeps the cursor free while it
+is up. Starting a round closes it, dropping an unapplied draft, since a window
+carried into Play with the cursor grabbed could not be closed and would keep
+every action quiet.
 
 **Every authoring mode has the same Edit menu**, just right of File:
 [`src/common/edit_menu.rs`](src/common/edit_menu.rs), with Undo, Redo and
@@ -538,14 +561,26 @@ for the same state and `OnEnter(Play)` tears the match down and rebuilds it.
 `toggle_mode` answers a client's F5 with a line in the log rather than
 swallowing it — a key that silently does nothing reads as a bug.
 
-**`Escape` opens the pause menu**
+**`Escape` opens the pause menu**, unless an overlay takes it first: a
+system in `TakeEscape` sets `EscapeTaken`. The team picker does, when the
+player opened it (`TeamPicker::closable`; one that bars the way in cannot
+close, so the menu opens over it)
 ([`src/game/pause_menu.rs`](src/game/pause_menu.rs)), and releasing the mouse
 is the point of it — a grabbed cursor is not something a player can get out of
 by clicking elsewhere, so a window with no way to hand the pointer back is a
 window you have to kill the process to leave. Plain Bevy UI, not `egui`: the
 panels are egui because they are editor tools, and this is part of the game, so
 it has to exist in a build with no editor and on a browser tab where the egui
-layer is one more thing to have gone wrong.
+layer is one more thing to have gone wrong. It offers **Resume**, **Settings**
+(closes the menu and opens the Settings window), **Change Teams** ("Join or Spectate" in a mode without teams; closes the menu and brings up the team picker, as `.` does) and **Back to Editor** — on the
+authority, ending the round for everybody, who stay connected — or, on a
+client, **Disconnect**, which also leaves Play in the same frame. A client that
+stops being one drops every entity the server sent (lightyear's `Remote`) and,
+mid-round, goes back to the editor (`leave_a_round_without_a_server`). Its buttons are `PlateButton`s
+([`src/game/plate_button.rs`](src/game/plate_button.rs)): a `Plate` that is
+lighter while hovered and darker while held, and triggers `ButtonActivated` on
+release; reuse it for any in-game button. A plate's child marked
+`FollowsTheLean` is moved sideways to keep its distance from the slanted sides.
 
 Three things there are easy to get wrong and none of them errors:
 
@@ -562,10 +597,12 @@ Three things there are easy to get wrong and none of them errors:
   moment you open the menu. `PlayerInput::release_controls` is the one place
   that distinction is written down, deliberately listing the fields rather than
   spreading `..default()` around, so a new field gets classified on purpose.
-- **The cursor is only touched while in Play.** Change detection counts a
-  resource's insertion as a change, so a `resource_changed` system that sets
-  the cursor unconditionally grabs it inside the editor on the first frame of
-  the process.
+- **The cursor is only touched while in Play**, by `grab_the_cursor` alone:
+  grabbed while we have a body (`LocalPlayer`) and no menu holds the mouse,
+  free otherwise, so a spectator or somebody waiting to come back always has
+  it. Change detection counts a resource's insertion as a change, so a
+  `resource_changed` system that sets the cursor unconditionally grabs it
+  inside the editor on the first frame of the process.
 
 The **HUD camera** carries `IsDefaultUiCamera`: the window has eight cameras
 in it and Bevy UI otherwise picks one by ambiguity rules rather than by being
@@ -599,8 +636,9 @@ at the top right of the safe zone, in the order they happened, oldest at the top
 for ten seconds, or twenty if it names us; the latest two naming us are kept, and the other
 slots go to the latest of the rest, so ours are bumped less. It is built from the `Died` every
 machine gets, so spectators and every mode see it. "Killer [icon] victim" or "killer + assist [icon] victim" is
-painted in the killer's color; "assist finished off [icon] victim" (killed by themself or the map, with help) and
-"[icon] victim" are cream. The icon is what killed ([`src/game/kill_icon.rs`](src/game/kill_icon.rs)): a
+painted in the killer's color; "assist finished off [icon] victim" (killed by themself or the map, with help),
+"[icon] victim died" and, from the explode key (`How::Exploded`), "[icon] victim exploded" are cream. Those three
+are arrays of wordings in the lang file, one picked per line by a seed drawn when the line is made. The icon is what killed ([`src/game/kill_icon.rs`](src/game/kill_icon.rs)): a
 weapon's `icon` in `weapons.toml`, a white SVG under `icons/` rasterized at runtime, else the flame for
 afterburn, the explosion for splash and the skull for the map, a suicide or a weapon with none. Each line is a **`Plate`** ([`src/game/plate.rs`](src/game/plate.rs)):
 a node with `PlateText` children, given its leaning panel after layout, repainted when its size
@@ -687,7 +725,7 @@ condition can override; `ViewMode` is what is drawn, and the camera swings
 between the two over `CAMERA_PULL_SECONDS` rather than cutting — your own body and
 its hitboxes are hidden from inside your own head, nobody else's are),
 **`F4`** toggles the hitbox gizmos, the debug laser aimed at them and each shot's line, and
-**`F6`** toggles the bone gizmos, the pickups' trigger volumes and the flame's and airblast's cones
+**`F6`** toggles the bone gizmos, the pickups' trigger volumes, the flame's and airblast's cones and each blast's damage sphere
 (green, dim while one restocks), **`F7`** shows the nav overlay picked in
 the Bakes panel, and **`F8`** draws each bot's route over the floor, its view
 and what it senses, in its color, and puts its name tag up with its goal. All four are off by default: they are debug
@@ -720,7 +758,7 @@ follows, so it should claim `weapon` and leave the arms that hold it unclaimed.
 **Nobody switches weapons while taunting** (`Condition::may_switch_weapons`):
 `select_weapons` drops the request, the selector stays shut, and a weapon
 picked up mid-taunt is carried but not drawn. **`O`** is
-suicide, **`T`** puts your spray on the surface you look at within 2 m, or moves it there (see "Decals"), 1000 damage credited to yourself, a debug key for the death cam; nobody
+suicide and **`P`** the same death blown apart through the torso (`BlownApart::Torso`) by a rocket-sized blast there, which hurts whoever is near, **`T`** puts your spray on the surface you look at within 2 m, or moves it there (see "Decals"), 1000 damage credited to yourself, a debug key for the death cam; nobody
 crouches while taunting; each taunt states what it claims, whether it
 shows the weapon, how far you can move, and how far your body (never the
 camera) can turn, and optionally a `view`: degrees left of the body's facing
@@ -1445,6 +1483,23 @@ Grackle's own credit, the music and the fonts into any `Ui`; Settings shows
 it on its **Attribution** page, and its **Fonts** page draws a sample in each
 font.
 
+**A map names its music** (`MapMetadata::music`, the Metadata tab): tracks by
+their path within a pack (`music/Pump/Pump.mp3`), so any pack's copy answers.
+The authority picks from that list and sends a `MusicCue`, never while only
+bots play (a person joining restarts the match, and the music with it)
+([`src/game/soundtrack.rs`](src/game/soundtrack.rs)) on `MatchChannel`: one
+with under five seconds of the pre-game left, played over anything, and one each
+time somebody new comes within one frag of the limit, never the opening track,
+played only where nothing is playing — each machine's own question, since the
+server cannot hear a client. A machine whose packs lack the track plays
+nothing; nothing checks or sends tracks yet. Volumes and **mute music on LAN**
+are `PlayerSettings::sound` (Settings → **Sound**), the mute on by default:
+a client is on a local network when its server is at a loopback, private or
+link-local address, or it named a `.local` host. A host is never muted, since
+it may be the machine on the room's speakers. Bevy plays
+MP3, FLAC and WAV through the features named in `Cargo.toml`, Ogg Vorbis by
+default; an Opus file is listed but will not decode.
+
 ## Editing a material
 
 `AppMode::Material` ([`src/material/`](src/material/)) is
@@ -1502,6 +1557,10 @@ beside each value.
   slots that differ (`lang::placeholders_in`, the check
   `every_language_keeps_its_placeholders` makes) and keys `en-US` lacks. An
   `en-US` file is checked against nothing.
+- **An array of strings is a list leaf**: a field per entry, `−` on each but
+  the last and `+` under them, edited in place so a list written one entry per
+  line stays that way. A key's right-click menu turns text into a list of one
+  and a list of one back. Its slots are checked as the union over its entries.
 - Undo is whole-file text snapshots taken when idle, as the map's is. **Saving
   remerges the strings in force** (`remerge`), so the editor's own labels change
   at once; that is a few small files parsed.
@@ -1559,8 +1618,14 @@ GPU path draws them ([`src/material/library.rs`](src/material/library.rs),
   `Palette` resource; nothing reads `MapMetadata` for it.
 - **Every map has `team_grid`** (`palette::TEAM_GRID`), a built-in role that
   paints the grid in each team's color and orange unsided, so a map with no
-  art pass still shows whose room is whose. A map role of the same name
-  shadows it; `Palette::every_role` is what the picker lists.
+  art pass still shows whose room is whose, and **`team_brick`**
+  (`palette::TEAM_BRICK`), painted brick the same way (`painted_brick_*`, orange
+  unsided), **`team_tiles`** (`palette::TEAM_TILES`), glazed tiles the same way
+  (`tiles_*`), and **`team_cladding`** (`palette::TEAM_CLADDING`): Red's wooden
+  fence, Blue's corrugated steel, Yellow's and Green's stripes, orange stripes
+  unsided. A map role of the same name shadows one; `Palette::every_role` is
+  what the picker lists, and every material a built-in role names must ship
+  (`every_built_in_role_paints_with_shipped_materials`).
 - **No palette field is skipped when empty.** It crosses the wire inside the
   settings, with postcard, which cannot read a field left out: a skipped
   field decodes as garbage after it, and `the_settings_survive_the_wire_encoding`
@@ -2378,6 +2443,11 @@ world mesh's `GlobalTransform` is recorded after propagation and an older one,
 tweened, written in its place before visibility; the live values are put back
 in `First`, so nothing that simulates reads a replayed one. A mesh born after
 the view time is drawn out of sight and one despawned before it by a ghost.
+Particles cannot be recorded, so `Time<EffectSimulation>` runs at the
+replay's speed instead and catches up afterward; the emitters' idle timers
+count on it, a burst waits for that clock to reach it (`HeldBursts`), and an
+emitter that follows a body is replayed like a mesh. A rocket trail samples its
+projectile's live path at the particles' time.
 Without `Replay` nothing is recorded and the history is empty. Two parts of the
 shape are not placeholders, and both live in
 [`src/game/respawn.rs`](src/game/respawn.rs):
@@ -2503,6 +2573,15 @@ hitscan measures from the eye to each pellet's hit, scales each on its own and
 rounds a body's share once, after they are added; a projectile measures from
 where its shooter is to the blast, and never scales the shooter's own. Bots
 weigh a weapon by the same curve.
+
+**A critical hit belongs to the shot**: `WeaponActionFired::critical`, copied
+onto a projectile and its `Explosion`, and recorded in `Cause::critical`. It
+is `CRIT_MULTIPLIER` (3) times the base in place of any ramp-up or falloff by
+distance, and a headshot does not stack on it; a blast's splash falloff still
+applies, the shooter's own splash and anybody's knockback are not raised, and a
+reflected projectile is a crit only if the reflector's airblast was. A body fires them while
+its `Condition::crit_boosted` is set, which only the post-game does, for the
+winners.
 
 `ProjectileSpec` ([`src/common/projectile.rs`](src/common/projectile.rs)) is
 a handful of numbers, and the rocket launcher's two barrels, the pipe bomb and the
@@ -2807,6 +2886,22 @@ cone is an `Effect::Gust`, which bots hear like a shot. What a player sees is a 
 started on a circle round the muzzle and flown down the aim, widening with the cone and coming to
 rest at its end; the cone itself is drawn on `F6`.
 
+**A blast is a fireball** ([`src/game/blast_cloud.rs`](src/game/blast_cloud.rs)): one burst per
+`Effect::Blast`, clouds started in a small sphere and flown outward to rest inside the damage
+radius over a quarter second, burning yellow-orange, red, dark red, black, gray and a white that
+fades out (`BURN`). The clouds are white SVGs, `particles/svg/cloud_{1..8}.svg`, rasterized into
+one sheet at startup; a pack without them draws the airblast's puffs. The damage sphere is drawn
+on `F6`.
+
+**A projectile may trail clouds** ([`src/game/rocket_trail.rs`](src/game/rocket_trail.rs)):
+`trail = "cloud"` on its spec in `weapons.toml` (the rocket launcher and the RPG). The blast's
+clouds, lasting longer and burning on to white, then fading as they grow, with no gravity, left where it passed, a dozen per meter. The emitter is its own
+entity replaying the projectile's drawn path 10 cm behind it, so our own shot trails from the
+barrel; when the projectile goes it runs on to where the projectile was going a tick on, stopped
+at a wall, since the drawn position lags the simulated one, and stops; it is despawned once its
+clouds fade. It cuts across a
+bounce, so nothing that bounces has one (`only_projectiles_that_never_bounce_trail`).
+
 `ProjectileEmitter` fires a spec along its own forward on an interval.
 Nothing places one: the player's key for it is gone, and it is meant to come
 back as a map feature.
@@ -3063,7 +3158,7 @@ guarantees is only that being alive is the resting state.
 | Round ends | the server's `leave_play` despawns every body; a client's despawns none, because they are not its to despawn |
 
 `enter_play` no longer spawns anything: it rebuilds `CollisionWorld`, drops
-`OurIdentity` so the new match is a new player, and hands the cursor over. The
+`OurIdentity` so the new match is a new player, and turns the editor cameras off. The
 body follows on the next `Update`, because by then somebody is a player with no
 body.
 
@@ -3464,6 +3559,14 @@ get!("room.messages.ghost", "me", a, "other", b)   // fills { me } / { other }
 Placeholder syntax in the TOML files is `{ name }`. A missing key renders as
 `<tools.select>` rather than panicking, so a wrong key is visible on screen and
 not a crash.
+
+**A key may hold an array of strings**, one of which is wanted at random (the
+kill feed's blameless deaths). `get!` takes the first, since it is asked every
+frame and a fresh pick each time would flicker. `get_random!(key, seed, ...)`
+takes the entry at `seed` modulo the array's length, and a plain string for any
+seed; it never draws a number itself. The caller draws one seed (any integer)
+per line or widget and keeps it, so an immediate-mode UI shows the same entry
+every frame.
 
 Files live at `assets/<pack>/lang/<code>.toml`. Loading merges two layers: every
 pack's `en-US` first as a base, then the chosen language on top, each walking

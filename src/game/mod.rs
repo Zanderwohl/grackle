@@ -37,6 +37,8 @@ pub mod decal;
 pub mod flame_jet;
 pub mod gib_blood;
 pub mod gust_ring;
+pub mod blast_cloud;
+pub mod rocket_trail;
 pub mod hat;
 pub mod held;
 pub mod hitbox;
@@ -62,6 +64,7 @@ pub mod weapon_select;
 pub mod weapon_select_hud;
 pub mod player;
 pub mod net_bodies;
+pub mod menu;
 pub mod pause_menu;
 pub mod hud;
 pub mod name_tag;
@@ -70,12 +73,14 @@ pub mod taunt_menu;
 pub mod taunt_view;
 pub mod kill_icon;
 pub mod plate;
+pub mod plate_button;
 pub mod pickup_beam;
 pub mod rounds;
 pub mod sunlit;
 pub mod score;
 pub mod telemetry;
 pub mod spectate;
+pub mod soundtrack;
 pub mod spray;
 pub mod streak;
 pub mod tab_board;
@@ -107,7 +112,7 @@ impl Plugin for GamePlugin {
             .add_plugins((crate::game::team_choice::TeamChoicePlugin, crate::game::team_picker::TeamPickerPlugin, crate::game::spectate::SpectatePlugin, crate::game::kill_cam::KillCamPlugin))
             .add_plugins(crate::game::damage_direction::DamageDirectionPlugin)
             .add_plugins(crate::game::name_tag::NameTagPlugin)
-            .add_plugins((crate::game::plate::PlatePlugin, crate::game::kill_feed::KillFeedPlugin, crate::game::taunt_menu::TauntMenuPlugin))
+            .add_plugins((crate::game::plate::PlatePlugin, crate::game::plate_button::PlateButtonPlugin, crate::game::kill_feed::KillFeedPlugin, crate::game::taunt_menu::TauntMenuPlugin))
             .add_plugins(crate::game::trigger::TriggerPlugin)
             .init_state::<AppMode>()
             .init_resource::<StartInPlay>()
@@ -150,7 +155,7 @@ impl Plugin for GamePlugin {
             .init_resource::<ViewPreference>()
             .init_resource::<crate::game::player::CameraPull>()
             .add_plugins(crate::game::condition::ConditionPlugin)
-            .add_systems(Update, (toggle_mode, start_in_play))
+            .add_systems(Update, (toggle_mode, start_in_play, leave_a_round_without_a_server))
             .add_systems(Update, (
                 toggle_view,
                 // Before any body: the team picker is drawn on the view.
@@ -243,7 +248,32 @@ fn toggle_mode(
             );
             return;
         }
+        AppMode::Onboarding => return,
     });
+}
+
+/// A client that stops being one drops what the server sent, which it would
+/// otherwise stand up a second copy of as the authority (props, pickups).
+/// Losing its server mid-round sends it to the editor, since nobody runs that round.
+fn leave_a_round_without_a_server(
+    mut commands: Commands,
+    role: Option<Res<NetRole>>,
+    mode: Res<State<AppMode>>,
+    mut next: ResMut<NextState<AppMode>>,
+    sent: Query<Entity, With<lightyear::prelude::client::Remote>>,
+    mut was_client: Local<bool>,
+) {
+    let client = role.is_some_and(|role| matches!(*role, NetRole::Client { .. }));
+    if *was_client && !client {
+        for entity in &sent {
+            commands.entity(entity).try_despawn();
+        }
+        if *mode.get() == AppMode::Play {
+            info!("No longer connected to a server; back to the editor");
+            next.set(AppMode::Editor);
+        }
+    }
+    *was_client = client;
 }
 
 fn enter_play(
@@ -251,7 +281,6 @@ fn enter_play(
     mut collision: ResMut<CollisionWorld>,
     volumes: MapVolumes,
     mut editor_cameras: Query<&mut Camera, With<Multicam>>,
-    window: Query<Entity, With<PrimaryWindow>>,
 ) {
     // First: `give_bodies_to_whoever_needs_one` asks it where a body can stand
     // on the next Update.
@@ -269,7 +298,6 @@ fn enter_play(
         camera.is_active = false;
     }
 
-    set_cursor_captured(&mut commands, &window, true);
     info!("Playing {} volume(s); F5 to go back to editing", volumes.len());
 }
 
@@ -448,6 +476,27 @@ mod tests {
         app.update();
         press(&mut app);
         assert_eq!(mode(&app), AppMode::Prop, "F5 started a round from the prop editor");
+    }
+
+    /// Breaks if a client left without a server stays in a round nobody runs or keeps what it was sent.
+    #[test]
+    fn a_client_that_disconnects_mid_round_goes_back_to_the_editor() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, bevy::state::app::StatesPlugin))
+            .init_state::<AppMode>()
+            .insert_resource(NetRole::Client { host: "elsewhere".into(), port: 27100 })
+            .add_systems(Update, leave_a_round_without_a_server);
+        app.world_mut().resource_mut::<NextState<AppMode>>().set(AppMode::Play);
+        app.update();
+        app.update();
+        assert_eq!(*app.world().resource::<State<AppMode>>().get(), AppMode::Play);
+
+        let sent = app.world_mut().spawn(lightyear::prelude::client::Remote).id();
+        app.insert_resource(NetRole::Solo);
+        app.update();
+        app.update();
+        assert_eq!(*app.world().resource::<State<AppMode>>().get(), AppMode::Editor);
+        assert!(app.world().get_entity(sent).is_err(), "what the server sent outlived the link");
     }
 
     #[test]
@@ -954,6 +1003,8 @@ mod tests {
             direct: None,
             weapon: None,
             reflected: false,
+            critical: false,
+            spare: None,
         });
     }
 
@@ -1057,6 +1108,63 @@ mod tests {
         let landed = player_position(&mut app) - Vec3::Y * stance.half_extents().y;
         let (across, height) = ((landed - baked).xz().length(), (landed.y - baked.y).abs());
         assert!(across < nav::SPACING && height < 0.1, "baked to land at {baked}, landed at {landed}");
+    }
+
+    /// Fails if the explode key leaves the body whole, or its pieces are not
+    /// thrown away from where the torso was.
+    #[test]
+    fn exploding_throws_the_pieces_apart() {
+        use bevy::ecs::system::RunSystemOnce;
+        use crate::game::ragdoll::Ragdoll;
+
+        fn centers(app: &mut App) -> std::collections::HashMap<Entity, Vec3> {
+            app.world_mut()
+                .query::<(Entity, &Ragdoll)>()
+                .iter(app.world())
+                .map(|(entity, piece)| {
+                    let (least, most) = piece.bounds().unwrap();
+                    (entity, (least + most) * 0.5)
+                })
+                .collect()
+        }
+
+        let mut app = armed(&[room(Vec3::new(-10.0, 0.0, -10.0), Vec3::new(10.0, 4.0, 10.0))]);
+        enter(&mut app);
+        app.world_mut().run_system_once(crate::game::skeleton::dress_new_players).unwrap();
+        app.update();
+        tick(&mut app, 30);
+
+        // `tick` leaves `Time<Fixed>` still, and the shove and the solver
+        // move by its delta.
+        fn fixed_tick(app: &mut App) {
+            app.world_mut().resource_mut::<Time<Fixed>>().advance_by(one_tick());
+            tick(app, 1);
+        }
+
+        latch(&mut app).0.explode = true;
+        fixed_tick(&mut app);
+        let torn: Vec<Vec3> = app
+            .world_mut()
+            .query::<&Ragdoll>()
+            .iter(app.world())
+            .filter_map(Ragdoll::torn_at)
+            .collect();
+        assert_eq!(torn.len(), 1, "the body was not torn apart");
+        let at = torn[0];
+        let before = centers(&mut app);
+        assert!(before.len() > 1, "the body left {} pieces", before.len());
+
+        for _ in 0..8 {
+            fixed_tick(&mut app);
+        }
+        let after = centers(&mut app);
+        for (piece, was) in &before {
+            let now = after[piece];
+            assert!(
+                now.distance(at) > was.distance(at) + 0.2,
+                "a piece at {was} went to {now}, from a blast at {at}"
+            );
+        }
     }
 
     /// A class built on a rig file plays a round as anybody does: it spawns as that rig, walks,

@@ -12,7 +12,7 @@ use bevy::prelude::*;
 
 use crate::common::swatch::Swatch;
 use crate::common::ui_shape::{Corner, ShapeMaterial};
-use crate::game::hud::{hud_text, leaning_panel, panel_style, ZONE_DROP, ZONE_STROKE};
+use crate::game::hud::{hud_text, leaning_panel, panel_style, LEAN, ZONE_DROP, ZONE_STROKE};
 
 /// Logical pixels inside the panel's box. The far sides are wider by the drop shadow, which
 /// centers the text on the panel rather than on panel and shadow.
@@ -32,7 +32,7 @@ pub struct PlatePlugin;
 
 impl Plugin for PlatePlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(PostUpdate, paint_the_plates.after(bevy::ui::UiSystems::Layout));
+        app.add_systems(PostUpdate, (paint_the_plates, follow_the_lean).after(bevy::ui::UiSystems::Layout));
     }
 }
 
@@ -61,6 +61,13 @@ pub struct PlateText;
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 #[require(Visibility = Visibility::Hidden)]
 pub struct PlateIcon;
+
+/// A plate's child moved sideways to keep the distance from the slanted sides it has at the
+/// plate's middle. Applied as a [`UiTransform`] after layout, so it lands a frame late, while
+/// the plate is still hidden.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+#[require(UiTransform)]
+pub struct FollowsTheLean;
 
 /// The node a plate's panel is drawn on, put first among its children.
 #[derive(Component)]
@@ -153,6 +160,24 @@ fn paint_the_plates(
     }
 }
 
+fn follow_the_lean(
+    plates: Query<(&Plate, &UiGlobalTransform, &ComputedNode, &Children)>,
+    mut followers: Query<(&UiGlobalTransform, &mut UiTransform), With<FollowsTheLean>>,
+) {
+    for (plate, plate_at, computed, children) in &plates {
+        let lean = if plate.leans_right { -LEAN } else { LEAN };
+        for &child in children {
+            let Ok((child_at, mut transform)) = followers.get_mut(child) else { continue };
+            // Physical pixels, and y grows downward.
+            let below = (child_at.translation.y - plate_at.translation.y) * computed.inverse_scale_factor();
+            let x = Val::Px((lean * below).round());
+            if transform.translation.x != x {
+                transform.translation.x = x;
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -180,5 +205,20 @@ mod tests {
         assert_eq!(shown(&world), [Visibility::Inherited; 2]);
         assert_eq!(world.get::<Visibility>(plate), Some(&Visibility::Inherited), "the plate's own visibility was touched");
         assert_eq!(world.get::<Children>(plate).unwrap().len(), 2, "a second panel");
+    }
+
+    /// Breaks if a child above the middle of a right-leaning plate is not moved right, one below
+    /// it not moved left, or the middle one moved at all.
+    #[test]
+    fn children_follow_a_right_leaning_plate() {
+        let mut world = World::new();
+        let at = |y: f32| UiGlobalTransform::from_translation(Vec2::new(100.0, y));
+        let row = |world: &mut World, y: f32| world.spawn((FollowsTheLean, at(y))).id();
+        let rows = [row(&mut world, 0.0), row(&mut world, 100.0), row(&mut world, 200.0)];
+        world.spawn((plate(Swatch::neutral()), at(100.0), ComputedNode { inverse_scale_factor: 1.0, ..default() })).add_children(&rows);
+
+        world.run_system_once(follow_the_lean).unwrap();
+        let x = |entity| world.get::<UiTransform>(entity).unwrap().translation.x;
+        assert_eq!([x(rows[0]), x(rows[1]), x(rows[2])], [Val::Px(12.0), Val::Px(0.0), Val::Px(-12.0)]);
     }
 }

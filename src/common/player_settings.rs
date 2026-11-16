@@ -1,5 +1,5 @@
 //! What the person at this machine has chosen about how they play: a name,
-//! whether to reload unasked and how wide they see. Edited in the map editor's Player tab, kept in
+//! whether to reload unasked, how wide they see and how loud they hear. Edited in the Settings window, kept in
 //! the user pack, and sent to the server, which is where it is acted on.
 //! `--profile N` keeps a second set in a file of its own, so two copies on one
 //! machine can be two players.
@@ -23,10 +23,44 @@ const SETTINGS_FILE: &str = "player.toml";
 pub const NAME_LIMIT: usize = 24;
 
 /// Degrees, vertical.
-pub const DEFAULT_FIELD_OF_VIEW: u32 = 90;
-pub const FIELD_OF_VIEW_RANGE: std::ops::RangeInclusive<u32> = 60..=120;
+pub const DEFAULT_FIELD_OF_VIEW: u32 = 80;
+pub const FIELD_OF_VIEW_RANGE: std::ops::RangeInclusive<u32> = 45..=110;
 /// The most of each kind of debris decal this machine keeps.
 pub const DEBRIS_RANGE: std::ops::RangeInclusive<u32> = 0..=512;
+
+/// Percent.
+pub const VOLUME_RANGE: std::ops::RangeInclusive<u32> = 0..=100;
+
+/// Percents, so the type keeps `Eq`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SoundSettings {
+    pub master: u32,
+    /// Nothing plays a sound effect yet.
+    pub effects: u32,
+    pub music: u32,
+    /// So players at one table do not hear several tracks at once. See
+    /// [`crate::game::soundtrack::on_a_local_network`].
+    pub mute_music_on_lan: bool,
+}
+
+impl Default for SoundSettings {
+    fn default() -> Self {
+        Self { master: 100, effects: 100, music: 60, mute_music_on_lan: true }
+    }
+}
+
+impl SoundSettings {
+    fn clamped(self) -> Self {
+        let clamp = |n: u32| n.min(*VOLUME_RANGE.end());
+        Self { master: clamp(self.master), effects: clamp(self.effects), music: clamp(self.music), ..self }
+    }
+
+    /// Linear gain, 0 to 1.
+    pub fn music_gain(&self) -> f32 {
+        (self.master as f32 / 100.0) * (self.music as f32 / 100.0)
+    }
+}
 
 /// Drawing only: each machine places its own marks, so these change nobody else's view.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -60,11 +94,12 @@ pub struct PlayerSettings {
     /// Degrees, vertical.
     pub field_of_view: u32,
     pub debris: DebrisDecals,
+    pub sound: SoundSettings,
 }
 
 impl Default for PlayerSettings {
     fn default() -> Self {
-        Self { name: String::new(), auto_reload: true, field_of_view: DEFAULT_FIELD_OF_VIEW, debris: DebrisDecals::default() }
+        Self { name: String::new(), auto_reload: true, field_of_view: DEFAULT_FIELD_OF_VIEW, debris: DebrisDecals::default(), sound: SoundSettings::default() }
     }
 }
 
@@ -76,6 +111,7 @@ impl PlayerSettings {
         self.name = printable.trim().chars().take(NAME_LIMIT).collect();
         self.field_of_view = self.field_of_view.clamp(*FIELD_OF_VIEW_RANGE.start(), *FIELD_OF_VIEW_RANGE.end());
         self.debris = self.debris.clamped();
+        self.sound = self.sound.clamped();
         self
     }
 }
@@ -217,6 +253,15 @@ mod tests {
         assert_eq!(wild.debris, DebrisDecals { bullet_holes: 512, blood: 3, scorch: 0 });
         let old: PlayerSettings = toml::from_str("name = \"Ada\"").unwrap();
         assert_eq!(old.debris, DebrisDecals::default());
+    }
+
+    #[test]
+    fn volumes_stay_percents_and_default_when_missing() {
+        let loud = PlayerSettings { sound: SoundSettings { master: 300, music: 50, ..Default::default() }, ..Default::default() }.cleaned();
+        assert_eq!((loud.sound.master, loud.sound.music), (100, 50));
+        assert!((loud.sound.music_gain() - 0.5).abs() < 1e-6);
+        let old: PlayerSettings = toml::from_str("name = \"Ada\"").unwrap();
+        assert_eq!(old.sound, SoundSettings::default());
     }
 
     #[test]

@@ -72,6 +72,10 @@ pub struct Projectile {
     #[serde(skip)]
     #[reflect(ignore)]
     pub reflected: bool,
+    /// Fired, or last reflected, as a critical hit. Not sent, like `weapon`.
+    #[serde(skip)]
+    #[reflect(ignore)]
+    pub critical: bool,
     pub velocity: Vec3,
     /// Where it was fired or last reflected from, which its blast's distance is measured from
     /// once the shooter is gone.
@@ -184,10 +188,11 @@ pub fn launch(
     owner: Option<PlayerId>,
     shooter: Option<Entity>,
     weapon: Option<crate::common::weapon::WeaponId>,
+    critical: bool,
 ) -> Entity {
     commands
         .spawn((
-            Projectile { weapon, ..fired(spec, from, direction, owner, shooter) },
+            Projectile { weapon, critical, ..fired(spec, from, direction, owner, shooter) },
             PhysicsBody::at(from),
             Transform::from_translation(from).with_scale(Vec3::splat(spec.radius)),
             Visibility::default(),
@@ -203,7 +208,7 @@ pub fn muzzle(center: Vec3, stance: Stance, player: &Player) -> Vec3 {
 
 /// A projectile just fired along `direction`.
 pub fn fired(spec: ProjectileSpec, from: Vec3, direction: Dir3, owner: Option<PlayerId>, shooter: Option<Entity>) -> Projectile {
-    Projectile { spec, owner, shooter, weapon: None, reflected: false, velocity: *direction * spec.initial_speed, launched: from, spin: 0.0, age: 0.0, bounces: 0 }
+    Projectile { spec, owner, shooter, weapon: None, reflected: false, critical: false, velocity: *direction * spec.initial_speed, launched: from, spin: 0.0, age: 0.0, bounces: 0 }
 }
 
 /// Fires from the step's position, not the drawn one: an interpolated muzzle
@@ -220,7 +225,7 @@ pub fn fire_projectiles(
         let Ok((body, player, stance, id)) = shooters.get(shot.shooter) else { continue };
 
         let direction = crate::game::hitscan::aim(player);
-        launch(&mut commands, spec, muzzle(body.current, *stance, player), direction, id.copied(), Some(shot.shooter), shot.weapon);
+        launch(&mut commands, spec, muzzle(body.current, *stance, player), direction, id.copied(), Some(shot.shooter), shot.weapon, shot.critical);
     }
 }
 
@@ -249,6 +254,7 @@ pub fn run_emitters(
             None,
             None,
             None,
+            false,
         );
     }
 }
@@ -294,6 +300,8 @@ pub fn step_projectiles(
                 direct,
                 weapon: projectile.weapon,
                 reflected: projectile.reflected,
+                critical: projectile.critical,
+                spare: None,
             });
         }
 
@@ -486,7 +494,7 @@ fn start_our_shots_at_the_muzzle(
 
 /// Composes onto what `interpolate_bodies` wrote this frame, which it rewrites
 /// every frame the two differ.
-fn draw_our_shots_from_the_muzzle(
+pub fn draw_our_shots_from_the_muzzle(
     mut commands: Commands,
     mut shots: Query<(Entity, &mut FromTheMuzzle, &mut Transform)>,
 ) {
@@ -554,6 +562,7 @@ mod tests {
                 bounces: 0,
                 weapon: None,
                 reflected: false,
+                critical: false,
             })
             .id();
 
@@ -585,6 +594,7 @@ mod tests {
                     bounces: 0,
                     weapon: None,
                     reflected: false,
+                    critical: false,
                 },
                 Transform::default(),
             ))
@@ -615,6 +625,7 @@ mod tests {
             bounces: 0,
             weapon: None,
             reflected: false,
+            critical: false,
         }).id();
 
         world.run_system_once(clear_projectiles).unwrap();
@@ -643,6 +654,7 @@ mod tests {
                     bounces: 0,
                     weapon: None,
                     reflected: false,
+                    critical: false,
                 },
                 PhysicsBody::at(at),
                 Transform::from_translation(at),
@@ -754,6 +766,7 @@ mod tests {
             Some(PlayerId(4)),
             None,
             None,
+            false,
         );
         world.flush();
         entity
@@ -783,6 +796,33 @@ mod tests {
         assert!((went_off[0].at.y - 2.0).abs() < 1e-3, "a flat rocket fell: {}", went_off[0].at);
         assert_eq!(went_off[0].source, DamageSource::Player(PlayerId(4)));
         assert_eq!(went_off[0].direct, None, "a wall is not a direct hit");
+    }
+
+    /// Breaks if a critical shot stops reaching its projectile or the projectile's blast.
+    #[test]
+    fn a_critical_shot_goes_off_as_a_critical_blast() {
+        let mut world = a_world(&[a_room()]);
+        world.init_resource::<Messages<WeaponActionFired>>();
+        for critical in [false, true] {
+            let shooter = world
+                .spawn((PhysicsBody::at(Vec3::new(0.0, 1.0, 10.0)), Player::default(), Stance::default(), PlayerId(4)))
+                .id();
+            world.write_message(WeaponActionFired {
+                shooter,
+                button: crate::game::weapon::Button::Primary,
+                action: crate::common::weapon::WeaponAction::Projectile(ProjectileSpec::ROCKET),
+                weapon: None,
+                critical,
+            });
+            world.run_system_once(fire_projectiles).unwrap();
+            world.flush();
+            world.resource_mut::<Messages<Explosion>>().clear();
+            tick(&mut world, 64 * 2);
+            let went_off = blasts(&mut world);
+            assert_eq!(went_off.len(), 1, "{went_off:?}");
+            assert_eq!(went_off[0].critical, critical);
+            world.despawn(shooter);
+        }
     }
 
     /// A body in the way takes the direct number and stops the rocket there.
@@ -818,6 +858,7 @@ mod tests {
             Some(PlayerId(4)),
             Some(shooter),
             None,
+            false,
         );
         world.flush();
 

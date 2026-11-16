@@ -254,12 +254,38 @@ pub fn available_languages(packs: &[PathBuf]) -> Vec<Language> {
 
 /// Takes an already-borrowed table so [`fill_template`] can read and store
 /// under one `LANG` read lock; `RwLock` is not reentrant.
+///
+/// An array of strings gives its first: a plain lookup is asked every frame,
+/// and picking a different one each time would flicker. [`get_random!`] picks.
 fn lookup<'a>(table: &'a toml::Value, keys: &[&str]) -> Option<&'a str> {
-    let mut current = table;
-    for key in keys {
-        current = current.get(*key)?;
+    lookup_nth(table, keys, 0)
+}
+
+fn value_at<'a>(table: &'a toml::Value, keys: &[&str]) -> Option<&'a toml::Value> {
+    keys.iter().try_fold(table, |current, key| current.get(*key))
+}
+
+/// A string whatever `seed` is, or an array's entry at `seed` wrapped to its length.
+fn lookup_nth<'a>(table: &'a toml::Value, keys: &[&str], seed: u64) -> Option<&'a str> {
+    let value = value_at(table, keys)?;
+    match value {
+        toml::Value::String(text) => Some(text),
+        toml::Value::Array(items) => items.get(wrap(value, seed) as usize)?.as_str(),
+        _ => None,
     }
-    current.as_str()
+}
+
+/// The entry `seed` picks: 0 for a string. Keys the cache, since the seed
+/// itself is unbounded.
+fn index_of(table: &toml::Value, keys: &[&str], seed: u64) -> u64 {
+    value_at(table, keys).map_or(0, |value| wrap(value, seed))
+}
+
+fn wrap(value: &toml::Value, seed: u64) -> u64 {
+    match value {
+        toml::Value::Array(items) if !items.is_empty() => seed % items.len() as u64,
+        _ => 0,
+    }
 }
 
 pub fn get_maybe(keys: &[&str]) -> Option<String> {
@@ -357,6 +383,34 @@ pub fn fill_uncached(key: &str, pairs: &[(&str, &str)]) -> String {
     fill_in(&lang, &keys, pairs).unwrap_or_else(|_| format!("<{}; {:?}>", full_path(&keys), pairs))
 }
 
+/// [`get_random!`]'s body.
+pub fn get_random_parsed(key: &str, seed: u64, pairs: &[(&str, &str)]) -> String {
+    let keys = key.split('.').collect::<Vec<&str>>();
+    // `LANG` before `CACHE`, as everywhere; see `fill_template`.
+    let lang = LANG.read().unwrap();
+    let index = index_of(&lang, &keys, seed);
+    let cache_key = template_cache_key(&format!("{key}#{index}"), pairs);
+    if let Some(cached) = CACHE.read().ok().and_then(|cache| cache.get(&cache_key).cloned()) {
+        return cached;
+    }
+    let product = fill_in_nth(&lang, &keys, index, pairs)
+        .unwrap_or_else(|_| format!("<{}; {:?}>", full_path(&keys), pairs));
+    if let Ok(mut cache) = CACHE.write() {
+        if cache.len() >= CACHE_LIMIT {
+            cache.clear();
+        }
+        cache.insert(cache_key, product.clone());
+    }
+    product
+}
+
+/// As [`fill_uncached`], picking from an array as [`get_random!`] does.
+pub fn fill_uncached_random(key: &str, seed: u64, pairs: &[(&str, &str)]) -> String {
+    let keys = key.split('.').collect::<Vec<&str>>();
+    let lang = LANG.read().unwrap();
+    fill_in_nth(&lang, &keys, seed, pairs).unwrap_or_else(|_| format!("<{}; {:?}>", full_path(&keys), pairs))
+}
+
 #[macro_export]
 macro_rules! get {
     ($key:expr) => {
@@ -364,6 +418,21 @@ macro_rules! get {
     };
     ($key:expr, $($var:expr, $val:expr),*) => {
         $crate::common::lang::get_template_parsed(&$key, &[
+            $(($var, &format!("{}", $val))),*
+        ])
+    };
+}
+
+/// As `get!`, but an array of strings gives its entry at `seed` modulo its
+/// length. The caller draws the seed once and keeps it (per line, per widget),
+/// so a UI redrawn every frame shows one entry.
+#[macro_export]
+macro_rules! get_random {
+    ($key:expr, $seed:expr) => {
+        $crate::common::lang::get_random_parsed(&$key, ($seed) as u64, &[])
+    };
+    ($key:expr, $seed:expr, $($var:expr, $val:expr),*) => {
+        $crate::common::lang::get_random_parsed(&$key, ($seed) as u64, &[
             $(($var, &format!("{}", $val))),*
         ])
     };
@@ -408,7 +477,11 @@ fn fill_and_store(cache_key: String, keys: &[&str], pairs: &[(&str, &str)]) -> R
 }
 
 fn fill_in(lang: &toml::Value, keys: &[&str], pairs: &[(&str, &str)]) -> Result<String, String> {
-    let template = lookup(lang, keys)
+    fill_in_nth(lang, keys, 0, pairs)
+}
+
+fn fill_in_nth(lang: &toml::Value, keys: &[&str], seed: u64, pairs: &[(&str, &str)]) -> Result<String, String> {
+    let template = lookup_nth(lang, keys, seed)
         .ok_or(format!("Failed to find value for key {:?}", keys))?;
 
     // A closure rather than a `&str` replacement: the regex crate expands `$name`
@@ -489,6 +562,28 @@ mod tests {
         for pairs in [&[][..], &[("game", "Grackle")][..], &[("me", "3"), ("other", "7")][..]] {
             assert_eq!(template_cache_key("room.messages.ghost", pairs), template_pair_path(&["room", "messages", "ghost"], pairs));
         }
+    }
+
+    /// Fails if `get!` does not take an array's first entry, or a seed is not wrapped onto the array.
+    #[test]
+    fn an_array_is_picked_from_by_seed() {
+        let table: toml::Value = toml::from_str("[a]\nlist = [\"one { x }\", \"two { x }\", \"three { x }\"]\nplain = \"just { x }\"").unwrap();
+        assert_eq!(lookup(&table, &["a", "list"]), Some("one { x }"));
+        assert_eq!(lookup_nth(&table, &["a", "list"], 4), Some("two { x }"));
+        assert_eq!(lookup_nth(&table, &["a", "list"], u64::MAX), lookup_nth(&table, &["a", "list"], u64::MAX % 3));
+        assert_eq!(lookup_nth(&table, &["a", "plain"], 7), Some("just { x }"));
+        assert_eq!(fill_in_nth(&table, &["a", "list"], 5, &[("x", "!")]).unwrap(), "three !");
+        assert_eq!(index_of(&table, &["a", "list"], 5), 2);
+        assert_eq!(index_of(&table, &["a", "plain"], 5), 0);
+    }
+
+    #[test]
+    fn get_random_is_get_on_a_plain_string() {
+        let _guard = switching_language();
+        assert_eq!(get_random!("editor.title_special", 12345, "game", "Grackle"), "Grackle Grackle Level Editor");
+        let all: BTreeSet<String> = (0..64u64).map(|seed| get_random!("kill_feed.died", seed, "victim", "V", "icon", "")).collect();
+        assert!(all.len() > 1, "every seed gave {all:?}");
+        assert_eq!(get_random!("kill_feed.died", 0, "victim", "V", "icon", ""), get!("kill_feed.died", "victim", "V", "icon", ""));
     }
 
     #[test]

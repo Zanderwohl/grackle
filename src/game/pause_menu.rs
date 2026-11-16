@@ -1,10 +1,18 @@
-//! The pause menu: `Escape` while playing releases the mouse. Plain Bevy UI,
-//! not egui, so it exists in a build with no editor.
+//! The pause menu: `Escape` while playing releases the mouse and offers Resume,
+//! Settings, Change Teams, and a way out of the round. Plain Bevy UI, not egui, so it exists
+//! in a build with no editor.
 
 use bevy::prelude::*;
 
 use crate::common::app_mode::AppMode;
 use crate::common::fonts::DisplayFont;
+use crate::common::net::{NetRequest, NetRole};
+use crate::common::settings::{OpenSettings, SettingsWindow};
+use crate::common::swatch::Swatch;
+use crate::game::menu::{menu_button, menu_panel, menu_title, ITEM_SIZE};
+use crate::game::plate::plate_text;
+use crate::game::plate_button::ButtonActivated;
+use crate::game::team_choice::TeamOptions;
 use crate::get;
 
 /// Whether the pause menu is showing.
@@ -20,16 +28,41 @@ pub struct MouseHeld {
     pub pause: bool,
     /// Written only by [`crate::game::team_picker`].
     pub team_picker: bool,
+    /// The Settings window, which the pause menu opens in Play.
+    pub settings: bool,
 }
 
 impl MouseHeld {
     pub fn any(&self) -> bool {
-        self.pause || self.team_picker
+        self.pause || self.team_picker || self.settings
     }
 }
 
+/// Set by an overlay that took this frame's Escape, in [`TakeEscape`]; the pause menu opens only
+/// when none did. `toggle_pause` clears it.
+#[derive(Resource, Debug, Default)]
+pub struct EscapeTaken(pub bool);
+
+/// Systems that may take Escape before the pause menu reads it.
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TakeEscape;
+
+/// Insert to bring up the team picker, which takes it down again.
+#[derive(Resource, Debug, Default)]
+pub struct ChangeTeamsAsked;
+
 #[derive(Component)]
 struct PauseMenuRoot;
+
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+enum PauseItem {
+    /// Back to the editor on the authority, which ends the round for everybody;
+    /// a client disconnects instead.
+    Leave,
+    Settings,
+    ChangeTeams,
+    Resume,
+}
 
 const PAUSE_MENU_LAYER: i32 = 20;
 
@@ -46,16 +79,20 @@ impl Plugin for PauseMenuPlugin {
         crate::common::keybind::ensure(app);
         app.init_resource::<PauseMenu>()
             .init_resource::<MouseHeld>()
+            .init_resource::<EscapeTaken>()
             .init_resource::<DisplayFont>()
+            .add_message::<NetRequest>()
+            .add_observer(choose)
             .add_systems(
                 Update,
                 (
-                    toggle_pause.run_if(in_state(AppMode::Play)),
+                    toggle_pause.after(TakeEscape).run_if(in_state(AppMode::Play)),
                     // Chained so the menu appears the same frame. Ungated so
                     // they run on the frame leaving Play closes the menu.
-                    show_or_hide.run_if(resource_changed::<PauseMenu>),
+                    show_or_hide.run_if(resource_changed::<PauseMenu>.or_else(resource_exists_and_changed::<NetRole>)),
                     lend_the_mouse,
-                    capture_or_release.run_if(resource_changed::<MouseHeld>),
+                    release_held_keys.run_if(resource_changed::<MouseHeld>),
+                    grab_the_cursor,
                 )
                     .chain(),
             )
@@ -63,8 +100,9 @@ impl Plugin for PauseMenuPlugin {
     }
 }
 
-fn toggle_pause(actions: Res<crate::common::keybind::Actions>, mut menu: ResMut<PauseMenu>) {
-    if actions.just_pressed(crate::common::keybind::Action::Pause) {
+fn toggle_pause(actions: Res<crate::common::keybind::Actions>, mut menu: ResMut<PauseMenu>, mut taken: ResMut<EscapeTaken>) {
+    let taken = std::mem::take(&mut taken.0);
+    if actions.just_pressed(crate::common::keybind::Action::Pause) && !taken {
         menu.open = !menu.open;
     }
 }
@@ -74,13 +112,34 @@ fn show_or_hide(
     menu: Res<PauseMenu>,
     existing: Query<Entity, With<PauseMenuRoot>>,
     font: Res<DisplayFont>,
+    role: Option<Res<NetRole>>,
+    offer: Option<Res<TeamOptions>>,
 ) {
     for root in &existing {
         commands.entity(root).despawn();
     }
+    if !menu.open {
+        return;
+    }
 
-    if menu.open {
-        commands.spawn((
+    let leave = match role.as_deref().is_none_or(NetRole::is_authority) {
+        true => get!("pause.back_to_editor"),
+        false => get!("pause.disconnect"),
+    };
+    // A mode without teams offers only Free for All and Spectate.
+    let change_teams = match offer.as_deref().is_none_or(|offer| offer.teams) {
+        true => get!("pause.change_teams"),
+        false => get!("pause.join_or_spectate"),
+    };
+    let items = [
+        (PauseItem::Resume, get!("pause.resume")),
+        (PauseItem::Settings, get!("pause.settings")),
+        (PauseItem::ChangeTeams, change_teams),
+        (PauseItem::Leave, leave),
+    ];
+    let font = &font.0;
+    commands
+        .spawn((
             PauseMenuRoot,
             // Over the team picker, which may be up underneath.
             GlobalZIndex(PAUSE_MENU_LAYER),
@@ -94,46 +153,91 @@ fn show_or_hide(
             },
             // Dimmed, not opaque: the match keeps running behind it.
             BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.6)),
-            children![(
-                Text::new(get!("pause.title")),
-                TextFont {
-                    font: (&font.0).into(),
-                    font_size: bevy::text::FontSize::Px(42.0),
-                    ..default()
-                },
-                TextColor(Color::WHITE),
-            )],
-        ));
-    }
+        ))
+        .with_children(|root| {
+            root.spawn(menu_panel()).with_children(|menu| {
+                menu.spawn(menu_title(font, get!("pause.title")));
+                for (item, label) in items {
+                    menu.spawn((item, menu_button(Swatch::neutral()))).with_child(plate_text(font, label, ITEM_SIZE));
+                }
+            });
+        });
 }
 
-fn lend_the_mouse(menu: Res<PauseMenu>, mut held: ResMut<MouseHeld>) {
-    if held.pause != menu.open {
-        held.pause = menu.open;
-    }
-}
-
-/// The one writer of the cursor while playing, so it cannot disagree with
-/// whichever menu is up.
-fn capture_or_release(
+fn choose(
+    activated: On<ButtonActivated>,
+    items: Query<&PauseItem>,
     mut commands: Commands,
-    held: Res<MouseHeld>,
-    window: Query<Entity, With<bevy::window::PrimaryWindow>>,
-    mode: Res<State<AppMode>>,
-    latch: Option<ResMut<crate::game::player::InputLatch>>,
+    mut menu: ResMut<PauseMenu>,
+    role: Option<Res<NetRole>>,
+    mut next: ResMut<NextState<AppMode>>,
+    mut requests: MessageWriter<NetRequest>,
 ) {
-    // `gather_input` stops while a menu is up, so held keys would stay held.
-    // Aim is kept.
+    let Ok(item) = items.get(activated.entity) else { return };
+    match item {
+        PauseItem::Resume => menu.open = false,
+        PauseItem::Settings => {
+            menu.open = false;
+            commands.insert_resource(OpenSettings);
+        }
+        PauseItem::ChangeTeams => {
+            menu.open = false;
+            commands.insert_resource(ChangeTeamsAsked);
+        }
+        // Leaving Play closes the menu. A client leaves Play in the same frame,
+        // before the role changes, so it is never the authority in a round.
+        PauseItem::Leave => {
+            if !role.as_deref().is_none_or(NetRole::is_authority) {
+                requests.write(NetRequest::GoSolo);
+            }
+            next.set(AppMode::Editor);
+        }
+    }
+}
+
+/// The Settings window counts from the moment it is asked for, since it opens a pass later, and
+/// only in Play, so it pauses nothing in the editors.
+fn lend_the_mouse(
+    menu: Res<PauseMenu>,
+    window: Option<Res<SettingsWindow>>,
+    asked: Option<Res<OpenSettings>>,
+    mode: Res<State<AppMode>>,
+    mut held: ResMut<MouseHeld>,
+) {
+    let settings = *mode.get() == AppMode::Play && (asked.is_some() || window.is_some_and(|window| window.is_open()));
+    if held.pause != menu.open || held.settings != settings {
+        held.pause = menu.open;
+        held.settings = settings;
+    }
+}
+
+/// `gather_input` stops while a menu is up, so held keys would stay held. Aim is kept.
+fn release_held_keys(held: Res<MouseHeld>, latch: Option<ResMut<crate::game::player::InputLatch>>) {
     if held.any()
         && let Some(mut latch) = latch
     {
         latch.0.release_controls();
     }
+}
 
-    // Only in Play: the resource's insertion counts as a change, and would
-    // grab the cursor in the editor on the first frame.
-    if *mode.get() == AppMode::Play {
-        crate::game::set_cursor_captured(&mut commands, &window, !held.any());
+/// The one writer of the cursor while playing: grabbed only while we have a
+/// body and no menu is up, so a spectator or somebody waiting to respawn has it free.
+fn grab_the_cursor(
+    mut commands: Commands,
+    held: Res<MouseHeld>,
+    ours: Query<(), With<crate::game::player::LocalPlayer>>,
+    window: Query<Entity, With<bevy::window::PrimaryWindow>>,
+    mode: Res<State<AppMode>>,
+    mut grabbed: Local<Option<bool>>,
+) {
+    if *mode.get() != AppMode::Play {
+        *grabbed = None;
+        return;
+    }
+    let wanted = !held.any() && !ours.is_empty();
+    if *grabbed != Some(wanted) {
+        *grabbed = Some(wanted);
+        crate::game::set_cursor_captured(&mut commands, &window, wanted);
     }
 }
 
@@ -252,4 +356,123 @@ mod tests {
         assert!(world.run_system_once(not_paused).unwrap());
     }
 
+    fn activate(app: &mut App, wanted: PauseItem) {
+        let item = app
+            .world_mut()
+            .query::<(Entity, &PauseItem)>()
+            .iter(app.world())
+            .find(|(_, item)| **item == wanted)
+            .map(|(entity, _)| entity)
+            .expect("the menu does not offer it");
+        app.world_mut().trigger(ButtonActivated { entity: item });
+        app.world_mut().flush();
+    }
+
+    fn open_menu(role: NetRole) -> App {
+        let mut app = app();
+        app.insert_resource(role);
+        press_escape(&mut app);
+        app
+    }
+
+    fn labels(app: &mut App) -> Vec<String> {
+        app.world_mut().query::<&Text>().iter(app.world()).map(|text| text.0.clone()).collect()
+    }
+
+    #[test]
+    fn resume_closes_the_menu() {
+        let mut app = open_menu(NetRole::Solo);
+        activate(&mut app, PauseItem::Resume);
+        app.update();
+        assert!(!showing(&mut app), "Resume left the menu up");
+        assert!(!app.world().resource::<MouseHeld>().any(), "Resume kept the mouse");
+    }
+
+    #[test]
+    fn settings_closes_the_menu_and_asks_for_the_window() {
+        let mut app = open_menu(NetRole::Solo);
+        activate(&mut app, PauseItem::Settings);
+        assert!(app.world().contains_resource::<OpenSettings>(), "the Settings window was not asked for");
+        app.update();
+        assert!(!showing(&mut app), "Settings left the menu up");
+        assert!(app.world().resource::<MouseHeld>().settings, "the mouse was taken back before the window opened");
+    }
+
+    #[test]
+    fn change_teams_closes_the_menu_and_asks_for_the_picker() {
+        let mut app = open_menu(NetRole::Solo);
+        activate(&mut app, PauseItem::ChangeTeams);
+        assert!(app.world().contains_resource::<ChangeTeamsAsked>(), "the team picker was not asked for");
+        app.update();
+        assert!(!showing(&mut app), "Change Teams left the menu up");
+    }
+
+    /// Breaks if the label names teams in a mode that has none.
+    #[test]
+    fn change_teams_is_named_for_the_mode() {
+        let mut app = app();
+        app.insert_resource(TeamOptions { teams: false, ..default() });
+        press_escape(&mut app);
+        let shown = labels(&mut app);
+        assert!(shown.contains(&get!("pause.join_or_spectate")) && !shown.contains(&get!("pause.change_teams")), "{shown:?}");
+    }
+
+    /// Breaks if an overlay that took Escape does not keep the menu shut.
+    #[test]
+    fn escape_taken_by_an_overlay_does_not_open_the_menu() {
+        let mut app = app();
+        app.insert_resource(EscapeTaken(true));
+        press_escape(&mut app);
+        assert!(!showing(&mut app), "the menu opened under an overlay that took Escape");
+        assert!(!app.world().resource::<EscapeTaken>().0, "the claim outlived its frame");
+    }
+
+    /// Breaks if the authority's way out of the menu does not end the round.
+    #[test]
+    fn the_host_goes_back_to_the_editor() {
+        let mut app = open_menu(NetRole::Listen { port: 27100 });
+        assert!(labels(&mut app).contains(&get!("pause.back_to_editor")));
+        activate(&mut app, PauseItem::Leave);
+        app.update();
+        assert_eq!(*app.world().resource::<State<AppMode>>().get(), AppMode::Editor);
+        assert!(!showing(&mut app), "the menu outlived the round");
+    }
+
+    /// Breaks if a client's way out does not disconnect and leave Play.
+    #[test]
+    fn a_client_disconnects() {
+        let mut app = open_menu(NetRole::Client { host: "elsewhere".into(), port: 27100 });
+        assert!(labels(&mut app).contains(&get!("pause.disconnect")));
+        activate(&mut app, PauseItem::Leave);
+        let asked = app.world().resource::<Messages<NetRequest>>().iter_current_update_messages().cloned().collect::<Vec<_>>();
+        assert!(matches!(asked.as_slice(), [NetRequest::GoSolo]), "{asked:?}");
+        app.update();
+        assert_eq!(*app.world().resource::<State<AppMode>>().get(), AppMode::Editor, "a client stayed in a round nobody runs");
+    }
+
+    /// Breaks if the cursor is grabbed with no body of ours, or left free with one and no menu up.
+    #[test]
+    fn the_cursor_is_grabbed_only_while_we_have_a_body() {
+        use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
+
+        let mut app = app();
+        let window = app.world_mut().spawn((Window::default(), PrimaryWindow)).id();
+        let grab = |app: &App| app.world().get::<CursorOptions>(window).map(|options| options.grab_mode);
+
+        app.update();
+        assert_eq!(grab(&app), Some(CursorGrabMode::None), "grabbed while spectating");
+
+        let body = app.world_mut().spawn(crate::game::player::LocalPlayer).id();
+        app.update();
+        assert_eq!(grab(&app), Some(CursorGrabMode::Locked), "free with a body to steer");
+
+        press_escape(&mut app);
+        app.update();
+        assert_eq!(grab(&app), Some(CursorGrabMode::None), "grabbed under the menu");
+
+        press_escape(&mut app);
+        app.world_mut().entity_mut(body).despawn();
+        app.update();
+        assert_eq!(grab(&app), Some(CursorGrabMode::None), "grabbed while waiting to come back");
+    }
 }

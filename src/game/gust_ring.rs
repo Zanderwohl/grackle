@@ -16,6 +16,7 @@ use crate::common::app_mode::AppMode;
 use crate::common::class::Stance;
 use crate::common::weapon::{AirblastSpec, Equipped, WeaponAction, WeaponCatalog};
 use crate::game::flame_jet::{effect_origin, noise, sheet_image, value_noise};
+use crate::game::replay::HeldBursts;
 use crate::game::held::{HeldModel, WeaponInHand};
 use crate::game::hitscan::aim;
 use crate::game::player::{LocalPlayer, Player, ViewMode, Watched};
@@ -79,6 +80,7 @@ struct RingLook {
 
 /// `body`'s emitter, reset for each gust; `idle` is seconds since the last.
 #[derive(Component)]
+#[require(crate::game::replay::Unreplayed)]
 struct GustRing {
     body: Entity,
     idle: f32,
@@ -230,13 +232,16 @@ fn ring_properties(spec: &AirblastSpec, toward: Dir3, carry: Vec3) -> EffectProp
     properties
 }
 
-#[allow(clippy::type_complexity)]
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn blow_rings(
     mut commands: Commands,
     look: Res<RingLook>,
     catalog: Res<WeaponCatalog>,
     view: Option<Res<ViewMode>>,
     apparent: Option<Res<ApparentMuzzle>>,
+    time: Res<Time>,
+    particles: Res<Time<EffectSimulation>>,
+    mut waiting: Local<HeldBursts<(Entity, Vec3, EffectProperties)>>,
     mut seen: MessageReader<ShotSeen>,
     bodies: Query<(&Transform, &Player, &Stance, &Equipped, Option<(&HeldModel, &WeaponInHand)>, Has<LocalPlayer>, Has<Watched>)>,
     mut rings: Query<(&mut GustRing, &mut Transform, &mut EffectProperties, Option<&mut EffectSpawner>), Without<Player>>,
@@ -246,10 +251,12 @@ fn blow_rings(
         let Some(weapon) = catalog.held_by(equipped) else { continue };
         let WeaponAction::Airblast(spec) = shot.button.of(weapon).action else { continue };
         let from = effect_origin(body, player, *stance, held, ours || watched, view.as_deref(), apparent.as_deref());
-        let properties = ring_properties(&spec, aim(player), player.velocity);
+        waiting.hold(time.elapsed_secs_f64(), (shot.body, from, ring_properties(&spec, aim(player), player.velocity)));
+    }
+    for (body, from, properties) in waiting.due(particles.elapsed_secs_f64()) {
         // The simulation is in world space, so moving the emitter leaves the last ring's puffs
         // where they are.
-        match rings.iter_mut().find(|(ring, ..)| ring.body == shot.body) {
+        match rings.iter_mut().find(|(ring, ..)| ring.body == body) {
             Some((mut ring, mut transform, mut current, spawner)) => {
                 ring.idle = 0.0;
                 transform.translation = from;
@@ -261,7 +268,7 @@ fn blow_rings(
             }
             None => {
                 commands.spawn((
-                    GustRing { body: shot.body, idle: 0.0 },
+                    GustRing { body, idle: 0.0 },
                     ParticleEffect::new(look.effect.clone()),
                     EffectMaterial { images: vec![look.sheet.clone()] },
                     properties,
@@ -273,7 +280,7 @@ fn blow_rings(
     }
 }
 
-fn end_the_rings(mut commands: Commands, time: Res<Time>, mut rings: Query<(Entity, &mut GustRing)>) {
+fn end_the_rings(mut commands: Commands, time: Res<Time<EffectSimulation>>, mut rings: Query<(Entity, &mut GustRing)>) {
     for (entity, mut ring) in &mut rings {
         ring.idle += time.delta_secs();
         if ring.idle >= LAST_PUFF_GONE {

@@ -23,6 +23,8 @@ use crate::game::team_choice::TeamOptions;
 pub const SWING_SECONDS: f32 = 0.5;
 /// Seconds from there to the killer's framing; time has stopped when it arrives.
 pub const GLIDE_SECONDS: f32 = 0.5;
+/// Seconds over which the match slows to a stop.
+const SLOW_SECONDS: f32 = SWING_SECONDS + GLIDE_SECONDS;
 /// Seconds held on the killer before the spectator cycle.
 pub const HOLD_SECONDS: f32 = 1.0;
 /// Seconds a `Died` naming our killer still starts the kill cam: on a client it and the despawn
@@ -95,8 +97,13 @@ impl KillCam {
         self.started + slowed(self.elapsed) as f64
     }
 
+    /// How fast the view moves through match time: the slope of [`slowed`].
+    pub fn speed(&self) -> f32 {
+        (1.0 - self.elapsed / SLOW_SECONDS).max(0.0)
+    }
+
     pub fn frozen(&self) -> bool {
-        self.elapsed >= SWING_SECONDS + GLIDE_SECONDS
+        self.elapsed >= SLOW_SECONDS
     }
 
     /// Where the view is while gliding to the killer or held on them.
@@ -128,9 +135,8 @@ impl KillCam {
 
 /// Seconds of match time seen after `elapsed` real seconds.
 pub fn slowed(elapsed: f32) -> f32 {
-    let slow = SWING_SECONDS + GLIDE_SECONDS;
-    let e = elapsed.clamp(0.0, slow);
-    e - e * e / (2.0 * slow)
+    let e = elapsed.clamp(0.0, SLOW_SECONDS);
+    e - e * e / (2.0 * SLOW_SECONDS)
 }
 
 /// Where the camera stands to show the killer head to feet: on the line from them to `pivot`,
@@ -226,7 +232,7 @@ fn run_the_kill_cam(
         if let Some(killer) = killer.filter(|killer| dead && now - killer.at <= KILL_CAM_GRACE as f64) {
             let died_at = death_cam.as_ref().map_or(Vec3::ZERO, |cam| cam.pivot);
             commands.insert_resource(KillCam::new(killer.killer, killer.weapon, now, died_at));
-            commands.insert_resource(Replay { view: now, frozen: false });
+            commands.insert_resource(Replay { view: now, frozen: false, speed: 1.0 });
             commands.remove_resource::<OurKiller>();
         }
         return;
@@ -272,7 +278,7 @@ fn run_the_kill_cam(
         }
         return;
     }
-    let wanted = Replay { view: kill_cam.view(), frozen: kill_cam.frozen() };
+    let wanted = Replay { view: kill_cam.view(), frozen: kill_cam.frozen(), speed: kill_cam.speed() };
     if replay.as_deref() != Some(&wanted) {
         commands.insert_resource(wanted);
     }
@@ -309,7 +315,7 @@ mod tests {
     #[test]
     fn the_match_slows_to_a_stop_half_the_slowdown_behind() {
         assert_eq!(slowed(0.0), 0.0);
-        let slow = SWING_SECONDS + GLIDE_SECONDS;
+        let slow = SLOW_SECONDS;
         assert!((slowed(slow) - slow * 0.5).abs() < 1e-6);
         assert_eq!(slowed(slow + 5.0), slowed(slow), "time moved after it stopped");
         let mut last = 0.0;
@@ -318,6 +324,21 @@ mod tests {
             assert!(seen >= last, "ran backward");
             last = seen;
         }
+    }
+
+    /// Breaks if the particles' clock does not follow the view's slope.
+    #[test]
+    fn the_speed_is_the_slope_of_the_slowdown() {
+        let slow = SLOW_SECONDS;
+        let mut cam = KillCam::new(PlayerId(1), None, 0.0, Vec3::ZERO);
+        let step = 1e-3;
+        for at in [0.0, 0.25, 0.5, 0.9] {
+            cam.elapsed = at * slow;
+            let slope = (slowed(cam.elapsed + step) - slowed(cam.elapsed)) / step;
+            assert!((cam.speed() - slope).abs() < 1e-2, "at {at}: speed {} slope {slope}", cam.speed());
+        }
+        cam.elapsed = slow + 1.0;
+        assert_eq!(cam.speed(), 0.0, "particles move after time stopped");
     }
 
     /// Breaks if the killer is not framed head to feet, if the camera moves further away than we

@@ -1,7 +1,7 @@
 //! This machine's program settings, in `assets/user/settings.toml`, and the
-//! Settings window that edits them and the [`Keymap`](crate::common::keybind::Keymap).
-//! Unlike [`PlayerSettings`](crate::common::player_settings), nothing here is
-//! sent to the server.
+//! Settings window that edits them, the [`Keymap`](crate::common::keybind::Keymap)
+//! and the [`PlayerSettings`](crate::common::player_settings::PlayerSettings).
+//! Of the three, only the player settings are sent to the server.
 
 pub mod window;
 
@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
-pub use window::{request_settings, SettingsPlugin, SettingsWindow};
+pub use window::{request_settings, OpenSettings, SettingsPlugin, SettingsWindow};
 
 #[derive(Resource, Serialize, Deserialize, Clone, PartialEq, Debug, Default)]
 #[serde(default)]

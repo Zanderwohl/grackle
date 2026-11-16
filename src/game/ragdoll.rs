@@ -43,7 +43,8 @@
 //! A body killed by a projectile's direct hit is [`BlownApart`]: whichever of
 //! its hips, torso and head is nearest the blast goes, with its parent and
 //! children, and each piece left is a corpse of its own
-//! ([`Ragdoll::blown_apart`]). A piece is a `Ragdoll` over the whole rig that
+//! ([`Ragdoll::blown_apart`]). The explode key loses the torso whatever is
+//! nearest ([`BlownApart::Torso`]). A piece is a `Ragdoll` over the whole rig that
 //! keeps only its own bones, so the wire and the mesh cache need nothing new.
 //! A splash kill leaves a whole corpse.
 //!
@@ -223,12 +224,14 @@ pub struct Ragdoll {
     grounded: bool,
 }
 
-/// The fatal hit was a projectile's direct hit at `at`. Never sent, since the
-/// pieces are.
+/// The body is torn apart as it dies. Never sent, since the pieces are.
 #[derive(Component, Clone, Copy, Debug, PartialEq)]
-pub struct BlownApart {
-    /// World space.
-    pub at: Vec3,
+pub enum BlownApart {
+    /// A projectile's direct hit here, in world space: the nearest of the
+    /// hips, torso and head goes.
+    Nearest(Vec3),
+    /// The torso goes, or the hips on a rig whose torso is its root.
+    Torso,
 }
 
 /// A body that has already had its corpse made.
@@ -270,11 +273,14 @@ impl Ragdoll {
     /// Each piece keeps the whole body's masses, so a hand is as light as it
     /// was on the arm.
     pub fn blown_apart(skeleton: &Skeleton, pose: &Pose, root: &Transform, carried: Vec3, at: Vec3) -> Vec<Ragdoll> {
+        Ragdoll::torn(skeleton, pose, root, carried, BlownApart::Nearest(at))
+    }
+
+    /// [`Ragdoll::blown_apart`], with the part lost chosen by `how`.
+    pub fn torn(skeleton: &Skeleton, pose: &Pose, root: &Transform, carried: Vec3, how: BlownApart) -> Vec<Ragdoll> {
         let posed = skeleton.posed_bones(pose, root);
         let bones = skeleton.bones();
-        let Some(struck) = deletable(skeleton)
-            .min_by(|&a, &b| distance_to_bone(at, &posed[a]).total_cmp(&distance_to_bone(at, &posed[b])))
-        else {
+        let Some(struck) = lost_bone(skeleton, &posed, how) else {
             return Vec::new();
         };
 
@@ -797,6 +803,23 @@ fn deletable(skeleton: &Skeleton) -> impl Iterator<Item = usize> {
     hips.into_iter().chain(torso).chain(head)
 }
 
+/// The bone [`Ragdoll::torn`] removes, with its parent and children.
+fn lost_bone(skeleton: &Skeleton, posed: &[PosedBone], how: BlownApart) -> Option<usize> {
+    match how {
+        BlownApart::Nearest(at) => deletable(skeleton)
+            .min_by(|&a, &b| distance_to_bone(at, &posed[a]).total_cmp(&distance_to_bone(at, &posed[b]))),
+        BlownApart::Torso => skeleton.anatomy().carry.or_else(|| deletable(skeleton).next()),
+    }
+}
+
+/// The middle of the bone [`BlownApart::Torso`] removes, in world space.
+/// `root` is the skeleton root, as for [`Ragdoll::from_body`].
+pub fn torso_center(skeleton: &Skeleton, pose: &Pose, root: &Transform) -> Option<Vec3> {
+    let posed = skeleton.posed_bones(pose, root);
+    let torso = lost_bone(skeleton, &posed, BlownApart::Torso)?;
+    Some((posed[torso].head + posed[torso].tail) * 0.5)
+}
+
 /// How far `at` is from the segment between a bone's two ends.
 fn distance_to_bone(at: Vec3, bone: &PosedBone) -> f32 {
     let along = bone.tail - bone.head;
@@ -878,7 +901,7 @@ pub fn raise_ragdolls(
         let carried = physics.map_or(Vec3::ZERO, |body| body.current - body.previous);
         let root = skeleton_root(global, offset);
         let pieces = match blown {
-            Some(blown) => Ragdoll::blown_apart(skeleton, pose, &root, carried, blown.at),
+            Some(&blown) => Ragdoll::torn(skeleton, pose, &root, carried, blown),
             None => vec![Ragdoll::from_body(skeleton, pose, &root, carried)],
         };
         // The death cam follows one piece: the biggest, the first of equals.
@@ -1393,6 +1416,50 @@ mod tests {
         }
     }
 
+    /// Times corpses on the shipped maps, one shoved at each spawn. Run with `--ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn corpses_on_the_shipped_maps() {
+        use crate::constants::MAP_BLUEPRINT_EXTENSION;
+
+        let skeleton = rig();
+        let head = skeleton.anatomy().head.unwrap();
+        for name in ["arena", "cloister", "waterworks"] {
+            let path = std::path::PathBuf::from(format!("assets/default/blueprints/{name}.{MAP_BLUEPRINT_EXTENSION}"));
+            let mut timeline = crate::editor::save::load(&path).unwrap().timeline;
+            timeline.resolve_all();
+            let volumes: Vec<_> = timeline.active_features().flat_map(|(_, feature)| feature.object().volumes()).collect();
+            let mut world = CollisionWorld::default();
+            world.rebuild_volumes(&volumes);
+            let spawns = timeline
+                .active_features()
+                .filter(|(_, feature)| feature.object().type_key() == "spawn_point")
+                .map(|(_, feature)| feature.object().get_point("").unwrap());
+
+            let mut corpses: Vec<Ragdoll> = spawns
+                .enumerate()
+                .map(|(i, feet)| {
+                    let a = i as f32 * 0.9;
+                    let root = Transform::from_translation(feet).with_rotation(Quat::from_rotation_y(a));
+                    let mut corpse = Ragdoll::from_body(&skeleton, &Pose::rest(), &root, Vec3::ZERO);
+                    let (head, _) = corpse.bone_points(head);
+                    corpse.shove(head, Push::Along(Vec3::new(a.cos() * 9.0, 2.0, a.sin() * 9.0)), 0.4, DT);
+                    corpse
+                })
+                .collect();
+
+            let ticks = 128;
+            let started = std::time::Instant::now();
+            for _ in 0..ticks {
+                for corpse in &mut corpses {
+                    corpse.step(&skeleton, &world, FALL, DT);
+                }
+            }
+            let per_tick = started.elapsed().as_secs_f64() * 1000.0 / ticks as f64;
+            println!("{name}: {} volumes, {} corpses, {per_tick:.3} ms per tick", volumes.len(), corpses.len());
+        }
+    }
+
     /// A shove wakes a settled corpse.
     #[test]
     fn a_shove_wakes_a_settled_corpse() {
@@ -1504,7 +1571,7 @@ mod tests {
 
         let mut world = World::new();
         let lit = Burning::lit(&FlameSpec::FLAMETHROWER, DamageSource::World);
-        a_dead_body(&mut world, (PlayerId(1), lit, BlownApart { at: Vec3::new(0.0, 1.0, 0.0) }));
+        a_dead_body(&mut world, (PlayerId(1), lit, BlownApart::Nearest(Vec3::new(0.0, 1.0, 0.0))));
         a_dead_body(&mut world, PlayerId(2));
         world.run_system_once(raise_ragdolls).unwrap();
 
@@ -2094,6 +2161,20 @@ mod tests {
         let (pelvis, _) = whole.bone_points(0);
         whole.shove(pelvis, Push::Along(Vec3::NEG_Y * 8.0), 3.0, DT);
         assert_eq!(strikes(&mut whole, &skeleton, &world, 64), vec![]);
+    }
+
+    /// Fails if exploding loses anything but the torso: the same pieces as a
+    /// blast at the chest, however the head is placed.
+    #[test]
+    fn exploding_loses_the_torso() {
+        let skeleton = rig();
+        let carry = skeleton.anatomy().carry.unwrap();
+        let pieces = Ragdoll::torn(&skeleton, &Pose::rest(), &Transform::IDENTITY, Vec3::ZERO, BlownApart::Torso);
+        assert!(pieces.len() > 1);
+        assert!(pieces.iter().all(|piece| !piece.keeps(carry)));
+        let at_chest = Ragdoll::blown_apart(&skeleton, &Pose::rest(), &Transform::IDENTITY, Vec3::ZERO, middle_of(&skeleton, bone::CHEST));
+        let kept = |pieces: &[Ragdoll]| pieces.iter().map(|piece| kept_names(piece, &skeleton)).collect::<Vec<_>>();
+        assert_eq!(kept(&pieces), kept(&at_chest));
     }
 
     /// Fails if a piece is not severed at each joint it was torn at, or a whole

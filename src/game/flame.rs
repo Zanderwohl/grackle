@@ -273,6 +273,7 @@ mod tests {
             button: crate::game::weapon::Button::Primary,
             action: WeaponAction::Flame(SPEC),
             weapon: None,
+            critical: false,
         });
         world.run_system_once(fire_flame).unwrap();
         world.flush();
@@ -297,7 +298,7 @@ mod tests {
             let mut world = a_world();
             let shooter = a_shooter(&mut world);
             a_body(&mut world, away, 0.0);
-            world.write_message(WeaponActionFired { shooter, button: crate::game::weapon::Button::Primary, action: WeaponAction::Flame(spec), weapon: None });
+            world.write_message(WeaponActionFired { shooter, button: crate::game::weapon::Button::Primary, action: WeaponAction::Flame(spec), weapon: None, critical: false });
             world.run_system_once(fire_flame).unwrap();
             asked_for(&mut world)[0].amount
         };

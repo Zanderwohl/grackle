@@ -64,7 +64,7 @@ deploy = 0.5
 model = "rocket_launcher"
 icon = "kill_rocket"
 magazine = { clip = 4, reserve = 20, reload = 0.8, reload_one_at_a_time = true, first_reload = 0.92 }
-primary = { cadence = { kind = "semi", interval = 0.8 }, cost = { kind = "ammo", rounds = 1 }, action = { kind = "projectile", initial_speed = 20.0, gravity_factor = 0.0, air_resistance = 0.0, spin_rate = 0.0, max_bounces = 0, restitution = 0.0, max_lifetime = 8.0, explodes_at_last_bounce = true, explodes_at_lifetime_end = false, explosion_radius = 2.8, damage = 90, splash_at_edge = 0.5, ramp_up = { near = 0.0, far = 5.0, scale = 1.25 }, falloff = { near = 5.0, far = 10.0, scale = 0.528 }, knockback = 9.0, radius = 0.12 } }
+primary = { cadence = { kind = "semi", interval = 0.8 }, cost = { kind = "ammo", rounds = 1 }, action = { kind = "projectile", initial_speed = 20.0, gravity_factor = 0.0, air_resistance = 0.0, spin_rate = 0.0, max_bounces = 0, restitution = 0.0, max_lifetime = 8.0, explodes_at_last_bounce = true, explodes_at_lifetime_end = false, explosion_radius = 2.8, damage = 90, splash_at_edge = 0.5, ramp_up = { near = 0.0, far = 5.0, scale = 1.25 }, falloff = { near = 5.0, far = 10.0, scale = 0.528 }, knockback = 9.0, radius = 0.12, trail = "cloud" } }
 secondary = { cadence = { kind = "semi" }, cost = { kind = "free" }, action = { kind = "none" } }
 
 # The TF2C-style RPG: the same rocket as above, but it falls — one number
@@ -81,7 +81,7 @@ deploy = 0.7
 model = "rpg"
 icon = "kill_rpg"
 magazine = { clip = 1, reserve = 8, reload = 1.5 }
-primary = { cadence = { kind = "semi", interval = 0.8 }, cost = { kind = "ammo", rounds = 1 }, action = { kind = "projectile", initial_speed = 34.0, gravity_factor = 1.0, air_resistance = 0.0, spin_rate = 0.0, max_bounces = 0, restitution = 0.0, max_lifetime = 8.0, explodes_at_last_bounce = true, explodes_at_lifetime_end = false, explosion_radius = 3.2, damage = 110, splash_at_edge = 0.5, knockback = 11.0, radius = 0.14 } }
+primary = { cadence = { kind = "semi", interval = 0.8 }, cost = { kind = "ammo", rounds = 1 }, action = { kind = "projectile", initial_speed = 34.0, gravity_factor = 1.0, air_resistance = 0.0, spin_rate = 0.0, max_bounces = 0, restitution = 0.0, max_lifetime = 8.0, explodes_at_last_bounce = true, explodes_at_lifetime_end = false, explosion_radius = 3.2, damage = 110, splash_at_edge = 0.5, knockback = 11.0, radius = 0.14, trail = "cloud" } }
 secondary = { cadence = { kind = "semi" }, cost = { kind = "free" }, action = { kind = "none" } }
 
 # The demoman's: pills that arc, tumble, bounce off a wall and go off on their

@@ -73,7 +73,7 @@ fn bots_may_play_alone(settings: &RoundSettings, bots: &Query<(), With<BotSeat>>
 }
 
 /// Humans whose seat is [`Seat::Playing`]: choosing or spectating does not count, nor do bots.
-fn people_playing(us: Option<&OurIdentity>, links: &Query<&Identity, (With<ClientOf>, With<Connected>)>) -> usize {
+pub fn people_playing(us: Option<&OurIdentity>, links: &Query<&Identity, (With<ClientOf>, With<Connected>)>) -> usize {
     let playing = |who: &Identity| who.seat.is_playing();
     us.map(|us| &us.0).into_iter().chain(links.iter()).filter(|who| playing(who)).count()
 }
@@ -249,10 +249,15 @@ fn pick_the_winners(
     info!("Humiliation: {:?} won", won.0);
 }
 
-/// Every frame, so a loser's `H` cannot let go of it.
+/// Every frame, so a loser's `H` cannot let go of it and a winner's new body is boosted too.
+/// Nothing clears the boost: the bodies go when the post-game ends.
 fn humiliate_the_losers(winners: Res<Winners>, mut bodies: Query<(&PlayerId, &mut Condition), With<Player>>) {
     for (id, mut condition) in &mut bodies {
-        if !winners.0.contains(id) && !condition.humiliated {
+        if winners.0.contains(id) {
+            if !condition.crit_boosted {
+                condition.crit_boosted = true;
+            }
+        } else if !condition.humiliated {
             condition.humiliated = true;
         }
     }
@@ -432,8 +437,8 @@ mod tests {
         assert_eq!(phase(&app), MatchPhase::Live, "the person's match did not start");
     }
 
-    /// Breaks if the post-game outlasts its losers by more than the grace, or keeps humiliating
-    /// past its length.
+    /// Breaks if the post-game outlasts its losers by more than the grace, keeps humiliating
+    /// past its length, or stops boosting the winners' shots to crits.
     #[test]
     fn the_post_game_ends_after_the_last_loser_or_its_length() {
         let settings = RoundSettings { pre_game_length: 0.0, post_game_length: 10.0, ..default() };
@@ -446,8 +451,13 @@ mod tests {
         app.update();
         assert_eq!(app.world().resource::<Winners>().0, vec![PlayerId(1)]);
         let loser = app.world_mut().spawn((Player::default(), PlayerId(2), Condition::default(), Damageable::with_health(100))).id();
+        let winner = app.world_mut().spawn((Player::default(), PlayerId(1), Condition::default(), Damageable::with_health(100))).id();
         run(&mut app, 3.0);
-        assert!(app.world().get::<Condition>(loser).unwrap().humiliated, "the loser was not humiliated");
+        let lost = *app.world().get::<Condition>(loser).unwrap();
+        assert!(lost.humiliated && !lost.crit_boosted, "the loser was not humiliated, or was boosted");
+        let won = *app.world().get::<Condition>(winner).unwrap();
+        assert!(won.crit_boosted && !won.humiliated, "the winner was not crit boosted, or was humiliated");
+        app.world_mut().despawn(winner);
         assert_eq!(phase(&app), MatchPhase::PostGame, "ended with a loser standing");
 
         app.world_mut().despawn(loser);

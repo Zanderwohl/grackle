@@ -16,7 +16,7 @@ use crate::common::net::has_authority;
 use crate::common::damage::{Armor, Cause, Damage, DamageDealt, Damageable, Died, How, Kill};
 use crate::common::game_rules::GameRules;
 use crate::common::team::Allegiances;
-use crate::game::death::{announce_deaths, announce_the_dead, reap_the_dead, record_damage, suicide};
+use crate::game::death::{announce_deaths, announce_the_dead, explode_yourself, reap_the_dead, record_damage, suicide};
 use crate::common::damage::{DamageSource, PlayerId};
 use crate::game::player::{LocalPlayer, PlayerCamera};
 use crate::game::ragdoll::{BlownApart, Push, RagdollShove};
@@ -66,6 +66,8 @@ impl Plugin for DamagePlugin {
             .add_message::<Died>()
             // Also `RagdollPlugin`'s; `apply_damage` throws kill shoves.
             .add_message::<RagdollShove>()
+            // Also `ExplosionPlugin`'s; the explode key writes one.
+            .add_message::<crate::common::damage::Explosion>()
             // A body reaped before its log is written is a kill credited to
             // nobody. Authority only: `Damageable` is replicated, and a client
             // resolving damage itself would disagree with the server. Not
@@ -80,7 +82,10 @@ impl Plugin for DamagePlugin {
                     .run_if(has_authority),
             )
             .add_systems(FixedUpdate, apply_damage.in_set(DamageSystems::Apply))
-            .add_systems(FixedUpdate, suicide.in_set(DamageSystems::Deal))
+            .add_systems(
+                FixedUpdate,
+                (suicide, explode_yourself.before(crate::game::explosion::explode)).in_set(DamageSystems::Deal),
+            )
             .add_systems(
                 FixedUpdate,
                 // `reap_the_dead` removes what was marked on an earlier tick,
@@ -154,7 +159,7 @@ pub fn apply_damage(
         });
         let killed = was_alive && !target.is_alive();
         if killed && request.cause.how == How::Direct {
-            commands.entity(request.target).try_insert(BlownApart { at: request.point });
+            commands.entity(request.target).try_insert(BlownApart::Nearest(request.point));
         }
         // Lands on the corpse `raise_ragdolls` stands up later this tick.
         if let Some(shove) = request.kill_shove
@@ -183,7 +188,7 @@ pub fn apply_damage(
             remaining: 0,
             point: kill.point,
             from: None,
-            cause: Cause::of(None, How::Kill),
+            cause: Cause::of(None, kill.how),
         });
     }
 }
@@ -525,6 +530,8 @@ mod tests {
             direct: None,
             weapon: None,
             reflected: false,
+            critical: false,
+            spare: None,
         });
 
         app.world_mut().run_schedule(FixedUpdate);

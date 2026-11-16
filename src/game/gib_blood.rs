@@ -21,6 +21,7 @@ use crate::common::movement_rules::MovementRules;
 use crate::common::skeleton::Skeleton;
 use crate::game::decal::HitBodies;
 use crate::game::ragdoll::Ragdoll;
+use crate::game::replay::HeldBursts;
 use crate::game::warm_up::{self, WarmUp};
 
 /// Meters per second a severed end must move for it to bleed.
@@ -107,6 +108,7 @@ enum Look {
 
 /// A burst's or a spurt's emitter. Seconds.
 #[derive(Component)]
+#[require(crate::game::replay::Unreplayed)]
 struct Burst {
     age: f32,
     seconds: f32,
@@ -440,6 +442,9 @@ fn make_the_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
 fn bleed_from_new_gibs(
     mut commands: Commands,
     effects: Res<BloodEffects>,
+    time: Res<Time>,
+    particles: Res<Time<EffectSimulation>>,
+    mut held: Local<HeldBursts<Vec3>>,
     gibs: Query<(Entity, &Ragdoll, &Skeleton), Without<Bleeding>>,
 ) {
     for (gib, ragdoll, skeleton) in &gibs {
@@ -448,14 +453,7 @@ fn bleed_from_new_gibs(
         if let Some(at) = ragdoll.torn_at()
             && ragdoll.age() <= BURST_SECONDS
         {
-            commands.spawn((
-                Burst { age: 0.0, seconds: BURST_SECONDS },
-                ParticleEffect::new(effects.burst.clone()),
-                EffectMaterial { images: vec![effects.splat.clone()] },
-                EffectProperties::default(),
-                Transform::from_translation(at),
-                Name::new("Gib burst"),
-            ));
+            held.hold(time.elapsed_secs_f64(), at);
         }
         for (end, (at, _)) in ragdoll.severed_ends(skeleton, 0.0).enumerate() {
             commands.spawn((
@@ -467,6 +465,16 @@ fn bleed_from_new_gibs(
             ));
         }
     }
+    for at in held.due(particles.elapsed_secs_f64()) {
+        commands.spawn((
+            Burst { age: 0.0, seconds: BURST_SECONDS },
+            ParticleEffect::new(effects.burst.clone()),
+            EffectMaterial { images: vec![effects.splat.clone()] },
+            EffectProperties::default(),
+            Transform::from_translation(at),
+            Name::new("Gib burst"),
+        ));
+    }
 }
 
 /// An emitter goes once its gib is asleep and its last drop has faded. A
@@ -474,14 +482,22 @@ fn bleed_from_new_gibs(
 fn follow_the_severed_ends(
     mut commands: Commands,
     fixed: Res<Time<Fixed>>,
-    time: Res<Time>,
+    time: Res<Time<EffectSimulation>>,
     gibs: Query<(&Ragdoll, &Skeleton)>,
     mut emitters: Query<(Entity, &mut BleedsFrom, &mut Transform, &mut EffectProperties, Option<&mut EffectSpawner>)>,
 ) {
     let dt = fixed.timestep().as_secs_f32();
     for (entity, mut from, mut transform, mut properties, spawner) in &mut emitters {
         let Ok((ragdoll, skeleton)) = gibs.get(from.gib) else {
-            commands.entity(entity).despawn();
+            // Its drops may still be on screen, held by the kill cam.
+            from.idle += time.delta_secs();
+            if from.idle >= LAST_DROP_GONE {
+                commands.entity(entity).despawn();
+            } else if let Some(mut spawner) = spawner
+                && spawner.active
+            {
+                spawner.active = false;
+            }
             continue;
         };
         let Some((at, velocity)) = ragdoll.severed_ends(skeleton, dt).nth(from.end) else {
@@ -506,10 +522,14 @@ fn follow_the_severed_ends(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn spurt_from_hits(
     mut commands: Commands,
     effects: Res<BloodEffects>,
     rules: Option<Res<MovementRules>>,
+    time: Res<Time>,
+    particles: Res<Time<EffectSimulation>>,
+    mut held: Local<HeldBursts<(Vec3, EffectProperties)>>,
     mut dealt: MessageReader<DamageDealt>,
     mut hit_bodies: HitBodies,
 ) {
@@ -523,12 +543,15 @@ fn spurt_from_hits(
         properties.set("velocity", (direction * SPURT_SPEED).into());
         let fall = rules.as_deref().map_or_else(|| MovementRules::default().fall(), MovementRules::fall);
         properties.set("gravity", (Vec3::Y * fall).into());
+        held.hold(time.elapsed_secs_f64(), (hit.point, properties));
+    }
+    for (point, properties) in held.due(particles.elapsed_secs_f64()) {
         commands.spawn((
             Burst { age: 0.0, seconds: SPURT_SECONDS },
             ParticleEffect::new(effects.spurt.clone()),
             EffectMaterial { images: vec![effects.blobs.clone()] },
             properties,
-            Transform::from_translation(hit.point),
+            Transform::from_translation(point),
             Name::new("Hit spurt"),
         ));
     }
@@ -536,7 +559,7 @@ fn spurt_from_hits(
 
 fn end_the_bursts(
     mut commands: Commands,
-    time: Res<Time>,
+    time: Res<Time<EffectSimulation>>,
     mut bursts: Query<(Entity, &mut Burst, Option<&mut EffectSpawner>)>,
 ) {
     for (entity, mut burst, spawner) in &mut bursts {

@@ -2,9 +2,6 @@
 //! after. Plain Bevy UI, like the pause menu. What it offers and what a choice
 //! does is [`crate::game::team_choice`]; this only asks.
 
-use bevy::picking::events::PointerClick;
-use bevy::picking::hover::Hovered;
-use bevy::picking::pointer::PointerButton;
 use bevy::prelude::*;
 
 use crate::common::app_mode::AppMode;
@@ -14,7 +11,10 @@ use crate::common::swatch::Swatch;
 use crate::common::team::Side;
 use crate::editor::spawn_point::SpawnPointMarker;
 use crate::game::collision::CollisionWorld;
-use crate::game::pause_menu::MouseHeld;
+use crate::game::menu::{menu_button, menu_item_node, menu_panel, menu_title, ITEM_SIZE};
+use crate::game::pause_menu::{ChangeTeamsAsked, EscapeTaken, MouseHeld, PauseMenu, TakeEscape};
+use crate::game::plate::{plate_text, FollowsTheLean, Plate};
+use crate::game::plate_button::ButtonActivated;
 use crate::game::player::{fallback_spawn, DeathCam, InputLatch, LocalPlayer, OurLastBody};
 use crate::game::spectate::{first_camera_for, Cameras};
 use crate::game::respawn::{placed_spawns, Seat};
@@ -31,31 +31,35 @@ pub struct TeamPicker {
     pub asked_from: Option<Seat>,
 }
 
-const ROW_WIDTH: f32 = 420.0;
-const ROW_HEIGHT: f32 = 56.0;
-const ROW_GAP: f32 = 10.0;
-/// How far a hovered row moves left, in pixels. The row's hover zone is this
-/// much wider than its face, so a face that has moved stays hovered.
-const SLIDE: f32 = 20.0;
-const SLIDE_SECONDS: f32 = 0.1;
+impl TeamPicker {
+    /// With no seat the picker bars the way into the match, asked for or not.
+    pub fn bars_the_way(offer: &TeamOptions) -> bool {
+        offer.seat == Seat::Choosing
+    }
+
+    pub fn is_up(&self, offer: &TeamOptions) -> bool {
+        self.wanted || Self::bars_the_way(offer)
+    }
+
+    /// Escape takes it down: up only because it was asked for.
+    pub fn closable(&self, offer: &TeamOptions) -> bool {
+        self.is_up(offer) && !Self::bars_the_way(offer)
+    }
+}
+
 /// Under the pause menu.
 const PICKER_LAYER: i32 = 10;
-const CLOSED_ALPHA: f32 = 0.35;
+/// Shares of a full team's OKLCH lightness and chroma.
+const CLOSED_LIGHTNESS: f32 = 0.6;
+const CLOSED_CHROMA: f32 = 0.3;
 /// Radians, looking down at the spawn point while choosing.
 pub(crate) const OVERLOOK_PITCH: f32 = -0.25;
 
 #[derive(Component)]
 struct PickerRoot;
 
-/// The hover zone. Its one child is the [`Face`].
 #[derive(Component, Clone, Copy)]
-struct PickerRow {
-    open: bool,
-}
-
-/// Pixels moved left so far.
-#[derive(Component, Default)]
-struct Face(f32);
+struct PickerItem(TeamChoice);
 
 pub struct TeamPickerPlugin;
 
@@ -63,6 +67,8 @@ impl Plugin for TeamPickerPlugin {
     fn build(&self, app: &mut App) {
         crate::common::keybind::ensure(app);
         app.init_resource::<TeamPicker>()
+            .init_resource::<EscapeTaken>()
+            .add_observer(choose)
             .init_resource::<MouseHeld>()
             .init_resource::<DisplayFont>()
             .init_resource::<TeamOptions>()
@@ -70,10 +76,11 @@ impl Plugin for TeamPickerPlugin {
             .add_systems(
                 Update,
                 (
-                    (toggle_the_picker, decide_the_picker, overlook_while_choosing).chain().run_if(in_state(AppMode::Play)),
+                    (escape_closes_the_picker.in_set(TakeEscape), toggle_the_picker, decide_the_picker, overlook_while_choosing)
+                        .chain()
+                        .run_if(in_state(AppMode::Play)),
                     // Ungated, so leaving Play takes it down.
                     show_or_hide.run_if(resource_changed::<MouseHeld>.or_else(resource_changed::<TeamOptions>)),
-                    slide_the_rows.run_if(in_state(AppMode::Play)),
                 )
                     .chain(),
             )
@@ -81,8 +88,31 @@ impl Plugin for TeamPickerPlugin {
     }
 }
 
-fn toggle_the_picker(actions: Res<crate::common::keybind::Actions>, mut picker: ResMut<TeamPicker>) {
-    if actions.just_pressed(crate::common::keybind::Action::TeamPicker) {
+/// Not while the pause menu is open over it, which Escape closes first.
+fn escape_closes_the_picker(
+    actions: Res<crate::common::keybind::Actions>,
+    menu: Option<Res<PauseMenu>>,
+    offer: Res<TeamOptions>,
+    mut picker: ResMut<TeamPicker>,
+    mut taken: ResMut<EscapeTaken>,
+) {
+    let menu_open = menu.is_some_and(|menu| menu.open);
+    if actions.just_pressed(crate::common::keybind::Action::Pause) && !menu_open && picker.closable(&offer) {
+        *picker = TeamPicker::default();
+        taken.0 = true;
+    }
+}
+
+fn toggle_the_picker(
+    mut commands: Commands,
+    actions: Res<crate::common::keybind::Actions>,
+    asked: Option<Res<ChangeTeamsAsked>>,
+    mut picker: ResMut<TeamPicker>,
+) {
+    if asked.is_some() {
+        commands.remove_resource::<ChangeTeamsAsked>();
+        *picker = TeamPicker { wanted: true, asked_from: None };
+    } else if actions.just_pressed(crate::common::keybind::Action::TeamPicker) {
         picker.wanted = !picker.wanted;
         picker.asked_from = None;
     }
@@ -93,7 +123,7 @@ fn decide_the_picker(mut picker: ResMut<TeamPicker>, offer: Res<TeamOptions>, mu
     if picker.asked_from.is_some_and(|from| from != offer.seat) {
         *picker = TeamPicker::default();
     }
-    let up = picker.wanted || offer.seat == Seat::Choosing;
+    let up = picker.is_up(&offer);
     if held.team_picker != up {
         held.team_picker = up;
     }
@@ -188,7 +218,7 @@ fn show_or_hide(
         return;
     }
 
-    let text_font = TextFont { font: (&font.0).into(), font_size: bevy::text::FontSize::Px(30.0), ..default() };
+    let font = &font.0;
     commands
         .spawn((
             PickerRoot,
@@ -197,65 +227,37 @@ fn show_or_hide(
                 position_type: PositionType::Absolute,
                 width: Val::Percent(100.0),
                 height: Val::Percent(100.0),
-                flex_direction: FlexDirection::Column,
                 align_items: AlignItems::Center,
                 justify_content: JustifyContent::Center,
-                row_gap: Val::Px(ROW_GAP),
                 ..default()
             },
             BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.45)),
         ))
         .with_children(|root| {
-            for (choice, label, swatch, open) in rows(&offer) {
-                let alpha = if open { 1.0 } else { CLOSED_ALPHA };
-                root.spawn((
-                    PickerRow { open },
-                    Hovered::default(),
-                    Node { width: Val::Px(ROW_WIDTH + SLIDE), height: Val::Px(ROW_HEIGHT), ..default() },
-                ))
-                .observe(move |click: On<PointerClick>, offer: Res<TeamOptions>, mut picker: ResMut<TeamPicker>, mut requests: MessageWriter<ChooseTeam>| {
-                    if open && click.button == PointerButton::Primary {
-                        requests.write(ChooseTeam { choice, from: offer.seat });
-                        picker.asked_from = Some(offer.seat);
-                    }
-                })
-                .with_children(|row| {
-                    row.spawn((
-                        Face::default(),
-                        Node {
-                            position_type: PositionType::Relative,
-                            left: Val::Px(SLIDE),
-                            width: Val::Px(ROW_WIDTH),
-                            height: Val::Percent(100.0),
-                            align_items: AlignItems::Center,
-                            padding: UiRect::horizontal(Val::Px(20.0)),
-                            ..default()
-                        },
-                        BackgroundColor(swatch.base.with_alpha(alpha)),
-                        children![(Text::new(label), text_font.clone(), TextColor(swatch.text().with_alpha(alpha)))],
-                    ));
-                });
-            }
+            root.spawn(menu_panel()).with_children(|menu| {
+                menu.spawn(menu_title(font, get!("team.picker.title")));
+                for (choice, label, swatch, open) in rows(&offer) {
+                    let mut row = match open {
+                        true => menu.spawn((PickerItem(choice), menu_button(swatch))),
+                        // A plain plate, so it neither lights nor answers a click.
+                        false => menu.spawn((PickerItem(choice), Plate::new(swatch.muted(CLOSED_LIGHTNESS, CLOSED_CHROMA)), FollowsTheLean, menu_item_node())),
+                    };
+                    row.with_child(plate_text(font, label, ITEM_SIZE));
+                }
+            });
         });
 }
 
-fn slide_the_rows(
-    time: Res<Time>,
-    rows: Query<(&PickerRow, &Hovered, &Children)>,
-    mut faces: Query<(&mut Face, &mut Node)>,
+fn choose(
+    activated: On<ButtonActivated>,
+    items: Query<&PickerItem>,
+    offer: Res<TeamOptions>,
+    mut picker: ResMut<TeamPicker>,
+    mut requests: MessageWriter<ChooseTeam>,
 ) {
-    let step = SLIDE / SLIDE_SECONDS * time.delta_secs();
-    for (row, hovered, children) in &rows {
-        let target = if row.open && hovered.get() { SLIDE } else { 0.0 };
-        for &child in children {
-            let Ok((mut face, mut node)) = faces.get_mut(child) else { continue };
-            let moved = face.0 + (target - face.0).clamp(-step, step);
-            if face.0 != moved {
-                face.0 = moved;
-                node.left = Val::Px(SLIDE - moved);
-            }
-        }
-    }
+    let Ok(&PickerItem(choice)) = items.get(activated.entity) else { return };
+    requests.write(ChooseTeam { choice, from: offer.seat });
+    picker.asked_from = Some(offer.seat);
 }
 
 #[cfg(test)]
@@ -348,5 +350,77 @@ mod tests {
         app.world_mut().resource_mut::<TeamOptions>().seat = Seat::Playing(Some(Team::Blue));
         app.update();
         assert!(!up(&app), "still up after the switch landed");
+    }
+
+    /// Breaks if a full team can be clicked, or an open one does not ask for its seat.
+    #[test]
+    fn open_rows_are_buttons_that_ask_and_full_teams_are_not() {
+        use crate::game::plate_button::PlateButton;
+
+        let mut app = app();
+        app.insert_resource(TeamOptions {
+            seat: Seat::Choosing,
+            teams: true,
+            open: vec![(Team::Red, false), (Team::Blue, true)],
+            random: true,
+            spectate: true,
+        });
+        app.update();
+
+        let rows: Vec<(Entity, TeamChoice, bool)> = app
+            .world_mut()
+            .query::<(Entity, &PickerItem, Has<PlateButton>)>()
+            .iter(app.world())
+            .map(|(entity, item, button)| (entity, item.0, button))
+            .collect();
+        let button = |choice| rows.iter().find(|row| row.1 == choice).map(|row| row.2);
+        assert_eq!(button(TeamChoice::Join(Team::Red)), Some(false), "a full team is a button");
+        assert_eq!(button(TeamChoice::Join(Team::Blue)), Some(true));
+        assert_eq!(button(TeamChoice::Spectate), Some(true));
+
+        let blue = rows.iter().find(|row| row.1 == TeamChoice::Join(Team::Blue)).unwrap().0;
+        app.world_mut().trigger(ButtonActivated { entity: blue });
+        app.world_mut().flush();
+        let asked: Vec<_> = app.world().resource::<Messages<ChooseTeam>>().iter_current_update_messages().map(|ask| ask.choice).collect();
+        assert_eq!(asked, vec![TeamChoice::Join(Team::Blue)]);
+        assert_eq!(app.world().resource::<TeamPicker>().asked_from, Some(Seat::Choosing));
+    }
+
+    fn press_escape(app: &mut App) {
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Escape);
+        crate::common::keybind::resolve_now(app.world_mut());
+        app.world_mut().run_schedule(Update);
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().release(KeyCode::Escape);
+    }
+
+    /// Breaks if Escape leaves up a picker the player asked for, or lets the pause menu open too.
+    #[test]
+    fn escape_closes_a_picker_that_was_asked_for() {
+        let mut app = app();
+        app.world_mut().resource_mut::<TeamOptions>().seat = Seat::Playing(None);
+        app.insert_resource(TeamPicker { wanted: true, asked_from: None });
+        press_escape(&mut app);
+        assert!(!app.world().resource::<TeamPicker>().wanted, "the picker stayed up");
+        assert!(app.world().resource::<EscapeTaken>().0, "the pause menu would open as well");
+    }
+
+    /// Breaks if Escape is taken while the picker bars the way in, leaving no way to the menu.
+    #[test]
+    fn escape_is_left_for_the_menu_while_the_picker_bars_the_way() {
+        let mut app = app();
+        app.insert_resource(TeamPicker { wanted: true, asked_from: None });
+        press_escape(&mut app);
+        assert!(!app.world().resource::<EscapeTaken>().0, "no way to the menu while choosing");
+    }
+
+    /// Breaks if the pause menu's Change Teams does not bring the picker up.
+    #[test]
+    fn change_teams_from_the_pause_menu_brings_it_up() {
+        let mut app = app();
+        app.world_mut().resource_mut::<TeamOptions>().seat = Seat::Playing(None);
+        app.insert_resource(ChangeTeamsAsked);
+        app.update();
+        assert!(up(&app), "the picker did not come up");
+        assert!(!app.world().contains_resource::<ChangeTeamsAsked>());
     }
 }

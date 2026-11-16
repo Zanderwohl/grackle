@@ -99,18 +99,22 @@ pub fn explode(
             && !bodies.contains(target)
         {
             let amount = scaled(blast, 1.0);
-            damage.write(Damage { target, source: blast.source, amount, point: blast.at, from: Some(blast.at), kill_shove: None, cause: Cause { reflected: blast.reflected, ..Cause::of(blast.weapon, How::Direct) } });
+            damage.write(Damage { target, source: blast.source, amount, point: blast.at, from: Some(blast.at), kill_shove: None, cause: Cause { reflected: blast.reflected, critical: blast.critical, ..Cause::of(blast.weapon, How::Direct) } });
         }
 
         for (entity, boxes, impulse, stance, player) in &mut bodies {
             let center = boxes.body.center;
+            if blast.spare == Some(entity) {
+                continue;
+            }
             let direct = blast.direct.filter(|target| *target == entity);
             let mine = allegiances.is_self(blast.source, entity);
-            let amount = match direct {
+            let worth = |blast: &Explosion| match direct {
                 Some(_) => scaled(blast, 1.0),
                 None if mine => self_splash(blast, &boxes.body),
                 None => splash(blast, center),
             };
+            let amount = worth(blast);
             // Before the ray, which is the expensive part: most bodies in a
             // map are nowhere near any one blast.
             if amount == 0 {
@@ -126,7 +130,9 @@ pub fn explode(
             {
                 let crouched = stance == Some(&Stance::Crouched);
                 let grounded = player.is_some_and(Player::on_ground);
-                impulse.0 += knockback(blast.at, center, amount, mine, crouched, grounded);
+                // A crit hurts more and pushes no harder.
+                let pushed_by = if blast.critical { worth(&Explosion { critical: false, ..*blast }) } else { amount };
+                impulse.0 += knockback(blast.at, center, pushed_by, mine, crouched, grounded);
             }
 
             damage.write(Damage {
@@ -139,7 +145,7 @@ pub fn explode(
                 point: if direct.is_some() { blast.at } else { center },
                 from: Some(blast.at),
                 kill_shove: None,
-                cause: Cause { reflected: blast.reflected, ..Cause::of(blast.weapon, if direct.is_some() { How::Direct } else { How::Splash }) },
+                cause: Cause { reflected: blast.reflected, critical: blast.critical, ..Cause::of(blast.weapon, if direct.is_some() { How::Direct } else { How::Splash }) },
             });
         }
 
@@ -154,7 +160,7 @@ pub fn explode(
 
 /// `blast`'s damage to somebody other than its source taking `share` of it.
 fn scaled(blast: &Explosion, share: f32) -> u32 {
-    (blast.damage as f32 * blast.scale * share).round() as u32
+    (blast.center_damage() * share).round() as u32
 }
 
 /// Falling off in a line from the blast to the body's center, down to the blast's edge share at
@@ -171,7 +177,8 @@ fn splash(blast: &Explosion, center: Vec3) -> u32 {
 /// TF2's self-splash: caught if any of the box is inside the radius, measured
 /// to the nearer of the box's center and its feet, and never below
 /// [`SELF_SPLASH_FLOOR`]. Kinder than [`splash`] on purpose — it is what a
-/// rocket jump costs and how hard it throws. Not scaled by distance, which is from the source.
+/// rocket jump costs and how hard it throws. Not scaled by distance, which is from the source,
+/// nor raised by a crit.
 fn self_splash(blast: &Explosion, body: &Box3) -> u32 {
     let nearest = blast.at.clamp(body.center - body.half_extents, body.center + body.half_extents);
     if blast.radius <= 0.0 || nearest.distance(blast.at) > blast.radius {
@@ -188,7 +195,7 @@ fn self_splash(blast: &Explosion, body: &Box3) -> u32 {
 /// nav bake's rocket jumps, which have no entities to send messages about.
 #[allow(clippy::too_many_arguments)]
 pub fn own_blast(world: &CollisionWorld, at: Vec3, radius: f32, damage: u32, body: &Box3, crouched: bool, grounded: bool) -> (u32, Vec3) {
-    let blast = Explosion { at, radius, damage, at_edge: 0.0, scale: 1.0, knockback: 0.0, source: crate::common::damage::DamageSource::World, direct: None, weapon: None, reflected: false };
+    let blast = Explosion { at, radius, damage, at_edge: 0.0, scale: 1.0, knockback: 0.0, source: crate::common::damage::DamageSource::World, direct: None, weapon: None, reflected: false, critical: false, spare: None };
     let amount = self_splash(&blast, body);
     if amount == 0 || !in_sight(world, at, body.center, body.center.distance(at)) {
         return (0, Vec3::ZERO);
@@ -229,9 +236,14 @@ fn in_sight(world: &CollisionWorld, from: Vec3, to: Vec3, distance: f32) -> bool
 }
 
 /// Reads [`Effect`] rather than `Explosion`: `Explosion` exists only on the
-/// authority, `Effect` is relayed to clients.
-fn mark_blasts(mut commands: Commands, mut effects: MessageReader<Effect>) {
+/// authority, `Effect` is relayed to clients. Marks only while `F6` shows them, but drains
+/// either way, so turning it on does not mark what went off before.
+fn mark_blasts(mut commands: Commands, mut effects: MessageReader<Effect>, show: Option<Res<crate::game::skeleton::ShowBones>>) {
+    let shown = show.is_some_and(|show| show.0);
     for effect in effects.read() {
+        if !shown {
+            continue;
+        }
         let (shape, lifetime) = match *effect {
             Effect::Blast { at, radius } => (MarkShape::Blast { at, radius }, BLAST_MARK_LIFETIME),
             Effect::Gust { from, toward, range, spread, .. } => {
@@ -257,21 +269,22 @@ fn fade_blast_marks(
     }
 }
 
-/// A blast as a sphere the size of the damage radius, a gust as its cone on `F6`; what a player
-/// sees of a gust is [`crate::game::gust_ring`].
+/// On `F6`, a blast as a sphere the size of the damage radius and a gust as its cone; what a
+/// player sees of them is [`crate::game::blast_cloud`] and [`crate::game::gust_ring`].
 fn draw_blast_marks(mut gizmos: Gizmos, marks: Query<&EffectMark>, show: Option<Res<crate::game::skeleton::ShowBones>>) {
-    let cones = show.is_some_and(|show| show.0);
+    if !show.is_some_and(|show| show.0) {
+        return;
+    }
     for mark in &marks {
         let alpha = (mark.remaining / mark.lifetime).clamp(0.0, 1.0);
         match mark.shape {
             MarkShape::Blast { at, radius } => {
                 gizmos.sphere(Isometry3d::from_translation(at), radius, Color::srgba(1.0, 0.55, 0.1, alpha));
             }
-            MarkShape::Gust { from, toward, range, spread } if cones => {
+            MarkShape::Gust { from, toward, range, spread } => {
                 let (cone, isometry) = crate::game::flame::cone_gizmo(from, toward, range, spread);
                 gizmos.primitive_3d(&cone, isometry, Color::srgba(0.75, 0.9, 1.0, alpha * 0.6));
             }
-            MarkShape::Gust { .. } => {}
         }
     }
 }
@@ -313,7 +326,7 @@ mod tests {
     }
 
     fn blast(at: Vec3, direct: Option<Entity>) -> Explosion {
-        Explosion { at, radius: 4.0, damage: 60, at_edge: 0.0, scale: 1.0, knockback: 10.0, source: SHOOTER, direct, weapon: None, reflected: false }
+        Explosion { at, radius: 4.0, damage: 60, at_edge: 0.0, scale: 1.0, knockback: 10.0, source: SHOOTER, direct, weapon: None, reflected: false, critical: false, spare: None }
     }
 
     fn damage_written(world: &mut World) -> Vec<Damage> {
@@ -336,6 +349,37 @@ mod tests {
         assert_eq!(splash(&near, Vec3::ZERO), 75);
         let body = Box3 { center: Vec3::new(0.0, 1.0, 0.0), half_extents: Vec3::new(0.4, 1.0, 0.4) };
         assert_eq!(self_splash(&near, &body), self_splash(&floored, &body));
+    }
+
+    /// Breaks if a crit stops tripling others' damage, keeps the range scale, loses the splash
+    /// falloff, or raises the shooter's own share.
+    #[test]
+    fn a_critical_blast_triples_others_past_the_range_scale_but_not_the_shooter() {
+        let plain = Explosion { at_edge: 0.5, scale: 0.5, ..blast(Vec3::ZERO, None) };
+        let crit = Explosion { critical: true, ..plain };
+        assert_eq!(splash(&crit, Vec3::ZERO), 180);
+        assert_eq!(splash(&crit, Vec3::new(2.0, 0.0, 0.0)), 135);
+        assert_eq!(splash(&crit, Vec3::new(4.0, 0.0, 0.0)), 90);
+        assert_eq!(scaled(&crit, 1.0), 180, "a direct hit");
+        let body = Box3 { center: Vec3::new(0.0, 1.0, 0.0), half_extents: Vec3::new(0.4, 1.0, 0.4) };
+        assert_eq!(self_splash(&crit, &body), self_splash(&plain, &body));
+    }
+
+    /// Breaks if the blast's crit does not reach the record of each hit, or raises the push.
+    #[test]
+    fn a_critical_blast_records_its_hits_as_critical_and_pushes_no_harder() {
+        use crate::game::player::Impulse;
+        let mut world = a_world();
+        let near = body(&mut world, Vec3::new(1.0, 0.0, 0.0));
+        world.entity_mut(near).insert(Impulse::default());
+        world.write_message(Explosion { critical: true, ..blast(Vec3::ZERO, None) });
+        world.run_system_once(explode).unwrap();
+        let hits = damage_written(&mut world);
+        let hit = hits.iter().find(|hit| hit.target == near).unwrap();
+        assert_eq!(hit.amount, 135);
+        assert!(hit.cause.critical);
+        let pushed = world.get::<Impulse>(near).unwrap().0;
+        assert!((pushed.length() - KNOCKBACK_PER_DAMAGE * 45.0).abs() < 1e-3, "pushed {pushed}");
     }
 
     #[test]

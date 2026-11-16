@@ -223,13 +223,18 @@ pub struct Cause {
     pub how: How,
     /// Airblasted back: the source is whoever turned it, the weapon whoever fired it.
     pub reflected: bool,
+    /// A critical hit. The amount already counts it; this is the record.
+    pub critical: bool,
 }
 
 impl Cause {
     pub fn of(weapon: Option<crate::common::weapon::WeaponId>, how: How) -> Self {
-        Cause { weapon, how, reflected: false }
+        Cause { weapon, how, reflected: false, critical: false }
     }
 }
+
+/// Replaces any ramp-up or falloff by distance.
+pub const CRIT_MULTIPLIER: f32 = 3.0;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum How {
@@ -246,6 +251,8 @@ pub enum How {
     Trigger,
     /// Emptied outright: a Kill trigger, a suicide, a team switch.
     Kill,
+    /// Emptied outright by the explode key, which blows the body apart.
+    Exploded,
 }
 
 /// A weapon cannot know whether a hit is fatal, only `apply_damage` can, so
@@ -265,6 +272,8 @@ pub struct Kill {
     pub target: Entity,
     pub source: DamageSource,
     pub point: Vec3,
+    /// [`How::Kill`], or [`How::Exploded`] for the explode key.
+    pub how: How,
 }
 
 /// Anything that goes off writes one; only [`crate::game::explosion`] knows
@@ -279,6 +288,8 @@ pub struct Explosion {
     pub at_edge: f32,
     /// Times `damage` for everybody but the source, by how far the blast went off from them.
     pub scale: f32,
+    /// [`CRIT_MULTIPLIER`] in place of `scale`, for everybody but the source.
+    pub critical: bool,
     /// Meters per second of corpse shove at the center. A living body is
     /// pushed by the damage it takes instead; see `crate::game::explosion`.
     pub knockback: f32,
@@ -290,6 +301,15 @@ pub struct Explosion {
     pub weapon: Option<crate::common::weapon::WeaponId>,
     /// Airblasted back before it went off.
     pub reflected: bool,
+    /// A body the blast does not touch: the explode key's own, which its `Kill` empties.
+    pub spare: Option<Entity>,
+}
+
+impl Explosion {
+    /// The center's damage to anybody but the source.
+    pub fn center_damage(&self) -> f32 {
+        self.damage as f32 * if self.critical { CRIT_MULTIPLIER } else { self.scale }
+    }
 }
 
 #[derive(Message, Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]

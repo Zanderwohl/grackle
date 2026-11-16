@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <filter id="soft" x="-10%" y="-10%" width="120%" height="120%"><feGaussianBlur stdDeviation="7"/></filter>
+    <filter id="softer" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="16"/></filter>
+  </defs>
+  <g filter="url(#soft)" fill="#e2e2e2">
+    <circle cx="256.0" cy="256.0" r="94.4"/>
+    <circle cx="294.1" cy="334.7" r="63.4"/>
+    <circle cx="194.5" cy="299.9" r="76.6"/>
+    <circle cx="227.8" cy="377.1" r="57.9"/>
+    <circle cx="161.9" cy="217.3" r="51.1"/>
+    <circle cx="182.3" cy="235.7" r="57.7"/>
+    <circle cx="172.8" cy="335.6" r="54.8"/>
+    <circle cx="166.9" cy="328.4" r="74.1"/>
+  </g>
+  <g filter="url(#softer)" fill="#ffffff" fill-opacity="0.9">
+    <circle cx="240.9" cy="239.0" r="73.6"/>
+    <circle cx="283.9" cy="323.3" r="49.4"/>
+    <circle cx="182.2" cy="286.1" r="59.7"/>
+    <circle cx="218.6" cy="366.7" r="45.1"/>
+    <circle cx="153.7" cy="208.1" r="39.8"/>
+    <circle cx="173.0" cy="225.3" r="45.0"/>
+    <circle cx="164.0" cy="325.7" r="42.8"/>
+    <circle cx="155.0" cy="315.0" r="57.8"/>
+  </g>
+</svg>

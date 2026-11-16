@@ -14,7 +14,7 @@ use resvg::usvg;
 
 use crate::common::app_mode::AppMode;
 use crate::common::damage::{Cause, How};
-use crate::common::icons::render_svg;
+use crate::common::icons::{demultiplied, render_svg};
 use crate::common::weapon::WeaponCatalog;
 
 pub const SKULL: &str = "kill_skull";
@@ -26,7 +26,7 @@ const TEXELS: u32 = 64;
 pub fn icon_for<'a>(cause: &Cause, catalog: Option<&'a WeaponCatalog>) -> &'a str {
     match cause.how {
         How::Burn => FLAME,
-        How::Splash => EXPLOSION,
+        How::Splash | How::Exploded => EXPLOSION,
         How::Trigger | How::Kill => SKULL,
         _ => cause.weapon.and_then(|weapon| catalog?.get(weapon)?.icon.as_deref()).unwrap_or(SKULL),
     }
@@ -81,16 +81,7 @@ impl KillIcons {
 /// White where the SVG is, so `ImageNode::color` is the color it is drawn in.
 pub fn rasterize(svg: &[u8]) -> Result<Image, usvg::Error> {
     let pixmap = render_svg(svg, TEXELS)?;
-    // tiny-skia's pixels are premultiplied, and a UI image is blended as straight alpha: left
-    // premultiplied, every edge is a dark fringe.
-    let rgba = pixmap
-        .pixels()
-        .iter()
-        .flat_map(|pixel| {
-            let pixel = pixel.demultiply();
-            [pixel.red(), pixel.green(), pixel.blue(), pixel.alpha()]
-        })
-        .collect();
+    let rgba = demultiplied(&pixmap).flatten().collect();
     Ok(Image::new(
         Extent3d { width: TEXELS, height: TEXELS, depth_or_array_layers: 1 },
         TextureDimension::D2,
