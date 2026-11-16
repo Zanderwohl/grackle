@@ -95,6 +95,12 @@ impl Swatch {
         }
     }
 
+    /// The same hue and chroma, `by` lighter in OKLCH lightness (darker when negative).
+    pub fn lightened(&self, by: f32) -> Self {
+        let base = Oklcha::from(self.base);
+        Self::from_oklch((base.lightness + by).clamp(0.05, 0.97), base.chroma, base.hue)
+    }
+
     /// Whichever of white and [`Ink::Black`] stands out on the base.
     pub fn text(&self) -> Color {
         if Oklcha::from(self.base).lightness > 0.72 { Ink::Black.on(self) } else { Ink::White.on(self) }

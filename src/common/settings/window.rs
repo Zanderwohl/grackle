@@ -1,5 +1,5 @@
-//! The Settings window, opened from every authoring mode's Edit menu or the
-//! [`Action::Settings`] chord. It edits a draft: nothing is saved until Apply,
+//! The Settings window, opened from every authoring mode's Edit menu, the
+//! [`Action::Settings`] chord, or the pause menu in Play. It edits a draft: nothing is saved until Apply,
 //! and Close with changes asks first.
 //!
 //! A floating window, because every mode opens it and the dock belongs to the
@@ -156,7 +156,7 @@ impl SettingsWindow {
 
     fn dismiss(&mut self) {
         if self.open {
-            info!("Leaving the editors closed the Settings window; changes not applied were dropped");
+            info!("Starting a round closed the Settings window; changes not applied were dropped");
         }
         self.sheet.stop();
         self.asking = false;
@@ -426,12 +426,13 @@ fn capture_binding(
     window.sheet.capture_from(&mut window.keys_draft, &keys, &mut messages);
 }
 
+/// Insert to open the Settings window on the next egui pass, from code with no `egui::Context`.
 #[derive(Resource, Default)]
-struct OpenRequested;
+pub struct OpenSettings;
 
 fn open_from_the_keyboard(mut commands: Commands, actions: Res<Actions>) {
     if actions.just_pressed(Action::Settings) {
-        commands.insert_resource(OpenRequested);
+        commands.insert_resource(OpenSettings);
     }
 }
 
@@ -444,10 +445,10 @@ fn draw_settings(
     mut keymap: ResMut<Keymap>,
     mut quiet: ResMut<Quiet>,
     keys: Res<ButtonInput<KeyCode>>,
-    requested: Option<Res<OpenRequested>>,
+    requested: Option<Res<OpenSettings>>,
     mode: Option<Res<State<AppMode>>>,
     (music, pack_fonts): (Res<MusicLibrary>, Res<PackFonts>),
-    mut published: Local<bool>,
+    (mut published, mut last_mode): (Local<bool>, Local<Option<AppMode>>),
 ) {
     let Ok(ctx) = contexts.ctx_mut() else {
         // No window can be drawn, so nothing may stay quiet for it.
@@ -458,17 +459,16 @@ fn draw_settings(
         keybind::publish(ctx, &keymap);
         *published = true;
     }
-    let authoring = mode.is_none_or(|mode| mode.get().is_authoring());
-    if take_request(ctx) || requested.is_some() {
-        commands.remove_resource::<OpenRequested>();
-        if authoring {
-            window.open(ctx, &settings, &keymap);
-        }
-    }
-    // Play grabs the cursor, so a window left open there could not be closed
-    // and would keep every action quiet.
-    if !authoring {
+    // Starting a round grabs the cursor, so a window carried into Play could not be closed and
+    // would keep every action quiet. Opened from the pause menu in Play, the menu lends the mouse.
+    let now = mode.map(|mode| *mode.get());
+    if now == Some(AppMode::Play) && *last_mode != now {
         window.dismiss();
+    }
+    *last_mode = now;
+    if take_request(ctx) || requested.is_some() {
+        commands.remove_resource::<OpenSettings>();
+        window.open(ctx, &settings, &keymap);
     }
     if window.is_open() {
         // Written through only by Apply, so drawing is not an edit.

@@ -69,6 +69,7 @@ pub mod taunt_menu;
 pub mod taunt_view;
 pub mod kill_icon;
 pub mod plate;
+pub mod plate_button;
 pub mod pickup_beam;
 pub mod rounds;
 pub mod sunlit;
@@ -106,7 +107,7 @@ impl Plugin for GamePlugin {
             .add_plugins((crate::game::team_choice::TeamChoicePlugin, crate::game::team_picker::TeamPickerPlugin, crate::game::spectate::SpectatePlugin, crate::game::kill_cam::KillCamPlugin))
             .add_plugins(crate::game::damage_direction::DamageDirectionPlugin)
             .add_plugins(crate::game::name_tag::NameTagPlugin)
-            .add_plugins((crate::game::plate::PlatePlugin, crate::game::kill_feed::KillFeedPlugin, crate::game::taunt_menu::TauntMenuPlugin))
+            .add_plugins((crate::game::plate::PlatePlugin, crate::game::plate_button::PlateButtonPlugin, crate::game::kill_feed::KillFeedPlugin, crate::game::taunt_menu::TauntMenuPlugin))
             .add_plugins(crate::game::trigger::TriggerPlugin)
             .init_state::<AppMode>()
             .init_resource::<StartInPlay>()
@@ -149,7 +150,7 @@ impl Plugin for GamePlugin {
             .init_resource::<ViewPreference>()
             .init_resource::<crate::game::player::CameraPull>()
             .add_plugins(crate::game::condition::ConditionPlugin)
-            .add_systems(Update, (toggle_mode, start_in_play))
+            .add_systems(Update, (toggle_mode, start_in_play, leave_a_round_without_a_server))
             .add_systems(Update, (
                 toggle_view,
                 // Before any body: the team picker is drawn on the view.
@@ -245,12 +246,35 @@ fn toggle_mode(
     });
 }
 
+/// A client that stops being one drops what the server sent, which it would
+/// otherwise stand up a second copy of as the authority (props, pickups).
+/// Losing its server mid-round sends it to the editor, since nobody runs that round.
+fn leave_a_round_without_a_server(
+    mut commands: Commands,
+    role: Option<Res<NetRole>>,
+    mode: Res<State<AppMode>>,
+    mut next: ResMut<NextState<AppMode>>,
+    sent: Query<Entity, With<lightyear::prelude::client::Remote>>,
+    mut was_client: Local<bool>,
+) {
+    let client = role.is_some_and(|role| matches!(*role, NetRole::Client { .. }));
+    if *was_client && !client {
+        for entity in &sent {
+            commands.entity(entity).try_despawn();
+        }
+        if *mode.get() == AppMode::Play {
+            info!("No longer connected to a server; back to the editor");
+            next.set(AppMode::Editor);
+        }
+    }
+    *was_client = client;
+}
+
 fn enter_play(
     mut commands: Commands,
     mut collision: ResMut<CollisionWorld>,
     volumes: MapVolumes,
     mut editor_cameras: Query<&mut Camera, With<Multicam>>,
-    window: Query<Entity, With<PrimaryWindow>>,
 ) {
     // First: `give_bodies_to_whoever_needs_one` asks it where a body can stand
     // on the next Update.
@@ -268,7 +292,6 @@ fn enter_play(
         camera.is_active = false;
     }
 
-    set_cursor_captured(&mut commands, &window, true);
     info!("Playing {} volume(s); F5 to go back to editing", volumes.len());
 }
 
@@ -447,6 +470,27 @@ mod tests {
         app.update();
         press(&mut app);
         assert_eq!(mode(&app), AppMode::Prop, "F5 started a round from the prop editor");
+    }
+
+    /// Breaks if a client left without a server stays in a round nobody runs or keeps what it was sent.
+    #[test]
+    fn a_client_that_disconnects_mid_round_goes_back_to_the_editor() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, bevy::state::app::StatesPlugin))
+            .init_state::<AppMode>()
+            .insert_resource(NetRole::Client { host: "elsewhere".into(), port: 27100 })
+            .add_systems(Update, leave_a_round_without_a_server);
+        app.world_mut().resource_mut::<NextState<AppMode>>().set(AppMode::Play);
+        app.update();
+        app.update();
+        assert_eq!(*app.world().resource::<State<AppMode>>().get(), AppMode::Play);
+
+        let sent = app.world_mut().spawn(lightyear::prelude::client::Remote).id();
+        app.insert_resource(NetRole::Solo);
+        app.update();
+        app.update();
+        assert_eq!(*app.world().resource::<State<AppMode>>().get(), AppMode::Editor);
+        assert!(app.world().get_entity(sent).is_err(), "what the server sent outlived the link");
     }
 
     #[test]

@@ -459,10 +459,11 @@ changes asks. Pages: **General** (the language, in
 or chord; a modifier let go alone is bound alone; a mouse button is bound
 only when pressed on the prompt, and a press elsewhere stops the wait; Escape
 stops it too; keys are captured from Bevy's input, not egui's) and **Developer** (every pack's
-`icons/*.svg` in a grid with its name). Not reachable in Play yet, where the
-cursor is grabbed; leaving the editors closes it, dropping an unapplied
-draft, since an open window there could not be closed and would keep every
-action quiet.
+`icons/*.svg` in a grid with its name). In Play it is opened from the pause
+menu (`OpenSettings`), and `MouseHeld::settings` keeps the cursor free while it
+is up. Starting a round closes it, dropping an unapplied draft, since a window
+carried into Play with the cursor grabbed could not be closed and would keep
+every action quiet.
 
 **Every authoring mode has the same Edit menu**, just right of File:
 [`src/common/edit_menu.rs`](src/common/edit_menu.rs), with Undo, Redo and
@@ -532,7 +533,16 @@ by clicking elsewhere, so a window with no way to hand the pointer back is a
 window you have to kill the process to leave. Plain Bevy UI, not `egui`: the
 panels are egui because they are editor tools, and this is part of the game, so
 it has to exist in a build with no editor and on a browser tab where the egui
-layer is one more thing to have gone wrong.
+layer is one more thing to have gone wrong. It offers **Resume**, **Settings**
+(closes the menu and opens the Settings window) and **Back to Editor** — on the
+authority, ending the round for everybody, who stay connected — or, on a
+client, **Disconnect**, which also leaves Play in the same frame. A client that
+stops being one drops every entity the server sent (lightyear's `Remote`) and,
+mid-round, goes back to the editor (`leave_a_round_without_a_server`). Its buttons are `PlateButton`s
+([`src/game/plate_button.rs`](src/game/plate_button.rs)): a `Plate` that is
+lighter while hovered and darker while held, and triggers `ButtonActivated` on
+release; reuse it for any in-game button. A plate's child marked
+`FollowsTheLean` is moved sideways to keep its distance from the slanted sides.
 
 Three things there are easy to get wrong and none of them errors:
 
@@ -549,10 +559,12 @@ Three things there are easy to get wrong and none of them errors:
   moment you open the menu. `PlayerInput::release_controls` is the one place
   that distinction is written down, deliberately listing the fields rather than
   spreading `..default()` around, so a new field gets classified on purpose.
-- **The cursor is only touched while in Play.** Change detection counts a
-  resource's insertion as a change, so a `resource_changed` system that sets
-  the cursor unconditionally grabs it inside the editor on the first frame of
-  the process.
+- **The cursor is only touched while in Play**, by `grab_the_cursor` alone:
+  grabbed while we have a body (`LocalPlayer`) and no menu holds the mouse,
+  free otherwise, so a spectator or somebody waiting to come back always has
+  it. Change detection counts a resource's insertion as a change, so a
+  `resource_changed` system that sets the cursor unconditionally grabs it
+  inside the editor on the first frame of the process.
 
 The **HUD camera** carries `IsDefaultUiCamera`: the window has eight cameras
 in it and Bevy UI otherwise picks one by ambiguity rules rather than by being
@@ -3050,7 +3062,7 @@ guarantees is only that being alive is the resting state.
 | Round ends | the server's `leave_play` despawns every body; a client's despawns none, because they are not its to despawn |
 
 `enter_play` no longer spawns anything: it rebuilds `CollisionWorld`, drops
-`OurIdentity` so the new match is a new player, and hands the cursor over. The
+`OurIdentity` so the new match is a new player, and turns the editor cameras off. The
 body follows on the next `Update`, because by then somebody is a player with no
 body.
 

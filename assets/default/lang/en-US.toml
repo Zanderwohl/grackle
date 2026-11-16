@@ -616,7 +616,11 @@ connected = "Connected"
 failed = "Failed: { reason }"
 
 [pause]
-title = "Esc Menu"
+title = "Menu"
+resume = "Resume"
+settings = "Settings"
+back_to_editor = "Back to Editor"
+disconnect = "Disconnect"
 
 [anim]
 no_clips = "No animation selected."
