@@ -278,7 +278,8 @@ mod tests {
                 .with_four_teams([Team::Red, Team::Blue, Team::Blue, Team::Green]),
         ));
 
-        let mut footprint = FootprintRoom::new(PointRef::reference_with_offset(min, 0.0, 0.5, 0.0), 2.75);
+        let mut footprint = FootprintRoom::new(PointRef::reference_with_offset(min, 0.0, 0.5, 0.0), 2.75)
+            .with_surfaces(crate::tool::room::RoomSurfaces { ceiling: Some(crate::common::sky::SKYBOX.into()), ..Default::default() });
         let a = footprint.add_corner(PointRef::reference_with_offset(max, 1.0, 0.0, 0.0));
         let b = footprint.add_corner(PointRef::absolute(6.0, 0.0, 2.0));
         let c = footprint.add_corner(PointRef::absolute(6.0, 0.0, 6.0));
@@ -313,7 +314,7 @@ mod tests {
 
     #[test]
     fn no_shipped_map_has_a_point_that_does_not_resolve() {
-        for name in ["new", "demo", "arena", "cloister"] {
+        for name in ["new", "demo", "arena", "cloister", "waterworks"] {
             let path = PathBuf::from(format!("assets/default/blueprints/{name}.{MAP_BLUEPRINT_EXTENSION}"));
             let mut timeline = load(&path).unwrap().timeline;
             timeline.resolve_all();
@@ -391,7 +392,7 @@ mod tests {
     /// headroom. Do not pin coordinates here.
     #[test]
     fn a_new_map_can_be_stood_in_lit_and_spawned_into() {
-        for name in ["new", "demo", "arena", "cloister"] {
+        for name in ["new", "demo", "arena", "cloister", "waterworks"] {
             let path = PathBuf::from(format!("assets/default/blueprints/{name}.{MAP_BLUEPRINT_EXTENSION}"));
             can_be_stood_in_lit_and_spawned_into(&path);
         }
@@ -444,7 +445,7 @@ mod tests {
         use crate::common::rotation::quat_from_euler;
         use crate::game::collision::CollisionWorld;
 
-        for name in ["new", "demo", "arena", "cloister"] {
+        for name in ["new", "demo", "arena", "cloister", "waterworks"] {
             let path = PathBuf::from(format!("assets/default/blueprints/{name}.{MAP_BLUEPRINT_EXTENSION}"));
             let mut timeline = load(&path).unwrap().timeline;
             timeline.resolve_all();
@@ -482,6 +483,20 @@ mod tests {
     fn every_cloister_spawn_stands_clear_and_walks_everywhere() {
         let places = [Vec3::new(0.0, 4.0, 0.0), Vec3::new(0.0, -1.2, 0.0), Vec3::new(0.0, -4.4, 0.0), Vec3::new(20.0, 4.0, 6.0), Vec3::new(-20.0, 4.0, -6.0)];
         stands_clear_and_walks_everywhere("cloister", 8, &places);
+    }
+
+    /// Breaks if a Waterworks spawn is wedged, or a body cannot walk from it to every other spawn,
+    /// onto the mezzanine and the tower, and down into the cistern and the canal.
+    #[test]
+    fn every_waterworks_spawn_stands_clear_and_walks_everywhere() {
+        let places = [
+            Vec3::new(-30.0, 4.0, -30.0),
+            Vec3::new(18.0, 4.8, 27.0),
+            Vec3::new(-4.0, -4.5, -4.0),
+            Vec3::new(36.0, -4.5, 27.0),
+            Vec3::new(0.0, 0.8, -4.5),
+        ];
+        stands_clear_and_walks_everywhere("waterworks", 8, &places);
     }
 
     fn stands_clear_and_walks_everywhere(name: &str, spawn_count: usize, places: &[Vec3]) {
