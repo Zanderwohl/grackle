@@ -9,7 +9,7 @@ use std::ops::ControlFlow;
 
 use bevy::prelude::*;
 
-use crate::common::world_surface::{self, Face, Volume};
+use crate::common::world_surface::{self, Face, Fill, Volume};
 use crate::prop::archetype::RoundedBox;
 use crate::tool::room::Room;
 use crate::common::grid::Grid;
@@ -36,6 +36,8 @@ pub struct CollisionWorld {
     /// The map's rooms and blocks, in order. [`CollisionWorld::depenetrate`]
     /// needs them to tell which way out of a wall is into the level.
     volumes: Vec<Volume>,
+    /// Filed `FILING_SLACK` wide: `Room::contains` takes points just outside an edge.
+    volume_grid: Grid,
     /// Placed props that block movement. Kept apart from `hulls` because they
     /// are rebuilt on a different trigger: rooms change with the map, props
     /// with what the authority has standing.
@@ -107,10 +109,18 @@ impl CollisionWorld {
     /// The walls are the same surface that is drawn, which is returned for whatever else is
     /// built from it.
     pub fn rebuild_volumes(&mut self, volumes: &[Volume]) -> Vec<Face> {
-        self.volumes = volumes.to_vec();
+        self.set_volumes_only(volumes);
         let faces = world_surface::of_volumes(volumes);
         self.set_surface(&faces);
         faces
+    }
+
+    fn set_volumes_only(&mut self, volumes: &[Volume]) {
+        self.volumes = volumes.to_vec();
+        self.volume_grid = Grid::build(volumes.iter().map(|volume| {
+            let (min, max) = volume.shape.bounds();
+            (min - FILING_SLACK, max + FILING_SLACK)
+        }));
     }
 
     pub fn rebuild(&mut self, rooms: &[Room]) {
@@ -253,8 +263,25 @@ impl CollisionWorld {
         Some((resting, hit.normal))
     }
 
+    /// Answers as [`world_surface::is_air`] does.
     pub fn inside_map(&self, point: Vec3) -> bool {
-        world_surface::is_air(&self.volumes, point)
+        let Some((everywhere, here)) = self.volume_grid.at(point) else {
+            return world_surface::is_air(&self.volumes, point);
+        };
+        // Both lists ascend, so walked down together the last volume in the map's order comes first.
+        let (mut big, mut near) = (everywhere.iter().rev().peekable(), here.iter().rev().peekable());
+        loop {
+            let next = match (big.peek(), near.peek()) {
+                (Some(a), Some(b)) if a > b => big.next(),
+                (_, Some(_)) => near.next(),
+                _ => big.next(),
+            };
+            let Some(&index) = next else { return false };
+            let volume = &self.volumes[index as usize];
+            if volume.shape.contains(point) {
+                return volume.fill == Fill::Air;
+            }
+        }
     }
 
     /// Whether a body stands clear: in the map and touching no wall. A low
@@ -332,17 +359,24 @@ impl CollisionWorld {
         for _ in 0..4 {
             let Some(escapes) = self.escapes(center, half) else { break };
 
+            // Any escape into the map beats every one out of it, so the shortest in the map wins. The
+            // sort is stable, so of two as short the first offered wins.
+            let mut by_length: Vec<(f32, Vec3)> = escapes.iter().map(|moved| ((*moved - center).length(), *moved)).collect();
+            by_length.sort_by(|(a, _), (b, _)| a.total_cmp(b));
+            if let Some((_, moved)) = by_length.into_iter().find(|(_, moved)| self.inside_map(*moved)) {
+                center = moved;
+                continue;
+            }
+
+            // The penalty rounds away a length's last bits, so close lengths tie and the first offered
+            // wins.
             let mut best: Option<(f32, Vec3)> = None;
             for moved in escapes {
-                let mut score = (moved - center).length();
-                if !self.inside_map(moved) {
-                    score += OUTSIDE_MAP_PENALTY;
-                }
+                let score = (moved - center).length() + OUTSIDE_MAP_PENALTY;
                 if best.is_none_or(|(best_score, _)| score < best_score) {
                     best = Some((score, moved));
                 }
             }
-
             match best {
                 Some((_, moved)) => center = moved,
                 None => break,
@@ -751,5 +785,65 @@ mod tests {
         let freed = world.depenetrate(buried, HALF);
         assert!(world.fits(freed, HALF), "still inside at {freed}");
         assert!(freed.y > buried.y, "pushed down through the ramp to {freed}");
+    }
+
+    /// Breaks if the grid answers differently from walking every volume, on the shipped maps or on
+    /// rooms and blocks nested in each other.
+    #[test]
+    fn the_filed_volumes_answer_as_every_volume_does() {
+        use crate::constants::MAP_BLUEPRINT_EXTENSION;
+
+        let mut worlds = vec![("sprawl".to_owned(), a_sprawl())];
+        let mut nested = CollisionWorld::default();
+        nested.rebuild_volumes(&[
+            Volume::air(Room::new(Vec3::new(-10.0, 0.0, -10.0), Vec3::new(10.0, 6.0, 10.0))),
+            Volume::solid(Room::new(Vec3::new(-4.0, 0.0, -4.0), Vec3::new(4.0, 6.0, 4.0))),
+            Volume::air(Room::new(Vec3::new(-6.0, 1.0, -1.0), Vec3::new(6.0, 3.0, 1.0))),
+            Volume::solid(Room::prism(vec![Vec2::new(-1.0, -1.0), Vec2::new(1.0, -1.0), Vec2::new(0.0, 1.0)], 1.0, 2.0)),
+            // Too big to file, so in every query.
+            Volume::solid(Room::new(Vec3::new(-500.0, 5.0, -500.0), Vec3::new(500.0, 5.5, 500.0))),
+            Volume::air(Room::new(Vec3::new(2.0, 4.5, 2.0), Vec3::new(3.0, 6.0, 3.0))),
+        ]);
+        worlds.push(("nested".to_owned(), nested));
+        for name in ["arena", "cloister", "waterworks"] {
+            let path = std::path::PathBuf::from(format!("assets/default/blueprints/{name}.{MAP_BLUEPRINT_EXTENSION}"));
+            let mut timeline = crate::editor::save::load(&path).unwrap().timeline;
+            timeline.resolve_all();
+            let volumes: Vec<_> = timeline.active_features().flat_map(|(_, feature)| feature.object().volumes()).collect();
+            let mut world = CollisionWorld::default();
+            world.set_volumes_only(&volumes);
+            worlds.push((name.to_owned(), world));
+        }
+
+        let mut seed = 0x6a09_e667;
+        for (name, world) in &worlds {
+            // Leaving out the slab, which would spread the points thin.
+            let (low, high) = world
+                .volumes
+                .iter()
+                .map(|volume| volume.shape.bounds())
+                .filter(|(min, max)| (*max - *min).max_element() < 200.0)
+                .fold((Vec3::splat(f32::INFINITY), Vec3::splat(f32::NEG_INFINITY)), |(lo, hi), (min, max)| (lo.min(min), hi.max(max)));
+            let (low, high) = (low - 2.0, high + 2.0);
+            let mut points: Vec<Vec3> = (0..20_000)
+                .map(|_| low + Vec3::new(scatter(&mut seed), scatter(&mut seed), scatter(&mut seed)) * (high - low))
+                .collect();
+            for volume in &world.volumes {
+                let (min, max) = volume.shape.bounds();
+                let corners = volume.shape.footprint().iter().chain(volume.shape.holes().iter().flatten()).flat_map(|corner| [Vec3::new(corner.x, min.y, corner.y), Vec3::new(corner.x, max.y, corner.y)]);
+                for corner in corners.chain([min, max, (min + max) / 2.0]) {
+                    for nudge in [0.0, 1.0e-6, 9.0e-6, 2.0e-5, 1.0e-3] {
+                        points.extend([corner + Vec3::splat(nudge), corner - Vec3::splat(nudge), corner + Vec3::new(nudge, -nudge, nudge)]);
+                    }
+                }
+            }
+            let mut air = 0;
+            for point in &points {
+                let expected = world_surface::is_air(&world.volumes, *point);
+                assert_eq!(world.inside_map(*point), expected, "{name} at {point}");
+                air += usize::from(expected);
+            }
+            assert!(air > 1000 && points.len() - air > 1000, "{name}: too few of one kind to have tested anything: {air} of {}", points.len());
+        }
     }
 }
