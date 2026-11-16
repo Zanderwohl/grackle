@@ -494,7 +494,7 @@ fn start_our_shots_at_the_muzzle(
 
 /// Composes onto what `interpolate_bodies` wrote this frame, which it rewrites
 /// every frame the two differ.
-fn draw_our_shots_from_the_muzzle(
+pub fn draw_our_shots_from_the_muzzle(
     mut commands: Commands,
     mut shots: Query<(Entity, &mut FromTheMuzzle, &mut Transform)>,
 ) {

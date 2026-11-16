@@ -67,13 +67,14 @@ const LAST_CLOUD_GONE: f32 = LIFETIME.1 + 0.5;
 /// Seconds an emitter waits unused for another blast before it goes.
 const KEPT_IDLE: f32 = 5.0;
 
-const CLOUD_GRID: UVec2 = UVec2::new(4, 2);
+pub(crate) const CLOUD_GRID: UVec2 = UVec2::new(4, 2);
 const CLOUD_TEXELS: u32 = 128;
 
 #[derive(Resource)]
-struct CloudLook {
+pub(crate) struct CloudLook {
     effect: Handle<EffectAsset>,
-    sheet: Handle<Image>,
+    /// Also the rocket trail's clouds.
+    pub(crate) sheet: Handle<Image>,
 }
 
 /// An emitter, reset for each blast it is given; `idle` is seconds since the last.

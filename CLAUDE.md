@@ -2855,6 +2855,15 @@ fades out (`BURN`). The clouds are white SVGs, `particles/svg/cloud_{1..8}.svg`,
 one sheet at startup; a pack without them draws the airblast's puffs. The damage sphere is drawn
 on `F6`.
 
+**A projectile may trail clouds** ([`src/game/rocket_trail.rs`](src/game/rocket_trail.rs)):
+`trail = "cloud"` on its spec in `weapons.toml` (the rocket launcher and the RPG). The blast's
+clouds, lasting longer and burning on to white, then fading as they grow, with no gravity, left where it passed, a dozen per meter. The emitter is its own
+entity replaying the projectile's drawn path 10 cm behind it, so our own shot trails from the
+barrel; when the projectile goes it runs on to where the projectile was going a tick on, stopped
+at a wall, since the drawn position lags the simulated one, and stops; it is despawned once its
+clouds fade. It cuts across a
+bounce, so nothing that bounces has one (`only_projectiles_that_never_bounce_trail`).
+
 `ProjectileEmitter` fires a spec along its own forward on an interval.
 Nothing places one: the player's key for it is gone, and it is meant to come
 back as a map feature.

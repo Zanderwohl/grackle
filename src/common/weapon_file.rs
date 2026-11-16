@@ -572,4 +572,24 @@ mod tests {
             "a weapon in the file is missing from the catalog, which is a collision"
         );
     }
+
+    /// Fails if a shipped projectile that bounces has a trail, or the rocket launcher or the RPG
+    /// loses its trail.
+    #[test]
+    fn only_projectiles_that_never_bounce_trail() {
+        use crate::common::projectile::Trail;
+        let catalog = the_default_pack();
+        let mut trailed = vec![];
+        for weapon in &catalog.weapons {
+            for mounted in [&weapon.primary, &weapon.secondary] {
+                let WeaponAction::Projectile(spec) = &mounted.action else { continue };
+                if spec.trail != Trail::None {
+                    assert_eq!(spec.max_bounces, 0, "{} bounces and trails", weapon.key);
+                    trailed.push(weapon.key.as_str());
+                }
+            }
+        }
+        trailed.sort();
+        assert_eq!(trailed, ["rocket_launcher", "rpg"]);
+    }
 }
