@@ -2536,6 +2536,15 @@ rounds a body's share once, after they are added; a projectile measures from
 where its shooter is to the blast, and never scales the shooter's own. Bots
 weigh a weapon by the same curve.
 
+**A critical hit belongs to the shot**: `WeaponActionFired::critical`, copied
+onto a projectile and its `Explosion`, and recorded in `Cause::critical`. It
+is `CRIT_MULTIPLIER` (3) times the base in place of any ramp-up or falloff by
+distance, and a headshot does not stack on it; a blast's splash falloff still
+applies, the shooter's own splash and anybody's knockback are not raised, and a
+reflected projectile is a crit only if the reflector's airblast was. A body fires them while
+its `Condition::crit_boosted` is set, which only the post-game does, for the
+winners.
+
 `ProjectileSpec` ([`src/common/projectile.rs`](src/common/projectile.rs)) is
 a handful of numbers, and the rocket launcher's two barrels, the pipe bomb and the
 TF2C-style RPG are all values of it. A grenade is a rocket that falls, spins,

@@ -91,6 +91,7 @@ pub fn airblast(
                 let theirs = projectile.shooter != Some(shot.shooter) && allegiances.may_hurt(projectile.source(), shot.shooter);
                 if theirs && caught(at.current, projectile.spec.radius + PROJECTILE_ALLOWANCE) {
                     reflect(&mut projectile, at.current, toward, spec.reflect_speed, id.copied(), shot.shooter);
+                    projectile.critical = shot.critical;
                 }
             }
         }
@@ -161,7 +162,7 @@ mod tests {
     }
 
     fn gust(world: &mut World, shooter: Entity) {
-        world.write_message(WeaponActionFired { shooter, button: crate::game::weapon::Button::Secondary, action: WeaponAction::Airblast(SPEC), weapon: None });
+        world.write_message(WeaponActionFired { shooter, button: crate::game::weapon::Button::Secondary, action: WeaponAction::Airblast(SPEC), weapon: None, critical: false });
         world.run_system_once(airblast).unwrap();
         world.flush();
     }

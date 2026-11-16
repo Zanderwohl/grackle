@@ -57,6 +57,8 @@ pub struct WeaponActionFired {
     pub action: WeaponAction,
     /// What it was fired from; `None` for a shot no weapon fired.
     pub weapon: Option<WeaponId>,
+    /// A critical hit, if the action is a hitscan or a projectile; see [`Condition::crit_boosted`].
+    pub critical: bool,
 }
 
 /// Seconds until each button may fire again.
@@ -216,7 +218,7 @@ pub fn pull_trigger(
 
             trigger.arm(button, mounted.cadence.interval());
 
-            fired.write(WeaponActionFired { shooter, button, action: mounted.action, weapon: Some(held) });
+            fired.write(WeaponActionFired { shooter, button, action: mounted.action, weapon: Some(held), critical: condition.crit_boosted });
         }
 
         if ammo.at(held) != Some(&state) {
@@ -578,6 +580,27 @@ mod tests {
         let state = ammo(&world, shooter);
         assert_eq!(state.reloading, 0.0, "the reload carried on after the shot");
         assert_eq!((state.clip, state.reserve), (2, 8), "rounds moved for a reload that was canceled");
+    }
+
+    /// Breaks if a crit-boosted body's shots stop being marked critical, or another's are.
+    #[test]
+    fn a_crit_boosted_body_fires_crits() {
+        let mut world = a_world(one_weapon(weapon(
+            semi(WeaponAction::Hitscan(LASER), 1),
+            Mounted::EMPTY,
+            Magazine { clip: Some(12), reserve: 12, reload: 1.0, reload_one_at_a_time: false, first_reload: None },
+        )));
+        let plain = a_shooter(&mut world);
+        let boosted = a_shooter(&mut world);
+        world.get_mut::<Condition>(boosted).unwrap().crit_boosted = true;
+        input(&mut world, plain).attack = true;
+        input(&mut world, boosted).attack = true;
+        step(&mut world);
+        let fired = shots(&mut world);
+        assert_eq!(fired.len(), 2, "{fired:?}");
+        for shot in fired {
+            assert_eq!(shot.critical, shot.shooter == boosted, "{shot:?}");
+        }
     }
 
     /// A humiliated body's press goes nowhere, and costs nothing.

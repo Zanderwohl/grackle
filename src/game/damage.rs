@@ -530,6 +530,7 @@ mod tests {
             direct: None,
             weapon: None,
             reflected: false,
+            critical: false,
             spare: None,
         });
 
