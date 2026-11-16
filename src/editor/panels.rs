@@ -539,9 +539,12 @@ impl EditorPanels {
 
         if let Some(op) = pending_file_op {
             match op {
-                // Both are untitled, so a save asks where rather than writing over the shipped file.
-                FileAction::New | FileAction::DemoScene => {
-                    let name = if op == FileAction::New { "new" } else { "demo" };
+                // All are untitled, so a save asks where rather than writing over the shipped file.
+                FileAction::New | FileAction::Example(_) => {
+                    let name = match op {
+                        FileAction::Example(example) => example.blueprint(),
+                        _ => "new",
+                    };
                     let template = PathBuf::from(format!(
                         "assets/default/{BLUEPRINTS_DIR}/{name}.{MAP_BLUEPRINT_EXTENSION}"
                     ));

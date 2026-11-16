@@ -925,7 +925,9 @@ new = "New"
 save = "Save"
 save_as = "Save As"
 open = "Open"
+demo_maps = "Demo Maps"
 demo_scene = "Demo Scene"
+showcase = "Material Showcase"
 quit = "Quit"
 
 [edit.menu]

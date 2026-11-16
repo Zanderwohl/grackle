@@ -208,7 +208,7 @@ shape is a new producer and not a rewrite of every consumer — see
 | `src/lang_editor/` | The lang editor: a pack's strings for one language. See "Editing a lang file". |
 | `src/common/` | Shared: i18n, geometry, rays, gamemodes, items. |
 | `src/unlock/` | The crate-drop prototype. Orthogonal — see above. |
-| `src/bin/` | `ensure_lang` (fills missing translation keys), `new_map_template` (writes the new-map, demo-scene, arena, cloister and waterworks blueprints), `map_stats` (bakes a blueprint's nav graph headless and prints its statistics and top-down charts of each field), `decal_images` (rasterizes the default pack's decal SVGs), `bake_body_clips` (seeds a pack's body animations from the pose functions they replace, and writes the clips `seed::WRITTEN` generates key by key), `default_materials` (writes the default pack's materials), `crate_drop`. |
+| `src/bin/` | `ensure_lang` (fills missing translation keys), `new_map_template` (writes the new-map, demo-scene, arena, cloister, waterworks and showcase blueprints), `map_stats` (bakes a blueprint's nav graph headless and prints its statistics and top-down charts of each field), `decal_images` (rasterizes the default pack's decal SVGs), `bake_body_clips` (seeds a pack's body animations from the pose functions they replace, and writes the clips `seed::WRITTEN` generates key by key), `default_materials` (writes the default pack's materials), `crate_drop`. |
 | `assets/default/` | The default pack: `lang/`, `blueprints/`, `servers/` (example `--server-config` files). |
 | `assets/user/` | The user pack: gitignored, made at startup, last in `default_packs()` so it overrides the shipped one. A new map or prop is saved here unless the document already has a folder. |
 | `cache/` | Gitignored, derived from the packs and maps: `thumbnail/props/{name}.png`, `nav/{hash}.bin`, `lightmap/{hash}.bin`, `rounds/{map}/*.jsonl`. Safe to delete. |
@@ -331,7 +331,7 @@ light half a meter under its `top_plane_center`, each named. What a new map has 
 the test at the bottom of [`save.rs`](src/editor/save.rs) checks, of this and
 the demo scene alike. Don't pin coordinates there.
 
-**File → Demo Scene** (`demo.gmb`, map editor only) is the busy one: an
+**File → Demo Maps → Demo Scene** (`demo.gmb`, map editor only) is the busy one: an
 animation grid, which is why its room is 24 m square, pickups, and a spawn
 nook on each side wall, Red's authored and Blue's made by a Mirror, with walls
 naming the `spawn_walls` role — the smallest map that exercises sides,
@@ -374,7 +374,16 @@ between two hedges, a stair whose foot met a wall and a pillar in a doorway each
 wedged for the rest of the round, and nothing reported it but the round's kill count.
 `every_waterworks_spawn_stands_clear_and_walks_everywhere` walks it.
 
-All five are text and diff like it. Still, don't edit them by saving over them
+**`showcase.gmb`** (Material Showcase) shows every role and material on walls: four arms off a hub
+open to the sky, Red's built and a quarter-turn Mirror making Blue's, Yellow's and Green's, each
+with a bay per palette role (the built-in ones and its own `team_plaster`) painted with that role,
+and an unmirrored gallery off the hub with an alcove per material no role names. Both lists are
+read when it is written, the materials from the default pack's folder, so run the generator again
+after adding a role or a material. It opens untitled from **File → Demo Maps → Material
+Showcase**, as the demo scene does (`ExampleMap`). `every_showcase_spawn_stands_clear_and_walks_everywhere` walks
+it, Mirror copies included.
+
+All six are text and diff like it. Still, don't edit them by saving over them
 from the editor — they are written by
 `cargo run --bin new_map_template`
 ([`src/bin/new_map_template.rs`](src/bin/new_map_template.rs)), run from the
@@ -397,7 +406,7 @@ blank and the command line names nothing to open or play (`EditorParams::chooses
 any mode flag, `--map`, `--serve`, `--connect`, `--server-config`, `--spectate`, `--rounds` or
 `--class`; not `--lang`, `--game` or `--profile`). It asks for a name and a field of
 view (45°–110°, default 80°), and Continue writes those two fields to `PlayerSettings`, leaving the rest as the Settings window left them, requests File → Demo
-Scene and enters the map editor. **`F5` swaps between the map editor and Play, and nothing
+Maps → Demo Scene and enters the map editor. **`F5` swaps between the map editor and Play, and nothing
 else** — the only way back to the editor, as `Escape` belongs to the pause
 menu. From the prop editor it is answered with a line in the log rather than
 starting a round: the key's whole meaning is that it toggles between *two*
@@ -1596,8 +1605,14 @@ GPU path draws them ([`src/material/library.rs`](src/material/library.rs),
   `Palette` resource; nothing reads `MapMetadata` for it.
 - **Every map has `team_grid`** (`palette::TEAM_GRID`), a built-in role that
   paints the grid in each team's color and orange unsided, so a map with no
-  art pass still shows whose room is whose. A map role of the same name
-  shadows it; `Palette::every_role` is what the picker lists.
+  art pass still shows whose room is whose, and **`team_brick`**
+  (`palette::TEAM_BRICK`), painted brick the same way (`painted_brick_*`, orange
+  unsided), **`team_tiles`** (`palette::TEAM_TILES`), glazed tiles the same way
+  (`tiles_*`), and **`team_cladding`** (`palette::TEAM_CLADDING`): Red's wooden
+  fence, Blue's corrugated steel, Yellow's and Green's stripes, orange stripes
+  unsided. A map role of the same name shadows one; `Palette::every_role` is
+  what the picker lists, and every material a built-in role names must ship
+  (`every_built_in_role_paints_with_shipped_materials`).
 - **No palette field is skipped when empty.** It crosses the wire inside the
   settings, with postcard, which cannot read a field left out: a skipped
   field decodes as garbage after it, and `the_settings_survive_the_wire_encoding`

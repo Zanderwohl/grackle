@@ -319,7 +319,7 @@ mod tests {
 
     #[test]
     fn no_shipped_map_has_a_point_that_does_not_resolve() {
-        for name in ["new", "demo", "arena", "cloister", "waterworks"] {
+        for name in ["new", "demo", "arena", "cloister", "waterworks", "showcase"] {
             let path = PathBuf::from(format!("assets/default/blueprints/{name}.{MAP_BLUEPRINT_EXTENSION}"));
             let mut timeline = load(&path).unwrap().timeline;
             timeline.resolve_all();
@@ -399,7 +399,7 @@ mod tests {
     /// headroom. Do not pin coordinates here.
     #[test]
     fn a_new_map_can_be_stood_in_lit_and_spawned_into() {
-        for name in ["new", "demo", "arena", "cloister", "waterworks"] {
+        for name in ["new", "demo", "arena", "cloister", "waterworks", "showcase"] {
             let path = PathBuf::from(format!("assets/default/blueprints/{name}.{MAP_BLUEPRINT_EXTENSION}"));
             can_be_stood_in_lit_and_spawned_into(&path);
         }
@@ -452,7 +452,7 @@ mod tests {
         use crate::common::rotation::quat_from_euler;
         use crate::game::collision::CollisionWorld;
 
-        for name in ["new", "demo", "arena", "cloister", "waterworks"] {
+        for name in ["new", "demo", "arena", "cloister", "waterworks", "showcase"] {
             let path = PathBuf::from(format!("assets/default/blueprints/{name}.{MAP_BLUEPRINT_EXTENSION}"));
             let mut timeline = load(&path).unwrap().timeline;
             timeline.resolve_all();
@@ -506,6 +506,22 @@ mod tests {
         stands_clear_and_walks_everywhere("waterworks", 8, &places);
     }
 
+    /// Breaks if a showcase spawn is wedged, or a body cannot walk from it into the first role's
+    /// bay in every arm and to both ends of the gallery.
+    #[test]
+    fn every_showcase_spawn_stands_clear_and_walks_everywhere() {
+        let places = [
+            Vec3::new(6.0, 0.0, -17.0),
+            Vec3::new(17.0, 0.0, 6.0),
+            Vec3::new(-6.0, 0.0, 17.0),
+            Vec3::new(-17.0, 0.0, -6.0),
+            Vec3::new(16.5, 0.0, 24.0),
+            Vec3::new(16.5, 0.0, 14.0),
+            Vec3::new(40.5, 0.0, 24.0),
+        ];
+        stands_clear_and_walks_everywhere("showcase", 5, &places);
+    }
+
     fn stands_clear_and_walks_everywhere(name: &str, spawn_count: usize, places: &[Vec3]) {
         use crate::common::class::{body_center_from_feet, CLASS_HALF_EXTENTS};
         use crate::common::movement_rules::MovementRules;
@@ -515,13 +531,18 @@ mod tests {
         let path = PathBuf::from(format!("assets/default/blueprints/{name}.{MAP_BLUEPRINT_EXTENSION}"));
         let mut timeline = load(&path).unwrap().timeline;
         timeline.resolve_all();
-        let volumes: Vec<_> = timeline.active_features().flat_map(|(_, feature)| feature.object().volumes()).collect();
+        // A Mirror's copies stand as features do.
+        let objects: Vec<_> = timeline
+            .active_features()
+            .flat_map(|(_, feature)| std::iter::once(feature.object()).chain(feature.object().standing_copies().into_iter().map(|copy| copy.object)))
+            .collect();
+        let volumes: Vec<_> = objects.iter().flat_map(|object| object.volumes()).collect();
         let mut world = CollisionWorld::default();
         let faces = world.rebuild_volumes(&volumes);
-        let spawns: Vec<Vec3> = timeline
-            .active_features()
-            .filter(|(_, feature)| feature.object().type_key() == "spawn_point")
-            .map(|(_, feature)| feature.object().get_point("").unwrap())
+        let spawns: Vec<Vec3> = objects
+            .iter()
+            .filter(|object| object.type_key() == "spawn_point")
+            .map(|object| object.get_point("").unwrap())
             .collect();
         assert_eq!(spawns.len(), spawn_count);
         for feet in &spawns {

@@ -1852,7 +1852,7 @@ fn handle_files(
                 }
                 Some(FileAction::Save) => save_the_body_clips(body, &BodyClips::default_pack()),
                 Some(FileAction::SaveAs) => files.body.ask_where_to_save(),
-                Some(FileAction::DemoScene | FileAction::Quit) | None => {}
+                Some(FileAction::Example(_) | FileAction::Quit) | None => {}
             }
         }
     }

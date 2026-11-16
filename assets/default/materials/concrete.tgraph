@@ -11,17 +11,17 @@ TextureGraphFile(
         layers: [
             Layer(
                 id: 2,
-                name: "mottle",
+                name: "patches",
                 kind: Noise(Noise(
                     dims: D2,
                     seed_offset: 0,
-                    frequency: 4.0,
+                    frequency: 1.0,
                     range: Unsigned,
                     output: Grayscale,
                     kernel: Value,
-                    period: (4, 4, 0),
+                    period: (1, 1, 0),
                     fractal: Fractal(
-                        octaves: 6,
+                        octaves: 3,
                         lacunarity: 2.0,
                         gain: 0.5,
                         mode: Standard,
@@ -31,33 +31,24 @@ TextureGraphFile(
             ),
             Layer(
                 id: 3,
-                name: "color ramp",
+                name: "base ramp",
                 kind: ColorRamp(ColorRamp(
                     stops: [
                         ColorStop(
-                            t: 0.2,
+                            t: 0.25,
                             color: Const(Oklch(
-                                l: 0.5,
-                                chroma: 0.006,
-                                hue: OklabHue(75.0),
-                                alpha: 1.0,
-                            )),
-                        ),
-                        ColorStop(
-                            t: 0.5,
-                            color: Const(Oklch(
-                                l: 0.6,
+                                l: 0.7,
                                 chroma: 0.008,
                                 hue: OklabHue(75.0),
                                 alpha: 1.0,
                             )),
                         ),
                         ColorStop(
-                            t: 0.8,
+                            t: 0.75,
                             color: Const(Oklch(
-                                l: 0.7,
+                                l: 0.77,
                                 chroma: 0.01,
-                                hue: OklabHue(75.0),
+                                hue: OklabHue(78.0),
                                 alpha: 1.0,
                             )),
                         ),
@@ -67,7 +58,7 @@ TextureGraphFile(
             ),
             Layer(
                 id: 4,
-                name: "color",
+                name: "base",
                 kind: Map(Map(
                     value: Some(2),
                     palette: Some(3),
@@ -75,20 +66,207 @@ TextureGraphFile(
             ),
             Layer(
                 id: 5,
-                name: "roughness ramp",
+                name: "grain",
+                kind: Noise(Noise(
+                    dims: D2,
+                    seed_offset: 1,
+                    frequency: 128.0,
+                    range: Unsigned,
+                    output: Grayscale,
+                    kernel: Value,
+                    period: (128, 128, 0),
+                    fractal: Fractal(
+                        octaves: 2,
+                        lacunarity: 2.0,
+                        gain: 0.5,
+                        mode: Standard,
+                        normalize: true,
+                    ),
+                )),
+            ),
+            Layer(
+                id: 6,
+                name: "sand ramp",
                 kind: ColorRamp(ColorRamp(
                     stops: [
                         ColorStop(
-                            t: 0.2,
+                            t: 0.3,
                             color: Const(Oklch(
-                                l: 0.72,
+                                l: 0.64,
+                                chroma: 0.01,
+                                hue: OklabHue(72.0),
+                                alpha: 1.0,
+                            )),
+                        ),
+                        ColorStop(
+                            t: 0.7,
+                            color: Const(Oklch(
+                                l: 0.8,
+                                chroma: 0.008,
+                                hue: OklabHue(80.0),
+                                alpha: 1.0,
+                            )),
+                        ),
+                    ],
+                    space: Oklch,
+                )),
+            ),
+            Layer(
+                id: 7,
+                name: "sand",
+                kind: Map(Map(
+                    value: Some(5),
+                    palette: Some(6),
+                )),
+            ),
+            Layer(
+                id: 8,
+                name: "sand share",
+                kind: Color(Oklch(
+                    l: 0.18,
+                    chroma: 0.0,
+                    hue: OklabHue(0.0),
+                    alpha: 1.0,
+                )),
+            ),
+            Layer(
+                id: 9,
+                name: "sanded",
+                kind: Mix(Mix(
+                    a: Some(4),
+                    b: Some(7),
+                    mode: Blend,
+                    factor: Layer(8),
+                    space: Oklch,
+                )),
+            ),
+            Layer(
+                id: 10,
+                name: "pocking",
+                kind: Noise(Noise(
+                    dims: D2,
+                    seed_offset: 2,
+                    frequency: 64.0,
+                    range: Unsigned,
+                    output: Grayscale,
+                    kernel: Value,
+                    period: (64, 64, 0),
+                    fractal: Fractal(
+                        octaves: 2,
+                        lacunarity: 2.0,
+                        gain: 0.5,
+                        mode: Standard,
+                        normalize: true,
+                    ),
+                )),
+            ),
+            Layer(
+                id: 11,
+                name: "holes ramp",
+                kind: ColorRamp(ColorRamp(
+                    stops: [
+                        ColorStop(
+                            t: 0.81,
+                            color: Const(Oklch(
+                                l: 0.0,
                                 chroma: 0.0,
                                 hue: OklabHue(0.0),
                                 alpha: 1.0,
                             )),
                         ),
                         ColorStop(
-                            t: 0.8,
+                            t: 0.85,
+                            color: Const(Oklch(
+                                l: 1.0,
+                                chroma: 0.0,
+                                hue: OklabHue(0.0),
+                                alpha: 1.0,
+                            )),
+                        ),
+                    ],
+                    space: Oklch,
+                )),
+            ),
+            Layer(
+                id: 12,
+                name: "holes",
+                kind: Map(Map(
+                    value: Some(10),
+                    palette: Some(11),
+                )),
+            ),
+            Layer(
+                id: 13,
+                name: "hole share ramp",
+                kind: ColorRamp(ColorRamp(
+                    stops: [
+                        ColorStop(
+                            t: 0.0,
+                            color: Const(Oklch(
+                                l: 0.0,
+                                chroma: 0.0,
+                                hue: OklabHue(0.0),
+                                alpha: 1.0,
+                            )),
+                        ),
+                        ColorStop(
+                            t: 1.0,
+                            color: Const(Oklch(
+                                l: 0.35,
+                                chroma: 0.0,
+                                hue: OklabHue(0.0),
+                                alpha: 1.0,
+                            )),
+                        ),
+                    ],
+                    space: Oklch,
+                )),
+            ),
+            Layer(
+                id: 14,
+                name: "hole share",
+                kind: Map(Map(
+                    value: Some(12),
+                    palette: Some(13),
+                )),
+            ),
+            Layer(
+                id: 15,
+                name: "shade",
+                kind: Color(Oklch(
+                    l: 0.48,
+                    chroma: 0.008,
+                    hue: OklabHue(70.0),
+                    alpha: 1.0,
+                )),
+            ),
+            Layer(
+                id: 16,
+                name: "color",
+                kind: Mix(Mix(
+                    a: Some(9),
+                    b: Some(15),
+                    mode: Blend,
+                    factor: Layer(14),
+                    space: Oklch,
+                )),
+            ),
+            Layer(
+                id: 17,
+                name: "roughness ramp",
+                kind: ColorRamp(ColorRamp(
+                    stops: [
+                        ColorStop(
+                            t: 0.0,
+                            color: Const(Oklch(
+                                l: 0.86,
+                                chroma: 0.0,
+                                hue: OklabHue(0.0),
+                                alpha: 1.0,
+                            )),
+                        ),
+                        ColorStop(
+                            t: 1.0,
                             color: Const(Oklch(
                                 l: 0.95,
                                 chroma: 0.0,
@@ -101,39 +279,100 @@ TextureGraphFile(
                 )),
             ),
             Layer(
-                id: 6,
+                id: 18,
                 name: "roughness",
                 kind: Map(Map(
                     value: Some(2),
-                    palette: Some(5),
+                    palette: Some(17),
                 )),
             ),
             Layer(
-                id: 7,
-                name: "pits",
-                kind: Noise(Noise(
-                    dims: D2,
-                    seed_offset: 1,
-                    frequency: 32.0,
-                    range: Unsigned,
-                    output: Grayscale,
-                    kernel: Value,
-                    period: (32, 32, 0),
-                    fractal: Fractal(
-                        octaves: 3,
-                        lacunarity: 2.0,
-                        gain: 0.5,
-                        mode: Standard,
-                        normalize: true,
-                    ),
+                id: 19,
+                name: "grit ramp",
+                kind: ColorRamp(ColorRamp(
+                    stops: [
+                        ColorStop(
+                            t: 0.0,
+                            color: Const(Oklch(
+                                l: 0.0,
+                                chroma: 0.0,
+                                hue: OklabHue(0.0),
+                                alpha: 1.0,
+                            )),
+                        ),
+                        ColorStop(
+                            t: 1.0,
+                            color: Const(Oklch(
+                                l: 0.5,
+                                chroma: 0.0,
+                                hue: OklabHue(0.0),
+                                alpha: 1.0,
+                            )),
+                        ),
+                    ],
+                    space: Oklch,
                 )),
             ),
             Layer(
-                id: 8,
-                name: "relief",
+                id: 20,
+                name: "grit",
+                kind: Map(Map(
+                    value: Some(5),
+                    palette: Some(19),
+                )),
+            ),
+            Layer(
+                id: 21,
+                name: "dents ramp",
+                kind: ColorRamp(ColorRamp(
+                    stops: [
+                        ColorStop(
+                            t: 0.0,
+                            color: Const(Oklch(
+                                l: 0.0,
+                                chroma: 0.0,
+                                hue: OklabHue(0.0),
+                                alpha: 1.0,
+                            )),
+                        ),
+                        ColorStop(
+                            t: 1.0,
+                            color: Const(Oklch(
+                                l: 0.6,
+                                chroma: 0.0,
+                                hue: OklabHue(0.0),
+                                alpha: 1.0,
+                            )),
+                        ),
+                    ],
+                    space: Oklch,
+                )),
+            ),
+            Layer(
+                id: 22,
+                name: "dents",
+                kind: Map(Map(
+                    value: Some(12),
+                    palette: Some(21),
+                )),
+            ),
+            Layer(
+                id: 23,
+                name: "height",
+                kind: Mix(Mix(
+                    a: Some(20),
+                    b: Some(22),
+                    mode: Subtract,
+                    factor: Const(0.5),
+                    space: Oklch,
+                )),
+            ),
+            Layer(
+                id: 24,
+                name: "normal",
                 kind: HeightToNormal(HeightToNormal(
-                    source: Some(7),
-                    strength: 0.012,
+                    source: Some(23),
+                    strength: 0.003,
                 )),
             ),
         ],
@@ -145,6 +384,22 @@ TextureGraphFile(
             6,
             7,
             8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
         ],
         canvases: {
             "main": Canvas(
@@ -153,20 +408,36 @@ TextureGraphFile(
                     3: (0.0, 150.0),
                     4: (260.0, 0.0),
                     5: (0.0, 300.0),
-                    6: (260.0, 150.0),
-                    7: (0.0, 450.0),
-                    8: (260.0, 300.0),
+                    6: (0.0, 450.0),
+                    7: (260.0, 150.0),
+                    8: (0.0, 600.0),
+                    9: (520.0, 0.0),
+                    10: (0.0, 750.0),
+                    11: (0.0, 900.0),
+                    12: (260.0, 300.0),
+                    13: (0.0, 1050.0),
+                    14: (520.0, 150.0),
+                    15: (0.0, 1200.0),
+                    16: (780.0, 0.0),
+                    17: (0.0, 1350.0),
+                    18: (260.0, 450.0),
+                    19: (0.0, 1500.0),
+                    20: (260.0, 600.0),
+                    21: (0.0, 1650.0),
+                    22: (520.0, 300.0),
+                    23: (780.0, 150.0),
+                    24: (1040.0, 0.0),
                 },
-                output_pos: Some((520.0, 0.0)),
+                output_pos: Some((1300.0, 0.0)),
             ),
         },
         output: Output(
-            color: Some(4),
-            roughness: Layer(6),
+            color: Some(16),
+            roughness: Layer(18),
             metallic: Const(0.0),
-            normal: Some(8),
+            normal: Some(24),
         ),
         params: {},
-        next_id: 9,
+        next_id: 25,
     ),
 )

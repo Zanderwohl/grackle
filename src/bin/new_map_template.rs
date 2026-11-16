@@ -1,6 +1,7 @@
 //! Writes `assets/default/blueprints/new.gmb`, the map you get on opening the
-//! editor or from File → New, `demo.gmb`, File → Demo Scene, and `arena.gmb`,
-//! `cloister.gmb` and `waterworks.gmb`, free-for-all maps for bots to fight over. Generated
+//! editor or from File → New, `demo.gmb`, File → Demo Maps → Demo Scene, and `arena.gmb`,
+//! `cloister.gmb` and `waterworks.gmb`, free-for-all maps for bots to fight over, and
+//! `showcase.gmb`, every role and material on walls. Generated
 //! here rather than saved from the editor so their contents are reviewable as
 //! code. Run from the repo root:
 //!
@@ -79,6 +80,8 @@ fn main() {
     write("cloister", &cloister, &metadata);
     let (waterworks, metadata) = waterworks();
     write("waterworks", &waterworks, &metadata);
+    let (showcase, metadata) = showcase();
+    write("showcase", &showcase, &metadata);
 }
 
 /// A point at the origin, a room off it, a spawn on its floor and a light under its ceiling.
@@ -779,10 +782,15 @@ impl Builder {
     }
 
     fn spawn(&mut self, name: &str, feet: Vec3, facing: Vec3) {
+        self.spawn_feature(name, feet, facing);
+    }
+
+    fn spawn_feature(&mut self, name: &str, feet: Vec3, facing: Vec3) -> FeatureId {
         let toward = facing - feet;
         let spawn = SpawnPoint::from_point_ref(self.at(feet)).with_yaw((-toward.x).atan2(-toward.z));
         let id = self.timeline.apply_feature(Box::new(spawn));
         self.timeline.rename(id, name);
+        id
     }
 
     fn pack(&mut self, model: &str, feet: Vec3) {
@@ -794,10 +802,14 @@ impl Builder {
     }
 
     fn light(&mut self, point: Vec3, intensity: f32, range: f32) {
+        self.light_feature(point, intensity, range);
+    }
+
+    fn light_feature(&mut self, point: Vec3, intensity: f32, range: f32) -> FeatureId {
         let mut light = GracklePointLight::from_point_ref(self.at(point));
         light.intensity = intensity;
         light.range = range;
-        self.timeline.apply_feature(Box::new(light));
+        self.timeline.apply_feature(Box::new(light))
     }
 
     fn camera(&mut self, name: &str, from: Vec3, to: Vec3) {
@@ -1040,6 +1052,129 @@ fn waterworks() -> (FeatureTimeline, MapMetadata) {
     let mut metadata = MapMetadata::default();
     metadata.display_name = Some("Waterworks".to_owned());
     metadata.authors = vec!["Claude".to_owned()];
+    (b.timeline, metadata)
+}
+
+/// Half the showcase's hub, which is open to the sky.
+const HUB_M: f32 = 12.0;
+/// A showcase bay: as wide as it is deep, opening its whole side onto the arm's corridor.
+const BAY_M: f32 = 6.0;
+const BAY_HEIGHT_M: f32 = 4.5;
+const SHOWCASE_CORRIDOR_HALF_WIDTH_M: f32 = 3.0;
+/// A gallery alcove, its open side on the gallery hall.
+const ALCOVE_WIDTH_M: f32 = 5.0;
+const ALCOVE_GAP_M: f32 = 1.0;
+const ALCOVE_DEPTH_SHOWCASE_M: f32 = 4.0;
+/// The gallery hall, north to south.
+const GALLERY_NEAR_M: f32 = 16.0;
+const GALLERY_FAR_M: f32 = 22.0;
+
+/// Every role and every material, each on walls where it can be seen.
+///
+/// Four arms off a hub open to the sky, Red's built and a quarter-turn Mirror making Blue's,
+/// Yellow's and Green's from it. Each arm is a corridor with one bay per role in the palette,
+/// built-in roles included, the role on the bay's walls, so the same bay in each arm shows that
+/// role in each team's paint. Off the hub's southeast corner a gallery Mirror leaves alone holds
+/// an alcove per material no role names, floored and walled in it.
+///
+/// Both lists are read when the map is written: the roles from the palette, the materials from the
+/// default pack's folder. Run this again after adding either.
+fn showcase() -> (FeatureTimeline, MapMetadata) {
+    use grackle::material::{FILE_EXTENSION, MATERIALS_DIR};
+
+    let mut b = Builder::new();
+    let v = Vec3::new;
+    let paint = |floor: &str, walls: &str, ceiling: &str| RoomSurfaces {
+        floor: Some(floor.to_owned()),
+        walls: Some(walls.to_owned()),
+        ceiling: Some(ceiling.to_owned()),
+    };
+
+    let palette = Palette {
+        roles: BTreeMap::from([(
+            "team_plaster".to_owned(),
+            RolePaint {
+                sides: BTreeMap::from([
+                    (Team::Red, "plaster_red".to_owned()),
+                    (Team::Blue, "plaster_blue".to_owned()),
+                    (Team::Yellow, "plaster_yellow".to_owned()),
+                    (Team::Green, "plaster_green".to_owned()),
+                ]),
+                unsided: Some("plaster".to_owned()),
+            },
+        )]),
+    };
+    let roles: Vec<String> = palette.every_role().map(|(name, _)| name.clone()).collect();
+    let role_paint: std::collections::BTreeSet<String> =
+        palette.every_role().flat_map(|(_, paint)| paint.sides.values().chain(&paint.unsided).cloned()).collect();
+    let mut loose: Vec<String> = std::fs::read_dir(PathBuf::from("assets/default").join(MATERIALS_DIR))
+        .expect("run from the repo root")
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().and_then(|e| e.to_str()) == Some(FILE_EXTENSION))
+        .filter_map(|path| path.file_stem().and_then(|s| s.to_str()).map(str::to_owned))
+        .filter(|name| !role_paint.contains(name))
+        .collect();
+    loose.sort();
+
+    b.room("Hub", v(-HUB_M, 0.0, -HUB_M), v(HUB_M, 8.0, HUB_M), &paint("concrete", "board_formed_concrete", SKYBOX));
+    b.light(v(0.0, 6.0, 0.0), 400_000.0, 30.0);
+    b.spawn("Hub Spawn", v(0.0, 0.0, 4.0), v(0.0, 0.0, -10.0));
+    b.camera("Hub", v(-HUB_M + 1.0, 6.5, HUB_M - 1.0), v(0.0, 0.0, -4.0));
+
+    // Red's arm runs north (-Z). A bay every 8 m down the corridor, alternating east and west.
+    let mut sources = Vec::new();
+    let pairs = roles.len().div_ceil(2) as f32;
+    let corridor_end = -HUB_M - 2.0 - pairs * (BAY_M + 2.0);
+    let w = SHOWCASE_CORRIDOR_HALF_WIDTH_M;
+    sources.push(b.room("Arm", v(-w, 0.0, corridor_end), v(w, 5.0, -HUB_M), &paint("tread_plate", "concrete", "plaster")));
+    for (i, role) in roles.iter().enumerate() {
+        let near = -HUB_M - 2.0 - (i / 2) as f32 * (BAY_M + 2.0);
+        let (x0, x1) = if i % 2 == 0 { (w, w + BAY_M) } else { (-w - BAY_M, -w) };
+        sources.push(b.room(&format!("Bay: {role}"), v(x0, 0.0, near - BAY_M), v(x1, BAY_HEIGHT_M, near), &paint("concrete", role, "plaster")));
+        sources.push(b.light_feature(v((x0 + x1) / 2.0, BAY_HEIGHT_M - 0.6, near - BAY_M / 2.0), 60_000.0, 10.0));
+    }
+    for k in 0..pairs as usize {
+        let z = -HUB_M - 2.0 - k as f32 * (BAY_M + 2.0) - BAY_M / 2.0;
+        sources.push(b.light_feature(v(0.0, 4.4, z), 30_000.0, 9.0));
+    }
+    sources.push(b.spawn_feature("Arm Spawn", v(0.0, 0.0, corridor_end + 2.0), v(0.0, 0.0, 0.0)));
+    let mirror = b.timeline.apply_feature(Box::new(
+        Mirror::new(b.at(Vec3::ZERO))
+            .with_symmetry(Symmetry::Rotate90)
+            .with_sources(sources)
+            .with_four_teams([Team::Red, Team::Blue, Team::Yellow, Team::Green]),
+    ));
+    b.timeline.rename(mirror, "Four Arms");
+
+    // The gallery: a hall east from the hub's south side, an alcove per material either side.
+    // Clear of the south arm's bays, which end 3 m short of its door at x = 9.
+    let door = (10.0, 12.0);
+    b.room("Gallery Door", v(door.0, 0.0, HUB_M), v(door.1, 3.0, GALLERY_NEAR_M), &paint("concrete", "concrete", "plaster"));
+    let first = door.1 + 2.0;
+    let per_side = loose.len().div_ceil(2) as f32;
+    let hall_end = first + per_side * (ALCOVE_WIDTH_M + ALCOVE_GAP_M) + 1.0;
+    b.room("Gallery", v(door.0, 0.0, GALLERY_NEAR_M), v(hall_end, 5.0, GALLERY_FAR_M), &RoomSurfaces::default());
+    for (j, material) in loose.iter().enumerate() {
+        let x0 = first + (j / 2) as f32 * (ALCOVE_WIDTH_M + ALCOVE_GAP_M);
+        let (z0, z1) = if j % 2 == 0 {
+            (GALLERY_FAR_M, GALLERY_FAR_M + ALCOVE_DEPTH_SHOWCASE_M)
+        } else {
+            (GALLERY_NEAR_M - ALCOVE_DEPTH_SHOWCASE_M, GALLERY_NEAR_M)
+        };
+        b.room(&format!("Alcove: {material}"), v(x0, 0.0, z0), v(x0 + ALCOVE_WIDTH_M, 4.0, z1), &paint(material, material, "plaster"));
+        b.light(v(x0 + ALCOVE_WIDTH_M / 2.0, 3.4, (z0 + z1) / 2.0), 40_000.0, 8.0);
+    }
+    for k in 0..per_side as usize {
+        b.light(v(first + k as f32 * (ALCOVE_WIDTH_M + ALCOVE_GAP_M) + ALCOVE_WIDTH_M / 2.0, 4.4, (GALLERY_NEAR_M + GALLERY_FAR_M) / 2.0), 30_000.0, 9.0);
+    }
+    let middle = (GALLERY_NEAR_M + GALLERY_FAR_M) / 2.0;
+    b.camera("Gallery", v(hall_end - 1.0, 4.0, middle), v(door.0, 0.0, middle));
+
+    let mut metadata = MapMetadata::default();
+    metadata.display_name = Some("Material Showcase".to_owned());
+    metadata.authors = vec!["Claude".to_owned()];
+    metadata.palette = palette;
     (b.timeline, metadata)
 }
 
