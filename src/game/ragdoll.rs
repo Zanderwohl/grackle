@@ -1393,8 +1393,7 @@ mod tests {
         }
     }
 
-    /// What corpses cost on the shipped maps: eight dropped at each spawn, shoved, and stepped
-    /// for two seconds. Prints the time per tick; run with `--ignored --nocapture`.
+    /// Times corpses on the shipped maps, one shoved at each spawn. Run with `--ignored --nocapture`.
     #[test]
     #[ignore]
     fn corpses_on_the_shipped_maps() {

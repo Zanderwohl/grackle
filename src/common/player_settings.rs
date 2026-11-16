@@ -1,5 +1,5 @@
 //! What the person at this machine has chosen about how they play: a name,
-//! whether to reload unasked and how wide they see. Edited in the map editor's Player tab, kept in
+//! whether to reload unasked and how wide they see. Edited in the Settings window, kept in
 //! the user pack, and sent to the server, which is where it is acted on.
 //! `--profile N` keeps a second set in a file of its own, so two copies on one
 //! machine can be two players.

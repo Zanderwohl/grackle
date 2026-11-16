@@ -36,8 +36,7 @@ pub struct CollisionWorld {
     /// The map's rooms and blocks, in order. [`CollisionWorld::depenetrate`]
     /// needs them to tell which way out of a wall is into the level.
     volumes: Vec<Volume>,
-    /// The volumes' bounds, filed `FILING_SLACK` wide since a room's edge holds points a little
-    /// outside it.
+    /// Filed `FILING_SLACK` wide: `Room::contains` takes points just outside an edge.
     volume_grid: Grid,
     /// Placed props that block movement. Kept apart from `hulls` because they
     /// are rebuilt on a different trigger: rooms change with the map, props
@@ -116,7 +115,6 @@ impl CollisionWorld {
         faces
     }
 
-    /// The volumes without the walls: what [`CollisionWorld::inside_map`] asks.
     fn set_volumes_only(&mut self, volumes: &[Volume]) {
         self.volumes = volumes.to_vec();
         self.volume_grid = Grid::build(volumes.iter().map(|volume| {
@@ -265,13 +263,12 @@ impl CollisionWorld {
         Some((resting, hit.normal))
     }
 
-    /// [`world_surface::is_air`], asking only the volumes filed where the point is.
+    /// Answers as [`world_surface::is_air`] does.
     pub fn inside_map(&self, point: Vec3) -> bool {
         let Some((everywhere, here)) = self.volume_grid.at(point) else {
             return world_surface::is_air(&self.volumes, point);
         };
-        // Both lists ascend, so walking them down together meets the last volume in the map's
-        // order first.
+        // Both lists ascend, so walked down together the last volume in the map's order comes first.
         let (mut big, mut near) = (everywhere.iter().rev().peekable(), here.iter().rev().peekable());
         loop {
             let next = match (big.peek(), near.peek()) {
@@ -362,9 +359,8 @@ impl CollisionWorld {
         for _ in 0..4 {
             let Some(escapes) = self.escapes(center, half) else { break };
 
-            // Any escape into the map beats every one out of it, so the shortest that lands in the
-            // map is the answer, and the escapes past it need not be asked. Sorted stably, so of
-            // two as short the first offered wins, as it does below.
+            // Any escape into the map beats every one out of it, so the shortest in the map wins. The
+            // sort is stable, so of two as short the first offered wins.
             let mut by_length: Vec<(f32, Vec3)> = escapes.iter().map(|moved| ((*moved - center).length(), *moved)).collect();
             by_length.sort_by(|(a, _), (b, _)| a.total_cmp(b));
             if let Some((_, moved)) = by_length.into_iter().find(|(_, moved)| self.inside_map(*moved)) {
@@ -372,8 +368,8 @@ impl CollisionWorld {
                 continue;
             }
 
-            // Out of the map the penalty is far larger than a length's last bits, so lengths
-            // close together score alike and the first offered wins.
+            // The penalty rounds away a length's last bits, so close lengths tie and the first offered
+            // wins.
             let mut best: Option<(f32, Vec3)> = None;
             for moved in escapes {
                 let score = (moved - center).length() + OUTSIDE_MAP_PENALTY;
@@ -791,9 +787,8 @@ mod tests {
         assert!(freed.y > buried.y, "pushed down through the ramp to {freed}");
     }
 
-    /// Breaks if asking the volumes filed at a point answers differently from walking every
-    /// volume: on the shipped maps, and on blocks inside rooms with rooms tunneling back through
-    /// them, at random points and on and just off each volume's corners and walls.
+    /// Breaks if the grid answers differently from walking every volume, on the shipped maps or on
+    /// rooms and blocks nested in each other.
     #[test]
     fn the_filed_volumes_answer_as_every_volume_does() {
         use crate::constants::MAP_BLUEPRINT_EXTENSION;
@@ -805,7 +800,7 @@ mod tests {
             Volume::solid(Room::new(Vec3::new(-4.0, 0.0, -4.0), Vec3::new(4.0, 6.0, 4.0))),
             Volume::air(Room::new(Vec3::new(-6.0, 1.0, -1.0), Vec3::new(6.0, 3.0, 1.0))),
             Volume::solid(Room::prism(vec![Vec2::new(-1.0, -1.0), Vec2::new(1.0, -1.0), Vec2::new(0.0, 1.0)], 1.0, 2.0)),
-            // Too big to file in the grid's cells, so it is in every query.
+            // Too big to file, so in every query.
             Volume::solid(Room::new(Vec3::new(-500.0, 5.0, -500.0), Vec3::new(500.0, 5.5, 500.0))),
             Volume::air(Room::new(Vec3::new(2.0, 4.5, 2.0), Vec3::new(3.0, 6.0, 3.0))),
         ]);
@@ -822,7 +817,7 @@ mod tests {
 
         let mut seed = 0x6a09_e667;
         for (name, world) in &worlds {
-            // Round the volumes of ordinary size, so the slab does not spread the points thin.
+            // Leaving out the slab, which would spread the points thin.
             let (low, high) = world
                 .volumes
                 .iter()

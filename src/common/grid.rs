@@ -85,8 +85,8 @@ impl Grid {
         ControlFlow::Continue(())
     }
 
-    /// Every shape whose bounds might hold `point`, as two ascending lists: the shapes too big to
-    /// file, and those filed in the point's cell. `None` for a point no cell holds.
+    /// The shapes too big to file and those in `point`'s cell, each ascending. `None` for a point
+    /// no cell holds.
     pub fn at(&self, point: Vec3) -> Option<(&[u32], &[u32])> {
         let (cell, _) = span(point, point)?;
         Some((&self.everywhere, self.cells.get(&cell).map_or(&[][..], Vec::as_slice)))
