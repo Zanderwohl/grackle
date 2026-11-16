@@ -1,6 +1,6 @@
 //! Writes `assets/default/blueprints/new.gmb`, the map you get on opening the
-//! editor or from File → New, `demo.gmb`, File → Demo Scene, and `arena.gmb` and
-//! `cloister.gmb`, free-for-all maps for bots to fight over. Generated
+//! editor or from File → New, `demo.gmb`, File → Demo Scene, and `arena.gmb`,
+//! `cloister.gmb` and `waterworks.gmb`, free-for-all maps for bots to fight over. Generated
 //! here rather than saved from the editor so their contents are reviewable as
 //! code. Run from the repo root:
 //!
@@ -24,8 +24,9 @@ use grackle::editor::block::EditorBlock;
 use grackle::editor::trigger::EditorTrigger;
 use grackle::common::trigger::TriggerEffect;
 use grackle::material::pit::PIT;
-use grackle::editor::editable::{FeatureId, FeatureTimeline, PointRef};
+use grackle::editor::editable::{FeatureId, FeatureTimeline, FeatureTrait, PointRef};
 use grackle::editor::editor_room::EditorRoom;
+use grackle::editor::footprint_room::FootprintRoom;
 use grackle::tool::room::RoomSurfaces;
 use grackle::editor::global_point::GlobalPoint;
 use grackle::editor::grackle_point_light::GracklePointLight;
@@ -76,6 +77,8 @@ fn main() {
     write("arena", &arena, &metadata);
     let (cloister, metadata) = cloister();
     write("cloister", &cloister, &metadata);
+    let (waterworks, metadata) = waterworks();
+    write("waterworks", &waterworks, &metadata);
 }
 
 /// A point at the origin, a room off it, a spawn on its floor and a light under its ceiling.
@@ -715,6 +718,329 @@ fn cloister() -> (FeatureTimeline, MapMetadata) {
     metadata.display_name = Some("Cloister".to_owned());
     metadata.authors = vec!["Claude".to_owned()];
     (timeline, metadata)
+}
+
+/// Places a map's features off one origin, by name.
+struct Builder {
+    timeline: FeatureTimeline,
+    origin: FeatureId,
+}
+
+impl Builder {
+    fn new() -> Self {
+        let mut timeline = FeatureTimeline::default();
+        let origin = timeline.apply_feature(Box::new(GlobalPoint::new(0.0, 0.0, 0.0)));
+        timeline.rename(origin, "Map Origin");
+        Self { timeline, origin }
+    }
+
+    fn at(&self, p: Vec3) -> PointRef {
+        PointRef::reference_with_offset(self.origin, p.x, p.y, p.z)
+    }
+
+    fn room(&mut self, name: &str, min: Vec3, max: Vec3, surfaces: &RoomSurfaces) -> FeatureId {
+        let room = EditorRoom::from_min_and_size(self.at(min), max - min).with_surfaces(surfaces.clone());
+        let id = self.timeline.apply_feature(Box::new(room));
+        self.timeline.rename(id, name);
+        id
+    }
+
+    fn block(&mut self, name: &str, min: Vec3, max: Vec3) -> FeatureId {
+        let room = EditorRoom::from_min_and_size(self.at(min), max - min);
+        let id = self.timeline.apply_feature(Box::new(EditorBlock::from_room(room)));
+        self.timeline.rename(id, name);
+        id
+    }
+
+    /// A prism over `corners`, a closed loop in world `x`/`z`, with `inside` in its one region.
+    fn footprint(&mut self, name: &str, floor: f32, height: f32, corners: &[Vec2], inside: Vec2, surfaces: &RoomSurfaces) -> FeatureId {
+        let mut room = FootprintRoom::new(self.at(Vec3::new(0.0, floor, 0.0)), height).with_surfaces(surfaces.clone());
+        let ids: Vec<_> = corners.iter().map(|c| room.add_corner(self.at(Vec3::new(c.x, 0.0, c.y)))).collect();
+        for (i, a) in ids.iter().enumerate() {
+            room.add_line(*a, ids[(i + 1) % ids.len()]);
+        }
+        room.resolve_references(self.timeline.features_map());
+        assert!(room.name_region_at(inside), "{name} encloses nothing at {inside}");
+        let id = self.timeline.apply_feature(Box::new(room));
+        self.timeline.rename(id, name);
+        id
+    }
+
+    /// A flight of `count` one-meter treads, the first over `first` (min and max in `x`/`z`), each
+    /// next one a meter along `along`, the `k`th (from 1) standing from `floor` to `top + rise * k`.
+    #[allow(clippy::too_many_arguments)]
+    fn flight(&mut self, name: &str, first: (Vec2, Vec2), along: Vec2, count: usize, floor: f32, top: f32, rise: f32) {
+        for k in 1..=count {
+            let shift = along * (k - 1) as f32;
+            let (a, b) = (first.0 + shift, first.1 + shift);
+            let height = top + rise * k as f32;
+            self.block(&format!("{name} Step {k}"), Vec3::new(a.x, floor, a.y), Vec3::new(b.x, height, b.y));
+        }
+    }
+
+    fn spawn(&mut self, name: &str, feet: Vec3, facing: Vec3) {
+        let toward = facing - feet;
+        let spawn = SpawnPoint::from_point_ref(self.at(feet)).with_yaw((-toward.x).atan2(-toward.z));
+        let id = self.timeline.apply_feature(Box::new(spawn));
+        self.timeline.rename(id, name);
+    }
+
+    fn pack(&mut self, model: &str, feet: Vec3) {
+        self.timeline.apply_feature(Box::new(Prop::from_point_ref(self.at(feet)).with_model(model)));
+    }
+
+    fn weapon(&mut self, weapon: &str, feet: Vec3, yaw: f32) {
+        self.timeline.apply_feature(Box::new(WeaponPickup::from_point_ref(self.at(feet)).with_weapon(weapon).with_yaw(yaw)));
+    }
+
+    fn light(&mut self, point: Vec3, intensity: f32, range: f32) {
+        let mut light = GracklePointLight::from_point_ref(self.at(point));
+        light.intensity = intensity;
+        light.range = range;
+        self.timeline.apply_feature(Box::new(light));
+    }
+
+    fn camera(&mut self, name: &str, from: Vec3, to: Vec3) {
+        let id = self.timeline.apply_feature(Box::new(SpectatorCamera::from_point_ref(self.at(from)).with_rotation(looking(from, to))));
+        self.timeline.rename(id, &format!("{name} Camera"));
+    }
+}
+
+/// The ground; the plaza, garden, yard, market and warehouse stand on it.
+const GROUND_M: f32 = 0.0;
+/// The lower level: the canal, the cistern and the tunnels between them.
+const LOW_M: f32 = -4.5;
+/// Treads down from the ground to the lower level.
+const DOWN_FLIGHT: usize = 11;
+const TUNNEL_HEIGHT_M: f32 = 2.6;
+const MEZZANINE_M: f32 = 4.0;
+const TOWER_M: f32 = 4.8;
+
+/// A free-for-all map half again as big as the arena or the cloister, of many kinds of place and
+/// no symmetry: an open plaza round a water tower, a sunken canal that bends twice, a warehouse
+/// with a mezzanine, a hedged garden, a pillared cistern under the plaza, a market street walled
+/// into a slalom, a yard with a tower, and narrow tunnels and dog-legs between them. Spawns stand
+/// round a corner in nooks off quiet rooms, away from every pickup. Every gap a body walks
+/// through is at least 1.5 m: bots wedged in narrower ones and stood there for the rest of a round.
+fn waterworks() -> (FeatureTimeline, MapMetadata) {
+    let mut b = Builder::new();
+    let v = Vec3::new;
+    let w = Vec2::new;
+    let paint = |floor: &str, walls: &str, ceiling: &str| RoomSurfaces {
+        floor: Some(floor.to_owned()),
+        walls: Some(walls.to_owned()),
+        ceiling: Some(ceiling.to_owned()),
+    };
+    let outdoors = paint("concrete", "board_formed_concrete", SKYBOX);
+    let garden = paint("grid_green", "board_formed_concrete", SKYBOX);
+    let indoors = paint("tread_plate", "plaster", "plaster");
+    let works = paint("steel_plate", "board_formed_concrete", "board_formed_concrete");
+    let below = paint("concrete", "board_formed_concrete", "board_formed_concrete");
+    let nook = paint("tread_plate", "plaster_blue", "plaster");
+
+    // The plaza: an irregular octagon open to the sky, a water tower on a dais in the middle, a
+    // stairwell down to the cistern cut into its floor.
+    let plaza = [w(-12.0, -10.0), w(10.0, -10.0), w(16.0, -4.0), w(16.0, 8.0), w(10.0, 14.0), w(-10.0, 14.0), w(-16.0, 8.0), w(-16.0, -4.0)];
+    b.footprint("Plaza", GROUND_M, 14.0, &plaza, w(-8.0, 6.0), &outdoors);
+    b.block("Water Tower", v(-2.0, 0.0, -3.5), v(2.0, 10.0, 0.5));
+    b.block("Pump House", v(6.5, 0.0, -7.5), v(10.5, 4.0, -4.5));
+    for (x, z) in [(-12.0_f32, 1.0_f32), (-12.0, 5.0), (-2.0, 11.0), (-9.0, -6.0)] {
+        b.block(&format!("Plaza Pillar {x:+} {z:+}"), v(x - 0.6, 0.0, z - 0.6), v(x + 0.6, 6.0, z + 0.6));
+    }
+    b.block("Dais", v(-4.0, 0.0, -6.0), v(4.0, 0.8, 2.0));
+    b.block("Dais North Step", v(-1.5, 0.0, -7.0), v(1.5, 0.4, -6.0));
+    b.block("Dais South Step", v(-1.5, 0.0, 2.0), v(1.5, 0.4, 3.0));
+    b.block("Plaza Low Wall East", v(11.0, 0.0, 0.0), v(14.0, 1.3, 0.4));
+    b.block("Arcade Screen", v(-13.2, 0.0, -3.0), v(-12.6, 3.0, 1.5));
+    b.block("Plaza Crates", v(-7.0, 0.0, 8.0), v(-5.0, 2.4, 10.0));
+    b.room("Cistern Stairwell", v(6.0, LOW_M, 2.0), v(8.5, GROUND_M, 13.0), &below);
+    b.flight("Cistern Stairwell", (w(6.0, 12.0), w(8.5, 13.0)), w(0.0, -1.0), DOWN_FLIGHT, LOW_M, GROUND_M, -0.4);
+    b.block("Stairwell Rail West", v(5.6, 0.0, 1.6), v(6.0, 1.0, 12.0));
+    b.block("Stairwell Rail East", v(8.5, 0.0, 1.6), v(8.9, 1.0, 12.0));
+    b.block("Stairwell Rail North", v(6.0, 0.0, 1.6), v(8.5, 1.0, 2.0));
+
+    // The cistern under the plaza: low, pillared, quiet.
+    b.room("Cistern", v(-6.0, LOW_M, -8.0), v(10.0, LOW_M + 3.5, 10.0), &below);
+    for x in [-1.0_f32, 4.0] {
+        for z in [-4.0_f32, 2.0, 7.0] {
+            b.block(&format!("Cistern Pillar {x:+} {z:+}"), v(x - 0.6, LOW_M, z - 0.6), v(x + 0.6, LOW_M + 3.5, z + 0.6));
+        }
+    }
+
+    // Up from the cistern into the garden: a tunnel north, then a stairwell cut into the garden's
+    // floor, climbing north.
+    b.room("Garden Tunnel", v(0.0, LOW_M, -20.0), v(2.5, LOW_M + TUNNEL_HEIGHT_M, -8.0), &below);
+    b.room("Garden Stairwell", v(0.0, LOW_M, -31.0), v(2.5, GROUND_M, -20.0), &below);
+    b.flight("Garden Stairwell", (w(0.0, -21.0), w(2.5, -20.0)), w(0.0, -1.0), DOWN_FLIGHT, LOW_M, LOW_M, 0.4);
+    b.block("Garden Rail West", v(-0.4, 0.0, -30.0), v(0.0, 1.0, -19.6));
+    b.block("Garden Rail East", v(2.5, 0.0, -30.0), v(2.9, 1.0, -19.6));
+    b.block("Garden Rail South", v(0.0, 0.0, -20.0), v(2.5, 1.0, -19.6));
+
+    // East from the cistern to the canal, with a jog.
+    b.room("Canal Tunnel West", v(9.5, LOW_M, 6.0), v(18.0, LOW_M + TUNNEL_HEIGHT_M, 8.5), &below);
+    b.room("Canal Tunnel Jog", v(15.5, LOW_M, 2.0), v(18.0, LOW_M + TUNNEL_HEIGHT_M, 8.5), &below);
+    b.room("Canal Tunnel Nook Door", v(12.0, LOW_M, 8.5), v(14.5, LOW_M + TUNNEL_HEIGHT_M, 10.5), &nook);
+    b.room("Canal Tunnel Nook", v(12.0, LOW_M, 10.5), v(17.0, LOW_M + TUNNEL_HEIGHT_M, 13.5), &nook);
+    b.room("Canal Tunnel East", v(15.5, LOW_M, 2.0), v(26.0, LOW_M + TUNNEL_HEIGHT_M, 4.5), &below);
+
+    // The canal: sunken, open to the sky, an S of three reaches.
+    let canal = [w(22.0, -38.0), w(29.0, -38.0), w(29.0, -14.0), w(32.0, -14.0), w(32.0, 12.0), w(29.0, 12.0), w(29.0, 34.0), w(22.0, 34.0), w(22.0, 10.0), w(26.0, 10.0), w(26.0, -12.0), w(22.0, -12.0)];
+    b.footprint("Canal", LOW_M, 13.5, &canal, w(28.0, 0.0), &outdoors);
+    b.block("North Sluice", v(22.0, LOW_M, -32.6), v(26.5, GROUND_M, -32.0));
+    b.block("South Sluice", v(25.0, LOW_M, 14.0), v(29.0, GROUND_M, 14.6));
+    b.block("Upper Middle Sluice", v(26.0, LOW_M, -6.0), v(30.0, LOW_M + 3.0, -5.4));
+    b.block("Middle Sluice", v(28.0, LOW_M, 6.0), v(32.0, LOW_M + 3.0, 6.6));
+    b.room("Canal North Nook Door", v(21.5, LOW_M, -35.0), v(22.0, LOW_M + TUNNEL_HEIGHT_M, -33.0), &nook);
+    b.room("Canal North Nook", v(17.0, LOW_M, -38.0), v(21.5, LOW_M + TUNNEL_HEIGHT_M, -33.0), &nook);
+
+    // A spur off the canal's south reach to a spawn.
+    b.room("Spawn Tunnel", v(29.0, LOW_M, 21.0), v(34.5, LOW_M + TUNNEL_HEIGHT_M, 23.5), &below);
+    b.room("Tunnel Nook Door", v(32.0, LOW_M, 23.5), v(34.5, LOW_M + TUNNEL_HEIGHT_M, 25.5), &nook);
+    b.room("Tunnel Nook", v(32.0, LOW_M, 25.5), v(37.0, LOW_M + TUNNEL_HEIGHT_M, 28.5), &nook);
+
+    // The garden: open to the sky, hedged into lanes, a gate to the plaza, steps down to the canal.
+    b.room("Garden", v(-4.0, 0.0, -38.0), v(16.0, 10.0, -18.0), &garden);
+    // A dog-leg, so the plaza and the garden do not see down it into each other.
+    b.room("Garden Gate South", v(3.0, 0.0, -14.0), v(7.0, 4.0, -9.5), &indoors);
+    b.room("Garden Gate Cross", v(-3.0, 0.0, -16.5), v(7.0, 4.0, -14.0), &indoors);
+    b.room("Garden Gate North", v(-3.0, 0.0, -18.5), v(0.0, 4.0, -16.5), &indoors);
+    for (name, min, max) in [
+        ("Hedge North West", v(-4.0, 0.0, -33.0), v(-1.0, 2.6, -32.2)),
+        ("Hedge North", v(3.5, 0.0, -33.0), v(8.0, 2.6, -32.2)),
+        ("Hedge Middle", v(5.0, 0.0, -32.0), v(5.8, 2.6, -24.0)),
+        ("Hedge East", v(9.0, 0.0, -27.0), v(14.0, 2.6, -26.2)),
+        ("Hedge North East", v(10.0, 0.0, -38.0), v(10.8, 2.6, -31.0)),
+        ("Hedge Gate Screen", v(3.5, 0.0, -21.2), v(8.5, 2.6, -20.4)),
+        ("Hedge South East", v(12.0, 0.0, -23.0), v(12.8, 2.6, -18.0)),
+    ] {
+        b.block(name, min, max);
+    }
+    b.room("Canal Steps Door", v(16.0, 0.0, -30.0), v(22.0, 3.0, -27.5), &indoors);
+    b.block("Canal Steps Landing", v(22.0, LOW_M, -30.0), v(24.5, 0.0, -27.5));
+    b.flight("Canal Steps", (w(22.0, -27.5), w(24.5, -26.5)), w(0.0, 1.0), DOWN_FLIGHT, LOW_M, GROUND_M, -0.4);
+
+    // The warehouse: tall and roofed, a mezzanine round two walls, crates and a shelf on its floor.
+    b.room("Warehouse", v(-38.0, 0.0, -32.0), v(-20.0, 9.0, -14.0), &indoors);
+    b.block("Mezzanine North", v(-38.0, 0.0, -32.0), v(-20.0, MEZZANINE_M, -28.0));
+    b.block("Mezzanine West", v(-38.0, 0.0, -28.0), v(-34.0, MEZZANINE_M, -18.0));
+    b.flight("Mezzanine", (w(-25.0, -28.0), w(-24.0, -25.5)), w(-1.0, 0.0), 9, 0.0, 0.0, 0.4);
+    // Hides the west mezzanine, and the office door off it, from the floor and the north mezzanine.
+    b.block("Mezzanine Landing", v(-34.0, 0.0, -28.0), v(-33.0, MEZZANINE_M, -25.5));
+    b.block("Mezzanine Wall", v(-34.4, MEZZANINE_M, -26.0), v(-34.0, MEZZANINE_M + 2.4, -19.5));
+    b.block("Mezzanine Partition", v(-38.0, MEZZANINE_M, -26.5), v(-35.5, 9.0, -26.0));
+    b.block("Warehouse Shelf", v(-31.0, 0.0, -24.0), v(-30.0, 5.0, -17.0));
+    b.block("Warehouse Crates North", v(-26.0, 0.0, -24.0), v(-24.0, 2.0, -22.0));
+    b.block("Warehouse Crates South", v(-27.0, 0.0, -19.0), v(-24.5, 2.4, -16.5));
+    b.room("Office Door", v(-40.0, MEZZANINE_M, -22.0), v(-38.0, MEZZANINE_M + 3.0, -20.0), &nook);
+    b.room("Office", v(-44.0, MEZZANINE_M, -26.0), v(-40.0, MEZZANINE_M + 3.0, -20.0), &nook);
+    b.room("Garden Lane West", v(-20.0, 0.0, -28.0), v(-11.0, 3.0, -25.0), &indoors);
+    b.room("Lane Nook Door", v(-18.0, 0.0, -30.0), v(-15.5, 3.0, -28.0), &nook);
+    b.room("Lane Nook", v(-18.0, 0.0, -33.0), v(-11.0, 3.0, -30.0), &nook);
+    b.room("Garden Lane East", v(-14.0, 0.0, -25.0), v(-4.0, 3.0, -22.5), &indoors);
+
+    // From the warehouse round a corner into the plaza.
+    b.room("Arcade North", v(-26.0, 0.0, -14.0), v(-23.0, 3.5, 1.0), &indoors);
+    b.room("Arcade South", v(-26.0, 0.0, -2.0), v(-15.5, 3.5, 1.0), &indoors);
+    b.room("Market Link", v(-21.0, 0.0, 1.0), v(-18.5, 3.5, 10.0), &indoors);
+
+    // From the warehouse's far corner down to the market, a jog with a spawn at its end.
+    b.room("Loading Passage North", v(-37.0, 0.0, -14.0), v(-34.5, 3.0, -2.0), &indoors);
+    b.room("Loading Nook Door", v(-34.5, 0.0, -10.0), v(-32.5, 3.0, -7.5), &nook);
+    b.room("Loading Nook", v(-32.5, 0.0, -12.0), v(-28.5, 3.0, -7.5), &nook);
+    b.room("Loading Passage Jog", v(-40.0, 0.0, -4.0), v(-30.0, 3.0, -1.5), &indoors);
+    b.room("Loading Passage South", v(-40.0, 0.0, -1.5), v(-37.5, 3.0, 10.0), &indoors);
+
+    // The market: a street open to the sky, walled across twice into a slalom, stalls along it.
+    b.room("Market", v(-40.0, 0.0, 10.0), v(-18.0, 10.0, 18.0), &outdoors);
+    b.room("Market Gate", v(-19.0, 0.0, 9.0), v(-12.0, 3.5, 13.0), &indoors);
+    b.block("Market Wall West", v(-32.0, 0.0, 13.0), v(-31.4, 4.0, 18.0));
+    b.block("Market Wall East", v(-23.0, 0.0, 10.0), v(-22.4, 4.0, 14.5));
+    b.block("Market Stall West", v(-38.0, 0.0, 15.5), v(-35.5, 2.8, 18.0));
+    b.block("Market Stall Middle", v(-29.0, 0.0, 10.0), v(-26.5, 2.8, 12.0));
+    b.room("Market Nook Door", v(-40.0, 0.0, 18.0), v(-37.5, 3.0, 20.5), &nook);
+    b.room("Market Nook", v(-40.0, 0.0, 20.5), v(-34.0, 3.0, 24.0), &nook);
+
+    // The yard: open to the sky off the plaza's south-east, a tower in it, a door down to the canal.
+    b.room("Yard", v(8.0, 0.0, 16.0), v(21.5, 12.0, 30.0), &outdoors);
+    b.room("Yard Gate", v(9.0, 0.0, 12.0), v(13.0, 3.5, 16.5), &indoors);
+    b.block("Yard Screen", v(8.0, 0.0, 18.5), v(12.3, 6.0, 19.1));
+    b.block("Tower", v(15.0, 0.0, 22.0), v(21.5, TOWER_M, 30.0));
+    b.block("Tower Parapet", v(15.0, TOWER_M, 22.0), v(21.5, TOWER_M + 1.1, 22.4));
+    b.flight("Tower", (w(12.5, 18.0), w(15.0, 19.0)), w(0.0, 1.0), 12, 0.0, 0.0, 0.4);
+    b.room("Canal Yard Door", v(21.5, 0.0, 17.0), v(22.0, 3.0, 19.5), &indoors);
+    b.block("Canal Yard Landing", v(22.0, LOW_M, 17.0), v(24.5, 0.0, 19.5));
+    b.flight("Canal Yard Steps", (w(22.0, 19.5), w(24.5, 20.5)), w(0.0, 1.0), DOWN_FLIGHT, LOW_M, GROUND_M, -0.4);
+
+    // Spawns, each round a corner from its door.
+    b.spawn("Spawn Office", v(-42.0, MEZZANINE_M, -24.5), v(-39.0, MEZZANINE_M, -21.0));
+    b.spawn("Spawn Loading Nook", v(-29.5, 0.0, -11.0), v(-33.5, 0.0, -8.75));
+    b.spawn("Spawn Canal North", v(18.5, LOW_M, -36.5), v(21.75, LOW_M, -34.0));
+    b.spawn("Spawn Lane", v(-12.5, 0.0, -31.5), v(-16.75, 0.0, -29.0));
+    b.spawn("Spawn Tunnel", v(36.0, LOW_M, 27.0), v(33.25, LOW_M, 24.5));
+    b.spawn("Spawn Market", v(-35.5, 0.0, 22.5), v(-38.75, 0.0, 19.25));
+    b.spawn("Spawn Canal Tunnel", v(16.0, LOW_M, 12.5), v(13.25, LOW_M, 9.5));
+    b.spawn("Spawn Loading", v(-31.5, 0.0, -2.75), v(-35.75, 0.0, -2.75));
+
+    b.pack("armor_pack", v(0.0, 0.8, -4.5));
+    for feet in [v(-30.0, MEZZANINE_M, -30.0), v(10.0, 0.0, 28.0), v(-2.5, 0.0, -36.0), v(7.0, LOW_M, -6.0), v(-21.0, 0.0, 16.0)] {
+        b.pack("health_pack", feet);
+    }
+    for (weapon, feet) in [
+        ("rocket_launcher", v(-28.0, 0.0, -20.0)),
+        ("rocket_launcher", v(26.5, LOW_M, -22.0)),
+        ("flamethrower", v(-24.5, 0.0, -0.5)),
+        ("flamethrower", v(1.25, LOW_M, -14.0)),
+        ("pill_launcher", v(-28.0, 0.0, 16.5)),
+        ("pill_launcher", v(2.0, 0.0, -15.25)),
+        ("shotgun", v(7.5, 0.0, -29.0)),
+        ("shotgun", v(10.5, 0.0, 22.0)),
+        ("rpg", v(-4.0, LOW_M, -4.0)),
+        ("laser_rifle", v(19.0, TOWER_M, 27.0)),
+    ] {
+        b.weapon(weapon, feet, 0.0);
+    }
+
+    // The sky lights the plaza, canal, garden, market and yard; these light what is roofed.
+    for (point, intensity, range) in [
+        (v(-29.0, 7.5, -24.0), 120_000.0, 16.0),
+        (v(-24.0, 7.5, -17.0), 80_000.0, 14.0),
+        (v(-36.0, 7.0, -22.0), 60_000.0, 12.0),
+        (v(-42.0, 6.6, -23.0), 20_000.0, 6.0),
+        (v(-24.5, 3.1, -7.0), 40_000.0, 10.0),
+        (v(-20.0, 3.1, -0.5), 40_000.0, 10.0),
+        (v(-35.75, 2.6, -8.0), 30_000.0, 9.0),
+        (v(-35.0, 2.6, -2.75), 30_000.0, 9.0),
+        (v(-38.75, 2.6, 4.0), 30_000.0, 9.0),
+        (v(-19.75, 3.1, 5.5), 30_000.0, 9.0),
+        (v(-37.0, 2.6, 22.25), 20_000.0, 6.0),
+        (v(-15.0, 2.6, -25.0), 30_000.0, 9.0),
+        (v(10.0, 3.0, 14.25), 30_000.0, 9.0),
+        (v(-15.5, 3.0, 11.0), 30_000.0, 9.0),
+        (v(2.0, 3.4, -15.25), 30_000.0, 9.0),
+        (v(-30.5, 2.6, -9.75), 20_000.0, 6.0),
+        (v(31.0, LOW_M + 2.2, 22.25), 20_000.0, 7.0),
+        (v(-14.5, 2.6, -31.5), 20_000.0, 6.0),
+        (v(-3.0, LOW_M + 3.0, 0.0), 60_000.0, 12.0),
+        (v(5.0, LOW_M + 3.0, 5.0), 60_000.0, 12.0),
+        (v(-3.0, LOW_M + 3.0, -6.0), 40_000.0, 10.0),
+        (v(15.0, LOW_M + 2.2, 12.0), 20_000.0, 6.0),
+        (v(1.25, LOW_M + 2.2, -14.0), 30_000.0, 9.0),
+        (v(14.0, LOW_M + 2.2, 7.25), 30_000.0, 9.0),
+        (v(21.0, LOW_M + 2.2, 3.25), 30_000.0, 9.0),
+        (v(19.25, LOW_M + 2.2, -35.5), 20_000.0, 6.0),
+        (v(34.5, LOW_M + 2.2, 27.0), 20_000.0, 6.0),
+    ] {
+        b.light(point, intensity, range);
+    }
+
+    b.camera("Plaza", v(-14.0, 9.0, 6.0), v(0.0, 0.8, -2.0));
+    b.camera("Canal", v(30.0, 6.0, 10.0), v(28.0, LOW_M, -10.0));
+    b.camera("Warehouse", v(-22.0, 7.5, -16.0), v(-32.0, 2.0, -28.0));
+
+    let mut metadata = MapMetadata::default();
+    metadata.display_name = Some("Waterworks".to_owned());
+    metadata.authors = vec!["Claude".to_owned()];
+    (b.timeline, metadata)
 }
 
 fn write(name: &str, timeline: &FeatureTimeline, metadata: &MapMetadata) {

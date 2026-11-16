@@ -200,7 +200,7 @@ shape is a new producer and not a rewrite of every consumer — see
 | `src/lang_editor/` | The lang editor: a pack's strings for one language. See "Editing a lang file". |
 | `src/common/` | Shared: i18n, geometry, rays, gamemodes, items. |
 | `src/unlock/` | The crate-drop prototype. Orthogonal — see above. |
-| `src/bin/` | `ensure_lang` (fills missing translation keys), `new_map_template` (writes the new-map, demo-scene, arena and cloister blueprints), `map_stats` (bakes a blueprint's nav graph headless and prints its statistics and top-down charts of each field), `decal_images` (rasterizes the default pack's decal SVGs), `bake_body_clips` (seeds a pack's body animations from the pose functions they replace, and writes the clips `seed::WRITTEN` generates key by key), `default_materials` (writes the default pack's materials), `crate_drop`. |
+| `src/bin/` | `ensure_lang` (fills missing translation keys), `new_map_template` (writes the new-map, demo-scene, arena, cloister and waterworks blueprints), `map_stats` (bakes a blueprint's nav graph headless and prints its statistics and top-down charts of each field), `decal_images` (rasterizes the default pack's decal SVGs), `bake_body_clips` (seeds a pack's body animations from the pose functions they replace, and writes the clips `seed::WRITTEN` generates key by key), `default_materials` (writes the default pack's materials), `crate_drop`. |
 | `assets/default/` | The default pack: `lang/`, `blueprints/`, `servers/` (example `--server-config` files). |
 | `assets/user/` | The user pack: gitignored, made at startup, last in `default_packs()` so it overrides the shipped one. A new map or prop is saved here unless the document already has a folder. |
 | `cache/` | Gitignored, derived from the packs and maps: `thumbnail/props/{name}.png`, `nav/{hash}.bin`, `lightmap/{hash}.bin`, `rounds/{map}/*.jsonl`. Safe to delete. |
@@ -351,7 +351,22 @@ tuned against bot rounds: the first version ran every route through the halls (3
 36% of the deaths) and its spawns on a through-route were the ones camped.
 `every_cloister_spawn_stands_clear_and_walks_everywhere` walks it as the arena's test does.
 
-All four are text and diff like it. Still, don't edit them by saving over them
+**`waterworks.gmb`** (Waterworks) is a third free-for-all map, half again as big (2,250 m² of
+floor against about 1,450) and not symmetric: an outdoor plaza round a water tower and the armor,
+a sunken canal open to the sky that bends twice and is cut by sluices, a warehouse with a
+mezzanine, a hedged garden, a pillared cistern under the plaza reached by a stairwell cut into
+the plaza's floor, a market street walled into a slalom, a yard with a tower holding the laser
+rifle, and narrow tunnels and dog-legs between them. The plaza and the canal are footprint rooms.
+Its eight spawns stand round a corner in nooks off quiet rooms, away from every pickup. It was
+tuned against 4- and 8-bot rounds and `map_stats`: against Cloister on the same settings, a spawn
+is hit within 4 s half as often (21% against 39%), 13% of first sightings are past 25 m (18%),
+and bots spend 28% and 46% of a round in a fight rather than 57% and 71%, so there are quiet
+stretches between them. **Every gap a body walks through is at least 1.5 m**: a meter-wide gap
+between two hedges, a stair whose foot met a wall and a pillar in a doorway each held bots
+wedged for the rest of the round, and nothing reported it but the round's kill count.
+`every_waterworks_spawn_stands_clear_and_walks_everywhere` walks it.
+
+All five are text and diff like it. Still, don't edit them by saving over them
 from the editor — they are written by
 `cargo run --bin new_map_template`
 ([`src/bin/new_map_template.rs`](src/bin/new_map_template.rs)), run from the
@@ -1929,7 +1944,7 @@ stands up a box; `FootprintRoom`
 ([`src/editor/footprint_room.rs`](src/editor/footprint_room.rs),
 [documentation/footprint-rooms.md](documentation/footprint-rooms.md)) is a
 sketch whose corners are `PointRef`s, each named region one room on a child
-entity. Anything that needs a feature's rooms asks `FeatureTrait::rooms`,
+entity, every one painted from the feature's one `RoomSurfaces`. Anything that needs a feature's rooms asks `FeatureTrait::rooms`,
 never its `type_key` or its box. Tools that edit a footprint's own drawing
 reach it through `FeatureTrait::footprint`/`footprint_mut` — a typetag trait
 object has no `Any` to downcast through. What a drawn chain makes a room is

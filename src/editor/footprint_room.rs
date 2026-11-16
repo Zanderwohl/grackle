@@ -9,12 +9,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::common::ray::ray_intersects_aabb;
 use crate::common::PointResolutionError;
-use crate::editor::editable::{Feature, FeatureId, FeatureTrait, PointRef, BROKEN};
+use crate::editor::editable::{insert_if_changed, Feature, FeatureId, FeatureTrait, PointRef, BROKEN};
 use crate::editor::mirror::Mirroring;
 use crate::get;
 use crate::prop::region::{arrange, Arrangement, Note, Region};
 use crate::prop::sketch::{region_label, Sketch, SketchEntity, SketchId, SketchPoint, SketchRegion};
-use crate::tool::room::Room;
+use crate::material::picker::material_button;
+use crate::tool::room::{Room, RoomSlot, RoomSurfaces};
 
 /// A height a new footprint stands to before anybody sets one.
 pub const DEFAULT_HEIGHT: f32 = 3.0;
@@ -83,6 +84,9 @@ pub struct FootprintRoom {
     regions: Vec<SketchRegion>,
     /// Region entries stood up as rooms.
     rooms: Vec<SketchId>,
+    /// Shared by every room it stands up.
+    #[serde(default, skip_serializing_if = "RoomSurfaces::is_empty")]
+    surfaces: RoomSurfaces,
     #[serde(skip)]
     resolved_floor: f32,
     #[serde(skip)]
@@ -107,6 +111,7 @@ impl FootprintRoom {
             lines: Vec::new(),
             regions: Vec::new(),
             rooms: Vec::new(),
+            surfaces: RoomSurfaces::default(),
             resolved_floor: 0.0,
             resolved_corners: Vec::new(),
             resolved: Vec::new(),
@@ -114,6 +119,11 @@ impl FootprintRoom {
             entity: None,
             room_entities: Vec::new(),
         }
+    }
+
+    pub fn with_surfaces(mut self, surfaces: RoomSurfaces) -> Self {
+        self.surfaces = surfaces;
+        self
     }
 
     fn take_id(&mut self) -> SketchId {
@@ -415,6 +425,15 @@ impl FeatureTrait for FootprintRoom {
             changed |= ui.add(egui::DragValue::new(&mut self.height).speed(0.05).range(MIN_HEIGHT..=f32::MAX)).changed();
         });
 
+        ui.label(get!("editor.features.room.materials"));
+        egui::Grid::new("footprint_materials").num_columns(2).spacing([10.0, 4.0]).show(ui, |ui| {
+            for slot in RoomSlot::ALL {
+                ui.label(get!(slot.name_key()));
+                changed |= material_button(ui, self.surfaces.slot_mut(slot), true);
+                ui.end_row();
+            }
+        });
+
         ui.separator();
         ui.label(egui::RichText::new(get!("editor.features.footprint_room.regions")).strong());
         let mut toggled = None;
@@ -500,10 +519,12 @@ impl FeatureTrait for FootprintRoom {
         for (index, room) in self.resolved.iter().enumerate() {
             match self.room_entities.get(index) {
                 Some(child) => {
-                    commands.entity(*child).insert(room.clone());
+                    let mut child = commands.entity(*child);
+                    child.insert(room.clone());
+                    insert_if_changed(&mut child, self.surfaces.clone());
                 }
                 None => {
-                    let child = commands.spawn((room.clone(), ChildOf(entity))).id();
+                    let child = commands.spawn((room.clone(), self.surfaces.clone(), ChildOf(entity))).id();
                     self.room_entities.push(child);
                 }
             }
