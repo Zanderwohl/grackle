@@ -68,7 +68,15 @@ fn main() {
                 exit_condition: ExitCondition::OnPrimaryClosed,
                 close_when_requested: true,
             })
-            .set(bevy::log::LogPlugin { custom_layer: grackle::common::log_file::layer, ..default() }),
+            .set(bevy::log::LogPlugin { custom_layer: grackle::common::log_file::layer, ..default() })
+            // From the working directory, as the packs are read: Bevy's own default is
+            // `CARGO_MANIFEST_DIR`, unset outside `cargo run`, else the executable's folder.
+            .set(bevy::asset::AssetPlugin {
+                file_path: std::env::current_dir()
+                    .map(|dir| dir.join(grackle::common::assets::ASSET_ROOT).to_string_lossy().into_owned())
+                    .unwrap_or_else(|_| grackle::common::assets::ASSET_ROOT.to_owned()),
+                ..default()
+            }),
         )
         .insert_resource(settings)
         .insert_resource(Keymap::load())
@@ -111,7 +119,7 @@ fn main() {
             ToolPlugin,
             PropEditorPlugin,
             (AnimPlugin, MaterialEditorPlugin, grackle::weapon_editor::WeaponEditorPlugin, LangEditorPlugin),
-            (GamePlugin, grackle::game::match_cycle::MatchCyclePlugin, grackle::game::match_banner::MatchBannerPlugin),
+            (GamePlugin, grackle::game::match_cycle::MatchCyclePlugin, grackle::game::match_banner::MatchBannerPlugin, grackle::game::soundtrack::SoundtrackPlugin),
             (WorldPropPlugin, ThumbnailPlugin, ForwardCameraPlugin, SunlitPlugin, DecalPlugin, SprayPlugin, grackle::game::streak::StreakPlugin, grackle::game::gib_blood::GibBloodPlugin, grackle::game::flame_jet::FlameJetPlugin, grackle::game::gust_ring::GustRingPlugin),
             SkeletonPlugin,
             (PerfPlugin, SettingsPlugin, FontsPlugin, grackle::common::music::MusicPlugin, grackle::common::icons::IconsPlugin, UiShapePlugin, grackle::common::player_settings::PlayerSettingsPlugin { profile: editor_params.profile }),

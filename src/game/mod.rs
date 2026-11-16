@@ -76,6 +76,7 @@ pub mod sunlit;
 pub mod score;
 pub mod telemetry;
 pub mod spectate;
+pub mod soundtrack;
 pub mod spray;
 pub mod streak;
 pub mod tab_board;

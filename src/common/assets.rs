@@ -84,6 +84,8 @@ impl Assets {
     }
 }
 
+/// Where Bevy's `AssetServer` reads from, which every pack sits under.
+pub const ASSET_ROOT: &str = "assets";
 /// Where somebody's own unsorted work goes: a pack like any other, last so it
 /// overrides the shipped one, and gitignored.
 pub const USER_PACK: &str = "assets/user";

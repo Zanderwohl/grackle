@@ -73,7 +73,7 @@ fn bots_may_play_alone(settings: &RoundSettings, bots: &Query<(), With<BotSeat>>
 }
 
 /// Humans whose seat is [`Seat::Playing`]: choosing or spectating does not count, nor do bots.
-fn people_playing(us: Option<&OurIdentity>, links: &Query<&Identity, (With<ClientOf>, With<Connected>)>) -> usize {
+pub fn people_playing(us: Option<&OurIdentity>, links: &Query<&Identity, (With<ClientOf>, With<Connected>)>) -> usize {
     let playing = |who: &Identity| who.seat.is_playing();
     us.map(|us| &us.0).into_iter().chain(links.iter()).filter(|who| playing(who)).count()
 }

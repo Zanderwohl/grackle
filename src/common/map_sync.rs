@@ -304,6 +304,7 @@ mod tests {
         let mut metadata = MapMetadata::default();
         metadata.display_name = Some("Harvest".into());
         metadata.movement.gravity = 9.81;
+        metadata.music = vec!["music/Pump/Pump.mp3".into()];
         let sent = MetadataSnapshot { metadata: SavedMetadata::of(&metadata), file: Some("harvest".into()) };
         let bytes = postcard::to_allocvec(&sent).expect("the settings would not encode");
         let received: MetadataSnapshot =

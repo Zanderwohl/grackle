@@ -120,6 +120,36 @@ impl MusicLibrary {
     pub fn tracks(&self) -> impl Iterator<Item = &Track> {
         self.credits.iter().flat_map(|credit| credit.tracks.iter())
     }
+
+    /// By [`Track::path`], the same in every pack.
+    pub fn track(&self, path: &str) -> Option<&Track> {
+        self.tracks().find(|track| track.path == path)
+    }
+
+    /// The path itself where no pack has the track.
+    pub fn label(&self, path: &str) -> String {
+        for credit in &self.credits {
+            if let Some(track) = credit.tracks.iter().find(|track| track.path == path) {
+                return match credit.tracks.len() {
+                    1 => credit.name(),
+                    _ => format!("{}: {}", credit.name(), track.name()),
+                };
+            }
+        }
+        path.to_owned()
+    }
+}
+
+impl Track {
+    /// For the `AssetServer`, whose root is `assets/`; `None` for a pack outside it.
+    pub fn asset_path(&self) -> Option<String> {
+        let pack = self.pack.strip_prefix(crate::common::assets::ASSET_ROOT).ok()?;
+        let pack = pack.to_str()?.replace('\\', "/");
+        Some(match pack.is_empty() {
+            true => self.path.clone(),
+            false => format!("{pack}/{}", self.path),
+        })
+    }
 }
 
 pub fn is_sound(file: &str) -> bool {
@@ -244,6 +274,29 @@ pub(crate) mod tests {
         let cc = "\"Dawn\" Somebody (example.com)\nLicensed under Creative Commons: By Attribution 4.0\n";
         assert_eq!(parse_attribution(cc), MusicAttribution::Text(cc.trim().to_owned()));
         assert_eq!(parse_attribution("Mood: grim"), MusicAttribution::Text("Mood: grim".to_owned()));
+    }
+
+    #[test]
+    fn a_track_is_found_and_labeled_by_its_path() {
+        let (listings, files) = memory_packs(&[(
+            "assets/default",
+            &[
+                ("music/Dawn/attribution.txt", "Title: Dawn Suite"),
+                ("music/Dawn/one.ogg", ""),
+                ("music/Dawn/two.ogg", ""),
+                ("music/Pump/attribution.txt", "Title: Pump"),
+                ("music/Pump/Pump.mp3", ""),
+            ],
+        )]);
+        let (library, _) = discover(&listings, &files);
+        assert_eq!(library.label("music/Pump/Pump.mp3"), "Pump");
+        assert_eq!(library.label("music/Dawn/two.ogg"), "Dawn Suite: two");
+        assert_eq!(library.label("music/gone.ogg"), "music/gone.ogg");
+        let pump = library.track("music/Pump/Pump.mp3").unwrap();
+        assert_eq!(pump.asset_path().as_deref(), Some("default/music/Pump/Pump.mp3"));
+        assert!(library.track("music/gone.ogg").is_none());
+        let elsewhere = Track { pack: PathBuf::from("/somewhere/pack"), path: "music/a.ogg".into() };
+        assert_eq!(elsewhere.asset_path(), None);
     }
 
     #[test]

@@ -39,6 +39,7 @@ const SAMPLE_SIZE: f32 = 28.0;
 enum Page {
     General,
     Graphics,
+    Sound,
     Shortcuts,
     Fonts,
     Developer,
@@ -46,12 +47,13 @@ enum Page {
 }
 
 impl Page {
-    const ALL: [Page; 6] = [Page::General, Page::Graphics, Page::Shortcuts, Page::Fonts, Page::Developer, Page::Attribution];
+    const ALL: [Page; 7] = [Page::General, Page::Graphics, Page::Sound, Page::Shortcuts, Page::Fonts, Page::Developer, Page::Attribution];
 
     fn name(self) -> String {
         match self {
             Page::General => get!("settings.page.general"),
             Page::Graphics => get!("settings.page.graphics"),
+            Page::Sound => get!("settings.page.sound"),
             Page::Shortcuts => get!("settings.page.shortcuts"),
             Page::Fonts => get!("settings.page.fonts"),
             Page::Developer => get!("settings.page.developer"),
@@ -261,6 +263,7 @@ impl SettingsWindow {
                             match self.page {
                                 Page::General => self.general(ui),
                                 Page::Graphics => self.graphics(ui),
+                                Page::Sound => self.sound(ui),
                                 Page::Shortcuts => self.sheet.show(ui, &mut self.keys_draft, held),
                                 Page::Developer => self.developer(ui),
                                 Page::Attribution => credits::credits(ui, packs.music, packs.fonts),
@@ -328,6 +331,25 @@ impl SettingsWindow {
                 ui.end_row();
             }
         });
+    }
+
+    fn sound(&mut self, ui: &mut Ui) {
+        ui.heading(get!("settings.sound.volume"));
+        ui.add_space(5.0);
+        let Some(player) = &mut self.player_draft else { return };
+        let sound = &mut player.sound;
+        egui::Grid::new("settings_volume").num_columns(2).spacing([10.0, 8.0]).show(ui, |ui| {
+            for (label, value) in [
+                (get!("settings.sound.master"), &mut sound.master),
+                (get!("settings.sound.effects"), &mut sound.effects),
+                (get!("settings.sound.music"), &mut sound.music),
+            ] {
+                ui.label(label);
+                ui.add(egui::Slider::new(value, player_settings::VOLUME_RANGE).suffix("%"));
+                ui.end_row();
+            }
+        });
+        ui.checkbox(&mut sound.mute_music_on_lan, get!("settings.sound.mute_music_on_lan"));
     }
 
     fn developer(&mut self, ui: &mut Ui) {
@@ -598,6 +620,7 @@ mod tests {
         for (page, mine, other) in [
             (Page::General, get!("settings.general.language"), get!("settings.developer.icons")),
             (Page::Graphics, get!("settings.graphics.debris"), get!("settings.general.language")),
+            (Page::Sound, get!("settings.sound.volume"), get!("settings.graphics.debris")),
             (Page::Shortcuts, get!("keybind.sheet.heading"), get!("settings.general.language")),
             (Page::Developer, get!("settings.developer.icons"), get!("keybind.sheet.heading")),
             (Page::Attribution, get!("credits.music"), get!("settings.developer.icons")),
