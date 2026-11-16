@@ -243,6 +243,7 @@ fn toggle_mode(
             );
             return;
         }
+        AppMode::Onboarding => return,
     });
 }
 

@@ -31,6 +31,8 @@ pub enum AppMode {
     /// One pack's strings for one language.
     Lang,
     Play,
+    /// A name and a field of view, for somebody with no name saved. Never offered by the Mode menu.
+    Onboarding,
 }
 
 impl AppMode {
@@ -77,6 +79,7 @@ impl AppMode {
             AppMode::Weapon => get!("app_mode.weapon"),
             AppMode::Lang => get!("app_mode.lang"),
             AppMode::Play => get!("app_mode.play"),
+            AppMode::Onboarding => get!("app_mode.onboarding"),
         }
     }
 
@@ -130,7 +133,7 @@ pub fn mode_menu(
     request: &mut Option<AppMode>,
 ) {
     ui.menu_button(get!("app_mode.menu.title"), |ui| {
-        for mode in AppMode::iter() {
+        for mode in AppMode::iter().filter(|mode| *mode != AppMode::Onboarding) {
             let enabled = mode.selectable_from(current, role);
             let entry = ui.add_enabled(enabled, egui::Button::new(mode.name()));
             if entry.clicked() {

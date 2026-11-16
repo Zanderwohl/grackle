@@ -390,8 +390,14 @@ is still a gamemode question.
 ## Editor and game in one process
 
 `AppMode` ([`src/common/app_mode.rs`](src/common/app_mode.rs)) is `Editor`,
-`Prop`, `Animation`, `Material`, `Weapon`, `Lang` or `Play`, iterable in that order, which is
-the Mode menu's order. **`F5` swaps between the map editor and Play, and nothing
+`Prop`, `Animation`, `Material`, `Weapon`, `Lang`, `Play` or `Onboarding`, iterable in that order, which is
+the Mode menu's order. **`Onboarding`** ([`src/onboarding.rs`](src/onboarding.rs)) is never in the
+menu: it is the *initial* state, inserted by `OnboardingPlugin` when the saved player name is
+blank and the command line names nothing to open or play (`EditorParams::chooses_where_to_start`:
+any mode flag, `--map`, `--serve`, `--connect`, `--server-config`, `--spectate`, `--rounds` or
+`--class`; not `--lang`, `--game` or `--profile`). It asks for a name and a field of
+view (45°–110°, default 80°), and Continue writes those two fields to `PlayerSettings`, leaving the rest as the Settings window left them, requests File → Demo
+Scene and enters the map editor. **`F5` swaps between the map editor and Play, and nothing
 else** — the only way back to the editor, as `Escape` belongs to the pause
 menu. From the prop editor it is answered with a line in the log rather than
 starting a round: the key's whole meaning is that it toggles between *two*

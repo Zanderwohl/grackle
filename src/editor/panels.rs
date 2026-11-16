@@ -87,6 +87,18 @@ pub struct CurrentFilePath {
     requested_op: Option<FileAction>,
 }
 
+impl CurrentFilePath {
+    /// Answered by the map editor's panel the next frame it runs.
+    pub fn request(&mut self, op: FileAction) {
+        self.requested_op = Some(op);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn requested(&self) -> Option<FileAction> {
+        self.requested_op
+    }
+}
+
 impl Default for CurrentFilePath {
     fn default() -> Self {
         Self {
