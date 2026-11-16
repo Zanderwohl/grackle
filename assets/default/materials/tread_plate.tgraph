@@ -405,7 +405,7 @@ TextureGraphFile(
                         ColorStop(
                             t: 0.25,
                             color: Const(Oklch(
-                                l: 0.51250005,
+                                l: 0.6325,
                                 chroma: 0.00525,
                                 hue: OklabHue(70.0),
                                 alpha: 1.0,
@@ -414,7 +414,7 @@ TextureGraphFile(
                         ColorStop(
                             t: 0.75,
                             color: Const(Oklch(
-                                l: 0.5475,
+                                l: 0.6675,
                                 chroma: 0.00475,
                                 hue: OklabHue(230.0),
                                 alpha: 1.0,
@@ -436,7 +436,7 @@ TextureGraphFile(
                 id: 31,
                 name: "polished",
                 kind: Color(Oklch(
-                    l: 0.74,
+                    l: 0.86,
                     chroma: 0.004,
                     hue: OklabHue(230.0),
                     alpha: 1.0,
@@ -602,7 +602,7 @@ TextureGraphFile(
         output: Output(
             color: Some(32),
             roughness: Layer(36),
-            metallic: Const(1.0),
+            metallic: Const(0.4),
             normal: Some(37),
         ),
         params: {},

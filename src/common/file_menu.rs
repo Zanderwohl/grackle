@@ -15,7 +15,7 @@ use crate::common::keybind::{self, Action};
 use crate::common::shortcuts::EditorChords;
 use crate::get;
 
-/// What the File menu was asked for. Every mode answers all but `DemoScene`,
+/// What the File menu was asked for. Every mode answers all but `Example`,
 /// which only the map editor offers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileAction {
@@ -23,12 +23,36 @@ pub enum FileAction {
     Save,
     SaveAs,
     Open,
-    DemoScene,
+    Example(ExampleMap),
     Quit,
 }
 
+/// A shipped map the map editor opens untitled from the File menu's Demo Maps submenu.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExampleMap {
+    Demo,
+    Showcase,
+}
+
+impl ExampleMap {
+    /// Its blueprint's stem under the default pack's blueprints.
+    pub fn blueprint(self) -> &'static str {
+        match self {
+            ExampleMap::Demo => "demo",
+            ExampleMap::Showcase => "showcase",
+        }
+    }
+
+    pub fn name_key(self) -> &'static str {
+        match self {
+            ExampleMap::Demo => "file.menu.demo_scene",
+            ExampleMap::Showcase => "file.menu.showcase",
+        }
+    }
+}
+
 /// What a mode editing one document offers: everything but the map editor's
-/// Demo Scene.
+/// demo maps.
 pub const DOCUMENT: &[FileAction] =
     &[FileAction::New, FileAction::Save, FileAction::SaveAs, FileAction::Open, FileAction::Quit];
 
@@ -38,7 +62,8 @@ pub const ALL: &[FileAction] = &[
     FileAction::Save,
     FileAction::SaveAs,
     FileAction::Open,
-    FileAction::DemoScene,
+    FileAction::Example(ExampleMap::Demo),
+    FileAction::Example(ExampleMap::Showcase),
     FileAction::Quit,
 ];
 
@@ -49,7 +74,7 @@ impl FileAction {
             FileAction::Save => "file.menu.save",
             FileAction::SaveAs => "file.menu.save_as",
             FileAction::Open => "file.menu.open",
-            FileAction::DemoScene => "file.menu.demo_scene",
+            FileAction::Example(example) => example.name_key(),
             FileAction::Quit => "file.menu.quit",
         }
     }
@@ -77,34 +102,54 @@ impl FileAction {
             FileAction::New => Some(Action::New),
             FileAction::Save => Some(Action::Save),
             FileAction::SaveAs => Some(Action::SaveAs),
-            FileAction::Open | FileAction::DemoScene | FileAction::Quit => None,
+            FileAction::Open | FileAction::Example(_) | FileAction::Quit => None,
         }
     }
 }
 
 /// `request` rather than a return value, so a caller drawing several menus
 /// can answer them after the borrow on its document is dropped. `actions` is
-/// what this mode offers, in [`ALL`]'s order.
+/// what this mode offers, in [`ALL`]'s order; the examples among them are drawn
+/// together in a submenu where the first one falls.
 pub fn file_menu(ui: &mut egui::Ui, actions: &[FileAction], request: &mut Option<FileAction>) {
     ui.menu_button(get!("file.menu.title"), |ui| {
+        let examples: Vec<FileAction> =
+            actions.iter().copied().filter(|action| matches!(action, FileAction::Example(_))).collect();
+        let mut examples_drawn = false;
         for action in actions {
             match action {
+                FileAction::Example(_) => {
+                    if !examples_drawn {
+                        examples_drawn = true;
+                        ui.separator();
+                        ui.menu_button(get!("file.menu.demo_maps"), |ui| {
+                            for example in &examples {
+                                entry(ui, *example, request);
+                            }
+                        });
+                    }
+                    continue;
+                }
                 // Quit throws work away without asking, so it gets the gap.
-                FileAction::DemoScene | FileAction::Quit => {
+                FileAction::Quit => {
                     ui.separator();
                 }
                 _ => {}
             }
-            let mut button = egui::Button::new(get!(action.name_key()));
-            if let Some(hint) = action.chord().and_then(|chord| keybind::hint(ui.ctx(), chord)) {
-                button = button.shortcut_text(hint);
-            }
-            if ui.add(button).clicked() {
-                ui.close_kind(UiKind::Menu);
-                *request = Some(*action);
-            }
+            entry(ui, *action, request);
         }
     });
+}
+
+fn entry(ui: &mut egui::Ui, action: FileAction, request: &mut Option<FileAction>) {
+    let mut button = egui::Button::new(get!(action.name_key()));
+    if let Some(hint) = action.chord().and_then(|chord| keybind::hint(ui.ctx(), chord)) {
+        button = button.shortcut_text(hint);
+    }
+    if ui.add(button).clicked() {
+        ui.close_kind(UiKind::Menu);
+        *request = Some(action);
+    }
 }
 
 /// Where a file dialog opens: beside the file being edited, or else the user
@@ -139,7 +184,7 @@ mod tests {
                 "{action:?} is offered more than once",
             );
         }
-        assert_eq!(ALL.len(), 6, "an action was added without being offered");
+        assert_eq!(ALL.len(), 7, "an action was added without being offered");
     }
 
     /// A missing key renders as `<key>` rather than failing. Read from the file
@@ -154,6 +199,7 @@ mod tests {
 
         let mut keys: Vec<&str> = ALL.iter().map(|action| action.name_key()).collect();
         keys.push("file.menu.title");
+        keys.push("file.menu.demo_maps");
         for key in keys {
             let mut at = &table;
             for part in key.split('.') {
