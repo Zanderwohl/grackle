@@ -86,6 +86,15 @@ pub fn render_svg(svg: &[u8], size: u32) -> Result<resvg::tiny_skia::Pixmap, res
     Ok(pixmap)
 }
 
+/// `pixmap` as straight-alpha RGBA, rows top to bottom: tiny-skia's are premultiplied, and an
+/// image blended as straight alpha left premultiplied has a dark fringe on every edge.
+pub fn demultiplied(pixmap: &resvg::tiny_skia::Pixmap) -> impl Iterator<Item = [u8; 4]> + '_ {
+    pixmap.pixels().iter().map(|pixel| {
+        let pixel = pixel.demultiply();
+        [pixel.red(), pixel.green(), pixel.blue(), pixel.alpha()]
+    })
+}
+
 fn load_wanted_icons(mut contexts: EguiContexts, assets: Res<Assets>, mut installed: Local<bool>) {
     let Ok(ctx) = contexts.ctx_mut() else { return };
     if !*installed {

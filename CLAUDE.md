@@ -698,7 +698,7 @@ condition can override; `ViewMode` is what is drawn, and the camera swings
 between the two over `CAMERA_PULL_SECONDS` rather than cutting — your own body and
 its hitboxes are hidden from inside your own head, nobody else's are),
 **`F4`** toggles the hitbox gizmos, the debug laser aimed at them and each shot's line, and
-**`F6`** toggles the bone gizmos, the pickups' trigger volumes and the flame's and airblast's cones
+**`F6`** toggles the bone gizmos, the pickups' trigger volumes, the flame's and airblast's cones and each blast's damage sphere
 (green, dim while one restocks), **`F7`** shows the nav overlay picked in
 the Bakes panel, and **`F8`** draws each bot's route over the floor, its view
 and what it senses, in its color, and puts its name tag up with its goal. All four are off by default: they are debug
@@ -2838,6 +2838,13 @@ cone is an `Effect::Gust`, which bots hear like a shot. What a player sees is a 
 ([`src/game/gust_ring.rs`](src/game/gust_ring.rs)): a burst of puffs from a generated sheet,
 started on a circle round the muzzle and flown down the aim, widening with the cone and coming to
 rest at its end; the cone itself is drawn on `F6`.
+
+**A blast is a fireball** ([`src/game/blast_cloud.rs`](src/game/blast_cloud.rs)): one burst per
+`Effect::Blast`, clouds started in a small sphere and flown outward to rest inside the damage
+radius over a quarter second, burning yellow-orange, red, dark red, black, gray and a white that
+fades out (`BURN`). The clouds are white SVGs, `particles/svg/cloud_{1..8}.svg`, rasterized into
+one sheet at startup; a pack without them draws the airblast's puffs. The damage sphere is drawn
+on `F6`.
 
 `ProjectileEmitter` fires a spec along its own forward on an interval.
 Nothing places one: the player's key for it is gone, and it is meant to come

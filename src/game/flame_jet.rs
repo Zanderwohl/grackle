@@ -386,17 +386,21 @@ pub fn flame_sheet(texels: u32) -> Vec<u8> {
     rgba
 }
 
+/// A generated sheet, written linear, so not decoded as sRGB.
 pub(crate) fn sheet_image(rgba: Vec<u8>, width: u32, height: u32) -> Image {
+    sheet_image_as(rgba, width, height, bevy::render::render_resource::TextureFormat::Rgba8Unorm)
+}
+
+pub(crate) fn sheet_image_as(rgba: Vec<u8>, width: u32, height: u32, format: bevy::render::render_resource::TextureFormat) -> Image {
     use bevy::asset::RenderAssetUsages;
     use bevy::image::ImageSampler;
-    use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+    use bevy::render::render_resource::{Extent3d, TextureDimension};
 
     let mut image = Image::new(
         Extent3d { width, height, depth_or_array_layers: 1 },
         TextureDimension::D2,
         rgba,
-        // Written linear, so not decoded as sRGB.
-        TextureFormat::Rgba8Unorm,
+        format,
         RenderAssetUsages::RENDER_WORLD,
     );
     image.sampler = ImageSampler::linear();
