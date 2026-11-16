@@ -520,6 +520,7 @@ yellow = "Yellow"
 green = "Green"
 
 [team.picker]
+title = "Choose a Team"
 random = "Random"
 free_for_all = "Free for All"
 spectate = "Spectate"
@@ -651,6 +652,8 @@ failed = "Failed: { reason }"
 title = "Menu"
 resume = "Resume"
 settings = "Settings"
+change_teams = "Change Teams"
+join_or_spectate = "Join or Spectate"
 back_to_editor = "Back to Editor"
 disconnect = "Disconnect"
 

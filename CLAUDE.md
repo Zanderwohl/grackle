@@ -460,7 +460,9 @@ ported from redwing) is **Edit → Settings…** in every authoring mode, or
 `Ctrl+,` — for a client too, whose other Edit entries are grayed out. A
 floating window, not a dock tab, because every mode opens it. It
 edits a draft — nothing is saved or in force until Apply, and Close with
-changes asks. Pages: **General** (the language, in
+changes asks. `Escape` is Close (or answers the question by keeping the
+window), unless a binding is waiting for a key or a text field has the
+keyboard; `capture_binding` reads it from the keymap, since every action is quiet. Pages: **General** (the language, in
 `assets/user/settings.toml`; `--lang` overrides it for one run; and the
 player's name, auto-reload and field of view, which are `PlayerSettings`),
 **Graphics** (the debris decal caps, also `PlayerSettings`),
@@ -537,7 +539,10 @@ for the same state and `OnEnter(Play)` tears the match down and rebuilds it.
 `toggle_mode` answers a client's F5 with a line in the log rather than
 swallowing it — a key that silently does nothing reads as a bug.
 
-**`Escape` opens the pause menu**
+**`Escape` opens the pause menu**, unless an overlay takes it first: a
+system in `TakeEscape` sets `EscapeTaken`. The team picker does, when the
+player opened it (`TeamPicker::closable`; one that bars the way in cannot
+close, so the menu opens over it)
 ([`src/game/pause_menu.rs`](src/game/pause_menu.rs)), and releasing the mouse
 is the point of it — a grabbed cursor is not something a player can get out of
 by clicking elsewhere, so a window with no way to hand the pointer back is a
@@ -545,7 +550,7 @@ window you have to kill the process to leave. Plain Bevy UI, not `egui`: the
 panels are egui because they are editor tools, and this is part of the game, so
 it has to exist in a build with no editor and on a browser tab where the egui
 layer is one more thing to have gone wrong. It offers **Resume**, **Settings**
-(closes the menu and opens the Settings window) and **Back to Editor** — on the
+(closes the menu and opens the Settings window), **Change Teams** ("Join or Spectate" in a mode without teams; closes the menu and brings up the team picker, as `.` does) and **Back to Editor** — on the
 authority, ending the round for everybody, who stay connected — or, on a
 client, **Disconnect**, which also leaves Play in the same frame. A client that
 stops being one drops every entity the server sent (lightyear's `Remote`) and,
