@@ -4418,6 +4418,7 @@ dependencies = [
  "ron",
  "serde",
  "serde_json",
+ "skrifa",
  "strum",
  "strum_macros",
  "texture-graph-core",

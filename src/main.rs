@@ -114,7 +114,7 @@ fn main() {
             GamePlugin,
             (WorldPropPlugin, ThumbnailPlugin, ForwardCameraPlugin, SunlitPlugin, DecalPlugin, SprayPlugin, grackle::game::streak::StreakPlugin, grackle::game::gib_blood::GibBloodPlugin, grackle::game::flame_jet::FlameJetPlugin, grackle::game::gust_ring::GustRingPlugin),
             SkeletonPlugin,
-            (PerfPlugin, SettingsPlugin, FontsPlugin, grackle::common::icons::IconsPlugin, UiShapePlugin, grackle::common::player_settings::PlayerSettingsPlugin { profile: editor_params.profile }),
+            (PerfPlugin, SettingsPlugin, FontsPlugin, grackle::common::music::MusicPlugin, grackle::common::icons::IconsPlugin, UiShapePlugin, grackle::common::player_settings::PlayerSettingsPlugin { profile: editor_params.profile }),
             ))
         .add_systems(Startup, move || {
             // Read before the log existed, so said now.

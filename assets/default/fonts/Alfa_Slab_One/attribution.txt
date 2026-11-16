@@ -1,0 +1,6 @@
+Name: Alfa Slab One
+File: AlfaSlabOne-Regular.ttf
+Designer: JM Solé
+Copyright: Copyright 2016 The Alfa Slab One Project Authors (http://www.jmsole.cl | info@jmsole.cl), with Reserved Font Name "Alfa Slab".
+License: SIL Open Font License, Version 1.1
+License File: OFL.txt
