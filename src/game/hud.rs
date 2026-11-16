@@ -179,11 +179,14 @@ impl HudZone {
     }
 }
 
+/// How far a leaning panel's slanted sides move sideways per unit of height.
+pub(crate) const LEAN: f32 = 0.12;
+
 /// Inset by the stroke and the drop so neither is cut off.
 pub(crate) fn leaning_panel(size: Vec2, leans_right: bool, big: Corner, small: Corner) -> Path {
     let lo = Vec2::splat(ZONE_STROKE);
     let hi = size - Vec2::splat(ZONE_STROKE) - ZONE_DROP;
-    let lean = 0.12 * (hi.y - lo.y);
+    let lean = LEAN * (hi.y - lo.y);
     if leans_right {
         Path::rounded_polygon_each(
             &[
@@ -449,7 +452,7 @@ fn armor_readout(font: &Handle<Font>) -> impl Bundle {
 struct ArmorLabel;
 
 fn kind_label(font: &Handle<Font>) -> impl Bundle {
-    (ArmorLabel, hud_text(font, get!("hud.armor"), SMALL, Color::BLACK))
+    (ArmorLabel, hud_text(font, get!("hud.armor"), SMALL, Color::WHITE))
 }
 
 /// A reload notice when there is one, the loaded count large and the reserve
