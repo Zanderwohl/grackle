@@ -63,6 +63,7 @@ pub mod weapon_select;
 pub mod weapon_select_hud;
 pub mod player;
 pub mod net_bodies;
+pub mod menu;
 pub mod pause_menu;
 pub mod hud;
 pub mod name_tag;

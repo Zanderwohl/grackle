@@ -1,5 +1,5 @@
 //! The pause menu: `Escape` while playing releases the mouse and offers Resume,
-//! Settings, and a way out of the round. Plain Bevy UI, not egui, so it exists
+//! Settings, Change Teams, and a way out of the round. Plain Bevy UI, not egui, so it exists
 //! in a build with no editor.
 
 use bevy::prelude::*;
@@ -9,9 +9,10 @@ use crate::common::fonts::DisplayFont;
 use crate::common::net::{NetRequest, NetRole};
 use crate::common::settings::{OpenSettings, SettingsWindow};
 use crate::common::swatch::Swatch;
-use crate::game::hud::{ZONE_DROP, ZONE_STROKE};
-use crate::game::plate::{plate_text, FollowsTheLean, Plate};
-use crate::game::plate_button::{plate_button, plate_button_node, ButtonActivated};
+use crate::game::menu::{menu_button, menu_panel, menu_title, ITEM_SIZE};
+use crate::game::plate::plate_text;
+use crate::game::plate_button::ButtonActivated;
+use crate::game::team_choice::TeamOptions;
 use crate::get;
 
 /// Whether the pause menu is showing.
@@ -37,6 +38,19 @@ impl MouseHeld {
     }
 }
 
+/// Set by an overlay that took this frame's Escape, in [`TakeEscape`]; the pause menu opens only
+/// when none did. `toggle_pause` clears it.
+#[derive(Resource, Debug, Default)]
+pub struct EscapeTaken(pub bool);
+
+/// Systems that may take Escape before the pause menu reads it.
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TakeEscape;
+
+/// Insert to bring up the team picker, which takes it down again.
+#[derive(Resource, Debug, Default)]
+pub struct ChangeTeamsAsked;
+
 #[derive(Component)]
 struct PauseMenuRoot;
 
@@ -46,18 +60,11 @@ enum PauseItem {
     /// a client disconnects instead.
     Leave,
     Settings,
+    ChangeTeams,
     Resume,
 }
 
 const PAUSE_MENU_LAYER: i32 = 20;
-const TITLE_SIZE: f32 = 42.0;
-const ITEM_SIZE: f32 = 30.0;
-const ITEM_GAP: f32 = 12.0;
-const ITEM_MIN_WIDTH: f32 = 320.0;
-/// OKLCH lightness the menu's panel is below the buttons' cream.
-const MENU_DARKEN: f32 = -0.3;
-/// Logical pixels each side, past the drop. The slant takes about 22 px of it at mid-height.
-const MENU_SIDE: f32 = 44.0;
 
 /// Run condition. `true` when the resource is missing, so the game layer runs
 /// in test apps without this plugin.
@@ -72,13 +79,14 @@ impl Plugin for PauseMenuPlugin {
         crate::common::keybind::ensure(app);
         app.init_resource::<PauseMenu>()
             .init_resource::<MouseHeld>()
+            .init_resource::<EscapeTaken>()
             .init_resource::<DisplayFont>()
             .add_message::<NetRequest>()
             .add_observer(choose)
             .add_systems(
                 Update,
                 (
-                    toggle_pause.run_if(in_state(AppMode::Play)),
+                    toggle_pause.after(TakeEscape).run_if(in_state(AppMode::Play)),
                     // Chained so the menu appears the same frame. Ungated so
                     // they run on the frame leaving Play closes the menu.
                     show_or_hide.run_if(resource_changed::<PauseMenu>.or_else(resource_exists_and_changed::<NetRole>)),
@@ -92,8 +100,9 @@ impl Plugin for PauseMenuPlugin {
     }
 }
 
-fn toggle_pause(actions: Res<crate::common::keybind::Actions>, mut menu: ResMut<PauseMenu>) {
-    if actions.just_pressed(crate::common::keybind::Action::Pause) {
+fn toggle_pause(actions: Res<crate::common::keybind::Actions>, mut menu: ResMut<PauseMenu>, mut taken: ResMut<EscapeTaken>) {
+    let taken = std::mem::take(&mut taken.0);
+    if actions.just_pressed(crate::common::keybind::Action::Pause) && !taken {
         menu.open = !menu.open;
     }
 }
@@ -104,6 +113,7 @@ fn show_or_hide(
     existing: Query<Entity, With<PauseMenuRoot>>,
     font: Res<DisplayFont>,
     role: Option<Res<NetRole>>,
+    offer: Option<Res<TeamOptions>>,
 ) {
     for root in &existing {
         commands.entity(root).despawn();
@@ -116,7 +126,17 @@ fn show_or_hide(
         true => get!("pause.back_to_editor"),
         false => get!("pause.disconnect"),
     };
-    let items = [(PauseItem::Resume, get!("pause.resume")), (PauseItem::Settings, get!("pause.settings")), (PauseItem::Leave, leave)];
+    // A mode without teams offers only Free for All and Spectate.
+    let change_teams = match offer.as_deref().is_none_or(|offer| offer.teams) {
+        true => get!("pause.change_teams"),
+        false => get!("pause.join_or_spectate"),
+    };
+    let items = [
+        (PauseItem::Resume, get!("pause.resume")),
+        (PauseItem::Settings, get!("pause.settings")),
+        (PauseItem::ChangeTeams, change_teams),
+        (PauseItem::Leave, leave),
+    ];
     let font = &font.0;
     commands
         .spawn((
@@ -135,27 +155,10 @@ fn show_or_hide(
             BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.6)),
         ))
         .with_children(|root| {
-            root.spawn((
-                Plate::new(Swatch::neutral().lightened(MENU_DARKEN)),
-                Node {
-                    padding: UiRect {
-                        left: Val::Px(ZONE_STROKE + MENU_SIDE),
-                        right: Val::Px(ZONE_STROKE + ZONE_DROP.x + MENU_SIDE),
-                        top: Val::Px(ZONE_STROKE + 16.0),
-                        bottom: Val::Px(ZONE_STROKE + ZONE_DROP.y + 28.0),
-                    },
-                    flex_direction: FlexDirection::Column,
-                    align_items: AlignItems::Stretch,
-                    row_gap: Val::Px(ITEM_GAP),
-                    ..default()
-                },
-            ))
-            .with_children(|menu| {
-                menu.spawn((plate_text(font, get!("pause.title"), TITLE_SIZE), FollowsTheLean, Node { align_self: AlignSelf::Center, ..default() }));
+            root.spawn(menu_panel()).with_children(|menu| {
+                menu.spawn(menu_title(font, get!("pause.title")));
                 for (item, label) in items {
-                    menu.spawn((item, plate_button(Swatch::neutral()), FollowsTheLean))
-                        .insert(Node { min_width: Val::Px(ITEM_MIN_WIDTH), ..plate_button_node() })
-                        .with_child(plate_text(font, label, ITEM_SIZE));
+                    menu.spawn((item, menu_button(Swatch::neutral()))).with_child(plate_text(font, label, ITEM_SIZE));
                 }
             });
         });
@@ -176,6 +179,10 @@ fn choose(
         PauseItem::Settings => {
             menu.open = false;
             commands.insert_resource(OpenSettings);
+        }
+        PauseItem::ChangeTeams => {
+            menu.open = false;
+            commands.insert_resource(ChangeTeamsAsked);
         }
         // Leaving Play closes the menu. A client leaves Play in the same frame,
         // before the role changes, so it is never the authority in a round.
@@ -389,6 +396,35 @@ mod tests {
         app.update();
         assert!(!showing(&mut app), "Settings left the menu up");
         assert!(app.world().resource::<MouseHeld>().settings, "the mouse was taken back before the window opened");
+    }
+
+    #[test]
+    fn change_teams_closes_the_menu_and_asks_for_the_picker() {
+        let mut app = open_menu(NetRole::Solo);
+        activate(&mut app, PauseItem::ChangeTeams);
+        assert!(app.world().contains_resource::<ChangeTeamsAsked>(), "the team picker was not asked for");
+        app.update();
+        assert!(!showing(&mut app), "Change Teams left the menu up");
+    }
+
+    /// Breaks if the label names teams in a mode that has none.
+    #[test]
+    fn change_teams_is_named_for_the_mode() {
+        let mut app = app();
+        app.insert_resource(TeamOptions { teams: false, ..default() });
+        press_escape(&mut app);
+        let shown = labels(&mut app);
+        assert!(shown.contains(&get!("pause.join_or_spectate")) && !shown.contains(&get!("pause.change_teams")), "{shown:?}");
+    }
+
+    /// Breaks if an overlay that took Escape does not keep the menu shut.
+    #[test]
+    fn escape_taken_by_an_overlay_does_not_open_the_menu() {
+        let mut app = app();
+        app.insert_resource(EscapeTaken(true));
+        press_escape(&mut app);
+        assert!(!showing(&mut app), "the menu opened under an overlay that took Escape");
+        assert!(!app.world().resource::<EscapeTaken>().0, "the claim outlived its frame");
     }
 
     /// Breaks if the authority's way out of the menu does not end the round.

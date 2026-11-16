@@ -41,7 +41,7 @@ impl Sheet {
         self.lone_modifier = None;
     }
 
-    fn begin(&mut self, action: Action, slot: usize) {
+    pub(crate) fn begin(&mut self, action: Action, slot: usize) {
         self.capturing = Some((action, slot));
         self.lone_modifier = None;
         self.refused = None;

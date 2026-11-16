@@ -85,6 +85,9 @@ pub struct SettingsWindow {
     keys_applied: bool,
     /// Apply wrote the player settings this frame, so they are saved and sent.
     player_applied: bool,
+    escaped: bool,
+    /// A text field had the keyboard last frame, so an Escape now only takes its focus.
+    typing: bool,
 }
 
 /// What the drafts are copies of; written only by Apply.
@@ -110,6 +113,8 @@ impl Default for SettingsWindow {
             sample: None,
             keys_applied: false,
             player_applied: false,
+            escaped: false,
+            typing: false,
         }
     }
 }
@@ -190,6 +195,13 @@ impl SettingsWindow {
         self.sheet.stop();
         self.asking = false;
         self.open = false;
+    }
+
+    fn escape(&mut self, now: &InForce) {
+        match self.asking {
+            true => self.asking = false,
+            false => self.close(now),
+        }
     }
 
     fn close(&mut self, now: &InForce) {
@@ -497,13 +509,22 @@ impl Plugin for SettingsPlugin {
     }
 }
 
+/// Also notes an Escape for [`draw_settings`], read here because a binding being waited for
+/// takes it in this system, and that press must not close the window too.
 fn capture_binding(
     mut window: ResMut<SettingsWindow>,
     keys: Res<ButtonInput<KeyCode>>,
+    keymap: Res<Keymap>,
     mut messages: MessageReader<KeyboardInput>,
 ) {
     let window = &mut *window;
+    let waiting = window.sheet.is_capturing();
     window.sheet.capture_from(&mut window.keys_draft, &keys, &mut messages);
+    // `Actions` is quiet while the window is open, so the table is read here.
+    window.escaped = window.open
+        && !waiting
+        && !window.typing
+        && Actions::read(&keymap, Some(&keys), None, false).just_pressed(Action::Cancel);
 }
 
 /// Insert to open the Settings window on the next egui pass, from code with no `egui::Context`.
@@ -557,6 +578,9 @@ fn draw_settings(
         commands.remove_resource::<OpenSettings>();
         window.open(ctx, &now);
     }
+    if std::mem::take(&mut window.escaped) {
+        window.escape(&now);
+    }
     if window.is_open() {
         let packs = Credited { music: &music, fonts: &pack_fonts };
         window.show(ctx, &mut now, Held::of(&keys), packs);
@@ -569,6 +593,7 @@ fn draw_settings(
             }
         }
     }
+    window.typing = ctx.text_edit_focused();
     quiet.set_if_neq(Quiet(window.is_open()));
 }
 
@@ -693,6 +718,64 @@ mod tests {
         assert_eq!(now.player.as_deref().unwrap().name, "Ada", "the name was not cleaned");
         assert!(std::mem::take(&mut window.player_applied));
         assert!(!window.has_unsaved_changes(&now));
+    }
+
+    fn escape_world() -> World {
+        let mut world = World::new();
+        world.init_resource::<Messages<KeyboardInput>>();
+        world.init_resource::<Keymap>();
+        let mut keys = ButtonInput::<KeyCode>::default();
+        keys.press(KeyCode::Escape);
+        world.insert_resource(keys);
+        world.insert_resource(SettingsWindow { open: true, ..default() });
+        world
+    }
+
+    fn escaped(world: &mut World) -> bool {
+        world.run_system_cached(capture_binding).unwrap();
+        world.resource::<SettingsWindow>().escaped
+    }
+
+    /// Breaks if Escape stops closing the open window, or is noted while it is shut.
+    #[test]
+    fn escape_is_noted_only_while_the_window_is_open() {
+        let mut world = escape_world();
+        assert!(escaped(&mut world), "Escape would not close the window");
+        world.resource_mut::<SettingsWindow>().open = false;
+        assert!(!escaped(&mut world), "noted with the window shut");
+    }
+
+    /// Breaks if the press that stops waiting for a binding also closes the window.
+    #[test]
+    fn escape_that_stops_a_binding_does_not_close_the_window() {
+        let mut world = escape_world();
+        world.resource_mut::<SettingsWindow>().sheet.begin(Action::TeamPicker, 0);
+        assert!(!escaped(&mut world));
+    }
+
+    /// Breaks if Escape in a text field closes the window rather than leaving the field.
+    #[test]
+    fn escape_in_a_text_field_does_not_close_the_window() {
+        let mut world = escape_world();
+        world.resource_mut::<SettingsWindow>().typing = true;
+        assert!(!escaped(&mut world));
+    }
+
+    /// Breaks if Escape discards changes, keeps a clean window open, or leaves the question up.
+    #[test]
+    fn escape_closes_asks_or_drops_the_question() {
+        let (mut settings, mut keymap) = (Settings::default(), Keymap::default());
+        let mut window = SettingsWindow { open: true, draft: settings.clone(), keys_draft: keymap.clone(), ..default() };
+        let now = InForce { settings: &mut settings, keymap: &mut keymap, player: None };
+        window.escape(&now);
+        assert!(!window.open, "a window with nothing to apply stayed open");
+
+        window.open = true;
+        window.draft.language = Some("de-DE".into());
+        window.escape(&now);
+        assert!(window.open && window.asking, "unapplied changes were dropped without asking");
+        window.escape(&now);
+        assert!(window.open && !window.asking, "Escape on the question did not keep the window");
     }
 
     #[test]
