@@ -2,7 +2,9 @@
 //! [`Plate`] in the killer's color reading "killer [icon] victim" or "killer + assist [icon]
 //! victim", the icon being what killed ([`kill_icon::icon_for`]). A body that killed itself or was
 //! killed by the map with somebody's help reads "assist finished off [icon] victim", and without
-//! help "[icon] victim", both in the neutral cream.
+//! help "[icon] victim died", or "[icon] victim exploded" for the explode key, all in the neutral
+//! cream. Those three are arrays in the lang file, one picked per line by a seed drawn as the line
+//! is made.
 //!
 //! A line naming us as killer, assist or victim is up for [`OUR_LIFETIME`] and any other for
 //! [`LIFETIME`]. The latest [`OURS_SHOWN`] of ours are always kept, and the rest of the slots go to
@@ -21,9 +23,9 @@ use std::collections::{HashMap, VecDeque};
 use bevy::prelude::*;
 
 use crate::common::app_mode::AppMode;
-use crate::common::damage::{DamageSource, Died, PlayerId};
+use crate::common::damage::{DamageSource, Died, How, PlayerId};
 use crate::common::fonts::DisplayFont;
-use crate::common::lang::fill_uncached;
+use crate::common::lang::fill_uncached_random;
 use crate::common::swatch::Swatch;
 use crate::game::hud::{SafeZone, MARGIN_X, MARGIN_Y};
 use crate::common::weapon::WeaponCatalog;
@@ -86,13 +88,13 @@ struct Words {
 }
 
 impl Words {
-    /// A translation without the `{ icon }` slot puts the icon last.
-    fn fill(key: &str, names: &[(&str, &str)], icon: &str) -> Self {
+    /// A translation without the `{ icon }` slot puts the icon last. `seed` picks from an array.
+    fn fill(key: &str, seed: u64, names: &[(&str, &str)], icon: &str) -> Self {
         let names: Vec<(&str, String)> = names.iter().map(|(slot, name)| (*slot, name.replace(ICON_MARK, ""))).collect();
         let mark = ICON_MARK.to_string();
         let mut pairs: Vec<(&str, &str)> = names.iter().map(|(slot, name)| (*slot, name.as_str())).collect();
         pairs.push(("icon", &mark));
-        let filled = fill_uncached(key, &pairs);
+        let filled = fill_uncached_random(key, seed, &pairs);
         let (before, after) = filled.split_once(ICON_MARK).unwrap_or((&filled, ""));
         // A second slot would draw the mark as a missing glyph.
         Words { before: before.trim_end().to_owned(), icon: icon.to_owned(), after: after.replace(ICON_MARK, "").trim_start().to_owned() }
@@ -165,7 +167,8 @@ pub(crate) fn forget_the_feed(mut feed: ResMut<KillFeed>) {
 }
 
 /// What a death reads as, and the color it is painted in; `None` for something that was nobody.
-fn line_for(died: &Died, known: &HashMap<PlayerId, (String, Swatch)>, catalog: Option<&WeaponCatalog>) -> Option<(Words, Swatch)> {
+/// `seed` picks the wording where the lang file offers several.
+fn line_for(died: &Died, known: &HashMap<PlayerId, (String, Swatch)>, catalog: Option<&WeaponCatalog>, seed: u64) -> Option<(Words, Swatch)> {
     let icon = kill_icon::icon_for(&died.cause, catalog);
     let victim_id = died.victim_id?;
     let name = |id: PlayerId| known.get(&id).map_or_else(|| get!("scoreboard.player", "id", id.0), |(name, _)| name.clone());
@@ -179,13 +182,16 @@ fn line_for(died: &Died, known: &HashMap<PlayerId, (String, Swatch)>, catalog: O
         (DamageSource::Player(killer), helper) if killer != victim_id => {
             let swatch = known.get(&killer).map_or_else(Swatch::neutral, |(_, swatch)| *swatch);
             let words = match helper {
-                Some(helper) => Words::fill("kill_feed.killed_with_help", &[("killer", &name(killer)), ("assist", &name(helper)), ("victim", &victim)], icon),
-                None => Words::fill("kill_feed.killed", &[("killer", &name(killer)), ("victim", &victim)], icon),
+                Some(helper) => Words::fill("kill_feed.killed_with_help", seed, &[("killer", &name(killer)), ("assist", &name(helper)), ("victim", &victim)], icon),
+                None => Words::fill("kill_feed.killed", seed, &[("killer", &name(killer)), ("victim", &victim)], icon),
             };
             (words, swatch)
         }
-        (_, Some(helper)) => (Words::fill("kill_feed.finished_off", &[("assist", &name(helper)), ("victim", &victim)], icon), Swatch::neutral()),
-        (_, None) => (Words::fill("kill_feed.died", &[("victim", &victim)], icon), Swatch::neutral()),
+        (_, Some(helper)) => (Words::fill("kill_feed.finished_off", seed, &[("assist", &name(helper)), ("victim", &victim)], icon), Swatch::neutral()),
+        (_, None) => {
+            let key = if died.cause.how == How::Exploded { "kill_feed.exploded" } else { "kill_feed.died" };
+            (Words::fill(key, seed, &[("victim", &victim)], icon), Swatch::neutral())
+        }
     })
 }
 
@@ -220,7 +226,7 @@ fn list_the_dead(
     // A client spectating since it joined has no body to know itself by, and no line is its own.
     let us = our_id(body.map(|body| **body), identity.as_deref(), last.as_deref(), death_cam.as_deref());
     for died in deaths.read() {
-        if let Some((words, swatch)) = line_for(died, &feed.known, catalog.as_deref()) {
+        if let Some((words, swatch)) = line_for(died, &feed.known, catalog.as_deref(), rand::random()) {
             feed.push(words, swatch, names(died, us));
         }
     }
@@ -354,7 +360,7 @@ mod tests {
         feed.learn(&standing(1, "Ana", Some(Team::Red)));
         feed.learn(&standing(2, "Bo", Some(Team::Blue)));
         feed.learn(&standing(3, "Cy", None));
-        deaths.iter().map(|died| line_for(died, &feed.known, None)).collect()
+        deaths.iter().map(|died| line_for(died, &feed.known, None, 0)).collect()
     }
 
     /// Breaks if somebody whose standing went before their death was read (gone to Spectate,
@@ -373,7 +379,7 @@ mod tests {
         world.run_system_once(list_the_dead).unwrap();
 
         let lines: Vec<(Words, Swatch)> = world.resource::<KillFeed>().lines.iter().map(|line| (line.words.clone(), line.swatch)).collect();
-        let killed = Words::fill("kill_feed.killed", &[("killer", "Ana"), ("victim", "Bo")], SKULL);
+        let killed = Words::fill("kill_feed.killed", 0, &[("killer", "Ana"), ("victim", "Bo")], SKULL);
         assert_eq!(lines, [(killed, Swatch::team(Team::Red))]);
     }
 
@@ -391,7 +397,7 @@ mod tests {
             died(1, player(3), Some(player(3))),
             died(3, player(9), None),
         ]);
-        let fill = |key: &str, pairs: &[(&str, &str)]| Words::fill(key, pairs, SKULL);
+        let fill = |key: &str, pairs: &[(&str, &str)]| Words::fill(key, 0, pairs, SKULL);
         let red = Swatch::team(Team::Red);
         assert_eq!(got[0], Some((fill("kill_feed.killed", &[("killer", "Ana"), ("victim", "Bo")]), red)));
         assert_eq!(got[1], Some((fill("kill_feed.killed_with_help", &[("killer", "Ana"), ("assist", "Cy"), ("victim", "Bo")]), red)));
@@ -404,6 +410,31 @@ mod tests {
         assert_eq!(got[6], Some((fill("kill_feed.killed", &[("killer", &nobody), ("victim", "Cy")]), Swatch::neutral())));
         let killed = &got[0].as_ref().unwrap().0;
         assert_eq!((killed.before.as_str(), killed.icon.as_str(), killed.after.as_str()), ("Ana", SKULL, "Bo"), "split wrong, or a missing lang key");
+    }
+
+    /// Breaks if an explode-key death does not read from `exploded`, or the seed does not vary the
+    /// wording.
+    #[test]
+    fn a_blameless_death_reads_by_how_it_happened_and_its_seed() {
+        use crate::game::kill_icon::EXPLOSION;
+        // en-US: another test may have a translation with one wording loaded.
+        let _guard = crate::common::lang::switching_language();
+        let mut feed = KillFeed::default();
+        feed.learn(&standing(2, "Bo", Some(Team::Blue)));
+        let own = DamageSource::Player(PlayerId(2));
+        let exploded = Died { cause: Cause::of(None, How::Exploded), ..died(2, own, None) };
+        let suicide = Died { cause: Cause::of(None, How::Kill), ..died(2, own, None) };
+        let line = |died: &Died, seed: u64| line_for(died, &feed.known, None, seed).unwrap().0;
+
+        assert_eq!(line(&exploded, 7), Words::fill("kill_feed.exploded", 7, &[("victim", "Bo")], EXPLOSION));
+        assert_eq!(line(&suicide, 7), Words::fill("kill_feed.died", 7, &[("victim", "Bo")], SKULL));
+        for died in [&exploded, &suicide] {
+            let wordings: std::collections::BTreeSet<String> = (0..64).map(|seed| line(died, seed).after).collect();
+            assert!(wordings.len() > 1, "every seed read {wordings:?}");
+            for wording in (0..64).map(|seed| line(died, seed)) {
+                assert!(wording.before.is_empty() && wording.after.starts_with("Bo "), "{wording:?}");
+            }
+        }
     }
 
     #[test]
@@ -499,10 +530,10 @@ mod tests {
         let catalog = crate::common::weapon_file::default_catalog();
         let mut burned = died(2, DamageSource::Player(PlayerId(1)), None);
         burned.cause = Cause::of(Some(WeaponId::of("flamethrower")), How::Burn);
-        let (words, _) = line_for(&burned, &feed.known, Some(&catalog)).unwrap();
+        let (words, _) = line_for(&burned, &feed.known, Some(&catalog), 0).unwrap();
         assert_eq!(words, Words { before: "Ana".into(), icon: FLAME.into(), after: "Bo".into() });
         burned.cause.how = How::Flame;
-        assert_eq!(line_for(&burned, &feed.known, Some(&catalog)).unwrap().0.icon, "kill_flamethrower");
+        assert_eq!(line_for(&burned, &feed.known, Some(&catalog), 0).unwrap().0.icon, "kill_flamethrower");
     }
 
     /// Breaks if a plate stops standing its icon between its two lots of words.

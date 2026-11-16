@@ -172,6 +172,7 @@ actions! {
     ShowBones => "show_bones", Everywhere, false, true;
     Humiliate => "humiliate", Play, false, true;
     Suicide => "suicide", Play, false, true;
+    Explode => "explode", Play, false, true;
     NavOverlay => "nav_overlay", Play, false, true;
     BotRoutes => "bot_routes", Play, false, true;
     SafeZone => "safe_zone", Play, false, true;

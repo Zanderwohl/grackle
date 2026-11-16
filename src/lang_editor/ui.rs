@@ -24,6 +24,7 @@ const MISSING: Color32 = Color32::from_rgb(230, 90, 80);
 const STUB: Color32 = Color32::from_rgb(230, 170, 60);
 const PLACEHOLDERS: Color32 = Color32::from_rgb(240, 130, 40);
 const EXTRA: Color32 = Color32::from_rgb(120, 160, 230);
+const KIND: Color32 = Color32::from_rgb(190, 120, 220);
 
 const KEY_WIDTH: f32 = 220.0;
 
@@ -54,7 +55,7 @@ struct Tree {
     generation: Option<u64>,
     root: Node,
     marks: HashMap<KeyPath, Marks>,
-    counts: [usize; 4],
+    counts: [usize; 5],
     /// Marked leaves at or under each node.
     problems: HashMap<KeyPath, usize>,
     shown: Shown,
@@ -77,13 +78,13 @@ impl Tree {
         let reference = editor.reference();
         self.root = Node::build(&editor.doc, reference);
         self.marks.clear();
-        self.counts = [0; 4];
+        self.counts = [0; 5];
         let mut leaves = Vec::new();
         self.root.leaves(&mut leaves);
         for node in leaves {
             let value = editor.doc.leaf(&node.path);
-            let marks = Marks::of(value.as_ref().map(Leaf::as_text), reference, &node.path);
-            for (count, mark) in self.counts.iter_mut().zip([marks.missing, marks.stub, marks.placeholders, marks.extra]) {
+            let marks = Marks::of(value.as_ref(), reference, &node.path);
+            for (count, mark) in self.counts.iter_mut().zip([marks.missing, marks.stub, marks.placeholders, marks.extra, marks.kind]) {
                 *count += mark as usize;
             }
             self.marks.insert(node.path.clone(), marks);
@@ -108,8 +109,9 @@ impl Tree {
                 return true;
             }
             let value = editor.doc.leaf(&node.path);
+            let text = value.as_ref().map(Leaf::text);
             let wanted = reference.and_then(|reference| reference.get(&node.path));
-            [Some(node.dotted.as_str()), value.as_ref().map(Leaf::as_text), wanted]
+            [Some(node.dotted.as_str()), text.as_deref(), wanted]
                 .into_iter()
                 .flatten()
                 .any(|text| text.to_lowercase().contains(filter))
@@ -318,7 +320,7 @@ fn keys_panel(ui: &mut Ui, editor: &mut LangEditor, state: &mut LangUi) {
             }
         }
         ui.separator();
-        let [missing, stubs, placeholders, extra] = state.tree.counts;
+        let [missing, stubs, placeholders, extra, kind] = state.tree.counts;
         if comparing {
             ui.colored_label(MISSING, get!("lang_editor.count.missing", "count", missing));
         }
@@ -326,6 +328,7 @@ fn keys_panel(ui: &mut Ui, editor: &mut LangEditor, state: &mut LangUi) {
         if comparing {
             ui.colored_label(PLACEHOLDERS, get!("lang_editor.count.placeholders", "count", placeholders));
             ui.colored_label(EXTRA, get!("lang_editor.count.extra", "count", extra));
+            ui.colored_label(KIND, get!("lang_editor.count.kind", "count", kind));
         }
     });
     ui.separator();
@@ -409,7 +412,7 @@ impl View<'_> {
         // `comparing` is `reference().is_some()`, asked once a frame rather than per row.
         let reference = self.comparing.then(|| self.editor.reference.get(&node.path)).flatten().map(str::to_string);
         ui.horizontal(|ui| {
-            let color = if marks.missing { MISSING } else if marks.stub { STUB } else if marks.placeholders { PLACEHOLDERS } else if marks.extra { EXTRA } else { ui.visuals().text_color() };
+            let color = if marks.missing { MISSING } else if marks.stub { STUB } else if marks.placeholders { PLACEHOLDERS } else if marks.extra { EXTRA } else if marks.kind { KIND } else { ui.visuals().text_color() };
             let name = ui.add_sized(
                 [KEY_WIDTH, ui.spacing().interact_size.y],
                 egui::Label::new(RichText::new(&node.name).monospace().color(color)).truncate().sense(egui::Sense::click()),
@@ -420,6 +423,16 @@ impl View<'_> {
                 }
                 if ui.add_enabled(value.is_some(), egui::Button::new(get!("lang_editor.remove"))).clicked() {
                     self.editor.edit(|doc| doc.remove(&node.path));
+                }
+                let toggle = match &value {
+                    Some(Leaf::Text(_)) => Some(get!("lang_editor.make_list")),
+                    Some(Leaf::List(items)) if items.len() == 1 => Some(get!("lang_editor.make_text")),
+                    _ => None,
+                };
+                if let Some(label) = toggle
+                    && ui.button(label).clicked()
+                {
+                    let _ = self.editor.edit(|doc| doc.toggle_list(&node.path));
                 }
             });
 
@@ -439,26 +452,70 @@ impl View<'_> {
                         let _ = self.editor.edit(|doc| doc.set(&node.path, &text));
                     }
                 }
+                Some(Leaf::List(items)) => {
+                    ui.allocate_ui(egui::vec2(width, 0.0), |ui| {
+                        ui.vertical(|ui| self.list(ui, node, items, width));
+                    });
+                }
                 Some(Leaf::Other(raw)) => {
                     ui.add_sized([width, ui.spacing().interact_size.y], egui::Label::new(RichText::new(raw).monospace()));
                 }
                 None => {
                     let copy = ui.add_sized([width, ui.spacing().interact_size.y], egui::Button::new(get!("lang_editor.copy_reference")));
                     if copy.clicked() {
-                        if let Some(reference) = &reference {
-                            let _ = self.editor.edit(|doc| doc.insert(&node.path, reference));
+                        let list = self.editor.reference().and_then(|reference| reference.list(&node.path)).map(<[String]>::to_vec);
+                        match (list, &reference) {
+                            (Some(items), _) => {
+                                let _ = self.editor.edit(|doc| doc.insert_list(&node.path, &items));
+                            }
+                            (None, Some(reference)) => {
+                                let _ = self.editor.edit(|doc| doc.insert(&node.path, reference));
+                            }
+                            (None, None) => {}
                         }
                     }
                 }
             }
             if self.comparing {
-                ui.add_sized(
-                    [width, ui.spacing().interact_size.y],
-                    egui::Label::new(RichText::new(reference.clone().unwrap_or_default()).weak()).truncate(),
-                );
+                // A list's entries are one per line, each beside the field it would be.
+                ui.allocate_ui(egui::vec2(width, 0.0), |ui| {
+                    ui.vertical(|ui| {
+                        for line in reference.as_deref().unwrap_or_default().split('\n') {
+                            ui.add_sized(
+                                [width, ui.spacing().interact_size.y],
+                                egui::Label::new(RichText::new(line).weak()).truncate(),
+                            );
+                        }
+                    });
+                });
             }
-            tags(ui, marks, value.as_ref().map(Leaf::as_text), reference.as_deref());
+            let text = value.as_ref().map(Leaf::text);
+            tags(ui, marks, text.as_deref(), reference.as_deref());
         });
+    }
+
+    fn list(&mut self, ui: &mut Ui, node: &Node, items: &[String], width: f32) {
+        let button = ui.spacing().interact_size.y;
+        let field = (width - button - ui.spacing().item_spacing.x).max(60.0);
+        for (index, item) in items.iter().enumerate() {
+            ui.horizontal(|ui| {
+                let mut text = item.clone();
+                let edit = egui::TextEdit::singleline(&mut text).desired_width(field).id_salt(("lang_value", &node.dotted, index));
+                if ui.add(edit).changed() {
+                    let _ = self.editor.edit(|doc| doc.set_item(&node.path, index, &text));
+                }
+                let remove = ui
+                    .add_enabled(items.len() > 1, egui::Button::new("−").min_size(egui::vec2(button, button)))
+                    .on_hover_text(get!("lang_editor.remove_item"));
+                if remove.clicked() {
+                    let _ = self.editor.edit(|doc| doc.remove_item(&node.path, index));
+                }
+            });
+        }
+        let add = ui.add(egui::Button::new("+").min_size(egui::vec2(button, button))).on_hover_text(get!("lang_editor.add_item"));
+        if add.clicked() {
+            let _ = self.editor.edit(|doc| doc.push_item(&node.path, ""));
+        }
     }
 }
 
@@ -484,6 +541,9 @@ fn tags(ui: &mut Ui, marks: Marks, value: Option<&str>, reference: Option<&str>)
     }
     if marks.extra {
         ui.colored_label(EXTRA, get!("lang_editor.mark.extra"));
+    }
+    if marks.kind {
+        ui.colored_label(KIND, get!("lang_editor.mark.kind"));
     }
 }
 

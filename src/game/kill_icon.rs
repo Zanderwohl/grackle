@@ -26,7 +26,7 @@ const TEXELS: u32 = 64;
 pub fn icon_for<'a>(cause: &Cause, catalog: Option<&'a WeaponCatalog>) -> &'a str {
     match cause.how {
         How::Burn => FLAME,
-        How::Splash => EXPLOSION,
+        How::Splash | How::Exploded => EXPLOSION,
         How::Trigger | How::Kill => SKULL,
         _ => cause.weapon.and_then(|weapon| catalog?.get(weapon)?.icon.as_deref()).unwrap_or(SKULL),
     }

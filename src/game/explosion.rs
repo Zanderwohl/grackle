@@ -104,6 +104,9 @@ pub fn explode(
 
         for (entity, boxes, impulse, stance, player) in &mut bodies {
             let center = boxes.body.center;
+            if blast.spare == Some(entity) {
+                continue;
+            }
             let direct = blast.direct.filter(|target| *target == entity);
             let mine = allegiances.is_self(blast.source, entity);
             let amount = match direct {
@@ -188,7 +191,7 @@ fn self_splash(blast: &Explosion, body: &Box3) -> u32 {
 /// nav bake's rocket jumps, which have no entities to send messages about.
 #[allow(clippy::too_many_arguments)]
 pub fn own_blast(world: &CollisionWorld, at: Vec3, radius: f32, damage: u32, body: &Box3, crouched: bool, grounded: bool) -> (u32, Vec3) {
-    let blast = Explosion { at, radius, damage, at_edge: 0.0, scale: 1.0, knockback: 0.0, source: crate::common::damage::DamageSource::World, direct: None, weapon: None, reflected: false };
+    let blast = Explosion { at, radius, damage, at_edge: 0.0, scale: 1.0, knockback: 0.0, source: crate::common::damage::DamageSource::World, direct: None, weapon: None, reflected: false, spare: None };
     let amount = self_splash(&blast, body);
     if amount == 0 || !in_sight(world, at, body.center, body.center.distance(at)) {
         return (0, Vec3::ZERO);
@@ -313,7 +316,7 @@ mod tests {
     }
 
     fn blast(at: Vec3, direct: Option<Entity>) -> Explosion {
-        Explosion { at, radius: 4.0, damage: 60, at_edge: 0.0, scale: 1.0, knockback: 10.0, source: SHOOTER, direct, weapon: None, reflected: false }
+        Explosion { at, radius: 4.0, damage: 60, at_edge: 0.0, scale: 1.0, knockback: 10.0, source: SHOOTER, direct, weapon: None, reflected: false, spare: None }
     }
 
     fn damage_written(world: &mut World) -> Vec<Damage> {

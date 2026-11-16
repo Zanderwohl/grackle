@@ -1,9 +1,10 @@
 //! A lang file as `toml_edit` holds it, so an edit touches only the lines it changes: order,
 //! comments, blank lines, dotted keys and `[headers]` all survive a save.
 
+use std::borrow::Cow;
 use std::collections::{BTreeSet, HashMap};
 
-use toml_edit::{DocumentMut, Item, Key, Table, TableLike, Value};
+use toml_edit::{Array, DocumentMut, Item, Key, Table, TableLike, Value};
 
 pub type KeyPath = Vec<String>;
 
@@ -28,6 +29,8 @@ pub enum LangError {
     /// A key on the way holds a value, so it cannot also be a table.
     NotATable(String),
     Missing(String),
+    /// The key holds something other than what the edit is for: text, or a list of text.
+    WrongKind(String),
 }
 
 impl LangError {
@@ -37,21 +40,26 @@ impl LangError {
             LangError::Exists(key) => crate::get!("lang_editor.error.exists", "key", key),
             LangError::NotATable(key) => crate::get!("lang_editor.error.not_a_table", "key", key),
             LangError::Missing(key) => crate::get!("lang_editor.error.missing", "key", key),
+            LangError::WrongKind(key) => crate::get!("lang_editor.error.wrong_kind", "key", key),
         }
     }
 }
 
-/// Strings are edited; anything else is shown as written.
+/// Strings and arrays of strings are edited; anything else is shown as written.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Leaf {
     Text(String),
+    /// One is picked by `get_random!`; `get!` takes the first.
+    List(Vec<String>),
     Other(String),
 }
 
 impl Leaf {
-    pub fn as_text(&self) -> &str {
+    /// A list's entries one per line, so its slots and a filter see all of them.
+    pub fn text(&self) -> Cow<'_, str> {
         match self {
-            Leaf::Text(text) | Leaf::Other(text) => text,
+            Leaf::Text(text) | Leaf::Other(text) => Cow::Borrowed(text),
+            Leaf::List(items) => Cow::Owned(items.join("\n")),
         }
     }
 }
@@ -124,9 +132,93 @@ impl LangDoc {
         self.insert(path, text)
     }
 
+    fn array_mut(&mut self, path: &[String]) -> Result<&mut Array, LangError> {
+        let (last, parents) = path.split_last().ok_or(LangError::BadKey)?;
+        match self.table_mut(parents).and_then(|table| table.get_mut(last)) {
+            Some(Item::Value(Value::Array(array))) => Ok(array),
+            Some(_) => Err(LangError::WrongKind(dotted(path))),
+            None => Err(LangError::Missing(dotted(path))),
+        }
+    }
+
+    pub fn set_item(&mut self, path: &[String], index: usize, text: &str) -> Result<(), LangError> {
+        let array = self.array_mut(path)?;
+        if index >= array.len() {
+            return Err(LangError::Missing(format!("{}[{index}]", dotted(path))));
+        }
+        array.replace(index, text);
+        Ok(())
+    }
+
+    /// Laid out as the last entry is, so a list written one entry per line stays that way.
+    pub fn push_item(&mut self, path: &[String], text: &str) -> Result<(), LangError> {
+        let array = self.array_mut(path)?;
+        let Some(last) = array.iter().last() else {
+            array.push(text);
+            return Ok(());
+        };
+        // A lone inline entry has no space before it, which a second one needs.
+        let one_per_line = last.decor().prefix().and_then(|prefix| prefix.as_str()).is_some_and(|prefix| prefix.contains('\n'));
+        if array.len() == 1 && !one_per_line {
+            array.push(text);
+            return Ok(());
+        }
+        let decor = last.decor().clone();
+        let mut fresh = Value::from(text);
+        *fresh.decor_mut() = decor;
+        array.push_formatted(fresh);
+        Ok(())
+    }
+
+    /// The last entry stays: a list of none is nothing to pick from.
+    pub fn remove_item(&mut self, path: &[String], index: usize) -> Result<(), LangError> {
+        let array = self.array_mut(path)?;
+        if index >= array.len() || array.len() == 1 {
+            return Err(LangError::Missing(format!("{}[{index}]", dotted(path))));
+        }
+        let was_first = index == 0;
+        let first_decor = array.get(0).unwrap().decor().clone();
+        array.remove(index);
+        // The new first entry takes the old first's place after the `[`.
+        if was_first {
+            *array.get_mut(0).unwrap().decor_mut() = first_decor;
+        }
+        Ok(())
+    }
+
+    /// Text becomes a list of that one entry, or a list of one entry becomes its text, keeping
+    /// the key's spacing and comment.
+    pub fn toggle_list(&mut self, path: &[String]) -> Result<(), LangError> {
+        let (last, parents) = path.split_last().ok_or(LangError::BadKey)?;
+        let Some(Item::Value(value)) = self.table_mut(parents).and_then(|table| table.get_mut(last)) else {
+            return Err(LangError::Missing(dotted(path)));
+        };
+        let decor = value.decor().clone();
+        let mut fresh = match value {
+            Value::String(text) => Value::Array(Array::from_iter([text.value().as_str()])),
+            Value::Array(array) if array.len() == 1 => match array.get(0).and_then(Value::as_str) {
+                Some(text) => Value::from(text),
+                None => return Err(LangError::WrongKind(dotted(path))),
+            },
+            _ => return Err(LangError::WrongKind(dotted(path))),
+        };
+        *fresh.decor_mut() = decor;
+        *value = fresh;
+        Ok(())
+    }
+
+    /// As [`LangDoc::insert`], for a list.
+    pub fn insert_list(&mut self, path: &[String], items: &[String]) -> Result<(), LangError> {
+        self.insert_value(path, Value::Array(Array::from_iter(items.iter().map(String::as_str))))
+    }
+
     /// At the end of its table. Missing tables are made dotted under a dotted table and as
     /// `[headers]` otherwise; `toml_edit` writes a table with no position after its parent's last.
     pub fn insert(&mut self, path: &[String], text: &str) -> Result<(), LangError> {
+        self.insert_value(path, Value::from(text))
+    }
+
+    fn insert_value(&mut self, path: &[String], value: Value) -> Result<(), LangError> {
         if path.is_empty() || !path.iter().all(|segment| valid_segment(segment)) {
             return Err(LangError::BadKey);
         }
@@ -148,7 +240,7 @@ impl LangDoc {
         if table.contains_key(last) {
             return Err(LangError::Exists(dotted(path)));
         }
-        table.insert(last, Item::Value(Value::from(text)));
+        table.insert(last, Item::Value(value));
         Ok(())
     }
 
@@ -212,6 +304,9 @@ impl LangDoc {
 fn leaf_of(value: &Value) -> Leaf {
     match value {
         Value::String(text) => Leaf::Text(text.value().clone()),
+        Value::Array(array) if array.iter().all(Value::is_str) => {
+            Leaf::List(array.iter().filter_map(Value::as_str).map(str::to_string).collect())
+        }
         other => Leaf::Other(other.clone().decorated("", "").to_string()),
     }
 }
@@ -233,7 +328,9 @@ fn collect(table: &dyn TableLike, path: &mut KeyPath, out: &mut Vec<(KeyPath, Le
 #[derive(Debug, Clone, Default)]
 pub struct Reference {
     pub order: Vec<KeyPath>,
+    /// A list's entries one per line, as [`Leaf::text`].
     values: HashMap<KeyPath, String>,
+    lists: HashMap<KeyPath, Vec<String>>,
 }
 
 impl Reference {
@@ -245,6 +342,10 @@ impl Reference {
 
     pub fn get(&self, path: &[String]) -> Option<&str> {
         self.values.get(path).map(String::as_str)
+    }
+
+    pub fn list(&self, path: &[String]) -> Option<&[String]> {
+        self.lists.get(path).map(Vec::as_slice)
     }
 
     pub fn is_empty(&self) -> bool {
@@ -260,6 +361,12 @@ fn flatten(table: &toml::Table, path: &mut KeyPath, into: &mut Reference) {
             toml::Value::String(text) => {
                 into.order.push(path.clone());
                 into.values.insert(path.clone(), text.clone());
+            }
+            toml::Value::Array(items) if items.iter().all(toml::Value::is_str) => {
+                let items: Vec<String> = items.iter().filter_map(toml::Value::as_str).map(str::to_string).collect();
+                into.order.push(path.clone());
+                into.values.insert(path.clone(), items.join("\n"));
+                into.lists.insert(path.clone(), items);
             }
             other => {
                 into.order.push(path.clone());
@@ -282,26 +389,40 @@ pub struct Marks {
     pub placeholders: bool,
     /// In the file, not in the reference.
     pub extra: bool,
+    /// Text where the reference has a list, or a list where it has text.
+    pub kind: bool,
 }
 
 impl Marks {
     pub fn any(self) -> bool {
-        self.missing || self.stub || self.placeholders || self.extra
+        self.missing || self.stub || self.placeholders || self.extra || self.kind
     }
 
-    /// `reference` is `None` when the open file is the reference itself.
-    pub fn of(value: Option<&str>, reference: Option<&Reference>, path: &[String]) -> Marks {
-        let stub = value.is_some_and(|value| value.starts_with(STUB_PREFIX));
+    /// `reference` is `None` when the open file is the reference itself. Each entry of a list
+    /// must have every slot the reference uses, since any one of them may be picked.
+    pub fn of(value: Option<&Leaf>, reference: Option<&Reference>, path: &[String]) -> Marks {
+        let entries: Vec<&str> = match value {
+            Some(Leaf::Text(text) | Leaf::Other(text)) => vec![text],
+            Some(Leaf::List(items)) => items.iter().map(String::as_str).collect(),
+            None => Vec::new(),
+        };
+        let stub = entries.iter().any(|entry| entry.starts_with(STUB_PREFIX));
         let Some(reference) = reference else { return Marks { stub, ..Default::default() } };
         let wanted = reference.get(path);
         Marks {
             missing: value.is_none() && wanted.is_some(),
             stub,
-            placeholders: match (value, wanted) {
-                (Some(value), Some(wanted)) if !stub => placeholders(value) != placeholders(wanted),
+            placeholders: match wanted {
+                Some(wanted) if !stub => entries.iter().any(|entry| placeholders(entry) != placeholders(wanted)),
                 _ => false,
             },
             extra: value.is_some() && wanted.is_none(),
+            kind: wanted.is_some()
+                && match value {
+                    Some(Leaf::Text(_)) => reference.list(path).is_some(),
+                    Some(Leaf::List(_)) => reference.list(path).is_none(),
+                    _ => false,
+                },
         }
     }
 }
@@ -494,12 +615,81 @@ four = \"4\"
         let at = |key: &str| path(key);
 
         assert!(Marks::of(None, Some(&reference), &at("a.x")).missing);
-        assert!(Marks::of(Some("Hallo"), Some(&reference), &at("a.x")).placeholders);
-        assert!(!Marks::of(Some("Hallo {name}"), Some(&reference), &at("a.x")).any());
-        let stub = Marks::of(Some("MISSING a.x"), Some(&reference), &at("a.x"));
+        assert!(Marks::of(Some(&Leaf::Text("Hallo".into())), Some(&reference), &at("a.x")).placeholders);
+        assert!(!Marks::of(Some(&Leaf::Text("Hallo {name}".into())), Some(&reference), &at("a.x")).any());
+        let stub = Marks::of(Some(&Leaf::Text("MISSING a.x".into())), Some(&reference), &at("a.x"));
         assert!(stub.stub && !stub.placeholders);
-        assert!(Marks::of(Some("z"), Some(&reference), &at("a.z")).extra);
-        assert!(!Marks::of(Some("Hallo"), None, &at("a.x")).any(), "the reference checked against itself");
+        assert!(Marks::of(Some(&Leaf::Text("z".into())), Some(&reference), &at("a.z")).extra);
+        assert!(!Marks::of(Some(&Leaf::Text("Hallo".into())), None, &at("a.x")).any(), "the reference checked against itself");
+    }
+
+    const LISTS: &str = "\
+[a]
+inline = [\"x\", \"y\"]
+tall = [
+    \"one\",
+    \"two\",
+] # kept
+plain = \"p\"
+";
+
+    #[test]
+    fn a_list_of_text_is_a_list_leaf() {
+        let doc = LangDoc::parse(LISTS).unwrap();
+        assert_eq!(doc.leaf(&path("a.tall")), Some(Leaf::List(vec!["one".into(), "two".into()])));
+        assert_eq!(doc.leaf(&path("a.tall")).unwrap().text(), "one\ntwo");
+        let mixed = LangDoc::parse("a = [\"x\", 1]").unwrap();
+        assert!(matches!(mixed.leaf(&path("a")), Some(Leaf::Other(_))));
+    }
+
+    /// Fails if editing, adding or removing an entry reformats the list or touches another line.
+    #[test]
+    fn editing_a_list_keeps_its_layout() {
+        let mut doc = LangDoc::parse(LISTS).unwrap();
+        doc.set_item(&path("a.tall"), 1, "deux").unwrap();
+        doc.push_item(&path("a.tall"), "three").unwrap();
+        doc.push_item(&path("a.inline"), "z").unwrap();
+        let mut lone = LangDoc::parse("x = [\n    \"one\",\n]\n").unwrap();
+        lone.push_item(&path("x"), "two").unwrap();
+        assert_eq!(lone.text(), "x = [\n    \"one\",\n    \"two\",\n]\n");
+        assert_eq!(doc.text(), "[a]\ninline = [\"x\", \"y\", \"z\"]\ntall = [\n    \"one\",\n    \"deux\",\n    \"three\",\n] # kept\nplain = \"p\"\n");
+
+        doc.remove_item(&path("a.tall"), 0).unwrap();
+        doc.remove_item(&path("a.inline"), 0).unwrap();
+        assert_eq!(doc.text(), "[a]\ninline = [\"y\", \"z\"]\ntall = [\n    \"deux\",\n    \"three\",\n] # kept\nplain = \"p\"\n");
+        assert!(doc.set_item(&path("a.plain"), 0, "q").is_err());
+    }
+
+    #[test]
+    fn the_last_entry_of_a_list_stays() {
+        let mut doc = LangDoc::parse("a = [\"only\"]\n").unwrap();
+        assert!(doc.remove_item(&path("a"), 0).is_err());
+        assert_eq!(doc.text(), "a = [\"only\"]\n");
+    }
+
+    #[test]
+    fn text_and_a_list_of_one_turn_into_each_other() {
+        let mut doc = LangDoc::parse("a = \"x\" # kept\nb = [\"p\", \"q\"]\n").unwrap();
+        doc.toggle_list(&path("a")).unwrap();
+        assert_eq!(doc.text(), "a = [\"x\"] # kept\nb = [\"p\", \"q\"]\n");
+        doc.toggle_list(&path("a")).unwrap();
+        assert_eq!(doc.text(), "a = \"x\" # kept\nb = [\"p\", \"q\"]\n");
+        assert_eq!(doc.toggle_list(&path("b")), Err(LangError::WrongKind("b".into())));
+    }
+
+    #[test]
+    fn a_list_in_the_reference_is_checked_and_copied_whole() {
+        let reference: toml::Table = toml::from_str("[a]\nx = [\"Hi { name }\", \"Yo { name }\"]").unwrap();
+        let reference = Reference::from_table(&reference);
+        assert_eq!(reference.list(&path("a.x")), Some(&["Hi { name }".to_string(), "Yo { name }".to_string()][..]));
+        let list = |items: &[&str]| Leaf::List(items.iter().map(|item| item.to_string()).collect());
+        assert!(Marks::of(Some(&list(&["Hallo { name }", "Hallo"])), Some(&reference), &path("a.x")).placeholders, "one entry dropped a slot");
+        assert!(!Marks::of(Some(&list(&["Hallo { name }", "Tag { name }"])), Some(&reference), &path("a.x")).any());
+        assert!(Marks::of(Some(&Leaf::Text("Hallo { name }".into())), Some(&reference), &path("a.x")).kind, "text where en-US has a list");
+
+        let mut doc = LangDoc::parse("[a]\n").unwrap();
+        doc.insert_list(&path("a.x"), reference.list(&path("a.x")).unwrap()).unwrap();
+        assert_eq!(doc.leaf(&path("a.x")), Some(Leaf::List(vec!["Hi { name }".into(), "Yo { name }".into()])));
     }
 
     #[test]

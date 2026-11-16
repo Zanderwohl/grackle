@@ -434,8 +434,50 @@ using = "Using { weapon }"
 # `{ icon }` is where the icon for what killed goes.
 killed = "{ killer } { icon } { victim }"
 killed_with_help = "{ killer } + { assist } { icon } { victim }"
-finished_off = "{ assist } finished off { icon } { victim }"
-died = "{ icon } { victim } died"
+# Arrays: each line picks one at random.
+finished_off = [
+    "{ assist } finished off { icon } { victim }",
+    "{ assist } bullied { icon } { victim }",
+    "{ assist } offed { icon } { victim }",
+    "{ assist } bumped off { icon } { victim }",
+    "{ assist } did away with { icon } { victim }",
+    "{ assist } iced { icon } { victim }",
+    "{ assist } dispatched { icon } { victim }",
+    "{ assist } smoked { icon } { victim }",
+]
+# Killed by themself or the map, with nobody's help.
+died = [
+    "{ icon } { victim } hit the road",
+    "{ icon } { victim } bought the farm",
+    "{ icon } { victim } kicked the bucket",
+    "{ icon } { victim } bid farewell",
+    "{ icon } { victim } expired",
+    "{ icon } { victim } is at peace",
+    "{ icon } { victim } passed on",
+    "{ icon } { victim } slipped away",
+    "{ icon } { victim } is no longer with us",
+    "{ icon } { victim } bit the dust",
+    "{ icon } { victim } cashed in their chips",
+    "{ icon } { victim } croaked",
+    "{ icon } { victim } went to a better place",
+    "{ icon } { victim } met their demise",
+    "{ icon } { victim } laid down their life",
+    "{ icon } { victim } gave up the ghost",
+    "{ icon } { victim } took a final bow",
+    "{ icon } { victim } joined the choir eternal",
+]
+# Blown up by the explode key, with nobody's help.
+exploded = [
+    "{ icon } { victim } blew a gasket",
+    "{ icon } { victim } asploded",
+    "{ icon } { victim } exploded",
+    "{ icon } { victim } blew up",
+    "{ icon } { victim } disassembled rapidly",
+    "{ icon } { victim } detonated",
+    "{ icon } { victim } burst",
+    "{ icon } { victim } blasted off",
+    "{ icon } { victim } went boom",
+]
 
 [scoreboard]
 player = "Player { id }"
@@ -909,6 +951,10 @@ add_key = "Add key…"
 rename = "Rename…"
 remove = "Remove"
 copy_reference = "Copy from en-US"
+make_list = "Make a list"
+make_text = "Make plain text"
+add_item = "Add an entry"
+remove_item = "Remove this entry"
 no_keys = "No keys."
 
 [lang_editor.browser]
@@ -922,6 +968,7 @@ missing = "{ count } missing"
 stub = "{ count } stubs"
 placeholders = "{ count } placeholder mismatches"
 extra = "{ count } not in en-US"
+kind = "{ count } text or list unlike en-US"
 
 [lang_editor.mark]
 missing = "missing"
@@ -929,6 +976,7 @@ stub = "stub"
 placeholders = "placeholders"
 placeholders_detail = "en-US: { reference }\nHere: { here }"
 extra = "not in en-US"
+kind = "text or list unlike en-US"
 
 [lang_editor.dialog]
 key = "Key"
@@ -947,6 +995,7 @@ bad_code = "A language code is letters, digits, _ and -."
 exists = "`{ key }` already exists."
 not_a_table = "`{ key }` holds a value, so nothing can go under it."
 missing = "`{ key }` is not in the file."
+wrong_kind = "`{ key }` holds neither text nor a list of text."
 file_exists = "{ file } already exists."
 
 [prop.menu]
@@ -1612,6 +1661,7 @@ spray = "Spray"
 pause = "Pause menu"
 humiliate = "Humiliate"
 suicide = "Suicide"
+explode = "Explode"
 nav_overlay = "Nav overlay"
 bot_routes = "Bot routes and senses"
 safe_zone = "Safe zone outlines"

@@ -998,6 +998,7 @@ mod tests {
             direct: None,
             weapon: None,
             reflected: false,
+            spare: None,
         });
     }
 
@@ -1101,6 +1102,63 @@ mod tests {
         let landed = player_position(&mut app) - Vec3::Y * stance.half_extents().y;
         let (across, height) = ((landed - baked).xz().length(), (landed.y - baked.y).abs());
         assert!(across < nav::SPACING && height < 0.1, "baked to land at {baked}, landed at {landed}");
+    }
+
+    /// Fails if the explode key leaves the body whole, or its pieces are not
+    /// thrown away from where the torso was.
+    #[test]
+    fn exploding_throws_the_pieces_apart() {
+        use bevy::ecs::system::RunSystemOnce;
+        use crate::game::ragdoll::Ragdoll;
+
+        fn centers(app: &mut App) -> std::collections::HashMap<Entity, Vec3> {
+            app.world_mut()
+                .query::<(Entity, &Ragdoll)>()
+                .iter(app.world())
+                .map(|(entity, piece)| {
+                    let (least, most) = piece.bounds().unwrap();
+                    (entity, (least + most) * 0.5)
+                })
+                .collect()
+        }
+
+        let mut app = armed(&[room(Vec3::new(-10.0, 0.0, -10.0), Vec3::new(10.0, 4.0, 10.0))]);
+        enter(&mut app);
+        app.world_mut().run_system_once(crate::game::skeleton::dress_new_players).unwrap();
+        app.update();
+        tick(&mut app, 30);
+
+        // `tick` leaves `Time<Fixed>` still, and the shove and the solver
+        // move by its delta.
+        fn fixed_tick(app: &mut App) {
+            app.world_mut().resource_mut::<Time<Fixed>>().advance_by(one_tick());
+            tick(app, 1);
+        }
+
+        latch(&mut app).0.explode = true;
+        fixed_tick(&mut app);
+        let torn: Vec<Vec3> = app
+            .world_mut()
+            .query::<&Ragdoll>()
+            .iter(app.world())
+            .filter_map(Ragdoll::torn_at)
+            .collect();
+        assert_eq!(torn.len(), 1, "the body was not torn apart");
+        let at = torn[0];
+        let before = centers(&mut app);
+        assert!(before.len() > 1, "the body left {} pieces", before.len());
+
+        for _ in 0..8 {
+            fixed_tick(&mut app);
+        }
+        let after = centers(&mut app);
+        for (piece, was) in &before {
+            let now = after[piece];
+            assert!(
+                now.distance(at) > was.distance(at) + 0.2,
+                "a piece at {was} went to {now}, from a blast at {at}"
+            );
+        }
     }
 
     /// A class built on a rig file plays a round as anybody does: it spawns as that rig, walks,

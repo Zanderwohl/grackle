@@ -294,6 +294,7 @@ pub fn step_projectiles(
                 direct,
                 weapon: projectile.weapon,
                 reflected: projectile.reflected,
+                spare: None,
             });
         }
 
