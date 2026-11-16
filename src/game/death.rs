@@ -81,6 +81,7 @@ pub fn explode_yourself(
                 direct: None,
                 weapon: None,
                 reflected: false,
+                critical: false,
                 spare: Some(body),
             });
         }

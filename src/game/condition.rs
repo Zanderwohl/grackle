@@ -26,6 +26,8 @@ use crate::game::player::{
 pub struct Condition {
     /// `H` toggles it until there are rounds to lose.
     pub humiliated: bool,
+    /// Its hitscans and projectiles are critical hits. Set on winners in the post-game.
+    pub crit_boosted: bool,
     /// Chosen from the taunt menu; see [`crate::game::taunt_menu`].
     pub taunt: Option<TauntId>,
     /// The authority's tick the taunt began on, so a viewer arriving mid-taunt
@@ -39,7 +41,7 @@ pub struct Condition {
 pub struct TauntClock(pub f32);
 
 impl Condition {
-    pub const HUMILIATED: Condition = Condition { humiliated: true, taunt: None, taunt_started: Tick(0) };
+    pub const HUMILIATED: Condition = Condition { humiliated: true, crit_boosted: false, taunt: None, taunt_started: Tick(0) };
 
     pub fn may_fire(self) -> bool {
         !self.humiliated && self.taunt.is_none()

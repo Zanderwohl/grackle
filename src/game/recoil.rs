@@ -321,6 +321,7 @@ mod tests {
                 button: Button::Primary,
                 action: WeaponAction::None,
                 weapon: None,
+                critical: false,
             });
         }
         world.run_system_once(announce_shots).unwrap();
