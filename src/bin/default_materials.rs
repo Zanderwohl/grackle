@@ -2098,6 +2098,42 @@ enum Face {
     Floor,
 }
 
+impl Face {
+    /// `x`, or on a floor a share of it: a floor's top has been worn smooth, so its streaks,
+    /// patches and lines are fainter and its beds stand out of it less.
+    fn calm(self, x: f32) -> f32 {
+        match self {
+            Face::Wall => x,
+            Face::Floor => x * 0.4,
+        }
+    }
+
+    /// Bed colors, or on a floor each brought halfway to their mean lightness and chroma, so
+    /// neighboring beds differ gently whichever stretch of them a floor crosses.
+    fn beds(self, colors: &[Color]) -> Vec<Color> {
+        match self {
+            Face::Wall => colors.to_vec(),
+            Face::Floor => {
+                let n = colors.len() as f32;
+                let l = colors.iter().map(|c| c.l).sum::<f32>() / n;
+                let chroma = colors.iter().map(|c| c.chroma).sum::<f32>() / n;
+                colors
+                    .iter()
+                    .map(|c| oklcha(l + (c.l - l) * 0.5, chroma + (c.chroma - chroma) * 0.5, c.hue.into_positive_degrees(), 1.0))
+                    .collect()
+            }
+        }
+    }
+
+    /// A height `x` that sits about `middle`, brought toward it on a floor by [`Face::calm`].
+    fn level(self, middle: f32, x: f32) -> Color {
+        match self {
+            Face::Wall => gray(x),
+            Face::Floor => gray(middle + self.calm(x - middle)),
+        }
+    }
+}
+
 /// What a floor's beds are read along: a broad noise over `span` of the profile from `from`, so a
 /// floor shows that stretch of the beds a wall does. Picked per rock for a stretch with several
 /// beds in it, since a stretch inside one bed is a flat floor.
@@ -2127,7 +2163,7 @@ fn redwall_sandstone(face: Face) -> Graph {
             let broad = bent_v(&mut g, "broad bend", v, 200, 1, 0.04);
             bent_v(&mut g, "bent", broad, 207, 3, 0.012)
         }
-        Face::Floor => cut_across(&mut g, 250, 0.0, 0.3),
+        Face::Floor => cut_across(&mut g, 250, 0.0, 0.2),
     };
     let beds = profile(&mut g, "beds", bent, 201, 6, 4);
     let fine = profile(&mut g, "fine", bent, 202, 24, 3);
@@ -2139,28 +2175,28 @@ fn redwall_sandstone(face: Face) -> Graph {
     let rust = oklcha(0.52, 0.115, 48.0, 1.0);
     let buff = oklcha(0.66, 0.065, 55.0, 1.0);
     let pink = oklcha(0.61, 0.080, 40.0, 1.0);
-    let bedded = banded(&mut g, "bedded", beds, &edges, &[
+    let bedded = banded(&mut g, "bedded", beds, &edges, &face.beds(&[
         deep, brick, terracotta, brick, pink, rust, brick, buff, terracotta, deep, rust, brick,
-    ]);
+    ]));
     let lamina_whole = contours(&mut g, "laminae whole", fine, 6.0, 0.06);
     let lamina_lines = broken(&mut g, "laminae", zero, lamina_whole, 208);
-    let lamina_share = scaled(&mut g, "lamina share", lamina_lines, 0.0, 0.35);
+    let lamina_share = scaled(&mut g, "lamina share", lamina_lines, 0.0, face.calm(0.35));
     let lamina = solid(&mut g, "lamina", oklcha(0.40, 0.075, 34.0, 1.0));
     let laminated = blend(&mut g, "laminated", bedded, lamina, lamina_share);
     let pale_lines = contours(&mut g, "pale laminae", beds, 9.0, 0.04);
-    let pale_share = scaled(&mut g, "pale share", pale_lines, 0.0, 0.25);
+    let pale_share = scaled(&mut g, "pale share", pale_lines, 0.0, face.calm(0.25));
     let pale = solid(&mut g, "pale", oklcha(0.70, 0.055, 58.0, 1.0));
     let lined = blend(&mut g, "lined", laminated, pale, pale_share);
 
     let wash = runoff(&mut g, face, 203, 2, 6.0);
     let washed = remap(&mut g, "washed", wash, 0.50, 0.75);
-    let wash_share = scaled(&mut g, "wash share", washed, 0.0, 0.40);
+    let wash_share = scaled(&mut g, "wash share", washed, 0.0, face.calm(0.40));
     let stain = solid(&mut g, "stain", oklcha(0.40, 0.090, 32.0, 1.0));
     let stained = blend(&mut g, "stained", lined, stain, wash_share);
     let mottle = g.add_unique("mottle", tiling_fbm(204, 4, 4)).unwrap();
     let (dim, bright) = noisy_pair(oklcha(0.40, 0.080, 35.0, 1.0), oklcha(0.70, 0.070, 50.0, 1.0));
     let patches = mapped(&mut g, "patches", mottle, &[(0.25, dim), (0.75, bright)]);
-    let patch_share = solid(&mut g, "patch share", gray(0.40));
+    let patch_share = solid(&mut g, "patch share", gray(face.calm(0.40)));
     let patched = blend(&mut g, "patched", stained, patches, patch_share);
     let grain = g.add_unique("grain", tiling_fbm(205, 128, 2)).unwrap();
     let (dark_grain, light_grain) = noisy_pair(oklcha(0.38, 0.070, 38.0, 1.0), oklcha(0.74, 0.060, 55.0, 1.0));
@@ -2171,21 +2207,21 @@ fn redwall_sandstone(face: Face) -> Graph {
     let roughness = scaled(&mut g, "roughness", grain, 0.86, 0.95);
 
     // The harder beds stand proud; the softer ones are weathered back between them.
-    let hard = gray(0.75);
-    let soft = gray(0.45);
+    let hard = face.level(0.60, 0.75);
+    let soft = face.level(0.60, 0.45);
     let ledges = banded(&mut g, "ledges", beds, &edges, &[
         hard, soft, hard, hard, soft, hard, soft, hard, soft, hard, soft, hard,
     ]);
-    let undercut = scaled(&mut g, "undercut", lamina_lines, 0.0, 0.12);
+    let undercut = scaled(&mut g, "undercut", lamina_lines, 0.0, face.calm(0.12));
     let cut = mix(&mut g, "cut", ledges, undercut, BlendMode::Subtract);
     let grit = scaled(&mut g, "grit", grain, 0.0, 0.10);
     let gritty = mix(&mut g, "gritty", cut, grit, BlendMode::Add);
     let pitting = g.add_unique("pitting", tiling_fbm(206, 32, 3)).unwrap();
     let pits = remap(&mut g, "pits", pitting, 0.66, 0.74);
-    let pit_depth = scaled(&mut g, "pit depth", pits, 0.0, 0.15);
+    let pit_depth = scaled(&mut g, "pit depth", pits, 0.0, face.calm(0.15));
     let pitted = mix(&mut g, "pitted", gritty, pit_depth, BlendMode::Subtract);
     let chipping = g.add_unique("chipping", tiling_fbm(209, 16, 4)).unwrap();
-    let chips = scaled(&mut g, "chips", chipping, 0.0, 0.20);
+    let chips = scaled(&mut g, "chips", chipping, 0.0, face.calm(0.20));
     let height = mix(&mut g, "height", pitted, chips, BlendMode::Add);
     let normal = normal_of(&mut g, height, 0.005);
     finish(g, Output {
@@ -2208,7 +2244,7 @@ fn bright_angel_sandstone(face: Face) -> Graph {
             let broad = bent_v(&mut g, "broad bend", v, 210, 1, 0.03);
             bent_v(&mut g, "bent", broad, 216, 3, 0.008)
         }
-        Face::Floor => cut_across(&mut g, 251, 0.45, 0.3),
+        Face::Floor => cut_across(&mut g, 251, 0.45, 0.2),
     };
     let beds = profile(&mut g, "beds", bent, 211, 8, 3);
     let fine = profile(&mut g, "fine", bent, 212, 16, 3);
@@ -2220,27 +2256,27 @@ fn bright_angel_sandstone(face: Face) -> Graph {
     let silver = oklcha(0.66, 0.014, 135.0, 1.0);
     let moss = oklcha(0.51, 0.028, 148.0, 1.0);
     let rust = oklcha(0.57, 0.040, 65.0, 1.0);
-    let bedded = banded(&mut g, "bedded", beds, &edges, &[
+    let bedded = banded(&mut g, "bedded", beds, &edges, &face.beds(&[
         slate, sage, silver, moss, sage, rust, slate, olive, silver, sage, moss, slate,
-    ]);
+    ]));
     let parting_lines = contours(&mut g, "parting lines", fine, 4.0, 0.06);
     let partings = broken(&mut g, "partings", zero, parting_lines, 217);
-    let parting_share = scaled(&mut g, "parting share", partings, 0.0, 0.45);
+    let parting_share = scaled(&mut g, "parting share", partings, 0.0, face.calm(0.45));
     let parting = solid(&mut g, "parting", oklcha(0.38, 0.014, 150.0, 1.0));
     let parted = blend(&mut g, "parted", bedded, parting, parting_share);
     let silt_lines = contours(&mut g, "silt", beds, 5.0, 0.04);
-    let silt_share = scaled(&mut g, "silt share", silt_lines, 0.0, 0.25);
+    let silt_share = scaled(&mut g, "silt share", silt_lines, 0.0, face.calm(0.25));
     let silt = solid(&mut g, "silt", oklcha(0.72, 0.012, 120.0, 1.0));
     let silted = blend(&mut g, "silted", parted, silt, silt_share);
 
     let mottle = g.add_unique("mottle", tiling_fbm(213, 4, 4)).unwrap();
     let (dim, bright) = noisy_pair(oklcha(0.46, 0.020, 140.0, 1.0), oklcha(0.72, 0.012, 130.0, 1.0));
     let patches = mapped(&mut g, "patches", mottle, &[(0.25, dim), (0.75, bright)]);
-    let patch_share = solid(&mut g, "patch share", gray(0.30));
+    let patch_share = solid(&mut g, "patch share", gray(face.calm(0.30)));
     let patched = blend(&mut g, "patched", silted, patches, patch_share);
     let wash = runoff(&mut g, face, 214, 4, 8.0);
     let washed = remap(&mut g, "washed", wash, 0.55, 0.78);
-    let wash_share = scaled(&mut g, "wash share", washed, 0.0, 0.25);
+    let wash_share = scaled(&mut g, "wash share", washed, 0.0, face.calm(0.25));
     let stain = solid(&mut g, "stain", oklcha(0.50, 0.030, 70.0, 1.0));
     let stained = blend(&mut g, "stained", patched, stain, wash_share);
     let grain = g.add_unique("grain", tiling_fbm(215, 128, 2)).unwrap();
@@ -2251,17 +2287,17 @@ fn bright_angel_sandstone(face: Face) -> Graph {
 
     let roughness = scaled(&mut g, "roughness", grain, 0.84, 0.94);
 
-    let hard = gray(0.70);
-    let soft = gray(0.50);
+    let hard = face.level(0.60, 0.70);
+    let soft = face.level(0.60, 0.50);
     let ledges = banded(&mut g, "ledges", beds, &edges, &[
         soft, hard, hard, soft, hard, soft, hard, soft, hard, soft, hard, soft,
     ]);
-    let split = scaled(&mut g, "split", partings, 0.0, 0.20);
+    let split = scaled(&mut g, "split", partings, 0.0, face.calm(0.20));
     let cut = mix(&mut g, "cut", ledges, split, BlendMode::Subtract);
     let grit = scaled(&mut g, "grit", grain, 0.0, 0.08);
     let gritty = mix(&mut g, "gritty", cut, grit, BlendMode::Add);
     let chipping = g.add_unique("chipping", tiling_fbm(218, 16, 4)).unwrap();
-    let chips = scaled(&mut g, "chips", chipping, 0.0, 0.15);
+    let chips = scaled(&mut g, "chips", chipping, 0.0, face.calm(0.15));
     let height = mix(&mut g, "height", gritty, chips, BlendMode::Add);
     let normal = normal_of(&mut g, height, 0.005);
     finish(g, Output {
@@ -2284,7 +2320,7 @@ fn muav_limestone(face: Face) -> Graph {
             let broad = bent_v(&mut g, "broad bend", v, 220, 1, 0.03);
             bent_v(&mut g, "bent", broad, 226, 4, 0.015)
         }
-        Face::Floor => cut_across(&mut g, 252, 0.55, 0.3),
+        Face::Floor => cut_across(&mut g, 252, 0.55, 0.2),
     };
     let beds = profile(&mut g, "beds", bent, 221, 5, 4);
 
@@ -2294,28 +2330,28 @@ fn muav_limestone(face: Face) -> Graph {
     let light = oklcha(0.66, 0.006, 235.0, 1.0);
     let lighter = oklcha(0.72, 0.008, 90.0, 1.0);
     let buff = oklcha(0.64, 0.024, 75.0, 1.0);
-    let bedded = banded(&mut g, "bedded", beds, &edges, &[dark, light, darker, buff, light, dark, lighter]);
+    let bedded = banded(&mut g, "bedded", beds, &edges, &face.beds(&[dark, light, darker, buff, light, dark, lighter]));
     // Which way a bed's blotches go: light in a dark bed, dark in a light one.
-    let other = banded(&mut g, "other", beds, &edges, &[light, darker, light, dark, dark, lighter, dark]);
+    let other = banded(&mut g, "other", beds, &edges, &face.beds(&[light, darker, light, dark, dark, lighter, dark]));
     let burrows = g.add_unique("burrows", tiling_fbm(222, 6, 5)).unwrap();
     let flattened = stretched(&mut g, "flattened", burrows, [1.0, 2.0]);
     let blotches = remap(&mut g, "blotches", flattened, 0.52, 0.70);
-    let blotch_share = scaled(&mut g, "blotch share", blotches, 0.0, 0.30);
+    let blotch_share = scaled(&mut g, "blotch share", blotches, 0.0, face.calm(0.30));
     let mottled = blend_linear(&mut g, "mottled", bedded, other, blotch_share);
     let parting_lines = contours(&mut g, "parting lines", beds, 4.0, 0.05);
     let partings = broken(&mut g, "partings", zero, parting_lines, 227);
-    let parting_share = scaled(&mut g, "parting share", partings, 0.0, 0.5);
+    let parting_share = scaled(&mut g, "parting share", partings, 0.0, face.calm(0.5));
     let parting = solid(&mut g, "parting", oklcha(0.30, 0.008, 250.0, 1.0));
     let parted = blend(&mut g, "parted", mottled, parting, parting_share);
 
     let wash = runoff(&mut g, face, 223, 2, 6.0);
     let washed = remap(&mut g, "washed", wash, 0.55, 0.80);
-    let wash_share = scaled(&mut g, "wash share", washed, 0.0, 0.15);
+    let wash_share = scaled(&mut g, "wash share", washed, 0.0, face.calm(0.15));
     let streak = solid(&mut g, "streak", oklcha(0.76, 0.006, 90.0, 1.0));
     let streaked = blend(&mut g, "streaked", parted, streak, wash_share);
     let pitting = g.add_unique("pitting", tiling_fbm(224, 64, 2)).unwrap();
     let pits = remap(&mut g, "pits", pitting, 0.73, 0.78);
-    let pit_share = scaled(&mut g, "pit share", pits, 0.0, 0.25);
+    let pit_share = scaled(&mut g, "pit share", pits, 0.0, face.calm(0.25));
     let shade = solid(&mut g, "shade", oklcha(0.28, 0.006, 250.0, 1.0));
     let pitted = blend(&mut g, "pitted", streaked, shade, pit_share);
     let grain = g.add_unique("grain", tiling_fbm(225, 128, 2)).unwrap();
@@ -2326,19 +2362,19 @@ fn muav_limestone(face: Face) -> Graph {
 
     let roughness = scaled(&mut g, "roughness", grain, 0.82, 0.93);
 
-    let hard = gray(0.72);
-    let soft = gray(0.55);
+    let hard = face.level(0.64, 0.72);
+    let soft = face.level(0.64, 0.55);
     let ledges = banded(&mut g, "ledges", beds, &edges, &[soft, hard, soft, hard, hard, soft, hard]);
-    let split = scaled(&mut g, "split", partings, 0.0, 0.25);
+    let split = scaled(&mut g, "split", partings, 0.0, face.calm(0.25));
     let cut = mix(&mut g, "cut", ledges, split, BlendMode::Subtract);
-    let knobs = scaled(&mut g, "knobs", blotches, 0.0, 0.06);
+    let knobs = scaled(&mut g, "knobs", blotches, 0.0, face.calm(0.06));
     let knobbly = mix(&mut g, "knobbly", cut, knobs, BlendMode::Add);
-    let pit_depth = scaled(&mut g, "pit depth", pits, 0.0, 0.25);
+    let pit_depth = scaled(&mut g, "pit depth", pits, 0.0, face.calm(0.25));
     let dissolved = mix(&mut g, "dissolved", knobbly, pit_depth, BlendMode::Subtract);
     let grit = scaled(&mut g, "grit", grain, 0.0, 0.05);
     let gritty = mix(&mut g, "gritty", dissolved, grit, BlendMode::Add);
     let chipping = g.add_unique("chipping", tiling_fbm(228, 16, 4)).unwrap();
-    let chips = scaled(&mut g, "chips", chipping, 0.0, 0.15);
+    let chips = scaled(&mut g, "chips", chipping, 0.0, face.calm(0.15));
     let height = mix(&mut g, "height", gritty, chips, BlendMode::Add);
     let normal = normal_of(&mut g, height, 0.005);
     finish(g, Output {
