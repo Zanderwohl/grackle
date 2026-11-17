@@ -121,7 +121,7 @@ fn show_the_wait(
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(match status.state {
                         BakeState::UpToDate => get!("round_prep.done"),
-                        BakeState::Baking => format!("{}/{}", status.completed, status.scheduled),
+                        BakeState::Baking => format!("{:.0}%", status.fraction() * 100.0),
                         BakeState::Waiting | BakeState::Stale => get!("round_prep.waiting"),
                     });
                 });

@@ -51,14 +51,8 @@ impl<'a> Step<'a> {
                 "scheduled", status.scheduled
             )
         } else {
-            get!(
-                "bakes.progress.status",
-                "step", self.step,
-                "steps", self.steps,
-                "completed", status.completed,
-                "scheduled", status.scheduled,
-                "doing", status.doing
-            )
+            // The counts are left to the bars: a bake that names what it is doing may count rays.
+            get!("bakes.progress.status", "step", self.step, "steps", self.steps, "doing", status.doing)
         }
     }
 }
@@ -112,7 +106,7 @@ mod tests {
         let sun = status(BakeState::Baking, 3, 12, "Hall");
         let step = Step::of(&[(BakeKind::Rooms, &rooms), (BakeKind::Sunlight, &sun)]).unwrap();
         assert_eq!((step.step, step.steps, step.kind), (2, 2, BakeKind::Sunlight));
-        assert_eq!(step.line(), "Step 2/2: 3/12 Hall");
+        assert_eq!(step.line(), "Step 2/2: Hall");
     }
 
     #[test]

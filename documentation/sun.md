@@ -102,6 +102,26 @@ padding, dilated from their edges, so bilinear filtering does not pull in a
 neighboring chart, and a texel sample is pushed inside its face and off it
 along the normal, so a corner texel does not start its rays inside a wall.
 
+**A chart is a cluster of faces, not one face**: faces in one plane that
+touch share a chart, so two pieces of a wall either side of a block keep their
+own padding. The kernel cuts a footprint
+room's floor into hundreds of convex pieces, many of them long diagonal
+slivers, and a chart per piece was that piece's bounding box — on a canyon map,
+41,800 m² of charts for 2,950 m² of floor and ceiling. Within a chart only
+texels within 1.5 texels of a face are baked, each sampled on the nearest face,
+and a gather sample is taken only where a baked texel reads it; the rest of the
+chart is never read; once a room is baked it takes the nearest baked texel,
+so carrying light onto a reshaped room copies lit values.
+
+**A bake is counted in rays before any is cast.** The first step builds the
+surface, then a step plans each room (`LightmapBake::plan`): which texels it bakes and
+which gather samples they read, so its sun and gather rays are known exactly.
+The air is planned the same way (`AirBake`). Progress is those rays, plus one
+per item, and the panel names the room being baked with its rays cast of its
+rays planned. A step is one row of a chart, or 16 air samples, so a big room
+reports as it goes and a wasm chunk is not one room long. The one ray from each
+surface a gather ray meets, asking whether the sun is on it, is not counted.
+
 One atlas **per room**, packed from that room's faces. Each slot mesh of the
 room gets a `Lightmap` pointing at it, with `ATTRIBUTE_UV_1` into it.
 

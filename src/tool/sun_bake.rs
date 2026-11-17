@@ -27,9 +27,9 @@ use bevy::platform::time::Instant;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 
-use crate::common::air_light::AirLight;
+use crate::common::air_light::{AirBake, AirLight};
 use crate::common::app_mode::AppMode;
-use crate::common::lightmap::{self, daylight, Atlas};
+use crate::common::lightmap::{self, daylight, Atlas, LightmapBake};
 use crate::common::palette::Palette;
 use crate::common::sky::{Brightness, SkyTime, SunPosition, SKYBOX};
 use crate::common::stable_hash::Fnv;
@@ -42,7 +42,7 @@ use crate::tool::bake_job::{self, BackgroundBake, BakeJob, BakeKind, BakeProgres
 use crate::tool::bakes::{BakePlugin, BakeSystems, BakedRoomGeometry, RoomBake, RoomSlotMesh};
 use crate::tool::room::{Block, Room, RoomSlot, RoomSurfaces};
 
-const FORMAT: u32 = 2;
+const FORMAT: u32 = 3;
 
 const CACHE_FOLDER: &str = "lightmap";
 
@@ -318,7 +318,18 @@ impl Snapshot {
                 })
             })
             .collect();
-        Job { rooms, light: self.light, surface: None, baked: Vec::new(), air: None, busy: Duration::ZERO }
+        Job {
+            rooms,
+            light: self.light,
+            surface: None,
+            planned: Vec::new(),
+            baked: Vec::new(),
+            air: None,
+            air_light: None,
+            rays: 0,
+            finished_rays: 0,
+            busy: Duration::ZERO,
+        }
     }
 }
 
@@ -331,15 +342,22 @@ struct JobRoom {
     faces_hash: u64,
 }
 
-/// Everything a bake reads, copied out of the world so it can run elsewhere. The first item is the
-/// whole map's surface, which every room's rays are cast against; then a room an item; then the
-/// light in the air.
+/// Everything a bake reads, copied out of the world so it can run elsewhere. One step builds the
+/// map's surface, which every room's rays are cast against. Then one step plans each room and one
+/// the air, so every ray is counted before any is cast. Then each step bakes a row of a room's
+/// chart, and last a few air samples.
 struct Job {
     rooms: Vec<JobRoom>,
     light: Daylight,
     surface: Option<LitSurface>,
+    /// One per room, taken as each is finished.
+    planned: Vec<Option<LightmapBake>>,
     baked: Vec<BakedLight>,
-    air: Option<AirLight>,
+    air: Option<AirBake>,
+    air_light: Option<AirLight>,
+    /// Planned in all, and cast in the rooms and air already finished.
+    rays: usize,
+    finished_rays: usize,
     /// Time spent stepping, not counting a wasm bake's waits between chunks.
     busy: Duration,
 }
@@ -347,15 +365,32 @@ struct Job {
 impl BakeJob for Job {
     type Output = BakedSun;
 
+    /// Rays, and one for each item — the surface, each room, the air — so a bake of nothing to
+    /// cast still has something to finish.
     fn progress(&self) -> (usize, usize) {
-        (usize::from(self.surface.is_some()) + self.baked.len() + usize::from(self.air.is_some()), 2 + self.rooms.len())
+        let items = 2 + self.rooms.len();
+        if !self.planned() {
+            return (0, items);
+        }
+        let current = self.planned.get(self.baked.len()).and_then(Option::as_ref).map_or(0, LightmapBake::cast);
+        let air = self.air.as_ref().map_or(0, AirBake::cast);
+        let done_items = 1 + self.baked.len() + usize::from(self.air_light.is_some());
+        (done_items + self.finished_rays + current + air, items + self.rays)
     }
 
     fn doing(&self) -> String {
-        match self.surface {
-            None => get!("bakes.doing.surface"),
-            Some(_) => self.rooms.get(self.baked.len()).map(|room| room.label.clone()).unwrap_or_else(|| get!("bakes.doing.air")),
+        let rays = |name: String, cast: usize, rays: usize| get!("bakes.doing.rays", "name", name, "cast", cast, "rays", rays);
+        if self.surface.is_none() {
+            return get!("bakes.doing.surface");
         }
+        if !self.planned() {
+            let name = self.rooms.get(self.planned.len()).map_or_else(|| get!("bakes.doing.air"), |room| room.label.clone());
+            return get!("bakes.doing.planning", "name", name);
+        }
+        if let (Some(room), Some(Some(bake))) = (self.rooms.get(self.baked.len()), self.planned.get(self.baked.len())) {
+            return rays(room.label.clone(), bake.cast(), bake.rays());
+        }
+        self.air.as_ref().map_or_else(|| get!("bakes.doing.air"), |air| rays(get!("bakes.doing.air"), air.cast(), air.rays()))
     }
 
     fn step(&mut self) {
@@ -366,16 +401,22 @@ impl BakeJob for Job {
 
     fn finish(self) -> BakedSun {
         info!(
-            "Baked sunlight for {} room(s), {} texels, in {:.0} ms",
+            "Baked sunlight for {} room(s), {} texels, {} rays, in {:.0} ms",
             self.baked.len(),
             self.baked.iter().map(|room| room.light.len()).sum::<usize>(),
+            self.rays,
             self.busy.as_secs_f32() * 1000.0
         );
-        BakedSun { rooms: self.baked, air: self.air.unwrap_or_default() }
+        BakedSun { rooms: self.baked, air: self.air_light.unwrap_or_default() }
     }
 }
 
 impl Job {
+    /// Whether every room and the air are planned, so every ray is counted.
+    fn planned(&self) -> bool {
+        self.air.is_some() || self.air_light.is_some()
+    }
+
     fn do_step(&mut self) {
         let Some(surface) = &self.surface else {
             let faces = self.rooms.iter().flat_map(|room| room.faces.iter().cloned()).collect();
@@ -383,14 +424,37 @@ impl Job {
             self.surface = Some(LitSurface::from_faces(faces, sky));
             return;
         };
-        let Some(room) = self.rooms.get(self.baked.len()) else {
-            let bounds: Vec<(Vec3, Vec3)> = self.rooms.iter().filter_map(|room| room.air).collect();
-            self.air = Some(AirLight::bake(&bounds, surface, &self.light));
+        if let Some(room) = self.rooms.get(self.planned.len()) {
+            let bake = LightmapBake::plan(Atlas::of(&room.faces), &room.faces, &room.sky, &self.light);
+            self.rays += bake.rays();
+            self.planned.push(Some(bake));
             return;
-        };
-        let atlas = Atlas::of(&room.faces);
-        let light = atlas.bake(&room.faces, &room.sky, surface, &self.light);
-        self.baked.push(BakedLight { room: room.room, faces_hash: room.faces_hash, atlas, light });
+        }
+        if !self.planned() {
+            let bounds: Vec<(Vec3, Vec3)> = self.rooms.iter().filter_map(|room| room.air).collect();
+            let air = AirBake::plan(&bounds);
+            self.rays += air.rays();
+            self.air = Some(air);
+            return;
+        }
+        let index = self.baked.len();
+        if let Some(room) = self.rooms.get(index) {
+            let bake = self.planned[index].as_mut().expect("a room is planned until it is finished");
+            bake.step(&room.faces, surface, &self.light);
+            if bake.is_done() {
+                let bake = self.planned[index].take().expect("just stepped");
+                self.finished_rays += bake.cast();
+                let (atlas, light) = bake.finish();
+                self.baked.push(BakedLight { room: room.room, faces_hash: room.faces_hash, atlas, light });
+            }
+            return;
+        }
+        let air = self.air.as_mut().expect("the air is planned with the rooms");
+        air.step(surface, &self.light);
+        if air.is_done() {
+            self.finished_rays += air.cast();
+            self.air_light = self.air.take().map(AirBake::finish);
+        }
     }
 }
 
@@ -778,7 +842,7 @@ mod tests {
     }
 
     #[test]
-    fn a_bake_reports_the_surface_each_room_and_the_air_as_it_goes() {
+    fn a_bake_reports_its_rays_as_it_goes() {
         let mut app = headless();
         app.world_mut().write_message(CalculateRoomGeometry);
         app.update();
@@ -795,7 +859,9 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         let done = status(&app);
-        assert_eq!((done.completed, done.scheduled), (3, 3), "the surface, the one room, then the air");
+        // The surface, the one room and the air, and every ray the room and the air planned.
+        assert_eq!(done.completed, done.scheduled);
+        assert!(done.scheduled > 3, "{} counts no rays", done.scheduled);
     }
 
     /// A second launch on the same map, as a second app, takes the light off disk without baking.

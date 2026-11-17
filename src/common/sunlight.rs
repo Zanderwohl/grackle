@@ -18,13 +18,13 @@ const LIFT: f32 = 0.01;
 const SUN_RADIUS: f32 = 0.02;
 
 /// Rays per point, across the sun's disc.
-const SUN_RAYS: usize = 8;
+pub const SUN_RAYS: usize = 8;
 
 /// Rays per point across the hemisphere, for sky light and bounce.
-const GATHER_RAYS: usize = 64;
+pub const GATHER_RAYS: usize = 64;
 
 /// Rays per point in the air, over the whole sphere.
-const AIR_RAYS: usize = 64;
+pub const AIR_RAYS: usize = 64;
 
 /// Every constant a texel's light depends on, for keying the lightmap cache.
 pub fn tuning() -> [u32; 5] {
