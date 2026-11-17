@@ -153,8 +153,7 @@ every corner, so another feature can reference one.
       keeps the axis it cannot see from the last corner), snapped to 0.1 m.
       Shift-click on a feature's point adds a corner measured from it; with
       no point under the pointer, Shift changes nothing and the click goes on
-      the grid. The footprint being drawn onto is left out of Shift's search,
-      since a corner measured from its own footprint is a cycle.
+      the grid.
       Clicking within 0.3 m of the first corner, with three or more down,
       closes the loop; `Backspace` takes the last corner back and `Escape`
       drops the drawing.
@@ -166,8 +165,8 @@ every corner, so another feature can reference one.
       and the loop it would make hatched (the prop sketch's `hatch`).
 - [x] `tools.footprint` in `en-US`.
 - [x] Tried by hand in the editor.
-- With no footprint selected a drawing is one loop, made into a new
-  footprint; with one selected it is added to that one (Stage 3).
+- Every drawing is one loop, made into a new footprint, whatever is
+  selected: adding to the selected one joined drawings by accident.
 
 ### Stage 3 — editing one
 
@@ -178,18 +177,13 @@ every corner, so another feature can reference one.
 - [x] Floor and ceiling handles over the first room's `floor_point`, through
       `drag_handle` on `y`. The ceiling is a height above the floor, so the
       floor carries it; it stops `MIN_HEIGHT` short of the floor.
-- [x] The draw tool on a selected footprint adds to it (`add_chain`):
-      corners snap onto its own within 0.3 m, and a chain that started on one
-      of them is finished on the next. A chain that started loose passes
-      through them and is finished only on its own first corner, since ended
-      on one it would be a spur bounding nothing. The pointer's corner is lit
-      when a click would finish the chain there. **One rule decides what
-      becomes a room**, for a new footprint and an added chain alike: every
-      region a new line bounds that none of the footprint's rooms already
-      covers. So a loop inside a room is a pillar, one outside is a new room,
-      a loop crossing a room adds only what is outside it, a wing out from
-      one corner and back to another is a room, and a line across a room
-      divides nothing.
+- [x] `add_chain` adds a chain of new or existing corners to a footprint.
+      **One rule decides what becomes a room**: every region a new line
+      bounds that none of the footprint's rooms already covers. So a loop
+      inside a room is a pillar, one outside is a new room, a loop crossing a
+      room adds only what is outside it, a wing out from one corner and back
+      to another is a room, and a line across a room divides nothing. The
+      draw tool no longer calls it on a selected footprint (see Stage 2).
 - [x] Inspector: every region as it is arranged now, with a checkbox for
       whether it is a room (`set_room_at`); every line, with a button to
       remove it (`remove_line`, which takes corners no line uses any more and
