@@ -42,7 +42,7 @@ use crate::tool::bake_job::{self, BackgroundBake, BakeJob, BakeKind, BakeProgres
 use crate::tool::bakes::{BakePlugin, BakeSystems, BakedRoomGeometry, RoomBake, RoomSlotMesh};
 use crate::tool::room::{Block, Room, RoomSlot, RoomSurfaces};
 
-const FORMAT: u32 = 2;
+const FORMAT: u32 = 3;
 
 const CACHE_FOLDER: &str = "lightmap";
 

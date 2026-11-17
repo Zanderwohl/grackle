@@ -102,6 +102,15 @@ padding, dilated from their edges, so bilinear filtering does not pull in a
 neighboring chart, and a texel sample is pushed inside its face and off it
 along the normal, so a corner texel does not start its rays inside a wall.
 
+**A chart is a cluster of faces, not one face**: faces in one plane whose
+bounds come within two texels share a chart. The kernel cuts a footprint
+room's floor into hundreds of convex pieces, many of them long diagonal
+slivers, and a chart per piece was that piece's bounding box — on a canyon map,
+41,800 m² of charts for 2,950 m² of floor and ceiling. Within a chart only
+texels within 1.5 texels of a face are baked, each sampled on the nearest face,
+and a gather sample is taken only where a baked texel reads it; the rest of the
+chart is never read and stays at the base.
+
 One atlas **per room**, packed from that room's faces. Each slot mesh of the
 room gets a `Lightmap` pointing at it, with `ATTRIBUTE_UV_1` into it.
 
