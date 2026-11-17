@@ -1,3 +1,4 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use bevy::ecs::system::SystemParam;
@@ -22,9 +23,9 @@ use crate::common::net_transport::NetStatus;
 use crate::constants::{BLUEPRINTS_DIR, MAP_BLUEPRINT_EXTENSION};
 use crate::editor::editable::{EditEvent, FeatureId, FeatureTimeline};
 use crate::editor::map_metadata::MapMetadata;
-use crate::common::palette::{Palette, RolePaint};
+use crate::common::palette::{Palette, RoleNameRefused, RolePaint};
 use crate::common::team::Team;
-use crate::material::picker::material_button;
+use crate::material::picker::{material_button, material_names};
 use crate::editor::multicam::MulticamState;
 use crate::editor::net_menu::{network_menu, ConnectDialog};
 use crate::editor::save::{self, LoadedBlueprint};
@@ -942,6 +943,11 @@ fn music_ui(ui: &mut egui::Ui, list: &mut Vec<String>, library: &MusicLibrary) {
 /// A role's name is committed when its field is left: renamed per keystroke, the role would move
 /// through the sorted list under the cursor and lose the field's focus.
 fn palette_ui(ui: &mut egui::Ui, palette: &mut Palette) {
+    let materials = known_materials(ui);
+    let is_material = |name: &str| materials.contains(name);
+    let refusals_id = egui::Id::new("palette_refusals");
+    let mut refusals = ui.data(|data| data.get_temp::<RoleRefusals>(refusals_id)).unwrap_or_default();
+    refusals.retain(|role, _| palette.roles.contains_key(role));
     let mut rename = None;
     let mut remove = None;
     for (name, paint) in palette.roles.iter_mut() {
@@ -951,6 +957,9 @@ fn palette_ui(ui: &mut egui::Ui, palette: &mut Palette) {
                 let buffer = ui.id().with("name");
                 let mut text = ui.data(|data| data.get_temp::<String>(buffer)).unwrap_or_else(|| name.clone());
                 let field = ui.add(egui::TextEdit::singleline(&mut text).desired_width(ui.available_width() - 30.0));
+                if field.gained_focus() {
+                    refusals.remove(name);
+                }
                 if field.lost_focus() {
                     ui.data_mut(|data| data.remove_temp::<String>(buffer));
                     let text = text.trim();
@@ -964,6 +973,19 @@ fn palette_ui(ui: &mut egui::Ui, palette: &mut Palette) {
                     remove = Some(name.clone());
                 }
             });
+            let error = ui.visuals().error_fg_color;
+            if is_material(name) {
+                ui.colored_label(error, get!("editor.metadata.palette.shadows_material", "name", name));
+            }
+            match refusals.get(name) {
+                Some((typed, RoleNameRefused::Material)) => {
+                    ui.colored_label(error, get!("editor.metadata.palette.material_named", "name", typed));
+                }
+                Some((typed, RoleNameRefused::Taken)) => {
+                    ui.colored_label(error, get!("editor.metadata.palette.role_named", "name", typed));
+                }
+                None => {}
+            }
             egui::Grid::new("sides").num_columns(2).spacing([10.0, 4.0]).show(ui, |ui| {
                 for team in Team::ALL {
                     ui.label(team.name());
@@ -984,22 +1006,47 @@ fn palette_ui(ui: &mut egui::Ui, palette: &mut Palette) {
     }
     if let Some(name) = remove {
         palette.roles.remove(&name);
+        refusals.remove(&name);
     }
-    if let Some((from, to)) = rename
-        && !palette.roles.contains_key(&to)
-        && let Some(paint) = palette.roles.remove(&from)
-    {
-        palette.roles.insert(to, paint);
+    if let Some((from, to)) = rename {
+        match palette.may_name_a_role(&to, is_material) {
+            Ok(()) => {
+                if let Some(paint) = palette.roles.remove(&from) {
+                    palette.roles.insert(to, paint);
+                }
+            }
+            Err(why) => {
+                refusals.insert(from, (to, why));
+            }
+        }
     }
     ui.separator();
     if ui.button(get!("editor.metadata.palette.add")).clicked() {
         let base = get!("editor.metadata.palette.new_role");
         let name = std::iter::once(base.clone())
             .chain((2..).map(|n| format!("{base} {n}")))
-            .find(|name| !palette.roles.contains_key(name))
+            .find(|name| palette.may_name_a_role(name, is_material).is_ok())
             .expect("an unbounded sequence of names has a free one");
         palette.roles.insert(name, RolePaint::default());
     }
+    ui.data_mut(|data| data.insert_temp(refusals_id, refusals));
+}
+
+/// By role: the name typed for it and why it was refused.
+type RoleRefusals = BTreeMap<String, (String, RoleNameRefused)>;
+
+/// Listed again at most every two seconds, since listing reads every pack's folder.
+fn known_materials(ui: &egui::Ui) -> BTreeSet<String> {
+    let id = egui::Id::new("palette_materials");
+    let now = ui.input(|input| input.time);
+    if let Some((at, names)) = ui.data(|data| data.get_temp::<(f64, BTreeSet<String>)>(id))
+        && now - at < 2.0
+    {
+        return names;
+    }
+    let names = material_names();
+    ui.data_mut(|data| data.insert_temp(id, (now, names.clone())));
+    names
 }
 
 

@@ -1324,6 +1324,9 @@ title = "Palette"
 unsided = "No side"
 add = "Add"
 new_role = "role"
+material_named = "A material is named { name }, so a role may not be"
+role_named = "Another role is named { name }"
+shadows_material = "A material is named { name }; every slot naming it is painted by this role"
 
 [editor.metadata.music]
 title = "Music"
