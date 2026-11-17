@@ -342,10 +342,10 @@ struct JobRoom {
     faces_hash: u64,
 }
 
-/// Everything a bake reads, copied out of the world so it can run elsewhere. The first step builds
-/// the whole map's surface, which every room's rays are cast against, and plans every room and the
-/// air, so the rest is counted in rays before any is cast; then a row of a room's chart a step;
-/// then the air a few samples a step.
+/// Everything a bake reads, copied out of the world so it can run elsewhere. One step builds the
+/// map's surface, which every room's rays are cast against. Then one step plans each room and one
+/// the air, so every ray is counted before any is cast. Then each step bakes a row of a room's
+/// chart, and last a few air samples.
 struct Job {
     rooms: Vec<JobRoom>,
     light: Daylight,
@@ -369,7 +369,7 @@ impl BakeJob for Job {
     /// cast still has something to finish.
     fn progress(&self) -> (usize, usize) {
         let items = 2 + self.rooms.len();
-        if self.surface.is_none() {
+        if !self.planned() {
             return (0, items);
         }
         let current = self.planned.get(self.baked.len()).and_then(Option::as_ref).map_or(0, LightmapBake::cast);
@@ -382,6 +382,10 @@ impl BakeJob for Job {
         let rays = |name: String, cast: usize, rays: usize| get!("bakes.doing.rays", "name", name, "cast", cast, "rays", rays);
         if self.surface.is_none() {
             return get!("bakes.doing.surface");
+        }
+        if !self.planned() {
+            let name = self.rooms.get(self.planned.len()).map_or_else(|| get!("bakes.doing.air"), |room| room.label.clone());
+            return get!("bakes.doing.planning", "name", name);
         }
         if let (Some(room), Some(Some(bake))) = (self.rooms.get(self.baked.len()), self.planned.get(self.baked.len())) {
             return rays(room.label.clone(), bake.cast(), bake.rays());
@@ -408,22 +412,31 @@ impl BakeJob for Job {
 }
 
 impl Job {
+    /// Whether every room and the air are planned, so every ray is counted.
+    fn planned(&self) -> bool {
+        self.air.is_some() || self.air_light.is_some()
+    }
+
     fn do_step(&mut self) {
         let Some(surface) = &self.surface else {
             let faces = self.rooms.iter().flat_map(|room| room.faces.iter().cloned()).collect();
             let sky = self.rooms.iter().flat_map(|room| room.sky.iter().copied()).collect();
             self.surface = Some(LitSurface::from_faces(faces, sky));
-            self.planned = self
-                .rooms
-                .iter()
-                .map(|room| Some(LightmapBake::plan(Atlas::of(&room.faces), &room.faces, &room.sky, &self.light)))
-                .collect();
-            let bounds: Vec<(Vec3, Vec3)> = self.rooms.iter().filter_map(|room| room.air).collect();
-            let air = AirBake::plan(&bounds);
-            self.rays = self.planned.iter().flatten().map(LightmapBake::rays).sum::<usize>() + air.rays();
-            self.air = Some(air);
             return;
         };
+        if let Some(room) = self.rooms.get(self.planned.len()) {
+            let bake = LightmapBake::plan(Atlas::of(&room.faces), &room.faces, &room.sky, &self.light);
+            self.rays += bake.rays();
+            self.planned.push(Some(bake));
+            return;
+        }
+        if !self.planned() {
+            let bounds: Vec<(Vec3, Vec3)> = self.rooms.iter().filter_map(|room| room.air).collect();
+            let air = AirBake::plan(&bounds);
+            self.rays += air.rays();
+            self.air = Some(air);
+            return;
+        }
         let index = self.baked.len();
         if let Some(room) = self.rooms.get(index) {
             let bake = self.planned[index].as_mut().expect("a room is planned until it is finished");

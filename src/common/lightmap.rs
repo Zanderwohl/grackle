@@ -53,12 +53,12 @@ pub fn tuning() -> [u32; 6] {
     [TEXEL, ALBEDO, AMBIENT_STEP, PADDING as f32, INSET, REACH].map(f32::to_bits)
 }
 
-/// The faces in one plane whose bounds, in lattice units, come within two texels of each other,
-/// chained: each cluster ascending, the clusters by their first face.
-fn clusters(faces: &[Face], bounds: &[(Vec2, Vec2)]) -> Vec<Vec<usize>> {
-    const GAP: f32 = 2.0;
-    let coplanar = |a: &Face, b: &Face| a.plane.normal.dot(b.plane.normal) > 0.9999 && (a.plane.w - b.plane.w).abs() < 1e-3;
-    let near = |a: (Vec2, Vec2), b: (Vec2, Vec2)| (a.0 - GAP).cmple(b.1).all() && (b.0 - GAP).cmple(a.1).all();
+/// The faces in one plane that touch, chained; each cluster ascending, the clusters by their first
+/// face. Faces that are only near stay apart, so wall pieces either side of a block keep their own
+/// padding. `outlines` are in lattice units.
+fn clusters(faces: &[Face], outlines: &[Vec<Vec2>], bounds: &[(Vec2, Vec2)]) -> Vec<Vec<usize>> {
+    /// Lattice units: a vertex this near another face's edge is on it.
+    const TOUCHING: f32 = 0.01;
     let mut parent: Vec<usize> = (0..faces.len()).collect();
     fn root(parent: &mut [usize], mut i: usize) -> usize {
         while parent[i] != i {
@@ -67,11 +67,30 @@ fn clusters(faces: &[Face], bounds: &[(Vec2, Vec2)]) -> Vec<Vec<usize>> {
         }
         i
     }
-    for a in 0..faces.len() {
-        for b in a + 1..faces.len() {
-            if coplanar(&faces[a], &faces[b]) && near(bounds[a], bounds[b]) {
-                let (ra, rb) = (root(&mut parent, a), root(&mut parent, b));
-                parent[ra.max(rb)] = ra.min(rb);
+    let mut planes: Vec<Vec<usize>> = Vec::new();
+    for (index, face) in faces.iter().enumerate() {
+        let coplanar = |other: &usize| {
+            let plane = faces[*other].plane;
+            plane.normal.dot(face.plane.normal) > 0.9999 && (plane.w - face.plane.w).abs() < 1e-3
+        };
+        match planes.iter_mut().find(|members| coplanar(&members[0])) {
+            Some(members) => members.push(index),
+            None => planes.push(vec![index]),
+        }
+    }
+    for mut members in planes {
+        members.sort_by(|a, b| bounds[*a].0.x.total_cmp(&bounds[*b].0.x));
+        for (at, &a) in members.iter().enumerate() {
+            for &b in &members[at + 1..] {
+                if bounds[b].0.x > bounds[a].1.x + TOUCHING {
+                    break;
+                }
+                let overlapping = (bounds[a].0 - TOUCHING).cmple(bounds[b].1).all() && (bounds[b].0 - TOUCHING).cmple(bounds[a].1).all();
+                let touch = |from: usize, to: usize| outlines[from].iter().any(|v| distance_to(&outlines[to], *v) <= TOUCHING);
+                if overlapping && (touch(a, b) || touch(b, a)) {
+                    let (ra, rb) = (root(&mut parent, a), root(&mut parent, b));
+                    parent[ra.max(rb)] = ra.min(rb);
+                }
             }
         }
     }
@@ -90,22 +109,7 @@ fn clusters(faces: &[Face], bounds: &[(Vec2, Vec2)]) -> Vec<Vec<usize>> {
 
 /// Zero inside the convex `outline`, else the distance to its nearest edge.
 fn distance_to(outline: &[Vec2], point: Vec2) -> f32 {
-    let count = outline.len();
-    let winding: f32 = (0..count).map(|i| outline[i].perp_dot(outline[(i + 1) % count])).sum();
-    let edge = |i: usize| (outline[i], outline[(i + 1) % count]);
-    if (0..count).all(|i| {
-        let (a, b) = edge(i);
-        (b - a).perp_dot(point - a) * winding >= 0.0
-    }) {
-        return 0.0;
-    }
-    (0..count)
-        .map(|i| {
-            let (a, b) = edge(i);
-            let t = ((point - a).dot(b - a) / (b - a).length_squared().max(f32::EPSILON)).clamp(0.0, 1.0);
-            (a + (b - a) * t).distance(point)
-        })
-        .fold(f32::INFINITY, f32::min)
+    nearest_on_outline(outline, point).map_or(0.0, |nearest| nearest.distance(point))
 }
 
 /// The lattice's two in-plane axes for a surface facing along `normal`. Floors and ceilings are
@@ -145,27 +149,28 @@ impl Chart {
 pub struct Atlas {
     /// One per cluster of touching faces in one plane.
     pub charts: Vec<Chart>,
-    /// Which chart each face is on, in the faces' order.
+    /// By face index.
     chart_of: Vec<usize>,
     pub size: UVec2,
 }
 
 impl Atlas {
-    /// Faces in one plane whose padded bounds touch share a chart, so a floor cut into slivers by
+    /// Faces in one plane that touch share a chart, so a floor cut into slivers by
     /// the kernel is one rectangle rather than a bounding box per sliver. Shelf-packed, tallest
     /// first.
     pub fn of(faces: &[Face]) -> Atlas {
-        let bounds: Vec<(Vec2, Vec2)> = faces
+        let outlines: Vec<Vec<Vec2>> = faces
             .iter()
             .map(|face| {
                 let (u, v) = axes(face.plane.normal);
-                face.vertices
-                    .iter()
-                    .map(|p| Vec2::new(p.dot(u), p.dot(v)) / TEXEL)
-                    .fold((Vec2::INFINITY, Vec2::NEG_INFINITY), |(lo, hi), p| (lo.min(p), hi.max(p)))
+                face.vertices.iter().map(|p| Vec2::new(p.dot(u), p.dot(v)) / TEXEL).collect()
             })
             .collect();
-        let mut charts: Vec<Chart> = clusters(faces, &bounds)
+        let bounds: Vec<(Vec2, Vec2)> = outlines
+            .iter()
+            .map(|outline| outline.iter().fold((Vec2::INFINITY, Vec2::NEG_INFINITY), |(lo, hi), p| (lo.min(*p), hi.max(*p))))
+            .collect();
+        let mut charts: Vec<Chart> = clusters(faces, &outlines, &bounds)
             .into_iter()
             .map(|members| {
                 let plane = faces[members[0]].plane;
@@ -205,7 +210,6 @@ impl Atlas {
         Atlas { charts, chart_of, size: UVec2::new(width, (y + shelf).max(1)) }
     }
 
-    /// The chart face `index` is on.
     pub fn chart(&self, index: usize) -> &Chart {
         &self.charts[self.chart_of[index]]
     }
@@ -216,7 +220,8 @@ impl Atlas {
         (chart.lattice(point) - chart.origin.as_vec2() + chart.at.as_vec2()) / self.size.as_vec2()
     }
 
-    /// Light per texel, row by row from the top of the atlas, baked in one go. See [`LightmapBake`].
+    /// Light per texel, row by row from the top of the atlas.
+    #[cfg(test)]
     pub fn bake(&self, faces: &[Face], sky: &[bool], surface: &LitSurface, light: &Daylight) -> Vec<Vec3> {
         let mut bake = LightmapBake::plan(self.clone(), faces, sky, light);
         while !bake.is_done() {
@@ -396,7 +401,31 @@ impl LightmapBake {
         }
     }
 
-    pub fn finish(self) -> (Atlas, Vec<Vec3>) {
+    /// Every texel left unbaked takes the nearest baked one in its chart: nothing samples them, but
+    /// [`Atlas::carry_over`] copies whole charts onto a reshaped room.
+    pub fn finish(mut self) -> (Atlas, Vec<Vec3>) {
+        for plan in &self.charts {
+            let chart = &self.atlas.charts[plan.chart];
+            let (width, height) = (chart.size.x as usize, chart.size.y as usize);
+            let mut from: Vec<Option<usize>> = plan.nearest.iter().enumerate().map(|(at, k)| k.map(|_| at)).collect();
+            let mut queue: std::collections::VecDeque<usize> = (0..from.len()).filter(|&at| from[at].is_some()).collect();
+            while let Some(at) = queue.pop_front() {
+                let (i, j) = (at % width, at / width);
+                let neighbors = [(i > 0).then(|| at - 1), (i + 1 < width).then(|| at + 1), (j > 0).then(|| at - width), (j + 1 < height).then(|| at + width)];
+                for next in neighbors.into_iter().flatten() {
+                    if from[next].is_none() {
+                        from[next] = from[at];
+                        queue.push_back(next);
+                    }
+                }
+            }
+            let in_atlas = |at: usize| ((chart.at.y as usize + at / width) * self.atlas.size.x as usize) + chart.at.x as usize + at % width;
+            for (at, source) in from.iter().enumerate() {
+                if let (None, Some(source)) = (plan.nearest[at], source) {
+                    self.texels[in_atlas(at)] = self.texels[in_atlas(*source)];
+                }
+            }
+        }
         (self.atlas, self.texels)
     }
 }
@@ -478,22 +507,29 @@ fn on_plane(face: &Face, chart: &Chart, at: Vec2) -> Vec3 {
 /// `point` if it is inside the convex `outline`, else the nearest point of it, pulled [`INSET`]
 /// toward the middle.
 fn inside(outline: &[Vec2], point: Vec2) -> Vec2 {
+    let Some(nearest) = nearest_on_outline(outline, point) else { return point };
+    let middle = outline.iter().copied().sum::<Vec2>() / outline.len() as f32;
+    nearest + (middle - nearest).normalize_or_zero() * INSET
+}
+
+/// `None` if `point` is inside the convex `outline`, else the nearest point of its edge.
+fn nearest_on_outline(outline: &[Vec2], point: Vec2) -> Option<Vec2> {
     let count = outline.len();
-    let turn = |a: Vec2, b: Vec2, p: Vec2| (b - a).perp_dot(p - a);
+    let edge = |i: usize| (outline[i], outline[(i + 1) % count]);
     let winding: f32 = (0..count).map(|i| outline[i].perp_dot(outline[(i + 1) % count])).sum();
-    if (0..count).all(|i| turn(outline[i], outline[(i + 1) % count], point) * winding >= 0.0) {
-        return point;
+    if (0..count).all(|i| {
+        let (a, b) = edge(i);
+        (b - a).perp_dot(point - a) * winding >= 0.0
+    }) {
+        return None;
     }
-    let nearest = (0..count)
+    (0..count)
         .map(|i| {
-            let (a, b) = (outline[i], outline[(i + 1) % count]);
+            let (a, b) = edge(i);
             let t = ((point - a).dot(b - a) / (b - a).length_squared().max(f32::EPSILON)).clamp(0.0, 1.0);
             a + (b - a) * t
         })
         .min_by(|x, y| x.distance_squared(point).total_cmp(&y.distance_squared(point)))
-        .unwrap_or(point);
-    let middle = outline.iter().copied().sum::<Vec2>() / count as f32;
-    nearest + (middle - nearest).normalize_or_zero() * INSET
 }
 
 #[cfg(test)]
@@ -555,8 +591,7 @@ mod tests {
         assert_eq!(world(&a, column(&a)), world(&b, column(&b)));
     }
 
-    /// A room is baked over many steps, each casting some of its rays, and casts exactly the rays
-    /// its plan counted.
+    /// Casts exactly the rays its plan counted, over more steps than the room has faces.
     #[test]
     fn a_room_casts_the_rays_it_planned_a_row_at_a_time() {
         let rooms = courtyard();
@@ -577,8 +612,8 @@ mod tests {
         assert!(steps > faces.len(), "{steps} steps for {} faces", faces.len());
     }
 
-    /// An L-shaped floor comes out of the kernel in several pieces, and they are one chart: a
-    /// chart per piece would be a bounding box per sliver, each baked whole.
+    /// The kernel cuts an L-shaped floor into pieces; they share one chart, or each sliver bakes its
+    /// whole bounding box.
     #[test]
     fn a_floor_in_pieces_is_one_chart() {
         let footprint = vec![Vec2::ZERO, Vec2::new(6.0, 0.0), Vec2::new(6.0, 2.0), Vec2::new(2.0, 2.0), Vec2::new(2.0, 6.0), Vec2::new(0.0, 6.0)];
