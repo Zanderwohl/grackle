@@ -801,8 +801,11 @@ and each is a decision rather than a shortcut:
   against a trait object without the kernel answering for every shape anyway —
   the openness would be a costume. Closing the set buys exhaustive matching,
   plain serde, and an evaluator that cannot be handed something it has never
-  heard of. Adding a feature is a variant and an arm in `evaluate`, not seven
-  edits in files that do not reference each other.
+  heard of. Adding a feature is a variant, its arm in `evaluate`, its
+  references listed in `FeatureOp::fields` (and written by `set_field`), and a
+  row in `tool::TOOLS` — `consumes`, `references`, re-picking and the
+  Inspector's Pick rows are all read from `fields`.
+  `every_reference_is_a_field` fails for a reference left out.
 - **Undo is whole-document snapshots**, not before-and-after deltas. A prop is
   a couple of kilobytes, so cloning per edit is free and correct by
   construction: no pair to get the wrong way round, no operation that can
@@ -1039,8 +1042,10 @@ the keyboard are idle, which is what makes typing a name one step rather than
 one per letter.
 
 **The verbs act on the selection**, not on whatever was added last, and **none
-is ever grayed out** ([`tool.rs`](src/prop/tool.rs)). Each tool states what it
-needs as a list of slots — Combine a body then a second body (target, then
+is ever grayed out** ([`tool.rs`](src/prop/tool.rs)). Each tool is a row in
+`TOOLS` stating what it needs as a list of [`Slot`](src/prop/slot.rs)s — a
+`Kind`, a prompt and named checks, such as "the axis lies in the regions'
+plane", that see the other slots' values — Combine a body then a second body (target, then
 tool: the order it is said in), Mirror a body then a plane, Revolve regions
 then an axis — and clicking one fills the slots from the selection in pick
 order, drops whatever fits none, and asks for the rest in the toolbar ("Pick a
@@ -1070,10 +1075,12 @@ landed on, and says what it stands for through one conversion per kind
 pickable thing is a variant and its arms in one file. A revolve turns about a
 `CurveRef`, a row runs along a `DirectionRef`, a circle turns about a
 `CurveRef`, and a mirror is about a `PlaneRef`. None is a
-dropdown: the inspector shows what it names with a **Pick** button, which is
-the same machinery as a tool with one slot (`Task::Repick`). A re-pick offers
-only what stands before the feature, since that is all it could resolve
-against. A revolve's axis must lie in its sketch's plane, which the hover
+dropdown: the Inspector's References section has a **Pick** button per field
+of `FeatureOp::fields` marked `picked`, which is the same machinery as a tool
+with one slot (`Task::Repick { feature, field }`), its checks seeing the
+feature's other fields. Body operands are not picked there, since one this
+feature eats cannot be clicked; they are lists. A re-pick offers only what
+stands before the feature, since that is all it could resolve against. A revolve's axis must lie in its sketch's plane, which the hover
 checks and the evaluator reports.
 
 **The selection is an ordered list of `Pick`s** — bodies, named corners,

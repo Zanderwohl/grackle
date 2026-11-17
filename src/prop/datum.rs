@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::prop::feature::PropFeatureId;
 use crate::prop::plane::{intersection, Plane, PlaneRef};
-use crate::prop::refs::{CurveRef, PointRef, Resolve, Scope};
+use crate::prop::refs::{AnyRef, CurveRef, PointRef, Resolve, Scope};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -49,11 +49,12 @@ const AXIS_MARGIN: f32 = 0.25;
 const COINCIDENT: f32 = 1e-6;
 
 impl AxisDef {
-    pub fn features(&self) -> Vec<PropFeatureId> {
+    /// What it is made from, in the order it was picked.
+    pub fn refs(&self) -> Vec<AnyRef> {
         match self {
-            AxisDef::Through { a, b } => [a.features(), b.features()].concat(),
-            AxisDef::Planes { a, b } => a.feature().into_iter().chain(b.feature()).collect(),
-            AxisDef::Normal { plane, point } => plane.feature().into_iter().chain(point.features()).collect(),
+            AxisDef::Through { a, b } => vec![AnyRef::Point(a.clone()), AnyRef::Point(b.clone())],
+            AxisDef::Planes { a, b } => vec![AnyRef::Plane(*a), AnyRef::Plane(*b)],
+            AxisDef::Normal { plane, point } => vec![AnyRef::Plane(*plane), AnyRef::Point(point.clone())],
         }
     }
 
@@ -98,10 +99,10 @@ pub fn meet((a, b): (Vec3, Vec3), plane: &Plane) -> Option<Vec3> {
 }
 
 impl PointDef {
-    pub fn features(&self) -> Vec<PropFeatureId> {
+    pub fn refs(&self) -> Vec<AnyRef> {
         match self {
-            PointDef::Midpoint { curve } => curve.features(),
-            PointDef::Intersection { curve, plane } => curve.features().into_iter().chain(plane.feature()).collect(),
+            PointDef::Midpoint { curve } => vec![AnyRef::Curve(curve.clone())],
+            PointDef::Intersection { curve, plane } => vec![AnyRef::Curve(curve.clone()), AnyRef::Plane(*plane)],
         }
     }
 

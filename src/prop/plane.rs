@@ -162,12 +162,13 @@ pub enum PlaneDef {
 }
 
 impl PlaneDef {
-    pub fn features(&self) -> Vec<PropFeatureId> {
+    /// What it is made from, in the order it was picked.
+    pub fn refs(&self) -> Vec<AnyRef> {
         match self {
-            PlaneDef::Through { through } => through.iter().flat_map(AnyRef::features).collect(),
-            PlaneDef::Offset { from, .. } => from.feature().into_iter().collect(),
-            PlaneDef::Angle { from, about, .. } => from.feature().into_iter().chain(about.features()).collect(),
-            PlaneDef::Midplane { a, b } => a.feature().into_iter().chain(b.feature()).collect(),
+            PlaneDef::Through { through } => through.clone(),
+            PlaneDef::Offset { from, .. } => vec![AnyRef::Plane(*from)],
+            PlaneDef::Angle { from, about, .. } => vec![AnyRef::Plane(*from), AnyRef::Curve(about.clone())],
+            PlaneDef::Midplane { a, b } => vec![AnyRef::Plane(*a), AnyRef::Plane(*b)],
         }
     }
 

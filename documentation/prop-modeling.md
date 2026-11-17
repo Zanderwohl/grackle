@@ -337,7 +337,7 @@ this plan; they need stage 4 and adjacency on the result, and get their own.
 
 ### References by kind
 - [x] `src/prop/refs.rs`: `PointRef`, `CurveRef`, `PathRef`, `DirectionRef`, `AnyRef` (`PlaneRef` stays in `plane.rs`)
-- [ ] `BodyRef` and `RegionsRef` — with stage 2, where slots first hold them
+- [x] `BodyRef` and `RegionsRef` — built as `AnyRef::Body` and `AnyRef::Regions` in stage 2
 - [x] `Scope` built by `evaluate`; `edge_of`, `plane_of`, `locate_in` become its methods
 - [x] `Resolve` trait implemented for every kind
 - [x] `Pick` gains `SketchPoint`, `SketchCurve`, `DatumAxis`, `DatumPoint`; one `as_*` conversion per kind
@@ -349,15 +349,15 @@ this plan; they need stage 4 and adjacency on the result, and get their own.
 - [ ] A handle to drag an offset plane's distance; today it is a number in the Inspector
 
 ### Slots and fields
-- [ ] `Slot { kind, count, prompt, checks }`; named checks shared between tools
-- [ ] `FeatureOp::fields` / `fields_mut`
-- [ ] `consumes` and `references` derived from `fields`
-- [ ] `every_reference_is_a_field` test over one of every feature
-- [ ] `Task::Repick { feature, field: usize }`; `Field`, `set_line`, `sweep_plane`, `picked_line` removed
-- [ ] `ToolSpec` table; `fill`/`accepts`/`prompt` with no per-tool match
-- [ ] Inspector Pick rows drawn from `fields`
-- [ ] `Path` slot and the Chain button
-- [ ] CLAUDE.md's "adding a feature" sentence updated
+- [x] `Slot { kind, prompt, checks }` in `slot.rs`; named checks shared between tools (a kind's count is its `open`)
+- [x] `FeatureOp::fields` / `set_field` (one reads, one writes by the same index; `every_field_writes_back_what_it_reads` holds them together)
+- [x] `consumes` and `references` derived from `fields`
+- [x] `every_reference_is_a_field` test over one of every feature
+- [x] `Task::Repick { feature, field: usize }`; `Field`, `set_line`, `sweep_plane`, `picked_line` removed
+- [x] `ToolSpec` table; `fill`/`accepts`/`prompt` with no per-tool match
+- [x] Inspector Pick rows drawn from `fields`, in a References section; datums and a sketch's plane can be re-picked
+- [ ] `Path` slot and the Chain button — moved to stage 6, where Sweep is the first thing to take a path
+- [x] CLAUDE.md's "adding a feature" sentence updated
 
 ### Sweep core
 - [ ] `skin.rs`: `Section`, `TaggedLoop`, `skin`, `Swept`
@@ -386,6 +386,7 @@ this plan; they need stage 4 and adjacency on the result, and get their own.
 - [ ] `CurveRef` resolves arcs and seams to curves, not two points
 
 ### Sweeps
+- [ ] `Path` slot (a pick joins either end) and the Chain button
 - [ ] Sweep feature: `Minimal`, `Frenet`, `Fixed`; twist and scale
 - [ ] Closed-path sweep spreads the leftover angle
 - [ ] Loft feature: correspondence by entity, resampling, start alignment, picked start points

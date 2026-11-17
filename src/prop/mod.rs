@@ -63,6 +63,7 @@ pub mod region;
 pub mod rig;
 pub mod sketch;
 pub mod sketch_edit;
+pub mod slot;
 pub mod solid;
 pub mod sync;
 pub mod surface;

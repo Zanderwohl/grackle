@@ -19,7 +19,8 @@ use crate::prop::solid::Polygon;
 use crate::prop::datum::{AxisDef, DatumAxis, DatumPoint, PointDef};
 use crate::prop::plane::{Datum, OriginPlane, PlaneDef, PlaneRef, MIN_ORIGIN_HALF};
 use crate::prop::plane::Plane;
-use crate::prop::refs::{CurveRef, DirectionRef, Resolve, Scope};
+use crate::prop::refs::{AnyRef, CurveRef, DirectionRef, Resolve, Scope};
+use crate::prop::slot::{self, Field, Resolved};
 use crate::prop::profile::revolve_steps;
 use crate::prop::region::{arrange, axis_clear, Region};
 use crate::prop::sketch::SketchId;
@@ -194,13 +195,6 @@ pub enum PatternKind {
 }
 
 impl PatternKind {
-    pub fn features(&self) -> Vec<PropFeatureId> {
-        match self {
-            PatternKind::Linear { direction, .. } => direction.features(),
-            PatternKind::Radial { axis, .. } => axis.features(),
-        }
-    }
-
     /// A point on the line copies are made along or about, and its direction.
     pub fn resolve(&self, scope: &Scope) -> Option<(Vec3, Dir3)> {
         match self {
@@ -257,39 +251,112 @@ impl FeatureOp {
         }
     }
 
-    /// The single answer the evaluator, the delete check and the panel's
-    /// dropdowns all use.
-    pub fn consumes(&self) -> Vec<PropFeatureId> {
+    /// Every reference the feature holds, in the order a tool asks for them.
+    /// [`Self::set_field`] takes the same indices; `consumes` and
+    /// `references` are read from this, so a reference left out here is one
+    /// nothing knows the feature depends on.
+    pub fn fields(&self) -> Vec<Field> {
+        let field = |label, slot, refs: Vec<AnyRef>| Field { label, slot, consumed: false, picked: true, refs };
+        let body = |label, slot, id: &PropFeatureId| Field {
+            label,
+            slot,
+            consumed: true,
+            picked: false,
+            refs: vec![AnyRef::Body { body: *id }],
+        };
+        let regions = |sketch: &PropFeatureId, entries: &Vec<SketchId>| Field {
+            label: "prop.inspector.regions_field",
+            slot: slot::REGIONS,
+            consumed: false,
+            picked: false,
+            refs: vec![AnyRef::Regions { sketch: *sketch, entries: entries.clone() }],
+        };
         match self {
-            FeatureOp::Primitive { .. }
-            | FeatureOp::Extrude { .. }
-            | FeatureOp::Revolve { .. }
-            | FeatureOp::Plane { .. }
-            | FeatureOp::Axis { .. }
-            | FeatureOp::Point { .. }
-            | FeatureOp::Sketch { .. } => vec![],
-            FeatureOp::Boolean { target, tool, .. } => vec![*target, *tool],
-            FeatureOp::Mirror { target, .. }
-            | FeatureOp::Paint { target, .. }
-            | FeatureOp::Pattern { target, .. } => vec![*target],
+            FeatureOp::Primitive { .. } => vec![],
+            FeatureOp::Extrude { sketch, regions: entries, .. } => vec![regions(sketch, entries)],
+            FeatureOp::Revolve { sketch, regions: entries, axis, .. } => vec![
+                regions(sketch, entries),
+                field("prop.inspector.axis", slot::AXIS, vec![AnyRef::Curve(axis.clone())]),
+            ],
+            FeatureOp::Boolean { target, tool, .. } => vec![
+                body("prop.inspector.target", slot::BODY, target),
+                body("prop.inspector.tool", slot::SECOND_BODY, tool),
+            ],
+            FeatureOp::Mirror { target, about, .. } => vec![
+                body("prop.inspector.target", slot::BODY, target),
+                field("prop.inspector.plane", slot::PLANE, vec![AnyRef::Plane(*about)]),
+            ],
+            FeatureOp::Paint { target, .. } => vec![body("prop.inspector.target", slot::BODY, target)],
+            FeatureOp::Pattern { target, along, .. } => vec![
+                body("prop.inspector.target", slot::BODY, target),
+                match along {
+                    PatternKind::Linear { direction, .. } => {
+                        field("prop.inspector.direction", slot::DIRECTION, vec![AnyRef::Direction(direction.clone())])
+                    }
+                    PatternKind::Radial { axis, .. } => {
+                        field("prop.inspector.axis", slot::AXIS, vec![AnyRef::Curve(axis.clone())])
+                    }
+                },
+            ],
+            FeatureOp::Plane { def } => vec![field("prop.inspector.made_from", slot::MAKE_PLANE, def.refs())],
+            FeatureOp::Axis { def } => vec![field("prop.inspector.made_from", slot::MAKE_AXIS, def.refs())],
+            FeatureOp::Point { def } => vec![field("prop.inspector.made_from", slot::MAKE_POINT, def.refs())],
+            FeatureOp::Sketch { on, .. } => vec![field("prop.inspector.on_plane", slot::PLANE, vec![AnyRef::Plane(*on)])],
         }
     }
 
-    /// Features this one names without consuming: what a plane was made
-    /// through, the plane or line something is about, and every copy that
+    /// Writes field `index` of [`Self::fields`]; `false` if the value is not
+    /// that field's kind. A construction's field takes the whole feature it
+    /// made, keeping the distance or angle when it is made the same way.
+    pub fn set_field(&mut self, index: usize, value: Resolved) -> bool {
+        match (self, index, value) {
+            (FeatureOp::Extrude { sketch, regions, .. } | FeatureOp::Revolve { sketch, regions, .. }, 0, Resolved::Regions { sketch: s, entries }) => {
+                (*sketch, *regions) = (s, entries);
+            }
+            (FeatureOp::Revolve { axis, .. }, 1, Resolved::Curve(curve)) => *axis = curve,
+            (
+                FeatureOp::Boolean { target, .. }
+                | FeatureOp::Mirror { target, .. }
+                | FeatureOp::Paint { target, .. }
+                | FeatureOp::Pattern { target, .. },
+                0,
+                Resolved::Body(id),
+            ) => *target = id,
+            (FeatureOp::Boolean { tool, .. }, 1, Resolved::Body(id)) => *tool = id,
+            (FeatureOp::Mirror { about, .. }, 1, Resolved::Plane(on)) => *about = on,
+            (FeatureOp::Pattern { along: PatternKind::Linear { direction, .. }, .. }, 1, Resolved::Direction(to)) => *direction = to,
+            (FeatureOp::Pattern { along: PatternKind::Radial { axis, .. }, .. }, 1, Resolved::Curve(curve)) => *axis = curve,
+            (FeatureOp::Sketch { on, .. }, 0, Resolved::Plane(to)) => *on = to,
+            (FeatureOp::Plane { def }, 0, Resolved::Op(FeatureOp::Plane { def: mut made })) => {
+                match (&*def, &mut made) {
+                    (PlaneDef::Offset { distance, .. }, PlaneDef::Offset { distance: new, .. }) => *new = *distance,
+                    (PlaneDef::Angle { degrees, .. }, PlaneDef::Angle { degrees: new, .. }) => *new = *degrees,
+                    _ => {}
+                }
+                *def = made;
+            }
+            (FeatureOp::Axis { def }, 0, Resolved::Op(FeatureOp::Axis { def: made })) => *def = made,
+            (FeatureOp::Point { def }, 0, Resolved::Op(FeatureOp::Point { def: made })) => *def = made,
+            _ => return false,
+        }
+        true
+    }
+
+    /// The bodies it eats; see [`Self::fields`].
+    pub fn consumes(&self) -> Vec<PropFeatureId> {
+        self.fields().iter().filter(|field| field.consumed).flat_map(|field| field.refs.iter().flat_map(AnyRef::features)).collect()
+    }
+
+    /// Features this one names without consuming: what a datum was made
+    /// from, the plane or line something is about, and every copy that
     /// geometry went through.
     pub fn references(&self) -> Vec<PropFeatureId> {
-        let mut named: Vec<PropFeatureId> = match self {
-            FeatureOp::Plane { def } => def.features(),
-            FeatureOp::Axis { def } => def.features(),
-            FeatureOp::Point { def } => def.features(),
-            FeatureOp::Sketch { on, .. } => on.feature().into_iter().collect(),
-            FeatureOp::Extrude { sketch, .. } => vec![*sketch],
-            FeatureOp::Revolve { sketch, axis, .. } => std::iter::once(*sketch).chain(axis.features()).collect(),
-            FeatureOp::Mirror { about, .. } => about.feature().into_iter().collect(),
-            FeatureOp::Pattern { along, .. } => along.features(),
-            _ => vec![],
-        };
+        let mut named: Vec<PropFeatureId> = self
+            .fields()
+            .iter()
+            .filter(|field| !field.consumed)
+            .flat_map(|field| field.refs.iter().flat_map(AnyRef::features))
+            .collect();
         named.sort();
         named.dedup();
         named
@@ -883,6 +950,113 @@ mod tests {
     /// whole radial turn.
     /// Fails if a datum is resolved against the end of the list, or a
     /// pattern cannot turn about one.
+    /// One of every feature, each naming features 100 and up and nothing
+    /// else in that range, so a feature id in its text is a reference.
+    fn one_of_every_referencing_feature() -> Vec<FeatureOp> {
+        use crate::prop::reference::{CopyOf, Element, Source};
+        use crate::prop::refs::{AnyRef, PointRef};
+        let id = PropFeatureId;
+        let geom = |element, feature| GeomRef { element, source: Source { feature: id(feature), copies: vec![] } };
+        let copied = GeomRef {
+            element: Element::Edge(3),
+            source: Source { feature: id(111), copies: vec![CopyOf { by: id(112), index: 1 }] },
+        };
+        let surface = Surface::default();
+        vec![
+            FeatureOp::Extrude { sketch: id(100), regions: vec![SketchId(1)], symmetric: false, end: End::Distance { distance: 0.05 }, surface },
+            FeatureOp::Revolve {
+                sketch: id(101),
+                regions: vec![SketchId(1)],
+                degrees: 90.0,
+                steps: 12,
+                symmetric: false,
+                axis: CurveRef::Datum { feature: id(102) },
+                surface,
+            },
+            FeatureOp::Boolean { op: BooleanOp::Subtract, target: id(103), tool: id(104) },
+            FeatureOp::Mirror { target: id(105), offset: 0.0, keep_original: true, about: PlaneRef::Feature(id(106)) },
+            FeatureOp::Paint { target: id(107), surface },
+            FeatureOp::Pattern {
+                target: id(108),
+                count: 3,
+                along: PatternKind::Linear { spacing: 0.05, direction: DirectionRef::Normal { plane: PlaneRef::Feature(id(109)) } },
+            },
+            FeatureOp::Pattern { target: id(110), count: 3, along: PatternKind::Radial { degrees: 90.0, axis: CurveRef::Edge { edge: copied } } },
+            FeatureOp::Plane {
+                def: PlaneDef::Through {
+                    through: vec![
+                        AnyRef::Point(PointRef::Corner { corner: geom(Element::Point(2), 113) }),
+                        AnyRef::Curve(CurveRef::Sketch { sketch: id(114), entity: SketchId(3) }),
+                        AnyRef::Face { face: geom(Element::Face(1), 115) },
+                    ],
+                },
+            },
+            FeatureOp::Plane { def: PlaneDef::Offset { distance: 0.05, from: PlaneRef::Feature(id(116)) } },
+            FeatureOp::Plane {
+                def: PlaneDef::Angle { degrees: 30.0, from: PlaneRef::Feature(id(117)), about: CurveRef::Datum { feature: id(118) } },
+            },
+            FeatureOp::Plane { def: PlaneDef::Midplane { a: PlaneRef::Feature(id(119)), b: PlaneRef::Feature(id(120)) } },
+            FeatureOp::Axis {
+                def: AxisDef::Through { a: PointRef::Datum { feature: id(121) }, b: PointRef::Sketch { sketch: id(122), point: SketchId(2) } },
+            },
+            FeatureOp::Axis { def: AxisDef::Planes { a: PlaneRef::Feature(id(123)), b: PlaneRef::Feature(id(124)) } },
+            FeatureOp::Axis {
+                def: AxisDef::Normal { plane: PlaneRef::Feature(id(125)), point: PointRef::Corner { corner: geom(Element::Point(0), 126) } },
+            },
+            FeatureOp::Point { def: PointDef::Midpoint { curve: CurveRef::Datum { feature: id(127) } } },
+            FeatureOp::Point {
+                def: PointDef::Intersection { curve: CurveRef::Edge { edge: geom(Element::Edge(1), 128) }, plane: PlaneRef::Feature(id(129)) },
+            },
+            FeatureOp::Sketch { on: PlaneRef::Feature(id(130)), sketch: Sketch::default() },
+        ]
+    }
+
+    /// Fails if a reference is left out of [`FeatureOp::fields`]: the feature
+    /// would not be pinned below it, nor told of its deletion.
+    #[test]
+    fn every_reference_is_a_field() {
+        #[derive(Serialize)]
+        struct Wrapper<'a> {
+            op: &'a FeatureOp,
+        }
+        for op in one_of_every_referencing_feature() {
+            let text = toml::to_string(&Wrapper { op: &op }).unwrap();
+            let mut named: Vec<PropFeatureId> = text
+                .split(|c: char| !c.is_ascii_digit() && c != '.')
+                .filter_map(|word| word.parse::<u32>().ok())
+                .filter(|n| (100..200).contains(n))
+                .map(PropFeatureId)
+                .collect();
+            named.sort();
+            named.dedup();
+            assert_eq!(op.depends_on(), named, "{text}");
+        }
+    }
+
+    /// Fails if [`FeatureOp::set_field`] and [`FeatureOp::fields`] disagree
+    /// about what an index is.
+    #[test]
+    fn every_field_writes_back_what_it_reads() {
+        use crate::prop::refs::AnyRef;
+        use crate::prop::slot::Kind;
+        for op in one_of_every_referencing_feature() {
+            for (index, field) in op.fields().iter().enumerate() {
+                let value = match (field.slot.kind, &field.refs[..]) {
+                    (Kind::Construct(_), _) => Resolved::Op(op.clone()),
+                    (_, [AnyRef::Body { body }]) => Resolved::Body(*body),
+                    (_, [AnyRef::Regions { sketch, entries }]) => Resolved::Regions { sketch: *sketch, entries: entries.clone() },
+                    (_, [AnyRef::Curve(curve)]) => Resolved::Curve(curve.clone()),
+                    (_, [AnyRef::Direction(direction)]) => Resolved::Direction(direction.clone()),
+                    (_, [AnyRef::Plane(on)]) => Resolved::Plane(*on),
+                    other => panic!("field {index} of {op:?} holds {other:?}"),
+                };
+                let mut written = op.clone();
+                assert!(written.set_field(index, value), "field {index} of {op:?}");
+                assert_eq!(written, op);
+            }
+        }
+    }
+
     #[test]
     fn datum_axes_and_points_stand_where_they_were_made() {
         use crate::prop::refs::PointRef;

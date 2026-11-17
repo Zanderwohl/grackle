@@ -69,6 +69,9 @@ pub enum AnyRef {
     Plane(PlaneRef),
     Direction(DirectionRef),
     Face { face: GeomRef },
+    Body { body: PropFeatureId },
+    /// Entries in a sketch's region list.
+    Regions { sketch: PropFeatureId, entries: Vec<SketchId> },
 }
 
 impl PointRef {
@@ -135,6 +138,8 @@ impl AnyRef {
             AnyRef::Plane(plane) => plane.feature().into_iter().collect(),
             AnyRef::Direction(direction) => direction.features(),
             AnyRef::Face { face } => face.source.features().collect(),
+            AnyRef::Body { body } => vec![*body],
+            AnyRef::Regions { sketch, .. } => vec![*sketch],
         }
     }
 }
@@ -350,7 +355,7 @@ impl AnyRef {
             AnyRef::Point(point) => point.resolve(scope).map(Located::Point),
             AnyRef::Curve(curve) => curve.resolve(scope)?.line().map(|(a, b)| Located::Edge(a, b)),
             AnyRef::Face { face } => flat_face(face, scope),
-            AnyRef::Path(_) | AnyRef::Plane(_) | AnyRef::Direction(_) => None,
+            AnyRef::Path(_) | AnyRef::Plane(_) | AnyRef::Direction(_) | AnyRef::Body { .. } | AnyRef::Regions { .. } => None,
         }
     }
 }
@@ -427,6 +432,8 @@ mod tests {
                 AnyRef::Direction(DirectionRef::Normal { plane: PlaneRef::Feature(PropFeatureId(2)) }),
                 AnyRef::Direction(DirectionRef::Along { curve: edge(2) }),
                 AnyRef::Face { face: corner },
+                AnyRef::Body { body: PropFeatureId(9) },
+                AnyRef::Regions { sketch: PropFeatureId(1), entries: vec![SketchId(2), SketchId(4)] },
             ],
         };
         let text = toml::to_string(&holder).unwrap();

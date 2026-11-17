@@ -152,7 +152,8 @@ impl Pick {
             AnyRef::Plane(plane) => Some(Pick::Plane(*plane)),
             AnyRef::Direction(direction) => Some(Pick::of_direction(direction)),
             AnyRef::Face { face } => Some(Pick::Geom(face.clone())),
-            AnyRef::Path(_) => None,
+            AnyRef::Body { body } => Some(Pick::Body(*body)),
+            AnyRef::Path(_) | AnyRef::Regions { .. } => None,
         }
     }
 
@@ -577,14 +578,20 @@ impl PropEditor {
     /// `first`, then the feature `then` builds on it, at the bar as one undo
     /// step; returns the second.
     pub fn add_pair(&mut self, first: FeatureOp, then: impl FnOnce(PropFeatureId) -> FeatureOp) -> PropFeatureId {
-        self.add_chain(vec![first], |ids| then(ids[0]))
+        self.add_chain(vec![first], |_, ids| Some(then(ids[0]))).expect("always built")
     }
 
-    /// Each of `first` in order, then the feature `then` builds on them, at
-    /// the bar as one undo step; returns the last.
-    pub fn add_chain(&mut self, first: Vec<FeatureOp>, then: impl FnOnce(&[PropFeatureId]) -> FeatureOp) -> PropFeatureId {
+    /// Each of `first` in order, then the feature `then` builds on them (with
+    /// the document, to adopt what it needs), at the bar as one undo step;
+    /// returns the last. If `then` builds nothing, nothing is added.
+    pub fn add_chain(
+        &mut self,
+        first: Vec<FeatureOp>,
+        then: impl FnOnce(&mut PropDoc, &[PropFeatureId]) -> Option<FeatureOp>,
+    ) -> Option<PropFeatureId> {
         let anchor = self.rollback;
         let id = self.edit(|doc| {
+            let original = doc.clone();
             let mut at = anchor.and_then(|anchor| doc.index_of(anchor)).map(|at| at + 1);
             let mut put = |doc: &mut PropDoc, op: FeatureOp| match at.as_mut() {
                 Some(at) => {
@@ -595,13 +602,18 @@ impl PropEditor {
                 None => doc.push(op),
             };
             let ids: Vec<PropFeatureId> = first.into_iter().map(|op| put(doc, op)).collect();
-            let last = then(&ids);
-            put(doc, last)
-        });
+            match then(doc, &ids) {
+                Some(last) => Some(put(doc, last)),
+                None => {
+                    *doc = original;
+                    None
+                }
+            }
+        })?;
         if anchor.is_some() {
             self.roll_back_to(Some(id));
         }
-        id
+        Some(id)
     }
 
     /// In pick order; the primary last.

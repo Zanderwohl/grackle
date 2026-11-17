@@ -52,11 +52,10 @@ use crate::prop::surface::{Style, Surface};
 use crate::prop::camera::FrameTheProp;
 use crate::prop::view::PropBuild;
 use crate::prop::construct::{Construct, Making};
-use crate::prop::datum::{AxisDef, PointDef};
 use crate::prop::plane::PlaneDef;
 use crate::prop::refs::{axis_name, AnyRef, CurveRef, DirectionRef, PointRef, Resolve};
 use crate::prop::tool::add_making;
-use crate::prop::tool::{advance, cancel, fill, is_ready, prompt, put_down, start, ActiveTool, Field, Task, Tool};
+use crate::prop::tool::{advance, cancel, fill, is_ready, prompt, put_down, start, ActiveTool, Task, Tool};
 
 /// What a file dialog came back with. A background thread, like the map
 /// editor's, so not wasm-ready; reading props does not come through here.
@@ -924,9 +923,10 @@ fn toolbar(
     if let Some(task) = active {
         ui.separator();
         let filled = fill(task, editor.picks(), editor.doc(), &build.evaluated);
-        ui.label(egui::RichText::new(task.name()).strong());
-        ui.label(egui::RichText::new(prompt(task, &filled, &build.evaluated)).color(ui.visuals().warn_fg_color));
-        let ready = is_ready(task, &filled, &build.evaluated);
+        ui.label(egui::RichText::new(task.name(editor.doc())).strong());
+        let asked = prompt(task, &filled, editor.doc(), &build.evaluated);
+        ui.label(egui::RichText::new(asked).color(ui.visuals().warn_fg_color));
+        let ready = is_ready(task, &filled, editor.doc(), &build.evaluated);
         let done = ready.then(|| Segment::new("check_mark", get!("prop.tool.done")));
         let segments: Vec<Segment> = done.into_iter().chain([Segment::new("trash_can", get!("prop.tool.cancel"))]).collect();
         let last = segments.len() - 1;
@@ -1388,7 +1388,7 @@ fn reference_row(
     label: String,
     shown: String,
     feature: PropFeatureId,
-    field: Field,
+    field: usize,
     tool: Option<Task>,
     requests: &mut PropRequests,
 ) {
@@ -1453,53 +1453,28 @@ fn feature_inspector(
     // Drawn against a copy: calling `PropEditor::doc_mut` marks the document
     // changed, which would rebuild the viewport and mark it dirty every frame.
     let Some(mut edited) = editor.doc().feature(selected).cloned() else { return };
-    // What a datum is made from, labeled before the document is borrowed.
+    // Every field picked in the viewport, labeled before the document is
+    // borrowed: its label, what it names now, and its index for a re-pick.
     let any_label = |reference: &AnyRef| match Pick::of_any(reference) {
         Some(pick) => pick_label(editor, build, &pick),
         None => get!("prop.picks.origin"),
     };
-    let through: Vec<String> = match &edited.op {
-        FeatureOp::Plane { def: PlaneDef::Through { through } } => through.iter().map(any_label).collect(),
-        FeatureOp::Plane { def: PlaneDef::Offset { from, .. } } => vec![any_label(&AnyRef::Plane(*from))],
-        FeatureOp::Plane { def: PlaneDef::Angle { from, about, .. } } => {
-            vec![any_label(&AnyRef::Plane(*from)), any_label(&AnyRef::Curve(about.clone()))]
-        }
-        FeatureOp::Plane { def: PlaneDef::Midplane { a, b } } | FeatureOp::Axis { def: AxisDef::Planes { a, b } } => {
-            vec![any_label(&AnyRef::Plane(*a)), any_label(&AnyRef::Plane(*b))]
-        }
-        FeatureOp::Axis { def: AxisDef::Through { a, b } } => {
-            vec![any_label(&AnyRef::Point(a.clone())), any_label(&AnyRef::Point(b.clone()))]
-        }
-        FeatureOp::Axis { def: AxisDef::Normal { plane, point } } => {
-            vec![any_label(&AnyRef::Plane(*plane)), any_label(&AnyRef::Point(point.clone()))]
-        }
-        FeatureOp::Point { def: PointDef::Midpoint { curve } } => vec![any_label(&AnyRef::Curve(curve.clone()))],
-        FeatureOp::Point { def: PointDef::Intersection { curve, plane } } => {
-            vec![any_label(&AnyRef::Curve(curve.clone())), any_label(&AnyRef::Plane(*plane))]
-        }
-        _ => vec![],
-    };
+    let rows: Vec<(String, String, usize)> = edited
+        .op
+        .fields()
+        .iter()
+        .enumerate()
+        .filter(|(_, field)| field.picked)
+        .map(|(index, field)| {
+            let shown: Vec<String> = field.refs.iter().map(any_label).collect();
+            (get!(field.label), shown.join(", "), index)
+        })
+        .collect();
     let datum = build.evaluated.datum(PlaneRef::Feature(selected));
-    let plane_name = |on: PlaneRef| pick_label(editor, build, &Pick::Plane(on));
     let sketch_name = match &edited.op {
         FeatureOp::Extrude { sketch, .. } | FeatureOp::Revolve { sketch, .. } => {
             Some(pick_label(editor, build, &Pick::Body(*sketch)))
         }
-        _ => None,
-    };
-    // What the feature is about, labeled before the document is borrowed.
-    let about: Option<String> = match &edited.op {
-        FeatureOp::Revolve { axis, .. } | FeatureOp::Pattern { along: PatternKind::Radial { axis, .. }, .. } => {
-            Some(pick_label(editor, build, &Pick::of_curve(axis)))
-        }
-        FeatureOp::Pattern { along: PatternKind::Linear { direction, .. }, .. } => {
-            Some(pick_label(editor, build, &Pick::of_direction(direction)))
-        }
-        FeatureOp::Mirror { about, .. } => Some(plane_name(*about)),
-        _ => None,
-    };
-    let sketch_plane = match &edited.op {
-        FeatureOp::Sketch { on, .. } => Some(plane_name(*on)),
         _ => None,
     };
     let feature = &mut edited;
@@ -1520,6 +1495,13 @@ fn feature_inspector(
             // action, a checkbox names a state.
             changed |= ui.checkbox(&mut feature.enabled, get!("prop.inspector.active")).changed();
         });
+        if !rows.is_empty() {
+            section(ui, "references", get!("prop.inspector.sections.references"), |ui| {
+                for (label, shown, index) in &rows {
+                    reference_row(ui, label.clone(), shown.clone(), selected, *index, tool, requests);
+                }
+            });
+        }
 
         let main = feature.op.main_axis();
         match &mut feature.op {
@@ -1561,8 +1543,6 @@ fn feature_inspector(
                         ui.label(sketch_name.clone().unwrap_or_default());
                     });
                     region_action = sweep_regions(ui, editor, build, *sketch, regions);
-                    let shown = about.clone().unwrap_or_default();
-                    reference_row(ui, get!("prop.inspector.axis"), shown, selected, Field::RevolveAxis, tool, requests);
                 });
                 section(ui, "extent", get!("prop.inspector.sections.extent"), |ui| {
                     changed |= drag(ui, get!("prop.inspector.degrees"), degrees, 1.0, "°");
@@ -1595,8 +1575,6 @@ fn feature_inspector(
                     changed |= body_picker(ui, get!("prop.inspector.target"), target, &names);
                 });
                 section(ui, "mirror", get!("prop.inspector.sections.mirror"), |ui| {
-                    let shown = about.clone().unwrap_or_default();
-                    reference_row(ui, get!("prop.inspector.plane"), shown, selected, Field::MirrorPlane, tool, requests);
                     changed |= drag(ui, get!("prop.inspector.offset"), offset, 0.001, "m");
                     changed |= ui
                         .checkbox(keep_original, get!("prop.inspector.keep_original"))
@@ -1617,20 +1595,10 @@ fn feature_inspector(
                 });
                 section(ui, "pattern", get!("prop.inspector.sections.pattern"), |ui| {
                     changed |= pattern_ui(ui, count, along);
-                    let (label, field) = match along {
-                        PatternKind::Linear { .. } => (get!("prop.inspector.direction"), Field::PatternDirection),
-                        PatternKind::Radial { .. } => (get!("prop.inspector.axis"), Field::PatternAxis),
-                    };
-                    let shown = about.clone().unwrap_or_default();
-                    reference_row(ui, label, shown, selected, field, tool, requests);
                 });
             }
             FeatureOp::Sketch { sketch, .. } => {
                 section(ui, "drawing", get!("prop.inspector.sections.drawing"), |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(get!("prop.inspector.on_plane"));
-                        ui.label(sketch_plane.clone().unwrap_or_default());
-                    });
                     ui.label(get!(
                         "prop.inspector.drawing",
                         "points",
@@ -1646,9 +1614,6 @@ fn feature_inspector(
                         ui.label(get!("prop.inspector.made"));
                         ui.label(plane_def_name(def));
                     });
-                    for label in &through {
-                        ui.label(label);
-                    }
                     match def {
                         PlaneDef::Offset { distance, .. } => {
                             changed |= drag(ui, get!("prop.inspector.distance"), distance, 0.001, "m");
@@ -1674,11 +1639,6 @@ fn feature_inspector(
                 }
             }
             FeatureOp::Axis { .. } | FeatureOp::Point { .. } => {
-                section(ui, "through", get!("prop.inspector.sections.through"), |ui| {
-                    for label in &through {
-                        ui.label(label);
-                    }
-                });
                 let triple = |v: Vec3| format!("{:.4}, {:.4}, {:.4}", v.x, v.y, v.z);
                 section(ui, "placement", get!("prop.inspector.sections.placement"), |ui| {
                     if let Some(axis) = build.evaluated.axes.iter().find(|axis| axis.id == selected) {
