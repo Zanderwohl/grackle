@@ -35,6 +35,13 @@ pub struct RolePaint {
     pub unsided: Option<String>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RoleNameRefused {
+    /// Another of the map's roles has it.
+    Taken,
+    Material,
+}
+
 /// Roles every map has without saying so, so a map with no art pass can still show whose side a
 /// room is on. A map's own role of the same name shadows one.
 static BUILT_IN: LazyLock<BTreeMap<String, RolePaint>> = LazyLock::new(|| {
@@ -78,6 +85,18 @@ impl Palette {
     /// The map's roles, then the built-in ones it does not shadow.
     pub fn every_role(&self) -> impl Iterator<Item = (&String, &RolePaint)> {
         self.roles.iter().chain(BUILT_IN.iter().filter(|(name, _)| !self.roles.contains_key(*name)))
+    }
+
+    /// A material's name is refused, since the role would shadow that material on every slot
+    /// naming it.
+    pub fn may_name_a_role(&self, name: &str, is_material: impl Fn(&str) -> bool) -> Result<(), RoleNameRefused> {
+        if self.roles.contains_key(name) {
+            Err(RoleNameRefused::Taken)
+        } else if is_material(name) {
+            Err(RoleNameRefused::Material)
+        } else {
+            Ok(())
+        }
     }
 
     /// The material a slot naming `name` is painted with on `side`: the name itself unless it is a
@@ -187,6 +206,15 @@ mod tests {
                 assert!(path.exists(), "{role} paints with {name}, which {} does not hold", dir.display());
             }
         }
+    }
+
+    #[test]
+    fn a_role_may_not_take_a_materials_name() {
+        let palette = spawn_walls();
+        let is_material = |name: &str| ["plaster", "concrete"].contains(&name);
+        assert_eq!(palette.may_name_a_role("plaster", is_material), Err(RoleNameRefused::Material));
+        assert_eq!(palette.may_name_a_role("spawn_walls", is_material), Err(RoleNameRefused::Taken));
+        assert_eq!(palette.may_name_a_role("team_plaster", is_material), Ok(()));
     }
 
     #[test]

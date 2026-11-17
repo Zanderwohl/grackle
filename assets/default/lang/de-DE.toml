@@ -152,6 +152,9 @@ title = "Palette"
 unsided = "Keine Seite"
 add = "Hinzufügen"
 new_role = "Rolle"
+material_named = "Ein Material heißt { name }, also darf keine Rolle so heißen"
+role_named = "Eine andere Rolle heißt { name }"
+shadows_material = "Ein Material heißt { name }; jeder Platz, der es nennt, wird von dieser Rolle bemalt"
 
 [sky]
 high_noon = "Mittag"

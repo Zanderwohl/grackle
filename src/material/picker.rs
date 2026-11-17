@@ -1,7 +1,7 @@
 //! Choosing a room slot's material: every pack's materials as previews, and the palette's roles
 //! beside them. The widget is [`crate::common::picker`].
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts, EguiTextureHandle};
@@ -29,6 +29,13 @@ pub fn material_button(ui: &mut egui::Ui, current: &mut Option<String>, offer_ro
     let changed = *current != pick;
     *current = pick;
     changed
+}
+
+/// Reads every pack's folder.
+pub fn material_names() -> BTreeSet<String> {
+    let mut names: BTreeSet<String> = every_in_packs(MATERIALS_DIR, FILE_EXTENSION).into_iter().collect();
+    names.extend([SKYBOX.to_owned(), PIT.to_owned()]);
+    names
 }
 
 #[derive(Default)]
@@ -117,4 +124,18 @@ pub(super) fn publish_choices(
         MATERIALS_AND_ROLES.publish(ctx, roles.into_iter().chain(materials.iter().cloned()).collect());
     }
     MATERIALS.publish(ctx, materials);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn material_names_hold_the_shipped_ones_and_the_fileless_ones() {
+        let names = material_names();
+        assert!(names.contains("plaster"));
+        assert!(names.contains(SKYBOX));
+        assert!(names.contains(PIT));
+        assert!(!names.contains("team_plaster"));
+    }
 }
