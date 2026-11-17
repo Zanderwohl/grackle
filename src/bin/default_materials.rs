@@ -47,9 +47,12 @@ fn main() {
         ("dirt_path", dirt_path()),
         ("desert_sand", desert_sand(false)),
         ("desert_stripes", desert_sand(true)),
-        ("redwall_sandstone", redwall_sandstone()),
-        ("bright_angel_sandstone", bright_angel_sandstone()),
-        ("muav_limestone", muav_limestone()),
+        ("redwall_sandstone", redwall_sandstone(Face::Wall)),
+        ("redwall_sandstone_floor", redwall_sandstone(Face::Floor)),
+        ("bright_angel_sandstone", bright_angel_sandstone(Face::Wall)),
+        ("bright_angel_sandstone_floor", bright_angel_sandstone(Face::Floor)),
+        ("muav_limestone", muav_limestone(Face::Wall)),
+        ("muav_limestone_floor", muav_limestone(Face::Floor)),
         ("tiles_white", tiles(Coat::GLAZE_WHITE)),
         ("tiles_orange", tiles(Coat::ORANGE)),
         ("tiles_red", tiles(Coat::RED)),
@@ -2085,16 +2088,47 @@ fn down_streaks(g: &mut Graph, name: &str, seed: u32, frequency: u32, scale: f32
     stretched(g, name, source, [scale, 1.0])
 }
 
+/// Which face of a bedded rock a material shows.
+#[derive(Clone, Copy, PartialEq)]
+enum Face {
+    /// Across the beds: they run level along `u`, and water has run down it.
+    Wall,
+    /// Along the beds, as the top of an outcrop: the floor cuts across a few beds at a shallow
+    /// angle, so they show as irregular terraces, with the wall's colors so the two meet.
+    Floor,
+}
+
+/// What a floor's beds are read along: a broad noise over `span` of the profile from `from`, so a
+/// floor shows that stretch of the beds a wall does. Picked per rock for a stretch with several
+/// beds in it, since a stretch inside one bed is a flat floor.
+fn cut_across(g: &mut Graph, seed: u32, from: f32, span: f32) -> LayerId {
+    let surface = g.add_unique("surface", tiling_fbm(seed, 2, 4)).unwrap();
+    scaled(g, "cut", surface, from, from + span)
+}
+
+/// Where water has stained the face: streaks down a wall, patches on a floor.
+fn runoff(g: &mut Graph, face: Face, seed: u32, frequency: u32, scale: f32) -> LayerId {
+    match face {
+        Face::Wall => down_streaks(g, "wash", seed, frequency, scale),
+        Face::Floor => g.add_unique("wash", tiling_fbm(seed, frequency, 3)).unwrap(),
+    }
+}
+
 /// Red cliff sandstone, as in the Grand Canyon's Redwall: beds from a few centimeters to a
 /// quarter meter, each its own shade of brick red, terracotta, rust or pale pink-buff, ruled
 /// through by fine laminae, the softer beds weathered back behind the harder, and stained by red
 /// wash that has run down the face. On a wall `v` runs down, so the beds run level.
-fn redwall_sandstone() -> Graph {
+fn redwall_sandstone(face: Face) -> Graph {
     let mut g = empty();
     let zero = solid(&mut g, "zero", gray(0.0));
-    let v = coordinate(&mut g, Axis::V);
-    let broad = bent_v(&mut g, "broad bend", v, 200, 1, 0.04);
-    let bent = bent_v(&mut g, "bent", broad, 207, 3, 0.012);
+    let bent = match face {
+        Face::Wall => {
+            let v = coordinate(&mut g, Axis::V);
+            let broad = bent_v(&mut g, "broad bend", v, 200, 1, 0.04);
+            bent_v(&mut g, "bent", broad, 207, 3, 0.012)
+        }
+        Face::Floor => cut_across(&mut g, 250, 0.0, 0.3),
+    };
     let beds = profile(&mut g, "beds", bent, 201, 6, 4);
     let fine = profile(&mut g, "fine", bent, 202, 24, 3);
 
@@ -2118,7 +2152,7 @@ fn redwall_sandstone() -> Graph {
     let pale = solid(&mut g, "pale", oklcha(0.70, 0.055, 58.0, 1.0));
     let lined = blend(&mut g, "lined", laminated, pale, pale_share);
 
-    let wash = down_streaks(&mut g, "wash", 203, 2, 6.0);
+    let wash = runoff(&mut g, face, 203, 2, 6.0);
     let washed = remap(&mut g, "washed", wash, 0.50, 0.75);
     let wash_share = scaled(&mut g, "wash share", washed, 0.0, 0.40);
     let stain = solid(&mut g, "stain", oklcha(0.40, 0.090, 32.0, 1.0));
@@ -2165,12 +2199,17 @@ fn redwall_sandstone() -> Graph {
 /// Gray-green sandstone and shale, as in the Grand Canyon's Bright Angel: thin, even beds of
 /// greenish and plain gray with the odd rust-stained one, split along close partings, and a fine
 /// silty grain. Gray first and green second: the chroma stays under 0.03.
-fn bright_angel_sandstone() -> Graph {
+fn bright_angel_sandstone(face: Face) -> Graph {
     let mut g = empty();
     let zero = solid(&mut g, "zero", gray(0.0));
-    let v = coordinate(&mut g, Axis::V);
-    let broad = bent_v(&mut g, "broad bend", v, 210, 1, 0.03);
-    let bent = bent_v(&mut g, "bent", broad, 216, 3, 0.008);
+    let bent = match face {
+        Face::Wall => {
+            let v = coordinate(&mut g, Axis::V);
+            let broad = bent_v(&mut g, "broad bend", v, 210, 1, 0.03);
+            bent_v(&mut g, "bent", broad, 216, 3, 0.008)
+        }
+        Face::Floor => cut_across(&mut g, 251, 0.45, 0.3),
+    };
     let beds = profile(&mut g, "beds", bent, 211, 8, 3);
     let fine = profile(&mut g, "fine", bent, 212, 16, 3);
 
@@ -2199,7 +2238,7 @@ fn bright_angel_sandstone() -> Graph {
     let patches = mapped(&mut g, "patches", mottle, &[(0.25, dim), (0.75, bright)]);
     let patch_share = solid(&mut g, "patch share", gray(0.30));
     let patched = blend(&mut g, "patched", silted, patches, patch_share);
-    let wash = down_streaks(&mut g, "wash", 214, 4, 8.0);
+    let wash = runoff(&mut g, face, 214, 4, 8.0);
     let washed = remap(&mut g, "washed", wash, 0.55, 0.78);
     let wash_share = scaled(&mut g, "wash share", washed, 0.0, 0.25);
     let stain = solid(&mut g, "stain", oklcha(0.50, 0.030, 70.0, 1.0));
@@ -2236,12 +2275,17 @@ fn bright_angel_sandstone() -> Graph {
 /// Mottled limestone, as in the Grand Canyon's Muav: thin and medium beds of dark and light gray,
 /// a few buff, with dark partings between them; each bed blotched with the other gray where
 /// burrows churned the mud, and pitted where rain has dissolved it.
-fn muav_limestone() -> Graph {
+fn muav_limestone(face: Face) -> Graph {
     let mut g = empty();
     let zero = solid(&mut g, "zero", gray(0.0));
-    let v = coordinate(&mut g, Axis::V);
-    let broad = bent_v(&mut g, "broad bend", v, 220, 1, 0.03);
-    let bent = bent_v(&mut g, "bent", broad, 226, 4, 0.015);
+    let bent = match face {
+        Face::Wall => {
+            let v = coordinate(&mut g, Axis::V);
+            let broad = bent_v(&mut g, "broad bend", v, 220, 1, 0.03);
+            bent_v(&mut g, "bent", broad, 226, 4, 0.015)
+        }
+        Face::Floor => cut_across(&mut g, 252, 0.55, 0.3),
+    };
     let beds = profile(&mut g, "beds", bent, 221, 5, 4);
 
     let edges = [0.36, 0.42, 0.47, 0.53, 0.58, 0.64];
@@ -2264,7 +2308,7 @@ fn muav_limestone() -> Graph {
     let parting = solid(&mut g, "parting", oklcha(0.30, 0.008, 250.0, 1.0));
     let parted = blend(&mut g, "parted", mottled, parting, parting_share);
 
-    let wash = down_streaks(&mut g, "wash", 223, 2, 6.0);
+    let wash = runoff(&mut g, face, 223, 2, 6.0);
     let washed = remap(&mut g, "washed", wash, 0.55, 0.80);
     let wash_share = scaled(&mut g, "wash share", washed, 0.0, 0.15);
     let streak = solid(&mut g, "streak", oklcha(0.76, 0.006, 90.0, 1.0));
