@@ -202,8 +202,8 @@ fn touches(a: &Volume, b: &Volume) -> bool {
 }
 
 impl BakePlugin {
-    pub fn ui(ui: &mut egui::Ui, auto: bool, auto_sun: bool, nav: &mut NavCommands, progress: &BakeProgress) -> BakeCommands {
-        let mut commands = BakeCommands { auto, auto_sun, ..default() };
+    pub fn ui(ui: &mut egui::Ui, auto: bool, auto_sun: bool, halfbright: bool, nav: &mut NavCommands, progress: &BakeProgress) -> BakeCommands {
+        let mut commands = BakeCommands { auto, auto_sun, halfbright, ..default() };
         ui.vertical(|ui| {
             ui.checkbox(&mut commands.auto, get!("bakes.auto_rooms"));
             ui.horizontal(|ui| {
@@ -215,9 +215,10 @@ impl BakePlugin {
                     commands.clear_room_geometry = true;
                 }
             });
-            ui.checkbox(&mut commands.auto_sun, get!("bakes.auto_sunlight"));
+            ui.checkbox(&mut commands.halfbright, get!("bakes.halfbright"));
+            ui.add_enabled(!halfbright, egui::Checkbox::new(&mut commands.auto_sun, get!("bakes.auto_sunlight")));
             ui.horizontal(|ui| {
-                if ui.add_enabled(!auto_sun, egui::Button::new(get!("bakes.sunlight"))).clicked() {
+                if ui.add_enabled(!auto_sun && !halfbright, egui::Button::new(get!("bakes.sunlight"))).clicked() {
                     commands.bake_sunlight = true;
                 }
                 if ui.small_button("x").clicked() {
@@ -828,6 +829,7 @@ mod tests {
 pub struct BakeCommands {
     pub auto: bool,
     pub auto_sun: bool,
+    pub halfbright: bool,
     pub bake_sunlight: bool,
     pub clear_sunlight: bool,
     pub calculate_room_geometry: bool,

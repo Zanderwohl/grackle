@@ -48,6 +48,8 @@ pub enum BakeState {
     /// Will bake once the map has been still long enough and what it reads has settled.
     Waiting,
     Baking,
+    /// Turned off, so nothing waits for it: sunlight in halfbright.
+    Skipped,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]

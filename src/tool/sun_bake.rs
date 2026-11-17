@@ -14,6 +14,10 @@
 //! Every bake is also written to `cache/lightmap/{hash}.bin` ([`bake_cache`]), keyed by the
 //! snapshot, and a map whose snapshot is there takes its light from it instead of baking. After
 //! changing how light is baked, bump [`FORMAT`] or delete `cache/lightmap/`.
+//!
+//! **Halfbright** skips the bake for testing: no surface takes a lightmap, the global ambient is
+//! half the sun ([`SunBake::ambient`]), and nothing that moves is sunlit. The light already baked is
+//! kept, so turning it off puts that back at once.
 
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -38,7 +42,7 @@ use crate::common::team::Side;
 use crate::common::world_surface::Face;
 use crate::get;
 use crate::tool::bake_cache;
-use crate::tool::bake_job::{self, BackgroundBake, BakeJob, BakeKind, BakeProgress, VolumeLabels};
+use crate::tool::bake_job::{self, BackgroundBake, BakeJob, BakeKind, BakeProgress, BakeState, BakeStatus, VolumeLabels};
 use crate::tool::bakes::{BakePlugin, BakeSystems, BakedRoomGeometry, RoomBake, RoomSlotMesh};
 use crate::tool::room::{Block, Room, RoomSlot, RoomSurfaces};
 
@@ -63,17 +67,24 @@ pub struct SunBake {
     generation: u64,
     /// When something it reads other than the rooms' meshes last changed, in real seconds.
     painted_at: f32,
+    halfbright: bool,
+    /// Set on leaving halfbright and kept until the map is looked at again.
+    recheck: bool,
+    no_air: AirLight,
 }
 
 impl Default for SunBake {
     fn default() -> Self {
-        Self { lit: HashMap::new(), air: AirLight::default(), bake: BackgroundBake::new(true), looked_up: None, use_disk: true, snapshot: None, generation: 0, painted_at: 0.0 }
+        Self { lit: HashMap::new(), air: AirLight::default(), bake: BackgroundBake::new(true), looked_up: None, use_disk: true, snapshot: None, generation: 0, painted_at: 0.0, halfbright: false, recheck: false, no_air: AirLight::default() }
     }
 }
 
 impl SunBake {
     /// The light standing for `room`, if it is for the layout `faces_hash` charts.
     pub fn light_for(&self, room: Entity, faces_hash: u64) -> Option<&Handle<Image>> {
+        if self.halfbright {
+            return None;
+        }
         self.lit.get(&room).filter(|light| light.faces_hash == faces_hash).map(|light| &light.image)
     }
 
@@ -89,8 +100,33 @@ impl SunBake {
         self.bake.is_baking()
     }
 
+    pub fn halfbright(&self) -> bool {
+        self.halfbright
+    }
+
+    /// Bumps the generation, so every slot drops or takes back its lightmap.
+    pub fn set_halfbright(&mut self, halfbright: bool) {
+        if self.halfbright != halfbright {
+            self.halfbright = halfbright;
+            self.recheck = !halfbright;
+            self.generation += 1;
+        }
+    }
+
+    /// In halfbright, half the sun but never below the map's ambient. A texel and the global
+    /// ambient are in the same units.
+    pub fn ambient(&self, brightness: &Brightness) -> f32 {
+        if self.halfbright { (brightness.sun * 0.5).max(brightness.ambient) } else { brightness.ambient }
+    }
+
+    /// Empty in halfbright, so everything that moves takes the global ambient as it is.
     pub fn air(&self) -> &AirLight {
-        &self.air
+        if self.halfbright { &self.no_air } else { &self.air }
+    }
+
+    fn status(&self) -> BakeStatus {
+        let status = self.bake.status();
+        if self.halfbright { BakeStatus { state: BakeState::Skipped, doing: String::new(), ..status } } else { status }
     }
 
     /// Lands every room of a bake, as one replacement for the whole map's light. A room whose
@@ -491,6 +527,10 @@ fn carry_light_over(
     mut gone_blocks: RemovedComponents<Block>,
     mut seen: Local<Option<u64>>,
 ) {
+    // Leaving halfbright bumps the generation, and that pass carries every room over.
+    if state.halfbright {
+        return;
+    }
     let gone = gone_rooms.read().count() + gone_blocks.read().count() > 0;
     if !gone && rebaked.is_empty() && *seen == Some(state.generation) {
         return;
@@ -551,7 +591,7 @@ fn auto_bake_sunlight(
     if repainted {
         state.painted_at = time.elapsed_secs();
     }
-    let inputs_changed = rooms_rebuilt || repainted;
+    let inputs_changed = rooms_rebuilt || repainted || state.recheck;
     if clears.read().count() > 0 {
         state.generation += 1;
         state.lit.clear();
@@ -559,20 +599,21 @@ fn auto_bake_sunlight(
         state.bake.forget();
         info!("Cleared the sunlight");
     }
-    if requests.read().count() > 0 {
+    if requests.read().count() > 0 && !state.halfbright {
         state.bake.ask();
     }
+    // A bake already running when halfbright went on is let land, to be shown once it goes off.
     if let Some(baked) = state.bake.poll() {
         state.landed(baked, &mut images);
     }
     // Half-rebuilt rooms leave holes for light to come through, so the bake waits for them. The sun
-    // on things that move is drawn live and does not wait.
-    if inputs_changed {
+    // on things that move is drawn live and does not wait. In halfbright nothing reads either.
+    if inputs_changed && !state.halfbright {
         let snapshot = Snapshot::take(&bakes, &paint, &palette, &sun, *sky, *brightness);
         open_sky.refresh(&snapshot, &bakes);
         state.snapshot = Some(snapshot);
     }
-    if !rooms.is_settled() {
+    if !rooms.is_settled() || state.halfbright {
         return;
     }
     // With nothing to bake, a snapshot only says whether the light is stale.
@@ -591,6 +632,7 @@ fn auto_bake_sunlight(
     // The rooms waited for the map to settle before rebuilding, so their part of the wait is
     // counted from the edit, not from the rebuild.
     let changed_at = rooms.last_edit().max(state.painted_at);
+    state.recheck = false;
     state.bake.update_since(snapshot.hash, rooms.is_settled(), time.elapsed_secs(), Some(changed_at), || snapshot.job(&bakes, &labels));
     state.snapshot = Some(snapshot);
 }
@@ -610,6 +652,9 @@ fn bake_sunlight_for_the_round(
     mut images: ResMut<Assets<Image>>,
     mut open_sky: ResMut<OpenSky>,
 ) {
+    if state.halfbright {
+        return;
+    }
     let snapshot = Snapshot::take(&bakes, &paint, &palette, &sun, *sky, *brightness);
     open_sky.refresh(&snapshot, &bakes);
     state.take_from_cache(&snapshot, &bakes, &mut images);
@@ -619,7 +664,7 @@ fn bake_sunlight_for_the_round(
 }
 
 fn report_sunlight(state: Res<SunBake>, mut progress: ResMut<BakeProgress>) {
-    bake_job::report(&mut progress, BakeKind::Sunlight, state.bake.status());
+    bake_job::report(&mut progress, BakeKind::Sunlight, state.status());
 }
 
 /// Every frame, as `paint_rooms` is: a slot takes its room's lightmap while it is drawn with a
@@ -891,6 +936,67 @@ mod tests {
         assert_eq!(status.state, BakeState::UpToDate, "the light was not taken from the cache");
         assert!(!second.world().resource::<SunBake>().is_baking());
         assert_eq!(light(&second), light(&first));
+    }
+
+    /// A round in halfbright bakes nothing and lights no slot, and leaving it puts back what was
+    /// baked before, without baking again.
+    #[test]
+    fn halfbright_skips_the_bake_and_keeps_the_light_for_later() {
+        let mut app = headless();
+        app.world_mut().resource_mut::<SunBake>().set_halfbright(true);
+        enter(&mut app, AppMode::Play);
+        app.update();
+        assert!(lightmaps(&app).is_empty(), "a round in halfbright was baked");
+        assert_eq!(lit_slots(&mut app), 0);
+        let status = app.world().resource::<BakeProgress>().get(BakeKind::Sunlight).cloned().unwrap();
+        assert_eq!(status.state, BakeState::Skipped);
+
+        enter(&mut app, AppMode::Editor);
+        app.world_mut().resource_mut::<SunBake>().set_halfbright(false);
+        enter(&mut app, AppMode::Play);
+        app.update();
+        let first = lightmaps(&app);
+        assert_eq!(first.len(), 1, "the round out of halfbright started unlit");
+
+        enter(&mut app, AppMode::Editor);
+        app.world_mut().resource_mut::<SunBake>().set_halfbright(true);
+        app.update();
+        app.update();
+        assert_eq!(lit_slots(&mut app), 0, "a slot kept its lightmap in halfbright");
+        app.world_mut().resource_mut::<SunBake>().set_halfbright(false);
+        app.update();
+        app.update();
+        assert!(lit_slots(&mut app) > 0, "the baked light did not come back");
+        assert_eq!(lightmaps(&app), first, "leaving halfbright baked again");
+    }
+
+    #[test]
+    fn halfbright_ambient_is_half_the_sun_and_never_darker_than_the_map() {
+        let mut state = SunBake::default();
+        let brightness = Brightness::default();
+        assert_eq!(state.ambient(&brightness), brightness.ambient);
+        state.set_halfbright(true);
+        assert_eq!(state.ambient(&brightness), brightness.sun * 0.5);
+        let night = Brightness { sun: 0.0, ..brightness };
+        assert_eq!(state.ambient(&night), night.ambient, "a map with no sun went dark");
+    }
+
+    /// With auto-bake off, an edit made in halfbright leaves the light stale once it is off.
+    #[test]
+    fn leaving_halfbright_finds_the_light_stale() {
+        let mut app = headless();
+        enter(&mut app, AppMode::Play);
+        enter(&mut app, AppMode::Editor);
+        app.world_mut().resource_mut::<SunBake>().set_halfbright(true);
+        app.update();
+        app.world_mut().resource_mut::<SunPosition>().altitude = 20.0;
+        app.update();
+        app.world_mut().resource_mut::<SunBake>().set_halfbright(false);
+        for _ in 0..2 {
+            app.update();
+        }
+        let status = app.world().resource::<BakeProgress>().get(BakeKind::Sunlight).cloned().unwrap();
+        assert_eq!(status.state, BakeState::Stale, "the light baked before halfbright reads as up to date");
     }
 
     #[test]

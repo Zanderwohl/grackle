@@ -218,7 +218,7 @@ impl<'a> TabViewer for TabViewerAndResources<'a> {
                 Tools::ui(ui, self.current_tool, self.next_tool);
             }
             TabKinds::Bakes => {
-                *self.bake_commands = BakePlugin::ui(ui, self.bake_commands.auto, self.bake_commands.auto_sun, self.nav_commands, self.bake_progress);
+                *self.bake_commands = BakePlugin::ui(ui, self.bake_commands.auto, self.bake_commands.auto_sun, self.bake_commands.halfbright, self.nav_commands, self.bake_progress);
             }
             TabKinds::Show => {
                 ShowPlugin::ui(ui, self.multicam_state, self.gizmo_visibility);
@@ -354,7 +354,7 @@ impl EditorPanels {
 
         map_metadata.sync_authors_ui_buffer_from_authors();
         
-        let mut bake_commands = BakeCommands { auto: messages.room_bake.auto(), auto_sun: messages.sun_bake.auto(), ..default() };
+        let mut bake_commands = BakeCommands { auto: messages.room_bake.auto(), auto_sun: messages.sun_bake.auto(), halfbright: messages.sun_bake.halfbright(), ..default() };
         let mut nav_commands = messages.nav.commands();
         let mut pending_edits = PendingEditEvents::default();
         let mut retarget_request: Option<(FeatureId, String)> = None;
@@ -630,6 +630,9 @@ impl EditorPanels {
         }
         if bake_commands.auto_sun != messages.sun_bake.auto() {
             messages.sun_bake.set_auto(bake_commands.auto_sun);
+        }
+        if bake_commands.halfbright != messages.sun_bake.halfbright() {
+            messages.sun_bake.set_halfbright(bake_commands.halfbright);
         }
         if bake_commands.bake_sunlight {
             messages.sunlight.write(BakeSunlight);

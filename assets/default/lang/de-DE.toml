@@ -51,6 +51,7 @@ room_geometry = "Raumgeometrie"
 auto_rooms = "Räume automatisch backen"
 sunlight = "Sonnenlicht"
 auto_sunlight = "Sonnenlicht automatisch backen"
+halfbright = "Halbhell (Sonnenlicht überspringen)"
 
 [show]
 title = "Ein-/Ausblenden"

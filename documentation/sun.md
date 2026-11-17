@@ -266,3 +266,4 @@ same-sized image into its existing texture — so no slot goes a frame unlit.
 - [x] Ambient in the air on a 2 m world lattice, baked last, sampled per body into a `MeshTag` that scales a body's ambient
 - [x] Sun and ambient on props, projectiles and held weapons: one `LitMaterial` for everything that moves
 - [x] Tests: a closed room is unlit; a sky ceiling lights the floor under it and not the room next door, except by bounce; coplanar floors across a threshold bake the same values on both sides
+- [x] Halfbright, for testing: a Bakes panel checkbox that skips the bake, drops every lightmap and sets the global ambient to half the sun, keeping the baked light for when it goes off

@@ -46,7 +46,7 @@ impl RoundPrep {
 }
 
 fn ready(progress: &BakeProgress, settings: Option<&RoundSettings>) -> bool {
-    waited_for(settings).all(|kind| progress.get(kind).is_none_or(|status| status.state == BakeState::UpToDate))
+    waited_for(settings).all(|kind| progress.get(kind).is_none_or(|status| matches!(status.state, BakeState::UpToDate | BakeState::Skipped)))
 }
 
 fn asked_to_play(next: &NextState<AppMode>) -> bool {
@@ -121,13 +121,14 @@ fn show_the_wait(
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(match status.state {
                         BakeState::UpToDate => get!("round_prep.done"),
+                        BakeState::Skipped => get!("round_prep.skipped"),
                         BakeState::Baking => format!("{:.0}%", status.fraction() * 100.0),
                         BakeState::Waiting | BakeState::Stale => get!("round_prep.waiting"),
                     });
                 });
             });
             let fraction = match status.state {
-                BakeState::UpToDate => 1.0,
+                BakeState::UpToDate | BakeState::Skipped => 1.0,
                 BakeState::Baking => status.fraction(),
                 BakeState::Waiting | BakeState::Stale => 0.0,
             };
@@ -212,6 +213,16 @@ mod tests {
         app.update();
         assert_eq!(mode(&app), AppMode::Play, "the bakes landed and the round never started");
         assert!(!app.world().resource::<RoundPrep>().is_waiting());
+    }
+
+    /// Breaks if halfbright holds a round for a sunlight bake that will never run.
+    #[test]
+    fn a_skipped_bake_does_not_hold_the_round() {
+        let mut app = app();
+        set(&mut app, BakeKind::Sunlight, BakeState::Skipped);
+        app.world_mut().resource_mut::<NextState<AppMode>>().set(AppMode::Play);
+        app.update();
+        assert_eq!(mode(&app), AppMode::Play, "a round was held for a skipped bake");
     }
 
     /// Breaks if a round without bots waits for, or asks for, a nav graph nothing will read.
