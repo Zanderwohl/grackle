@@ -16,9 +16,10 @@ use serde::{Deserialize, Serialize};
 use crate::get;
 use crate::prop::profile::Placement;
 use crate::prop::solid::Polygon;
-use crate::prop::line::LineRef;
-use crate::prop::plane::{Datum, OriginPlane, PlaneRef, MIN_ORIGIN_HALF};
+use crate::prop::datum::{AxisDef, DatumAxis, DatumPoint, PointDef};
+use crate::prop::plane::{Datum, OriginPlane, PlaneDef, PlaneRef, MIN_ORIGIN_HALF};
 use crate::prop::plane::Plane;
+use crate::prop::refs::{CurveRef, DirectionRef, Resolve, Scope};
 use crate::prop::profile::revolve_steps;
 use crate::prop::region::{arrange, axis_clear, Region};
 use crate::prop::sketch::SketchId;
@@ -118,7 +119,7 @@ pub enum FeatureOp {
         /// Half each way of the sketch's plane.
         #[serde(default)]
         symmetric: bool,
-        axis: LineRef,
+        axis: CurveRef,
         surface: Surface,
     },
     Boolean { op: BooleanOp, target: PropFeatureId, tool: PropFeatureId },
@@ -142,9 +143,13 @@ pub enum FeatureOp {
         count: u32,
         along: PatternKind,
     },
-    /// Not geometry: something to sketch on and measure from. Through what
-    /// [`crate::prop::plane`] accepts, as it stood when this runs.
-    Plane { through: Vec<GeomRef> },
+    /// Not geometry: something to sketch on and measure from, made from what
+    /// stood when this runs.
+    Plane { def: PlaneDef },
+    /// Not geometry: something to turn about or run along.
+    Axis { def: AxisDef },
+    /// Not geometry: something to pass through.
+    Point { def: PointDef },
     /// A drawing on a plane, which makes no body; see [`crate::prop::sketch`].
     Sketch { on: PlaneRef, sketch: Sketch },
 }
@@ -177,37 +182,40 @@ pub enum PatternKind {
     Linear {
         #[serde(with = "crate::prop::nice_f32::scalar")]
         spacing: f32,
-        direction: LineRef,
+        direction: DirectionRef,
     },
     /// About `axis`. A whole turn spaces copies evenly; less puts the first
     /// and last at the ends of `degrees`.
     Radial {
         #[serde(with = "crate::prop::nice_f32::scalar")]
         degrees: f32,
-        axis: LineRef,
+        axis: CurveRef,
     },
 }
 
 impl PatternKind {
-    pub fn line(&self) -> &LineRef {
+    pub fn features(&self) -> Vec<PropFeatureId> {
         match self {
-            PatternKind::Linear { direction, .. } => direction,
-            PatternKind::Radial { axis, .. } => axis,
+            PatternKind::Linear { direction, .. } => direction.features(),
+            PatternKind::Radial { axis, .. } => axis.features(),
         }
     }
 
-    pub fn line_mut(&mut self) -> &mut LineRef {
+    /// A point on the line copies are made along or about, and its direction.
+    pub fn resolve(&self, scope: &Scope) -> Option<(Vec3, Dir3)> {
         match self {
-            PatternKind::Linear { direction, .. } => direction,
-            PatternKind::Radial { axis, .. } => axis,
+            PatternKind::Linear { direction, .. } => Some((Vec3::ZERO, direction.resolve(scope)?)),
+            PatternKind::Radial { axis, .. } => {
+                let (a, b) = axis.resolve(scope)?.line()?;
+                Some((a, Dir3::new(b - a).ok()?))
+            }
         }
     }
 
-    /// Copy `index` of `count`, with [`Self::line`] resolved to `(a, b)`.
-    pub fn copy(&self, (a, b): (Vec3, Vec3), index: u32, count: u32) -> Transform {
-        let along = (b - a).normalize_or_zero();
+    /// Copy `index` of `count`, along or about [`Self::resolve`]'s line.
+    pub fn copy(&self, (a, along): (Vec3, Dir3), index: u32, count: u32) -> Transform {
         match *self {
-            PatternKind::Linear { spacing, .. } => Transform::from_translation(along * spacing * index as f32),
+            PatternKind::Linear { spacing, .. } => Transform::from_translation(*along * spacing * index as f32),
             PatternKind::Radial { degrees, .. } => {
                 // A whole turn would put the last copy on top of the first.
                 let gaps = match is_full_turn(degrees) {
@@ -215,7 +223,7 @@ impl PatternKind {
                     false => count.saturating_sub(1).max(1),
                 };
                 let angle = (degrees / gaps as f32).to_radians() * index as f32;
-                let turn = Quat::from_axis_angle(along, angle);
+                let turn = Quat::from_axis_angle(*along, angle);
                 Transform::from_translation(a - turn * a).with_rotation(turn)
             }
         }
@@ -243,6 +251,8 @@ impl FeatureOp {
             FeatureOp::Paint { .. } => get!("prop.features.paint"),
             FeatureOp::Pattern { .. } => get!("prop.features.pattern"),
             FeatureOp::Plane { .. } => get!("prop.features.plane"),
+            FeatureOp::Axis { .. } => get!("prop.features.axis"),
+            FeatureOp::Point { .. } => get!("prop.features.point"),
             FeatureOp::Sketch { .. } => get!("prop.features.sketch"),
         }
     }
@@ -255,6 +265,8 @@ impl FeatureOp {
             | FeatureOp::Extrude { .. }
             | FeatureOp::Revolve { .. }
             | FeatureOp::Plane { .. }
+            | FeatureOp::Axis { .. }
+            | FeatureOp::Point { .. }
             | FeatureOp::Sketch { .. } => vec![],
             FeatureOp::Boolean { target, tool, .. } => vec![*target, *tool],
             FeatureOp::Mirror { target, .. }
@@ -268,12 +280,14 @@ impl FeatureOp {
     /// geometry went through.
     pub fn references(&self) -> Vec<PropFeatureId> {
         let mut named: Vec<PropFeatureId> = match self {
-            FeatureOp::Plane { through } => through.iter().flat_map(|r| r.source.features()).collect(),
+            FeatureOp::Plane { def } => def.features(),
+            FeatureOp::Axis { def } => def.features(),
+            FeatureOp::Point { def } => def.features(),
             FeatureOp::Sketch { on, .. } => on.feature().into_iter().collect(),
             FeatureOp::Extrude { sketch, .. } => vec![*sketch],
             FeatureOp::Revolve { sketch, axis, .. } => std::iter::once(*sketch).chain(axis.features()).collect(),
             FeatureOp::Mirror { about, .. } => about.feature().into_iter().collect(),
-            FeatureOp::Pattern { along, .. } => along.line().features(),
+            FeatureOp::Pattern { along, .. } => along.features(),
             _ => vec![],
         };
         named.sort();
@@ -299,6 +313,8 @@ impl FeatureOp {
             | FeatureOp::Paint { .. }
             | FeatureOp::Pattern { .. }
             | FeatureOp::Plane { .. }
+            | FeatureOp::Axis { .. }
+            | FeatureOp::Point { .. }
             | FeatureOp::Sketch { .. } => None,
         }
     }
@@ -364,6 +380,9 @@ pub struct Evaluated {
     pub planes: Vec<Datum>,
     /// Sketches, in list order, placed where their planes were.
     pub sketches: Vec<PlacedSketch>,
+    /// Datum axes and points, in list order.
+    pub axes: Vec<DatumAxis>,
+    pub points: Vec<DatumPoint>,
     /// Meters each way of the origin the origin planes and axes are drawn.
     pub origin_half: f32,
 }
@@ -465,27 +484,29 @@ impl Evaluated {
         self.planes.iter().find(|datum| datum.id == id)
     }
 
-    /// Where a reference is now, whether or not it can be seen.
-    pub fn locate(&self, reference: &GeomRef) -> Option<Located> {
-        self.wires
-            .iter()
-            .flat_map(|(_, wires)| wires)
-            .find(|wire| wire.source == reference.source)
-            .and_then(|wire| wire.outline.locate(reference.element))
+    /// The finished prop, for resolving references against.
+    pub fn scope(&self) -> Scope<'_> {
+        Scope::new(
+            self.wires.iter().flat_map(|(_, wires)| wires),
+            &self.planes,
+            &self.sketches,
+            &self.axes,
+            &self.points,
+            self.origin_half,
+        )
     }
 
-    /// A line as it is now, end to end as it is drawn: an origin axis runs
+    /// Where a reference is now, whether or not it can be seen.
+    pub fn locate(&self, reference: &GeomRef) -> Option<Located> {
+        self.scope().locate(reference)
+    }
+
+    /// A curve as it is now, end to end as it is drawn: an origin axis runs
     /// across the origin planes.
-    pub fn locate_line(&self, line: &LineRef) -> Option<(Vec3, Vec3)> {
-        match line {
-            LineRef::Origin { axis } => Some((-axis.normal() * self.origin_half, axis.normal() * self.origin_half)),
-            _ => line.resolve(
-                |edge| match self.locate(edge)? {
-                    Located::Edge(a, b) => Some((a, b)),
-                    Located::Point(_) | Located::Face { .. } => None,
-                },
-                &self.sketches,
-            ),
+    pub fn drawn_curve(&self, curve: &CurveRef) -> Option<(Vec3, Vec3)> {
+        match curve {
+            CurveRef::Axis { axis } => Some((-axis.normal() * self.origin_half, axis.normal() * self.origin_half)),
+            _ => curve.resolve(&self.scope())?.line(),
         }
     }
 
@@ -568,27 +589,15 @@ struct Live {
     wires: Vec<Wire>,
 }
 
-/// Where a reference is among the bodies live at this point in the list.
-fn locate_in(live: &[Live], reference: &GeomRef) -> Option<Located> {
-    live.iter()
-        .flat_map(|body| &body.wires)
-        .find(|wire| wire.source == reference.source)
-        .and_then(|wire| wire.outline.locate(reference.element))
-}
-
-fn edge_of(live: &[Live], reference: &GeomRef) -> Option<(Vec3, Vec3)> {
-    match locate_in(live, reference)? {
-        Located::Edge(a, b) => Some((a, b)),
-        Located::Point(_) | Located::Face { .. } => None,
-    }
-}
-
-/// An origin plane, or a plane feature that has already run.
-fn plane_of(on: PlaneRef, planes: &[Datum]) -> Option<Plane> {
-    match on {
-        PlaneRef::Origin(which) => Some(which.plane()),
-        PlaneRef::Feature(_) => planes.iter().find(|datum| datum.id == on).map(|datum| datum.plane),
-    }
+/// How far the origin planes reach: the furthest any body reaches from the
+/// origin, plus the same margin a plane feature's square has.
+fn origin_half_of(live: &[Live]) -> f32 {
+    let reach = live
+        .iter()
+        .filter_map(|body| body.solid.bounds())
+        .map(|(min, max)| min.abs().max(max.abs()).max_element())
+        .fold(0.0, f32::max);
+    (reach * 1.25).max(MIN_ORIGIN_HALF)
 }
 
 /// Meters a revolve's axis may sit off its sketch's plane: the kernel's
@@ -627,6 +636,8 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
     let mut problems = Vec::new();
     let mut planes = Vec::new();
     let mut sketches = Vec::new();
+    let mut axes = Vec::new();
+    let mut points = Vec::new();
     let mut live_before = Vec::with_capacity(features.len());
 
     for feature in features {
@@ -644,6 +655,16 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
             solid,
             wires: vec![Wire::new(feature.id, outline)],
         };
+        // Resolved against before anything this feature makes or takes.
+        let scope = Scope::new(
+            live.iter().flat_map(|body| &body.wires),
+            &planes,
+            &sketches,
+            &axes,
+            &points,
+            origin_half_of(&live),
+        );
+        let resolved_axis = |axis: &CurveRef| axis.resolve(&scope).and_then(|curve| curve.line());
 
         match &feature.op {
             FeatureOp::Primitive { shape, placement, surface } => {
@@ -683,7 +704,7 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
                     continue;
                 };
                 let Some(found) = resolve_regions(feature.id, placed, regions, &mut problems) else { continue };
-                let Some((a, b)) = axis.resolve(|edge| edge_of(&live, edge), &sketches) else {
+                let Some((a, b)) = resolved_axis(axis) else {
                     problems.push(Problem { feature: feature.id, message: get!("prop.problems.missing_axis") });
                     continue;
                 };
@@ -763,7 +784,7 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
                 live.push(Live { id: feature.id, solid: result, wires });
             }
             FeatureOp::Mirror { target, about, offset, keep_original } => {
-                let Some(plane) = plane_of(*about, &planes) else {
+                let Some(plane) = scope.plane(*about) else {
                     problems.push(Problem { feature: feature.id, message: get!("prop.problems.no_mirror_plane") });
                     continue;
                 };
@@ -792,15 +813,20 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
                 };
                 live.push(Live { id: feature.id, solid: body.solid.painted(*surface), wires: body.wires });
             }
-            FeatureOp::Plane { through } => {
-                let located: Option<Vec<Located>> = through.iter().map(|reference| locate_in(&live, reference)).collect();
-                match located.and_then(|located| Datum::through(feature.id, &located)) {
-                    Some(datum) => planes.push(datum),
-                    None => problems.push(Problem { feature: feature.id, message: get!("prop.problems.no_plane") }),
-                }
-            }
+            FeatureOp::Plane { def } => match def.resolve(feature.id, &scope) {
+                Some(datum) => planes.push(datum),
+                None => problems.push(Problem { feature: feature.id, message: get!("prop.problems.no_plane") }),
+            },
+            FeatureOp::Axis { def } => match def.resolve(feature.id, &scope) {
+                Some(axis) => axes.push(axis),
+                None => problems.push(Problem { feature: feature.id, message: get!("prop.problems.no_axis") }),
+            },
+            FeatureOp::Point { def } => match def.resolve(feature.id, &scope) {
+                Some(point) => points.push(point),
+                None => problems.push(Problem { feature: feature.id, message: get!("prop.problems.no_point") }),
+            },
             FeatureOp::Sketch { on, sketch } => {
-                match plane_of(*on, &planes) {
+                match scope.plane(*on) {
                     Some(plane) => sketches.push(PlacedSketch {
                         id: feature.id,
                         plane,
@@ -814,7 +840,7 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
                 }
             }
             FeatureOp::Pattern { target, count, along } => {
-                let Some(line) = along.line().resolve(|edge| edge_of(&live, edge), &sketches) else {
+                let Some(line) = along.resolve(&scope) else {
                     problems.push(Problem { feature: feature.id, message: get!("prop.problems.missing_line") });
                     continue;
                 };
@@ -843,17 +869,10 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
     }
 
     let pickables = live.iter().flat_map(|body| pickables(body.id, &body.solid, &body.wires)).collect();
-    // Framing whatever is standing: the furthest any body reaches from the
-    // origin, plus the same margin a plane feature's square has.
-    let reach = live
-        .iter()
-        .filter_map(|body| body.solid.bounds())
-        .map(|(min, max)| min.abs().max(max.abs()).max_element())
-        .fold(0.0, f32::max);
-    let origin_half = (reach * 1.25).max(MIN_ORIGIN_HALF);
+    let origin_half = origin_half_of(&live);
     planes.splice(0..0, OriginPlane::ALL.map(|which| Datum::origin(which, origin_half)));
     let (bodies, wires) = live.into_iter().map(|body| ((body.id, body.solid), (body.id, body.wires))).unzip();
-    Evaluated { bodies, wires, pickables, problems, live_before, planes, sketches, origin_half }
+    Evaluated { bodies, wires, pickables, problems, live_before, planes, sketches, axes, points, origin_half }
 }
 
 #[cfg(test)]
@@ -862,6 +881,48 @@ mod tests {
 
     /// Fails if copies land on top of each other, including the last of a
     /// whole radial turn.
+    /// Fails if a datum is resolved against the end of the list, or a
+    /// pattern cannot turn about one.
+    #[test]
+    fn datum_axes_and_points_stand_where_they_were_made() {
+        use crate::prop::refs::PointRef;
+        let cube = PropFeature::new(
+            PropFeatureId(0),
+            FeatureOp::Primitive {
+                shape: Shape::Box { size: [0.2; 3] },
+                placement: Placement::default(),
+                surface: Surface::default(),
+            },
+        );
+        let corner = |i| PointRef::Corner {
+            corner: GeomRef { element: crate::prop::reference::Element::Point(i), source: crate::prop::reference::Source { feature: PropFeatureId(0), copies: vec![] } },
+        };
+        let axis = PropFeature::new(PropFeatureId(1), FeatureOp::Axis { def: AxisDef::Through { a: corner(0), b: corner(4) } });
+        let middle = PropFeature::new(
+            PropFeatureId(2),
+            FeatureOp::Point { def: PointDef::Midpoint { curve: CurveRef::Datum { feature: PropFeatureId(1) } } },
+        );
+        let turned = PropFeature::new(
+            PropFeatureId(3),
+            FeatureOp::Pattern {
+                target: PropFeatureId(0),
+                count: 4,
+                along: PatternKind::Radial { degrees: 360.0, axis: CurveRef::Datum { feature: PropFeatureId(1) } },
+            },
+        );
+        let evaluated = evaluate(&[cube, axis.clone(), middle, turned]);
+        assert!(evaluated.problems.is_empty(), "{:?}", evaluated.problems);
+        assert_eq!(evaluated.axes.len(), 1);
+        let (a, b) = (evaluated.axes[0].a, evaluated.axes[0].b);
+        let point = evaluated.points[0].at;
+        assert!((point - (a + b) / 2.0).length() < 1e-6, "the middle of the drawn axis is the middle of its points");
+        assert_eq!(evaluated.bodies.len(), 1);
+
+        let before_its_cube = evaluate(&[axis]);
+        assert!(before_its_cube.axes.is_empty());
+        assert_eq!(before_its_cube.problems.len(), 1);
+    }
+
     #[test]
     fn a_pattern_makes_that_many_separate_copies() {
         let cube = primitive(0, Shape::Box { size: [0.1, 0.1, 0.1] }, Vec3::new(0.3, 0.0, 0.0));
@@ -876,10 +937,10 @@ mod tests {
             evaluated.bodies[0].1.volume()
         };
 
-        let z = LineRef::Origin { axis: Axis::Z };
+        let z = DirectionRef::Along { curve: CurveRef::Axis { axis: Axis::Z } };
         let row = pattern(3, PatternKind::Linear { spacing: 0.2, direction: z.clone() });
         assert!((row - 3.0 * one).abs() < 1e-6, "{row} vs {}", 3.0 * one);
-        let round = pattern(4, PatternKind::Radial { degrees: 360.0, axis: LineRef::Origin { axis: Axis::Y } });
+        let round = pattern(4, PatternKind::Radial { degrees: 360.0, axis: CurveRef::Axis { axis: Axis::Y } });
         assert!((round - 4.0 * one).abs() < 1e-6, "{round} vs {}", 4.0 * one);
         let alone = pattern(1, PatternKind::Linear { spacing: 0.2, direction: z });
         assert!((alone - one).abs() < 1e-9);
@@ -1307,7 +1368,7 @@ mod tests {
                     PropFeatureId(1),
                     FeatureOp::Revolve {
                         sketch: PropFeatureId(0),
-                        axis: LineRef::Sketch { sketch: PropFeatureId(0), line: axis },
+                        axis: CurveRef::Sketch { sketch: PropFeatureId(0), entity: axis },
                         degrees,
                         steps,
                         symmetric,
@@ -1401,7 +1462,7 @@ mod tests {
                             degrees: 360.0,
                             steps: 12,
                             symmetric: false,
-                            axis: LineRef::Origin { axis },
+                            axis: CurveRef::Axis { axis },
                             surface: Surface::default(),
                         },
                     ),
@@ -1435,7 +1496,7 @@ mod tests {
                     PropFeatureId(1),
                     FeatureOp::Revolve {
                         sketch: PropFeatureId(0),
-                        axis: LineRef::Sketch { sketch: PropFeatureId(0), line: axis },
+                        axis: CurveRef::Sketch { sketch: PropFeatureId(0), entity: axis },
                         degrees: 120.0,
                         steps: 4,
                         symmetric: false,
@@ -1462,7 +1523,7 @@ mod tests {
             let on = doc.push(FeatureOp::Sketch { on: PlaneRef::Origin(OriginPlane::Xz), sketch });
             doc.push(FeatureOp::Revolve {
                 sketch: on,
-                axis: LineRef::Sketch { sketch: on, line: axis },
+                axis: CurveRef::Sketch { sketch: on, entity: axis },
                 degrees: 270.0,
                 steps: 9,
                 symmetric: true,

@@ -1057,11 +1057,19 @@ wanted, a flat face is offered too, and finishing makes a plane feature through
 it in the same undo step (`PropEditor::add_pair`), so a sketch can go straight
 on a face.
 
-**Lines are picks** — an edge, a sketch's line (pickable from outside the
-sketch) or one of the three origin axes, which are drawn across the origin
-planes for that reason — and all three are one `LineRef`
-([`line.rs`](src/prop/line.rs)): what a revolve turns about and what a pattern
-runs along or turns about. A mirror is about a `PlaneRef`. Neither is a
+**A reference is typed by what it is, not where it came from**
+([`refs.rs`](src/prop/refs.rs)): a `PointRef` is a corner, a sketch point or a
+datum point; a `CurveRef` an edge, a sketch's line, an origin axis (drawn
+across the origin planes for that reason) or a datum axis; a `DirectionRef` a
+straight curve or a plane's or flat face's normal; `PathRef` curves joined end
+to end; `AnyRef` any of them. Each resolves through `Resolve` against one
+`Scope` — what stands at that point in the list — which `evaluate` builds per
+feature and `Evaluated::scope` for the finished prop. A `Pick` is what a click
+landed on, and says what it stands for through one conversion per kind
+(`as_point`, `as_curve`, `as_direction`, `as_plane_source`, `body`), so a new
+pickable thing is a variant and its arms in one file. A revolve turns about a
+`CurveRef`, a row runs along a `DirectionRef`, a circle turns about a
+`CurveRef`, and a mirror is about a `PlaneRef`. None is a
 dropdown: the inspector shows what it names with a **Pick** button, which is
 the same machinery as a tool with one slot (`Task::Repick`). A re-pick offers
 only what stands before the feature, since that is all it could resolve
@@ -1116,11 +1124,17 @@ trusting its winding, which nothing promises before
 is what fails if that is ever derived instead. A revolve's side is flat — its
 two sweep edges are parallel chords — so a sphere's facets are faces too.
 
-**A plane is a feature that makes no body** (`FeatureOp::Plane { through }`,
-[`plane.rs`](src/prop/plane.rs)). Accepted: three corners, an edge and a
-corner, two coplanar edges, or one flat face; the frame comes from pick order,
-or from a face's own outward normal, so something sketched on it extrudes
-out of the body. **Its references are resolved as the prop stood when it
+**A plane is a feature that makes no body** (`FeatureOp::Plane { def }`,
+[`plane.rs`](src/prop/plane.rs)): through three points, a line and a point,
+two coplanar lines or one flat face, from any source; offset from a plane;
+turned about a line along a plane; or halfway between two planes. Through
+points, the frame comes from pick order, or from a face's own outward normal,
+so something sketched on it extrudes out of the body. **Datum axes and points**
+(`FeatureOp::Axis`, `FeatureOp::Point`, [`datum.rs`](src/prop/datum.rs)) are
+the same kind of feature. What a selection makes with the Plane, Axis and
+Point tools is [`construct.rs`](src/prop/construct.rs)'s one table, and a face
+standing in for a plane there is given a plane feature in the same undo step
+(`PropEditor::add_chain`). **Its references are resolved as the prop stood when it
 runs**, against the bodies live at that point in the list, so a mirror below
 it that takes the original away does not move it. It is drawn as a gray dashed
 square and picked by its border, so one through a body does not stop clicks
@@ -1131,7 +1145,10 @@ be dragged above the cube it was made on.
 
 Sketches — a 2D drawing on a plane that Extrude and Revolve sweep — are
 planned in [documentation/sketches.md](documentation/sketches.md), with the
-decisions behind them and a checklist. Four things about what is built:
+decisions behind them and a checklist. References by kind, named seams, sketch
+curves and one sweep core under Extrude, Revolve, Sweep and Loft are planned in
+[documentation/prop-modeling.md](documentation/prop-modeling.md). Four things
+about what is built:
 
 - **A sketch is a flat set, not a feature list** ([`sketch.rs`](src/prop/sketch.rs)):
   lines name their ends by id, so a shared corner is one point and "is this

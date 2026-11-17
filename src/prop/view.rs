@@ -28,8 +28,8 @@ use crate::prop::figure::{clear_the_figure, pose_the_figure, refresh_the_figure,
 use crate::prop::document::{Pick, PropEditor};
 use crate::prop::gizmo::HoveredPick;
 use crate::prop::plane::draw_square;
-use crate::prop::feature::{Axis, FeatureOp, PropFeatureId};
-use crate::prop::line::LineRef;
+use crate::prop::feature::{Axis, FeatureOp, PatternKind, PropFeatureId};
+use crate::prop::refs::{CurveRef, Resolve};
 use crate::prop::tool::ActiveTool;
 use crate::prop::region::RegionRef;
 use crate::prop::sketch_edit::SketchSession;
@@ -392,7 +392,7 @@ fn draw_the_bench(
         (Axis::Z, Color::srgb(0.3, 0.5, 0.9)),
     ] {
         let pick = Pick::Axis(axis);
-        let Some((a, b)) = build.evaluated.locate_line(&LineRef::Origin { axis }) else { continue };
+        let Some((a, b)) = build.evaluated.drawn_curve(&CurveRef::Axis { axis }) else { continue };
         let (positive, negative) = if editor.picks().contains(&pick) {
             (picked_color(&pick), picked_color(&pick))
         } else if hovered.0.as_ref() == Some(&pick) {
@@ -423,11 +423,11 @@ fn draw_the_bench(
                     draw_located(&mut gizmos, at, marker, picked_color(pick));
                 }
             }
-            // Drawn with every other plane and axis.
-            Pick::Plane(_) | Pick::Axis(_) => {}
-            Pick::SketchLine { .. } => {
-                if let Some((a, b)) = pick.line().and_then(|line| build.evaluated.locate_line(&line)) {
-                    draw_located(&mut gizmos, Located::Edge(a, b), marker, picked_color(pick));
+            // Drawn with every other plane, axis and datum.
+            Pick::Plane(_) | Pick::Axis(_) | Pick::DatumAxis(_) | Pick::DatumPoint(_) => {}
+            Pick::SketchCurve { .. } | Pick::SketchPoint { .. } => {
+                if let Some(at) = sketch_located(&build, pick) {
+                    draw_located(&mut gizmos, at, marker, picked_color(pick));
                 }
             }
             Pick::Region { sketch, region } => {
@@ -442,9 +442,9 @@ fn draw_the_bench(
             }
         }
         Some(Pick::Region { sketch, region }) => draw_region(&mut gizmos, &build, &mut regions, *sketch, region, HOVERED),
-        Some(pick @ Pick::SketchLine { .. }) => {
-            if let Some((a, b)) = pick.line().and_then(|line| build.evaluated.locate_line(&line)) {
-                draw_located(&mut gizmos, Located::Edge(a, b), marker * 0.8, HOVERED);
+        Some(pick @ (Pick::SketchCurve { .. } | Pick::SketchPoint { .. })) => {
+            if let Some(at) = sketch_located(&build, pick) {
+                draw_located(&mut gizmos, at, marker * 0.8, HOVERED);
             }
         }
         Some(Pick::Body(body)) if tool.0.is_some() => draw_body_box(&mut gizmos, &build, *body, HOVERED),
@@ -457,11 +457,13 @@ fn draw_the_bench(
         .primary_feature(&build.evaluated)
         .and_then(|id| editor.doc().feature(id))
         .and_then(|feature| match &feature.op {
-            FeatureOp::Revolve { axis, .. } => Some(axis.clone()),
-            FeatureOp::Pattern { along, .. } => Some(along.line().clone()),
+            FeatureOp::Revolve { axis, .. } | FeatureOp::Pattern { along: PatternKind::Radial { axis, .. }, .. } => {
+                Some(axis.clone())
+            }
+            FeatureOp::Pattern { along: PatternKind::Linear { direction, .. }, .. } => direction.curve().cloned(),
             _ => None,
         });
-    if let Some((a, b)) = about.and_then(|line| build.evaluated.locate_line(&line)) {
+    if let Some((a, b)) = about.and_then(|curve| build.evaluated.drawn_curve(&curve)) {
         let middle = (a + b) / 2.0;
         let reach = (b - a).normalize_or_zero() * build.evaluated.origin_half.max(a.distance(b));
         dashed_line(&mut gizmos, middle - reach, middle + reach, HOVERED, marker * 2.0, marker);
@@ -481,6 +483,25 @@ fn draw_the_bench(
             }
         }
     }
+    let datum_color = |pick: &Pick| {
+        if editor.picks().contains(pick) {
+            picked_color(pick)
+        } else if hovered.0.as_ref() == Some(pick) {
+            HOVERED
+        } else {
+            PLANE
+        }
+    };
+    for axis in &build.evaluated.axes {
+        let color = datum_color(&Pick::DatumAxis(axis.id));
+        dashed_line(&mut gizmos, axis.a, axis.b, color, marker * 3.0, marker);
+    }
+    for point in &build.evaluated.points {
+        let color = datum_color(&Pick::DatumPoint(point.id));
+        for axis in [Vec3::X, Vec3::Y, Vec3::Z] {
+            gizmos.line(point.at - axis * marker, point.at + axis * marker, color);
+        }
+    }
     for datum in &build.evaluated.planes {
         let pick = Pick::Plane(datum.id);
         let color = if editor.picks().contains(&pick) {
@@ -495,6 +516,16 @@ fn draw_the_bench(
         };
         draw_square(&mut gizmos, &datum.corners, color);
     }
+}
+
+/// Where a sketch's point or curve picked from outside it is.
+fn sketch_located(build: &PropBuild, pick: &Pick) -> Option<Located> {
+    let scope = build.evaluated.scope();
+    if let Some(point) = pick.as_point() {
+        return point.resolve(&scope).map(Located::Point);
+    }
+    let (a, b) = pick.as_curve()?.resolve(&scope)?.line()?;
+    Some(Located::Edge(a, b))
 }
 
 const PICKED: Color = Color::srgb(1.0, 0.8, 0.2);

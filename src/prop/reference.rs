@@ -532,6 +532,18 @@ pub fn segment_under<T: Clone, P: Fn(Vec3) -> Option<Vec2>>(
         .map(|(what, _)| what)
 }
 
+pub fn point_under<T: Clone, P: Fn(Vec3) -> Option<Vec2>>(
+    points: impl IntoIterator<Item = (T, Vec3)>,
+    pointer: &Pointer<P>,
+) -> Option<T> {
+    points
+        .into_iter()
+        .filter_map(|(what, p)| Some((what, pointer.to_point(p)?)))
+        .filter(|(_, pixels)| *pixels <= POINT_PICK_PX)
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(what, _)| what)
+}
+
 /// The point of segment `a`–`b` nearest the line through `origin` along
 /// `direction`.
 fn closest_on_segment(origin: Vec3, direction: Vec3, a: Vec3, b: Vec3) -> Vec3 {

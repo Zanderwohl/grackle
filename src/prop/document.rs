@@ -16,7 +16,7 @@ use crate::common::reorder;
 use crate::common::skeleton::clip::ClipSet;
 use crate::common::assets::{AssetError, Assets};
 use crate::prop::feature::{evaluate, Axis, Evaluated, FeatureOp, PropFeature, PropFeatureId};
-use crate::prop::line::LineRef;
+use crate::prop::refs::{AnyRef, CurveRef, DirectionRef, PointRef};
 use crate::prop::archetype::{Archetype, BreakableSpec, Collider, HatSpec, PickupSpec};
 use crate::prop::hold::{HoldSpec, MuzzleSpec, ViewmodelSpec};
 use crate::prop::reference::{Element, GeomRef};
@@ -29,6 +29,9 @@ pub const PROP_EXTENSION: &str = "gpp";
 
 pub const PROPS_DIR: &str = "props";
 
+/// What a click landed on. What it stands for as a reference is asked
+/// through one conversion per kind: [`Pick::as_point`], [`Pick::as_curve`],
+/// [`Pick::as_direction`], [`Pick::as_plane_source`] and [`Pick::body`].
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Pick {
     Body(PropFeatureId),
@@ -36,10 +39,14 @@ pub enum Pick {
     Plane(PlaneRef),
     /// A closed region of a sketch, which is what a sweep takes.
     Region { sketch: PropFeatureId, region: RegionRef },
-    /// A line of a sketch, picked from outside it.
-    SketchLine { sketch: PropFeatureId, line: SketchId },
+    /// A point of a sketch, picked from outside it.
+    SketchPoint { sketch: PropFeatureId, point: SketchId },
+    /// A line or curve of a sketch, picked from outside it.
+    SketchCurve { sketch: PropFeatureId, entity: SketchId },
     /// An axis through the origin.
     Axis(Axis),
+    DatumAxis(PropFeatureId),
+    DatumPoint(PropFeatureId),
 }
 
 impl Pick {
@@ -49,32 +56,113 @@ impl Pick {
         match self {
             Pick::Body(id) => evaluated.bodies.iter().any(|(body, _)| body == id).then_some(*id),
             Pick::Geom(reference @ GeomRef { element: Element::Face(_), .. }) => evaluated.body_of(reference),
-            Pick::Geom(_) | Pick::Plane(_) | Pick::Region { .. } | Pick::SketchLine { .. } | Pick::Axis(_) => None,
+            _ => None,
         }
     }
 
-    pub fn line(&self) -> Option<LineRef> {
+    pub fn as_point(&self) -> Option<PointRef> {
         match self {
-            Pick::Geom(edge @ GeomRef { element: Element::Edge(_), .. }) => Some(LineRef::Edge { edge: edge.clone() }),
-            Pick::SketchLine { sketch, line } => Some(LineRef::Sketch { sketch: *sketch, line: *line }),
-            Pick::Axis(axis) => Some(LineRef::Origin { axis: *axis }),
-            Pick::Body(_) | Pick::Geom(_) | Pick::Plane(_) | Pick::Region { .. } => None,
+            Pick::Geom(corner @ GeomRef { element: Element::Point(_), .. }) => {
+                Some(PointRef::Corner { corner: corner.clone() })
+            }
+            Pick::SketchPoint { sketch, point } => Some(PointRef::Sketch { sketch: *sketch, point: *point }),
+            Pick::DatumPoint(feature) => Some(PointRef::Datum { feature: *feature }),
+            _ => None,
         }
     }
 
-    pub fn of_line(line: &LineRef) -> Pick {
-        match line {
-            LineRef::Origin { axis } => Pick::Axis(*axis),
-            LineRef::Edge { edge } => Pick::Geom(edge.clone()),
-            LineRef::Sketch { sketch, line } => Pick::SketchLine { sketch: *sketch, line: *line },
+    pub fn as_curve(&self) -> Option<CurveRef> {
+        match self {
+            Pick::Geom(edge @ GeomRef { element: Element::Edge(_), .. }) => Some(CurveRef::Edge { edge: edge.clone() }),
+            Pick::SketchCurve { sketch, entity } => Some(CurveRef::Sketch { sketch: *sketch, entity: *entity }),
+            Pick::Axis(axis) => Some(CurveRef::Axis { axis: *axis }),
+            Pick::DatumAxis(feature) => Some(CurveRef::Datum { feature: *feature }),
+            _ => None,
+        }
+    }
+
+    /// Any face, flat or not; whether it is flat is a question for the build.
+    pub fn as_face(&self) -> Option<GeomRef> {
+        match self {
+            Pick::Geom(face @ GeomRef { element: Element::Face(_), .. }) => Some(face.clone()),
+            _ => None,
+        }
+    }
+
+    /// A plane, or a face to stand for the plane through it.
+    pub fn as_plane_source(&self) -> Option<PlaneSource> {
+        match self {
+            Pick::Plane(on) => Some(PlaneSource::Plane(*on)),
+            _ => self.as_face().map(PlaneSource::Face),
+        }
+    }
+
+    /// Along a curve, or a plane's or face's normal.
+    pub fn as_direction(&self) -> Option<DirectionRef> {
+        if let Some(curve) = self.as_curve() {
+            return Some(DirectionRef::Along { curve });
+        }
+        match self.as_plane_source()? {
+            PlaneSource::Plane(plane) => Some(DirectionRef::Normal { plane }),
+            PlaneSource::Face(face) => Some(DirectionRef::Face { face }),
+        }
+    }
+
+    /// What a plane through it would take: a point, a curve or a face.
+    pub fn as_located(&self) -> Option<AnyRef> {
+        if let Some(point) = self.as_point() {
+            return Some(AnyRef::Point(point));
+        }
+        if let Some(curve) = self.as_curve() {
+            return Some(AnyRef::Curve(curve));
+        }
+        self.as_face().map(|face| AnyRef::Face { face })
+    }
+
+    pub fn of_point(point: &PointRef) -> Option<Pick> {
+        match point {
+            PointRef::Origin => None,
+            PointRef::Corner { corner } => Some(Pick::Geom(corner.clone())),
+            PointRef::Sketch { sketch, point } => Some(Pick::SketchPoint { sketch: *sketch, point: *point }),
+            PointRef::Datum { feature } => Some(Pick::DatumPoint(*feature)),
+        }
+    }
+
+    pub fn of_curve(curve: &CurveRef) -> Pick {
+        match curve {
+            CurveRef::Axis { axis } => Pick::Axis(*axis),
+            CurveRef::Edge { edge } => Pick::Geom(edge.clone()),
+            CurveRef::Sketch { sketch, entity } => Pick::SketchCurve { sketch: *sketch, entity: *entity },
+            CurveRef::Datum { feature } => Pick::DatumAxis(*feature),
+        }
+    }
+
+    pub fn of_direction(direction: &DirectionRef) -> Pick {
+        match direction {
+            DirectionRef::Along { curve } => Pick::of_curve(curve),
+            DirectionRef::Normal { plane } => Pick::Plane(*plane),
+            DirectionRef::Face { face } => Pick::Geom(face.clone()),
+        }
+    }
+
+    pub fn of_any(reference: &AnyRef) -> Option<Pick> {
+        match reference {
+            AnyRef::Point(point) => Pick::of_point(point),
+            AnyRef::Curve(curve) => Some(Pick::of_curve(curve)),
+            AnyRef::Plane(plane) => Some(Pick::Plane(*plane)),
+            AnyRef::Direction(direction) => Some(Pick::of_direction(direction)),
+            AnyRef::Face { face } => Some(Pick::Geom(face.clone())),
+            AnyRef::Path(_) => None,
         }
     }
 
     /// See [`PropEditor::primary_feature`].
     pub fn feature(&self, evaluated: &Evaluated) -> Option<PropFeatureId> {
         match self {
-            Pick::Body(id) | Pick::Plane(PlaneRef::Feature(id)) => Some(*id),
-            Pick::Region { sketch, .. } | Pick::SketchLine { sketch, .. } => Some(*sketch),
+            Pick::Body(id) | Pick::Plane(PlaneRef::Feature(id)) | Pick::DatumAxis(id) | Pick::DatumPoint(id) => Some(*id),
+            Pick::Region { sketch, .. } | Pick::SketchPoint { sketch, .. } | Pick::SketchCurve { sketch, .. } => {
+                Some(*sketch)
+            }
             Pick::Plane(PlaneRef::Origin(_)) | Pick::Axis(_) => None,
             Pick::Geom(_) => self.body(evaluated),
         }
@@ -83,12 +171,24 @@ impl Pick {
     /// Every feature the pick names; if any goes, so does the pick.
     pub fn features(&self) -> Box<dyn Iterator<Item = PropFeatureId> + '_> {
         match self {
-            Pick::Body(id) | Pick::Plane(PlaneRef::Feature(id)) => Box::new(std::iter::once(*id)),
+            Pick::Body(id) | Pick::Plane(PlaneRef::Feature(id)) | Pick::DatumAxis(id) | Pick::DatumPoint(id) => {
+                Box::new(std::iter::once(*id))
+            }
             Pick::Plane(PlaneRef::Origin(_)) | Pick::Axis(_) => Box::new(std::iter::empty()),
-            Pick::Region { sketch, .. } | Pick::SketchLine { sketch, .. } => Box::new(std::iter::once(*sketch)),
+            Pick::Region { sketch, .. } | Pick::SketchPoint { sketch, .. } | Pick::SketchCurve { sketch, .. } => {
+                Box::new(std::iter::once(*sketch))
+            }
             Pick::Geom(reference) => Box::new(reference.source.features()),
         }
     }
+}
+
+/// A plane, or a flat face standing in for the plane through it. Where a
+/// feature needs a [`PlaneRef`], a face is given a plane feature first.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum PlaneSource {
+    Plane(PlaneRef),
+    Face(GeomRef),
 }
 
 /// Bounded because each step is a whole document.
@@ -477,17 +577,26 @@ impl PropEditor {
     /// `first`, then the feature `then` builds on it, at the bar as one undo
     /// step; returns the second.
     pub fn add_pair(&mut self, first: FeatureOp, then: impl FnOnce(PropFeatureId) -> FeatureOp) -> PropFeatureId {
+        self.add_chain(vec![first], |ids| then(ids[0]))
+    }
+
+    /// Each of `first` in order, then the feature `then` builds on them, at
+    /// the bar as one undo step; returns the last.
+    pub fn add_chain(&mut self, first: Vec<FeatureOp>, then: impl FnOnce(&[PropFeatureId]) -> FeatureOp) -> PropFeatureId {
         let anchor = self.rollback;
         let id = self.edit(|doc| {
-            let at = anchor.and_then(|anchor| doc.index_of(anchor)).map(|at| at + 1);
-            let first = match at {
-                Some(at) => doc.insert_at(at, first),
-                None => doc.push(first),
+            let mut at = anchor.and_then(|anchor| doc.index_of(anchor)).map(|at| at + 1);
+            let mut put = |doc: &mut PropDoc, op: FeatureOp| match at.as_mut() {
+                Some(at) => {
+                    let id = doc.insert_at(*at, op);
+                    *at += 1;
+                    id
+                }
+                None => doc.push(op),
             };
-            match at {
-                Some(at) => doc.insert_at(at + 1, then(first)),
-                None => doc.push(then(first)),
-            }
+            let ids: Vec<PropFeatureId> = first.into_iter().map(|op| put(doc, op)).collect();
+            let last = then(&ids);
+            put(doc, last)
         });
         if anchor.is_some() {
             self.roll_back_to(Some(id));
@@ -536,6 +645,8 @@ impl PropEditor {
     fn pick_for(&self, id: PropFeatureId) -> Pick {
         match self.doc.feature(id).map(|feature| &feature.op) {
             Some(FeatureOp::Plane { .. }) => Pick::Plane(PlaneRef::Feature(id)),
+            Some(FeatureOp::Axis { .. }) => Pick::DatumAxis(id),
+            Some(FeatureOp::Point { .. }) => Pick::DatumPoint(id),
             _ => Pick::Body(id),
         }
     }
@@ -774,13 +885,13 @@ mod tests {
         let row = doc.push(FeatureOp::Pattern {
             target: a,
             count: 3,
-            along: PatternKind::Linear { spacing: 0.05, direction: LineRef::Origin { axis: Axis::Z } },
+            along: PatternKind::Linear { spacing: 0.05, direction: crate::prop::refs::DirectionRef::Along { curve: CurveRef::Axis { axis: Axis::Z } } },
         });
         let edge = GeomRef { element: Element::Edge(4), source: crate::prop::reference::Source { feature: a, copies: vec![] } };
         doc.push(FeatureOp::Pattern {
             target: row,
             count: 6,
-            along: PatternKind::Radial { degrees: 360.0, axis: LineRef::Edge { edge } },
+            along: PatternKind::Radial { degrees: 360.0, axis: CurveRef::Edge { edge } },
         });
         let text = to_text(&doc).unwrap();
         assert_eq!(parse(&text).unwrap(), doc, "{text}");
@@ -1420,7 +1531,7 @@ mod tests {
     #[test]
     fn a_plane_feature_is_picked_as_a_plane() {
         let mut editor = PropEditor::default();
-        let plane = editor.edit(|doc| doc.push(FeatureOp::Plane { through: vec![] }));
+        let plane = editor.edit(|doc| doc.push(FeatureOp::Plane { def: crate::prop::plane::PlaneDef::Through { through: vec![] } }));
         editor.select(plane);
         assert_eq!(editor.picks(), &[Pick::Plane(PlaneRef::Feature(plane))]);
     }

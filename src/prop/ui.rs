@@ -51,7 +51,11 @@ use crate::prop::solid::Shape;
 use crate::prop::surface::{Style, Surface};
 use crate::prop::camera::FrameTheProp;
 use crate::prop::view::PropBuild;
-use crate::prop::line::{axis_name, LineRef};
+use crate::prop::construct::{Construct, Making};
+use crate::prop::datum::{AxisDef, PointDef};
+use crate::prop::plane::PlaneDef;
+use crate::prop::refs::{axis_name, AnyRef, CurveRef, DirectionRef, PointRef, Resolve};
+use crate::prop::tool::add_making;
 use crate::prop::tool::{advance, cancel, fill, is_ready, prompt, put_down, start, ActiveTool, Field, Task, Tool};
 
 /// What a file dialog came back with. A background thread, like the map
@@ -898,7 +902,9 @@ fn toolbar(
 
     toolbar::cluster(ui, |ui| {
         let plane_tool = tool_button(ui, Tool::Plane, active, requests, Joins::RIGHT);
-        requests.preview_plane |= plane_tool.hovered() && plane_through_picks(editor, plane).is_some();
+        requests.preview_plane |= plane_tool.hovered() && plane.is_some();
+        tool_button(ui, Tool::Axis, active, requests, Joins::BOTH);
+        tool_button(ui, Tool::Point, active, requests, Joins::BOTH);
         tool_button(ui, Tool::Sketch, active, requests, Joins::LEFT);
     });
 
@@ -1089,24 +1095,19 @@ fn sketch_inspector(ui: &mut Ui, editor: &mut PropEditor, session: &mut SketchSe
     }
 }
 
-/// The picks, when they make a plane and are all geometry; a lone plane pick
-/// would only make the same plane again. Shared by the toolbar's Plane and the
-/// Inspector's Use plane, so they are offered together.
-fn plane_through_picks(editor: &PropEditor, plane: Option<Plane>) -> Option<Vec<GeomRef>> {
-    plane?;
-    editor
-        .picks()
-        .iter()
-        .map(|pick| match pick {
-            Pick::Geom(reference) => Some(reference.clone()),
-            Pick::Body(_) | Pick::Plane(_) | Pick::Region { .. } | Pick::SketchLine { .. } | Pick::Axis(_) => None,
-        })
-        .collect()
+/// The plane the picks make, unless they are one plane, which Use plane
+/// would only offset. Shared by the toolbar's Plane and the Inspector's Use
+/// plane, so they are offered together.
+fn plane_making(editor: &PropEditor, build: &PropBuild) -> Option<Making> {
+    if let [Pick::Plane(_)] = editor.picks() {
+        return None;
+    }
+    Construct::Plane.making(editor.picks(), &build.evaluated.scope())
 }
 
-fn add_plane(editor: &mut PropEditor, through: Vec<GeomRef>) {
-    let id = editor.add(FeatureOp::Plane { through });
-    editor.select_pick(Pick::Plane(PlaneRef::Feature(id)));
+fn add_plane(editor: &mut PropEditor, making: &Making) {
+    let id = add_making(editor, making);
+    editor.select(id);
 }
 
 pub(crate) fn edit_availability(editor: &PropEditor) -> EditAvailability {
@@ -1155,13 +1156,13 @@ fn inspector(
     if listed {
         selection_list(ui, editor, build);
     }
-    let through = plane_through_picks(editor, plane);
-    let offered = through.is_some();
-    if let Some(through) = through {
+    let making = plane.and(plane_making(editor, build));
+    let offered = making.is_some();
+    if let Some(making) = making {
         let use_plane = ui.button(get!("prop.picks.use_plane"));
         requests.preview_plane |= use_plane.hovered();
         if use_plane.clicked() {
-            add_plane(editor, through);
+            add_plane(editor, &making);
         }
     }
     if listed || offered {
@@ -1174,11 +1175,13 @@ fn inspector(
             Some(Task::Repick { feature, .. }) => feature_inspector(ui, editor, build, feature, requests, tool),
             _ => prop_overview(ui, editor, build),
         },
-        Some(Pick::Body(id) | Pick::Plane(PlaneRef::Feature(id))) => {
+        Some(Pick::Body(id) | Pick::Plane(PlaneRef::Feature(id)) | Pick::DatumAxis(id) | Pick::DatumPoint(id)) => {
             feature_inspector(ui, editor, build, id, requests, tool)
         }
         Some(Pick::Plane(PlaneRef::Origin(which))) => origin_plane_inspector(ui, which),
-        Some(pick @ (Pick::Axis(_) | Pick::SketchLine { .. })) => line_inspector(ui, editor, build, &pick),
+        Some(pick @ (Pick::Axis(_) | Pick::SketchCurve { .. } | Pick::SketchPoint { .. })) => {
+            line_inspector(ui, editor, build, &pick)
+        }
         Some(Pick::Region { sketch, region }) => {
             section(ui, "element", get!("prop.inspector.sections.element"), |ui| {
                 let label = pick_label(editor, build, &Pick::Region { sketch, region: region.clone() });
@@ -1272,12 +1275,23 @@ fn pick_label(editor: &PropEditor, build: &PropBuild, pick: &Pick) -> String {
             .unwrap_or_else(|| get!("prop.inspector.missing", "id", id))
     };
     let reference = match pick {
-        Pick::Body(id) | Pick::Plane(PlaneRef::Feature(id)) => return name(*id),
+        Pick::Body(id) | Pick::Plane(PlaneRef::Feature(id)) | Pick::DatumAxis(id) | Pick::DatumPoint(id) => {
+            return name(*id);
+        }
         Pick::Plane(PlaneRef::Origin(which)) => return which.name(),
         Pick::Region { sketch, .. } => return get!("prop.picks.region", "sketch", name(*sketch)),
-        Pick::SketchLine { sketch, line } => {
-            let label = get!("prop.picks.sketch_line", "sketch", name(*sketch), "id", *line);
-            return match build.evaluated.locate_line(&LineRef::Sketch { sketch: *sketch, line: *line }) {
+        Pick::SketchCurve { sketch, entity } => {
+            let label = get!("prop.picks.sketch_line", "sketch", name(*sketch), "id", *entity);
+            let curve = CurveRef::Sketch { sketch: *sketch, entity: *entity };
+            return match curve.resolve(&build.evaluated.scope()) {
+                Some(_) => label,
+                None => get!("prop.picks.absent", "pick", label),
+            };
+        }
+        Pick::SketchPoint { sketch, point } => {
+            let label = get!("prop.picks.sketch_point", "sketch", name(*sketch), "id", *point);
+            let at = PointRef::Sketch { sketch: *sketch, point: *point };
+            return match at.resolve(&build.evaluated.scope()) {
                 Some(_) => label,
                 None => get!("prop.picks.absent", "pick", label),
             };
@@ -1342,16 +1356,25 @@ fn element_inspector(ui: &mut Ui, editor: &PropEditor, build: &PropBuild, refere
     });
 }
 
+/// A sketch's point or curve, or an origin axis: read-only, like an element.
 fn line_inspector(ui: &mut Ui, editor: &PropEditor, build: &PropBuild, pick: &Pick) {
     let triple = |v: Vec3| format!("{:.4}, {:.4}, {:.4}", v.x, v.y, v.z);
     section(ui, "element", get!("prop.inspector.sections.element"), |ui| {
         ui.label(egui::RichText::new(pick_label(editor, build, pick)).strong());
-        let Some((a, b)) = pick.line().and_then(|line| build.evaluated.locate_line(&line)) else { return };
+        let scope = build.evaluated.scope();
+        if let Some(at) = pick.as_point().and_then(|point| point.resolve(&scope)) {
+            ui.horizontal(|ui| {
+                ui.label(get!("prop.inspector.position"));
+                ui.label(format!("{} m", triple(at)));
+            });
+            return;
+        }
+        let Some((a, b)) = pick.as_curve().and_then(|curve| curve.resolve(&scope)?.line()) else { return };
         ui.horizontal(|ui| {
             ui.label(get!("prop.inspector.direction"));
             ui.label(triple((b - a).normalize_or_zero()));
         });
-        if let Pick::SketchLine { .. } = pick {
+        if let Pick::SketchCurve { .. } = pick {
             ui.horizontal(|ui| {
                 ui.label(get!("prop.inspector.length"));
                 ui.label(format!("{:.4} m", a.distance(b)));
@@ -1430,9 +1453,29 @@ fn feature_inspector(
     // Drawn against a copy: calling `PropEditor::doc_mut` marks the document
     // changed, which would rebuild the viewport and mark it dirty every frame.
     let Some(mut edited) = editor.doc().feature(selected).cloned() else { return };
+    // What a datum is made from, labeled before the document is borrowed.
+    let any_label = |reference: &AnyRef| match Pick::of_any(reference) {
+        Some(pick) => pick_label(editor, build, &pick),
+        None => get!("prop.picks.origin"),
+    };
     let through: Vec<String> = match &edited.op {
-        FeatureOp::Plane { through } => {
-            through.iter().map(|reference| pick_label(editor, build, &Pick::Geom(reference.clone()))).collect()
+        FeatureOp::Plane { def: PlaneDef::Through { through } } => through.iter().map(any_label).collect(),
+        FeatureOp::Plane { def: PlaneDef::Offset { from, .. } } => vec![any_label(&AnyRef::Plane(*from))],
+        FeatureOp::Plane { def: PlaneDef::Angle { from, about, .. } } => {
+            vec![any_label(&AnyRef::Plane(*from)), any_label(&AnyRef::Curve(about.clone()))]
+        }
+        FeatureOp::Plane { def: PlaneDef::Midplane { a, b } } | FeatureOp::Axis { def: AxisDef::Planes { a, b } } => {
+            vec![any_label(&AnyRef::Plane(*a)), any_label(&AnyRef::Plane(*b))]
+        }
+        FeatureOp::Axis { def: AxisDef::Through { a, b } } => {
+            vec![any_label(&AnyRef::Point(a.clone())), any_label(&AnyRef::Point(b.clone()))]
+        }
+        FeatureOp::Axis { def: AxisDef::Normal { plane, point } } => {
+            vec![any_label(&AnyRef::Plane(*plane)), any_label(&AnyRef::Point(point.clone()))]
+        }
+        FeatureOp::Point { def: PointDef::Midpoint { curve } } => vec![any_label(&AnyRef::Curve(curve.clone()))],
+        FeatureOp::Point { def: PointDef::Intersection { curve, plane } } => {
+            vec![any_label(&AnyRef::Curve(curve.clone())), any_label(&AnyRef::Plane(*plane))]
         }
         _ => vec![],
     };
@@ -1446,8 +1489,12 @@ fn feature_inspector(
     };
     // What the feature is about, labeled before the document is borrowed.
     let about: Option<String> = match &edited.op {
-        FeatureOp::Revolve { axis, .. } => Some(pick_label(editor, build, &Pick::of_line(axis))),
-        FeatureOp::Pattern { along, .. } => Some(pick_label(editor, build, &Pick::of_line(along.line()))),
+        FeatureOp::Revolve { axis, .. } | FeatureOp::Pattern { along: PatternKind::Radial { axis, .. }, .. } => {
+            Some(pick_label(editor, build, &Pick::of_curve(axis)))
+        }
+        FeatureOp::Pattern { along: PatternKind::Linear { direction, .. }, .. } => {
+            Some(pick_label(editor, build, &Pick::of_direction(direction)))
+        }
         FeatureOp::Mirror { about, .. } => Some(plane_name(*about)),
         _ => None,
     };
@@ -1570,12 +1617,12 @@ fn feature_inspector(
                 });
                 section(ui, "pattern", get!("prop.inspector.sections.pattern"), |ui| {
                     changed |= pattern_ui(ui, count, along);
-                    let label = match along {
-                        PatternKind::Linear { .. } => get!("prop.inspector.direction"),
-                        PatternKind::Radial { .. } => get!("prop.inspector.axis"),
+                    let (label, field) = match along {
+                        PatternKind::Linear { .. } => (get!("prop.inspector.direction"), Field::PatternDirection),
+                        PatternKind::Radial { .. } => (get!("prop.inspector.axis"), Field::PatternAxis),
                     };
                     let shown = about.clone().unwrap_or_default();
-                    reference_row(ui, label, shown, selected, Field::PatternLine, tool, requests);
+                    reference_row(ui, label, shown, selected, field, tool, requests);
                 });
             }
             FeatureOp::Sketch { sketch, .. } => {
@@ -1593,10 +1640,23 @@ fn feature_inspector(
                     ));
                 });
             }
-            FeatureOp::Plane { .. } => {
+            FeatureOp::Plane { def } => {
                 section(ui, "through", get!("prop.inspector.sections.through"), |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(get!("prop.inspector.made"));
+                        ui.label(plane_def_name(def));
+                    });
                     for label in &through {
                         ui.label(label);
+                    }
+                    match def {
+                        PlaneDef::Offset { distance, .. } => {
+                            changed |= drag(ui, get!("prop.inspector.distance"), distance, 0.001, "m");
+                        }
+                        PlaneDef::Angle { degrees, .. } => {
+                            changed |= drag(ui, get!("prop.inspector.angle"), degrees, 1.0, "°");
+                        }
+                        PlaneDef::Through { .. } | PlaneDef::Midplane { .. } => {}
                     }
                 });
                 if let Some(datum) = datum {
@@ -1612,6 +1672,32 @@ fn feature_inspector(
                         });
                     });
                 }
+            }
+            FeatureOp::Axis { .. } | FeatureOp::Point { .. } => {
+                section(ui, "through", get!("prop.inspector.sections.through"), |ui| {
+                    for label in &through {
+                        ui.label(label);
+                    }
+                });
+                let triple = |v: Vec3| format!("{:.4}, {:.4}, {:.4}", v.x, v.y, v.z);
+                section(ui, "placement", get!("prop.inspector.sections.placement"), |ui| {
+                    if let Some(axis) = build.evaluated.axes.iter().find(|axis| axis.id == selected) {
+                        ui.horizontal(|ui| {
+                            ui.label(get!("prop.inspector.origin"));
+                            ui.label(triple(axis.a));
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label(get!("prop.inspector.direction"));
+                            ui.label(triple((axis.b - axis.a).normalize_or_zero()));
+                        });
+                    }
+                    if let Some(point) = build.evaluated.points.iter().find(|point| point.id == selected) {
+                        ui.horizontal(|ui| {
+                            ui.label(get!("prop.inspector.position"));
+                            ui.label(triple(point.at));
+                        });
+                    }
+                });
             }
         }
     });
@@ -2546,6 +2632,15 @@ fn shape_ui(ui: &mut Ui, shape: &mut Shape) -> bool {
 const MAX_PATTERN_COPIES: u32 = 64;
 
 /// Switching between linear and radial keeps the line.
+fn plane_def_name(def: &PlaneDef) -> String {
+    match def {
+        PlaneDef::Through { .. } => get!("prop.planes.through"),
+        PlaneDef::Offset { .. } => get!("prop.planes.offset"),
+        PlaneDef::Angle { .. } => get!("prop.planes.angle"),
+        PlaneDef::Midplane { .. } => get!("prop.planes.midplane"),
+    }
+}
+
 fn pattern_ui(ui: &mut Ui, count: &mut u32, along: &mut PatternKind) -> bool {
     let mut changed = ui
         .horizontal(|ui| {
@@ -2554,14 +2649,19 @@ fn pattern_ui(ui: &mut Ui, count: &mut u32, along: &mut PatternKind) -> bool {
         })
         .inner;
     ui.horizontal(|ui| {
+        // A row along a curve turns about it; anything else turns about Y.
+        let curve = match along {
+            PatternKind::Linear { direction, .. } => direction.curve().cloned(),
+            PatternKind::Radial { axis, .. } => Some(axis.clone()),
+        };
         let linear = matches!(along, PatternKind::Linear { .. });
-        let line = along.line().clone();
         if ui.selectable_label(linear, get!("prop.inspector.pattern_linear")).clicked() && !linear {
-            *along = PatternKind::Linear { spacing: 0.05, direction: line.clone() };
+            let curve = curve.clone().unwrap_or(CurveRef::Axis { axis: crate::prop::feature::Axis::X });
+            *along = PatternKind::Linear { spacing: 0.05, direction: DirectionRef::Along { curve } };
             changed = true;
         }
         if ui.selectable_label(!linear, get!("prop.inspector.pattern_radial")).clicked() && linear {
-            *along = PatternKind::Radial { degrees: 360.0, axis: line };
+            *along = PatternKind::Radial { degrees: 360.0, axis: curve.unwrap_or(CurveRef::Axis { axis: crate::prop::feature::Axis::Y }) };
             changed = true;
         }
     });

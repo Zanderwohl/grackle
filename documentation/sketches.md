@@ -81,7 +81,7 @@ what is done.
   does not change the file again. `symmetric` replaces `midplane`. A guide
   line for a slanted extrude is a later optional field.
 - **Revolve turns about a line in the sketch's plane** — a sketch line,
-  construction or not, a model edge or an origin axis (`LineRef`) — by an
+  construction or not, a model edge or an origin axis (`CurveRef`) — by an
   angle, optionally symmetric.
 - **A region with holes is extruded as its outer loop minus its inner loops**,
   inside the evaluator, with the CSG that already exists, rather than teaching

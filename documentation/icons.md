@@ -43,6 +43,8 @@ When an icon ships, check its box.
 | [x] | `two_squares` | Two squares side by side | Row pattern |
 | [x] | `squares_in_circle` | Four squares in a circle | Circle pattern |
 | [x] | `ground_square` | Flat square on the ground, in isometric view | Plane |
+| [x] | `dashed_line_dots` | Dashed diagonal line with a dot on it near each end | Axis |
+| [x] | `dot_crosshair` | Dot with four short lines pointing at it, a gap round it | Point |
 | [x] | `pencil` | Pencil | Sketch |
 | [x] | `film_camera` | Film camera with a big reel on top | Frame, Frame selected, Spectator Camera |
 | [x] | `check_mark` | Check mark | Done, Finish sketch |

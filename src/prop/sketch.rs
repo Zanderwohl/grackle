@@ -407,10 +407,9 @@ mod tests {
             placement: Placement::default(),
             surface: Surface::default(),
         });
-        let top = doc.push(FeatureOp::Plane {
-            // The far cap: the cube's +Z face.
-            through: vec![GeomRef { element: Element::Face(1), source: Source { feature: cube, copies: vec![] } }],
-        });
+        // The far cap: the cube's +Z face.
+        let face = GeomRef { element: Element::Face(1), source: Source { feature: cube, copies: vec![] } };
+        let top = doc.push(crate::prop::tool::plane_through_face(face));
         doc.push(FeatureOp::Sketch { on: PlaneRef::Origin(OriginPlane::Xz), sketch: triangle() });
         doc.push(FeatureOp::Sketch { on: PlaneRef::Feature(top), sketch: triangle() });
         (doc, top)

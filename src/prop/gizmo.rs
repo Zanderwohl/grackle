@@ -24,8 +24,8 @@ use crate::prop::hold::HoldSpec;
 use crate::prop::profile::Placement;
 use crate::prop::plane::plane_under;
 use crate::prop::feature::{Axis, Evaluated};
-use crate::prop::line::LineRef;
-use crate::prop::reference::{corner_under, edge_under, segment_under, Pointer};
+use crate::prop::refs::CurveRef;
+use crate::prop::reference::{corner_under, edge_under, point_under, segment_under, Pointer};
 use crate::prop::tool::{accepts, ActiveTool};
 use crate::prop::solid::{Shape, MIN_EXTENT};
 use crate::tool::tool_helpers::{closest_param_on_axis, ray_point_distance};
@@ -417,21 +417,32 @@ fn candidates_under<'a, P: Fn(Vec3) -> Option<Vec2>>(
     hit: Option<(crate::prop::feature::PropFeatureId, &'a crate::prop::solid::Polygon, f32)>,
 ) -> impl Iterator<Item = Pick> + 'a {
     let geom = |pickable: &crate::prop::reference::Pickable| Pick::Geom(pickable.reference.clone());
-    let finders: [Box<dyn Fn() -> Option<Pick> + 'a>; 7] = [
+    let finders: Vec<Box<dyn Fn() -> Option<Pick> + 'a>> = vec![
         Box::new(move || corner_under(&evaluated.pickables, pointer).map(geom)),
+        Box::new(move || {
+            let points = evaluated.sketches.iter().flat_map(|placed| {
+                placed.sketch.points.iter().map(|point| {
+                    let at = placed.world(Vec2::from(point.at));
+                    (Pick::SketchPoint { sketch: placed.id, point: point.id }, at)
+                })
+            });
+            point_under(points, pointer)
+        }),
+        Box::new(move || point_under(evaluated.points.iter().map(|p| (Pick::DatumPoint(p.id), p.at)), pointer)),
         Box::new(move || edge_under(&evaluated.pickables, pointer).map(geom)),
         Box::new(move || {
             let lines = evaluated.sketches.iter().flat_map(|placed| {
-                placed.sketch.lines().filter_map(|(line, ..)| {
-                    let (a, b) = placed.sketch.line(line)?;
-                    Some((Pick::SketchLine { sketch: placed.id, line }, placed.world(a), placed.world(b)))
+                placed.sketch.lines().filter_map(|(entity, ..)| {
+                    let (a, b) = placed.sketch.line(entity)?;
+                    Some((Pick::SketchCurve { sketch: placed.id, entity }, placed.world(a), placed.world(b)))
                 })
             });
             segment_under(lines, pointer)
         }),
+        Box::new(move || segment_under(evaluated.axes.iter().map(|axis| (Pick::DatumAxis(axis.id), axis.a, axis.b)), pointer)),
         Box::new(move || {
             let axes = Axis::ALL.into_iter().filter_map(|axis| {
-                let (a, b) = evaluated.locate_line(&LineRef::Origin { axis })?;
+                let (a, b) = evaluated.drawn_curve(&CurveRef::Axis { axis })?;
                 Some((Pick::Axis(axis), a, b))
             });
             segment_under(axes, pointer)
