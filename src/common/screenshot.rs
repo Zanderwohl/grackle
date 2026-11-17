@@ -51,7 +51,7 @@ mod native {
         let now = Local::now();
         commands.spawn(Screenshot::primary_window()).observe(move |captured: On<ScreenshotCaptured>| {
             let image = captured.image.clone();
-            // PNG encoding a large window takes long enough to be felt as a hitch.
+            // Encoding a large window on the main thread causes a visible hitch.
             bevy::tasks::IoTaskPool::get().spawn(async move { save(image, now) }).detach();
         });
     }
@@ -85,9 +85,8 @@ mod native {
         }
     }
 
-    /// Creates the first free name for `at`. `create_new` fails if the name exists, checked and
-    /// created in one step, so two saves at once cannot take the same name. Each try is a higher
-    /// number, so it ends once past the files already there.
+    /// `create_new` checks and creates in one step, so two saves at once cannot take one name.
+    /// Each try is a higher number, so the loop ends past the files already there.
     fn claim(directory: &Path, at: DateTime<Local>) -> std::io::Result<(PathBuf, std::fs::File)> {
         let mut discriminator = first_discriminator(at);
         loop {

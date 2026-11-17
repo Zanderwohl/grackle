@@ -195,9 +195,8 @@ impl Action {
         Action::Bucket9,
     ];
 
-    /// Fire while the Settings window is open, and while a text field has the
-    /// keyboard when the chord is a function key, which types nothing. Never
-    /// while a binding is waited for, so the key can be bound.
+    /// Fire over the Settings window, and over a text field from a function key.
+    /// Never while a binding is waited for, so the key can be bound.
     pub const THROUGH_QUIET: [Action; 1] = [Action::Screenshot];
 
     pub fn is_fixed(self) -> bool {
