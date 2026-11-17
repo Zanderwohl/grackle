@@ -235,6 +235,7 @@ shape is a new producer and not a rewrite of every consumer — see
 | `assets/user/` | The user pack: gitignored, made at startup, last in `default_packs()` so it overrides the shipped one. A new map or prop is saved here unless the document already has a folder. Also holds `settings.toml`, the player settings, `shortcuts.toml` and `server.toml` (the Round tab). |
 | `cache/` | Gitignored, derived from the packs and maps: `thumbnail/props/{name}.png`, `nav/{hash}.bin`, `lightmap/{hash}.bin`, `rounds/{map}/*.jsonl`. Safe to delete. |
 | `logs/` | Gitignored: the log's file drain, one file per launch. |
+| `screenshots/` | Gitignored, made at startup: `F12` saves the window as drawn, HUD and egui included, as `{date}_{time}_{millisecond}.png` ([`src/common/screenshot.rs`](src/common/screenshot.rs)). |
 
 ## Spawn points and class metrics
 
@@ -477,8 +478,11 @@ stand alone in tests. A test that runs a system directly calls
 - **Nothing on a key fires while egui wants the keyboard**, mouse buttons
   and bare modifiers (Shift-click) still do — `Ctrl+Z` in a text field means undo the text. Read from the
   previous frame's `EguiWantsInput`, since egui drops a text field's focus on
-  the frame the Escape arrives. **Nothing at all fires while the Settings
+  the frame the Escape arrives. **Nothing fires while the Settings
   window is open** (`Quiet`), so a key being bound does nothing else.
+  `Action::THROUGH_QUIET` (the screenshot) is the exception: it fires over the
+  window, and over a text field when its chord is a function key, but never
+  while a binding is waited for.
 - The editor's pointer gestures (`CurrentMouseInput`: click, drag, orbit,
   pan) still read the mouse buttons; the mouse wheel is read where it is used.
 

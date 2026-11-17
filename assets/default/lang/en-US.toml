@@ -1645,6 +1645,7 @@ debug = "Debug"
 [keybind.action]
 toggle_mode = "Swap editor and Play"
 settings = "Settings"
+screenshot = "Screenshot"
 perf_overlay = "Performance overlay"
 show_hitboxes = "Show hitboxes"
 show_bones = "Show bones and triggers"

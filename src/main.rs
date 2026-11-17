@@ -123,7 +123,7 @@ fn main() {
             (GamePlugin, grackle::game::match_cycle::MatchCyclePlugin, grackle::game::match_banner::MatchBannerPlugin, grackle::game::soundtrack::SoundtrackPlugin),
             (WorldPropPlugin, ThumbnailPlugin, ForwardCameraPlugin, SunlitPlugin, DecalPlugin, SprayPlugin, grackle::game::streak::StreakPlugin, grackle::game::gib_blood::GibBloodPlugin, grackle::game::flame_jet::FlameJetPlugin, grackle::game::gust_ring::GustRingPlugin, grackle::game::blast_cloud::BlastCloudPlugin, grackle::game::rocket_trail::RocketTrailPlugin),
             SkeletonPlugin,
-            (PerfPlugin, SettingsPlugin, FontsPlugin, grackle::common::music::MusicPlugin, grackle::common::icons::IconsPlugin, UiShapePlugin, grackle::common::player_settings::PlayerSettingsPlugin { profile: editor_params.profile }),
+            (PerfPlugin, grackle::common::screenshot::ScreenshotPlugin, SettingsPlugin, FontsPlugin, grackle::common::music::MusicPlugin, grackle::common::icons::IconsPlugin, UiShapePlugin, grackle::common::player_settings::PlayerSettingsPlugin { profile: editor_params.profile }),
             ))
         .add_plugins(RoundSettingsFilePlugin { path: USER_SERVER_CONFIG.into() })
         .add_plugins(grackle::onboarding::OnboardingPlugin { skip: editor_params.chooses_where_to_start() })

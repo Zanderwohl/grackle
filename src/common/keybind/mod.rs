@@ -114,6 +114,7 @@ macro_rules! actions {
 actions! {
     ToggleMode => "toggle_mode", Everywhere, false, false;
     Settings => "settings", Everywhere, true, false;
+    Screenshot => "screenshot", Everywhere, false, false;
 
     New => "new", Editing, true, false;
     Save => "save", Editing, true, false;
@@ -194,6 +195,10 @@ impl Action {
         Action::Bucket9,
     ];
 
+    /// Fire over the Settings window, and over a text field from a function key.
+    /// Never while a binding is waited for, so the key can be bound.
+    pub const THROUGH_QUIET: [Action; 1] = [Action::Screenshot];
+
     pub fn is_fixed(self) -> bool {
         Self::FIXED.contains(&self)
     }
@@ -245,6 +250,17 @@ impl Actions {
         self.pressed(positive) as i8 as f32 - self.pressed(negative) as i8 as f32
     }
 
+    fn only(self, kept: &[Action]) -> Self {
+        let mut only = Self::default();
+        for &action in kept {
+            let i = action.index();
+            only.pressed[i] = self.pressed[i];
+            only.just_pressed[i] = self.just_pressed[i];
+            only.just_released[i] = self.just_released[i];
+        }
+        only
+    }
+
     /// For a test that does not run [`resolve_actions`].
     #[cfg(test)]
     pub fn press(&mut self, action: Action) {
@@ -261,12 +277,13 @@ impl Actions {
     ) -> Self {
         let mut actions = Self::default();
         let held = keys.map(Held::of).unwrap_or_default();
-        let state = |input: Input| -> (bool, bool, bool) {
-            match input {
+        let state = |action: Action, chord: Chord| -> (bool, bool, bool) {
+            let heard = !quiet_keys || (Action::THROUGH_QUIET.contains(&action) && chord.types_nothing());
+            match chord.input {
                 // A bare modifier types nothing, so a Shift-click still adds to
                 // a selection while a text field has the keyboard.
                 Input::Key(key) => match keys {
-                    Some(keys) if !quiet_keys || chord::modifier_of(key).is_some() => {
+                    Some(keys) if heard || chord::modifier_of(key).is_some() => {
                         (keys.pressed(key), keys.just_pressed(key), keys.just_released(key))
                     }
                     _ => (false, false, false),
@@ -283,7 +300,7 @@ impl Actions {
         for &action in Action::ALL {
             let mut released = false;
             for &chord in keymap.chords(action) {
-                let (pressed, just_pressed, just_released) = state(chord.input);
+                let (pressed, just_pressed, just_released) = state(action, chord);
                 let modifiers = chord.modifiers_match(held, action.exact());
                 if pressed && modifiers {
                     actions.pressed[action.index()] = true;
@@ -316,10 +333,16 @@ impl Actions {
     }
 }
 
-/// Set while the Settings window is open, so a key being bound does nothing
-/// else.
-#[derive(Resource, Default, PartialEq)]
-pub struct Quiet(pub bool);
+/// Written by the Settings window, so a key being bound does nothing else.
+#[derive(Resource, Default, Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Quiet {
+    #[default]
+    Off,
+    /// The window is open: only [`Action::THROUGH_QUIET`] fires.
+    Window,
+    /// A binding is waited for: nothing fires.
+    Binding,
+}
 
 /// Every input resource is optional, so a test world with only a keyboard
 /// still resolves.
@@ -331,12 +354,14 @@ pub fn resolve_actions(
     quiet: Res<Quiet>,
     mut actions: ResMut<Actions>,
 ) {
-    if quiet.0 {
-        actions.set_if_neq(Actions::default());
-        return;
-    }
-    let quiet = egui.is_some_and(|egui| egui.wants_any_keyboard_input());
-    actions.set_if_neq(Actions::read(&keymap, keys.as_deref(), buttons.as_deref(), quiet));
+    let typing = egui.is_some_and(|egui| egui.wants_any_keyboard_input());
+    let read = || Actions::read(&keymap, keys.as_deref(), buttons.as_deref(), typing);
+    let heard = match *quiet {
+        Quiet::Off => read(),
+        Quiet::Window => read().only(&Action::THROUGH_QUIET),
+        Quiet::Binding => Actions::default(),
+    };
+    actions.set_if_neq(heard);
 }
 
 /// For tests that run systems one at a time rather than through `PreUpdate`.
@@ -435,6 +460,39 @@ mod tests {
         assert_eq!(commands(&[KeyCode::SuperLeft], KeyCode::KeyZ), vec![Action::Undo]);
         assert_eq!(commands(&[KeyCode::SuperLeft, KeyCode::ShiftLeft], KeyCode::KeyZ), vec![Action::Redo]);
         assert_eq!(commands(&[KeyCode::ControlLeft], KeyCode::KeyY), vec![Action::Redo]);
+    }
+
+    fn screenshot_heard(quiet: Quiet, keymap: &Keymap, hit: KeyCode) -> bool {
+        let mut world = World::new();
+        world.insert_resource(keymap.clone());
+        world.insert_resource(keys(&[], hit));
+        world.insert_resource(quiet);
+        resolve_now(&mut world);
+        world.resource::<Actions>().just_pressed(Action::Screenshot)
+    }
+
+    /// Fails if the Settings window hides itself from screenshots, or F12 binds as a screenshot.
+    #[test]
+    fn a_screenshot_fires_over_the_settings_window_but_not_while_binding() {
+        let keymap = Keymap::default();
+        assert!(screenshot_heard(Quiet::Off, &keymap, KeyCode::F12));
+        assert!(screenshot_heard(Quiet::Window, &keymap, KeyCode::F12));
+        assert!(!screenshot_heard(Quiet::Binding, &keymap, KeyCode::F12));
+        let saving = Actions::read(&keymap, Some(&keys(&[KeyCode::ControlLeft], KeyCode::KeyS)), None, false)
+            .only(&Action::THROUGH_QUIET);
+        assert!(!saving.just_pressed(Action::Save), "the window let more than the screenshot through");
+    }
+
+    /// Fails if a screenshot bound to a letter fires as that letter is typed.
+    #[test]
+    fn a_screenshot_fires_over_a_text_field_only_from_a_function_key() {
+        let read = |keymap: &Keymap, hit| {
+            Actions::read(keymap, Some(&keys(&[], hit)), None, true).just_pressed(Action::Screenshot)
+        };
+        assert!(read(&Keymap::default(), KeyCode::F12));
+        let mut lettered = Keymap::default();
+        lettered.bind(Action::Screenshot, 0, Chord::key(KeyCode::KeyP));
+        assert!(!read(&lettered, KeyCode::KeyP));
     }
 
     /// Typing `s` into a viewport must not save.
