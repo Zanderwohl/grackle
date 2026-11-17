@@ -1823,6 +1823,10 @@ and **light is replaced, never dropped**: `SunBake` keeps it by `Room` entity,
 which outlives every rebuild of its meshes, and a rebuilt room has its old light
 carried onto its new layout (`Atlas::carry_over`) until a bake lands — so F5 on
 an unchanged map is free. Only the clear beside the Sunlight button forgets it.
+**Halfbright**, a checkbox in the Bakes panel for testing (`SunBake::halfbright`, not saved),
+skips the sun bake: no slot takes a lightmap, the global ambient is half the sun, nothing that
+moves is sunlit, and the Sunlight status is `Skipped`, which a round does not wait for. The light
+already baked is kept, so turning it off puts it back.
 Every bake is written to `cache/lightmap/{hash}.bin` and read back by a map
 whose snapshot hashes the same, as the nav graph is from `cache/nav/`
 ([`src/tool/bake_cache.rs`](src/tool/bake_cache.rs)), so a map opens lit. Both

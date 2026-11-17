@@ -73,6 +73,7 @@ room_geometry = "Room Geometry"
 auto_rooms = "Auto-bake Rooms"
 sunlight = "Sunlight"
 auto_sunlight = "Auto-bake Sunlight"
+halfbright = "Halfbright (skip sunlight)"
 
 [bakes.doing]
 surface = "The map's surface"
@@ -105,6 +106,7 @@ overall = "Overall"
 title = "Baking for the round"
 done = "Done"
 waiting = "Waiting"
+skipped = "Skipped"
 cancel = "Cancel"
 
 [nav]

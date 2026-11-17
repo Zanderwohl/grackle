@@ -9,7 +9,7 @@ use bevy::camera::visibility::RenderLayers;
 use bevy::mesh::MeshTag;
 use bevy::prelude::*;
 
-use crate::common::air_light::{self, AirLight};
+use crate::common::air_light;
 use crate::common::app_mode::AppMode;
 use crate::common::render_layers::VIEWMODEL;
 use crate::common::skeleton::rig::Skeleton;
@@ -66,17 +66,22 @@ fn retag(entity: Entity, tag: Option<u32>, current: Option<&MeshTag>, commands: 
 }
 
 /// The other modes light their own scenes, so they keep the default.
-fn follow_the_map_ambient(mode: Res<State<AppMode>>, brightness: Res<Brightness>, mut ambient: ResMut<GlobalAmbientLight>) {
-    let wanted = if mode.get().shows_the_world() { brightness.ambient } else { BASE_AMBIENT };
+fn follow_the_map_ambient(
+    mode: Res<State<AppMode>>,
+    brightness: Res<Brightness>,
+    sun_bake: Res<SunBake>,
+    mut ambient: ResMut<GlobalAmbientLight>,
+) {
+    let wanted = if mode.get().shows_the_world() { sun_bake.ambient(&brightness) } else { BASE_AMBIENT };
     if ambient.brightness != wanted {
         ambient.brightness = wanted;
     }
 }
 
 /// The ambient is a multiple of `base`, the global ambient.
-fn tag_at(probe: Vec3, toward: Vec3, open_sky: &OpenSky, air: &AirLight, base: f32) -> u32 {
-    let ambient = air.at(probe).map_or(Vec3::ONE, |light| light / base);
-    air_light::pack(ambient, open_sky.sees_sun(probe, toward))
+fn tag_at(probe: Vec3, toward: Vec3, open_sky: &OpenSky, sun_bake: &SunBake, base: f32) -> u32 {
+    let ambient = sun_bake.air().at(probe).map_or(Vec3::ONE, |light| light / base);
+    air_light::pack(ambient, !sun_bake.halfbright() && open_sky.sees_sun(probe, toward))
 }
 
 /// Where a thing was last probed and what its meshes were tagged with then.
@@ -138,7 +143,7 @@ fn light_what_moves(
         let kept = probed.filter(|probed| !stale && probed.at.distance_squared(probe) <= REPROBE_DISTANCE * REPROBE_DISTANCE);
         let tag = match kept {
             Some(probed) => probed.tag,
-            None => shows_the_world.then(|| tag_at(probe, toward, &open_sky, sun_bake.air(), brightness.ambient)),
+            None => shows_the_world.then(|| tag_at(probe, toward, &open_sky, &sun_bake, brightness.ambient)),
         };
         // The viewmodel shows ours, or the one being spectated.
         if local || watched {
