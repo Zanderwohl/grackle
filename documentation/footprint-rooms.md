@@ -179,13 +179,17 @@ every corner, so another feature can reference one.
       `drag_handle` on `y`. The ceiling is a height above the floor, so the
       floor carries it; it stops `MIN_HEIGHT` short of the floor.
 - [x] The draw tool on a selected footprint adds to it (`add_chain`):
-      corners snap onto its own within 0.3 m, and a chain ending on one of
-      them is finished there. **One rule decides what becomes a room**, for a
-      new footprint and an added chain alike: every region a new line bounds
-      that none of the footprint's rooms already covers. So a loop inside a
-      room is a pillar, one outside is a new room, a loop crossing a room adds
-      only what is outside it, a wing out from one corner and back to another
-      is a room, and a line across a room divides nothing.
+      corners snap onto its own within 0.3 m, and a chain that started on one
+      of them is finished on the next. A chain that started loose passes
+      through them and is finished only on its own first corner, since ended
+      on one it would be a spur bounding nothing. The pointer's corner is lit
+      when a click would finish the chain there. **One rule decides what
+      becomes a room**, for a new footprint and an added chain alike: every
+      region a new line bounds that none of the footprint's rooms already
+      covers. So a loop inside a room is a pillar, one outside is a new room,
+      a loop crossing a room adds only what is outside it, a wing out from
+      one corner and back to another is a room, and a line across a room
+      divides nothing.
 - [x] Inspector: every region as it is arranged now, with a checkbox for
       whether it is a room (`set_room_at`); every line, with a button to
       remove it (`remove_line`, which takes corners no line uses any more and
