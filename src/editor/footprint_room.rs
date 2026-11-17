@@ -9,19 +9,22 @@ use serde::{Deserialize, Serialize};
 
 use crate::common::ray::ray_intersects_aabb;
 use crate::common::PointResolutionError;
+use crate::common::world_surface::Fill;
 use crate::editor::editable::{insert_if_changed, AxisRef, Feature, FeatureId, FeatureTrait, OwnBase, PointRef, BROKEN};
 use crate::editor::mirror::Mirroring;
 use crate::get;
 use crate::prop::region::{arrange, Arrangement, Note, Region};
 use crate::prop::sketch::{region_label, Sketch, SketchEntity, SketchId, SketchPoint, SketchRegion};
 use crate::material::picker::material_button;
-use crate::tool::room::{Room, RoomSlot, RoomSurfaces};
+use crate::tool::room::{Block, Room, RoomSlot, RoomSurfaces};
 
 /// A height a new footprint stands to before anybody sets one.
 pub const DEFAULT_HEIGHT: f32 = 3.0;
 
 /// The lowest a ceiling may be dragged to over its floor.
 pub const MIN_HEIGHT: f32 = 0.1;
+
+pub const LINE_COLOR: Color = Color::srgb_u8(200, 200, 120);
 
 /// How far above the origin its handle stands, in meters, so it is not on top
 /// of the first corner's; never more than half the height, so it stays under
@@ -520,6 +523,46 @@ impl FootprintRoom {
         })
     }
 
+    /// `edges` colors the prisms; the drawn lines are always `LINE_COLOR`.
+    pub fn draw(&self, gizmos: &mut Gizmos, edges: Color) {
+        let at = |p: Vec2| Vec3::new(p.x, self.resolved_origin.y, p.y);
+        for line in &self.lines {
+            if let (Some(a), Some(b)) = (self.corner_at(line.a), self.corner_at(line.b)) {
+                gizmos.line(at(a), at(b), LINE_COLOR);
+            }
+        }
+        for room in &self.resolved {
+            for (a, b) in room.edges() {
+                gizmos.line(a, b, edges);
+            }
+        }
+    }
+
+    /// One child per prism, re-applied rather than respawned: a respawned room
+    /// is rebaked every frame of a drag.
+    pub fn stand_up(&mut self, commands: &mut Commands, entity: Entity, fill: Fill) {
+        commands.entity(entity).insert_if_new((Transform::IDENTITY, Visibility::Inherited));
+        for surplus in self.room_entities.drain(self.resolved.len().min(self.room_entities.len())..) {
+            commands.entity(surplus).despawn();
+        }
+        for (index, room) in self.resolved.iter().enumerate() {
+            let child = match self.room_entities.get(index) {
+                Some(child) => *child,
+                None => {
+                    let child = commands.spawn(ChildOf(entity)).id();
+                    self.room_entities.push(child);
+                    child
+                }
+            };
+            let mut child = commands.entity(child);
+            match fill {
+                Fill::Solid => child.insert(Block(room.clone())),
+                Fill::Air => child.insert(room.clone()),
+            };
+            insert_if_changed(&mut child, self.surfaces.clone());
+        }
+    }
+
     fn problem_text(&self, problem: &Problem) -> String {
         let (sketch, _) = self.local_sketch();
         match problem {
@@ -643,17 +686,7 @@ impl FeatureTrait for FootprintRoom {
     }
 
     fn debug_gizmos(&self, gizmos: &mut Gizmos) {
-        let at = |p: Vec2| Vec3::new(p.x, self.resolved_origin.y, p.y);
-        for line in &self.lines {
-            if let (Some(a), Some(b)) = (self.corner_at(line.a), self.corner_at(line.b)) {
-                gizmos.line(at(a), at(b), Color::srgb_u8(200, 200, 120));
-            }
-        }
-        for room in &self.resolved {
-            for (a, b) in room.edges() {
-                gizmos.line(a, b, Color::srgb_u8(100, 100, 100));
-            }
-        }
+        self.draw(gizmos, Color::srgb_u8(100, 100, 100));
     }
 
     fn selected_gizmos(&self, gizmos: &mut Gizmos) {
@@ -669,26 +702,8 @@ impl FeatureTrait for FootprintRoom {
         self.room_entities.clear();
     }
 
-    /// One child per room, re-applied rather than respawned: a respawned room
-    /// is a rebake of it every frame of a drag.
     fn apply_to_entity(&mut self, commands: &mut Commands, entity: Entity) {
-        commands.entity(entity).insert_if_new((Transform::IDENTITY, Visibility::Inherited));
-        for surplus in self.room_entities.drain(self.resolved.len().min(self.room_entities.len())..) {
-            commands.entity(surplus).despawn();
-        }
-        for (index, room) in self.resolved.iter().enumerate() {
-            match self.room_entities.get(index) {
-                Some(child) => {
-                    let mut child = commands.entity(*child);
-                    child.insert(room.clone());
-                    insert_if_changed(&mut child, self.surfaces.clone());
-                }
-                None => {
-                    let child = commands.spawn((room.clone(), self.surfaces.clone(), ChildOf(entity))).id();
-                    self.room_entities.push(child);
-                }
-            }
-        }
+        self.stand_up(commands, entity, Fill::Air);
     }
 
     fn resolve_references(&mut self, features: &HashMap<FeatureId, Feature>) {

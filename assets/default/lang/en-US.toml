@@ -64,6 +64,7 @@ room = "Room"
 trigger = "Trigger"
 block = "Block"
 footprint = "Footprint"
+footprint_block = "Footprint Block"
 mirror = "Mirror"
 retarget = "Retarget"
 
@@ -293,6 +294,9 @@ effect = "Effect"
 hurt = "Hurt"
 kill = "Kill"
 per_second = "Damage per second"
+
+[editor.features.footprint_block]
+title = "Footprint Block"
 
 [editor.features.footprint_room]
 title = "Footprint Room"

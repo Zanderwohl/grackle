@@ -75,23 +75,21 @@ impl SelectionPlugin {
 
         let highlight = Color::srgb_u8(0, 230, 0);
 
-        match feature.object().type_key() {
-            "editor_room" | "footprint_room" => {
-                for room in feature.object().rooms() {
-                    for (a, b) in room.edges() {
-                        gizmos.line(a, b, highlight);
-                    }
+        let volumes = feature.object().volumes();
+        if !volumes.is_empty() {
+            for volume in &volumes {
+                for (a, b) in volume.shape.edges() {
+                    gizmos.line(a, b, highlight);
                 }
             }
-            _ => {
-                let pick_boxes = feature.object().pick_boxes();
-                if pick_boxes.is_empty() {
-                    gizmos.sphere(Isometry3d::from_translation(hit_pos), 0.15, highlight);
-                }
-                for pick_box in pick_boxes {
-                    gizmos.cube(pick_box.transform(), highlight);
-                }
-            }
+            return;
+        }
+        let pick_boxes = feature.object().pick_boxes();
+        if pick_boxes.is_empty() {
+            gizmos.sphere(Isometry3d::from_translation(hit_pos), 0.15, highlight);
+        }
+        for pick_box in pick_boxes {
+            gizmos.cube(pick_box.transform(), highlight);
         }
     }
 }

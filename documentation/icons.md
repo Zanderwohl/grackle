@@ -28,6 +28,7 @@ When an icon ships, check its box.
 | [x] | `cube_solid` | Solid hexagon, the exact footprint of `cube_hollow`, with its edges as negative-space lines | Block |
 | [x] | `cube_exclamation` | `cube_hollow` with an exclamation point inside, outlined in negative space to give it a little margin | Trigger |
 | [x] | `double_pennant` | Irregular concave pentagon, like the flag of Nepal laid on its long side: two overlapping isosceles triangles of different heights on one base | Footprint |
+| [x] | `double_pennant_solid` | `double_pennant` filled solid, the line between its two triangles in negative space | Footprint Block |
 | [x] | `square_mirrored` | Square on the left, solid vertical line, dashed square on the right | Mirror (map editor), Mirror (prop editor) |
 | [x] | `runner` | Running human figure, side-on | Animation Display |
 | [x] | `two_runners` | Two running human figures, side-on | Animation Grid |

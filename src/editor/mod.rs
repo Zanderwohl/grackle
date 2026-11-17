@@ -19,4 +19,5 @@ pub mod decal;
 pub mod mirror;
 pub mod trigger;
 pub mod block;
+pub mod footprint_block;
 pub mod volume_order;

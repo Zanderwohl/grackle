@@ -133,6 +133,7 @@ pub enum Tools {
     Block,
     Trigger,
     Footprint,
+    FootprintBlock,
     Mirror,
     Retarget,
     /// A client's: no tool runs under it.
@@ -156,6 +157,7 @@ impl Tools {
             Self::Block => get!("tools.block"),
             Self::Trigger => get!("tools.trigger"),
             Self::Footprint => get!("tools.footprint"),
+            Self::FootprintBlock => get!("tools.footprint_block"),
             Self::Mirror => get!("tools.mirror"),
             Self::Retarget => "Retarget".into(),
             Self::Spectate => "Spectate".into(),
@@ -179,6 +181,7 @@ impl Tools {
             Self::Block => "cube_solid",
             Self::Trigger => "cube_exclamation",
             Self::Footprint => "double_pennant",
+            Self::FootprintBlock => "double_pennant_solid",
             Self::Mirror => "square_mirrored",
             Self::Retarget => icons::FALLBACK,
             Self::Spectate => icons::FALLBACK,
@@ -239,7 +242,7 @@ const TOOLBAR: &[ToolGroup] = &[
     ToolGroup::One(Tools::Select),
     ToolGroup::Split("points", &[Tools::Point, Tools::PointLight, Tools::SpawnPoint, Tools::SpectatorCamera, Tools::Decal]),
     ToolGroup::Split("props", &[Tools::Prop, Tools::WeaponPickup]),
-    ToolGroup::Cluster(&[Tools::Room, Tools::Block, Tools::Trigger, Tools::Footprint]),
+    ToolGroup::Cluster(&[Tools::Room, Tools::Block, Tools::Trigger, Tools::Footprint, Tools::FootprintBlock]),
     ToolGroup::One(Tools::Mirror),
     ToolGroup::Split("animation", &[Tools::AnimationDisplay, Tools::AnimationGrid]),
 ];

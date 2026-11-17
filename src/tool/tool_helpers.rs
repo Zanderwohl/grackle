@@ -370,26 +370,12 @@ pub fn find_nearest_feature_hit_in(
 
     for (feature_id, feature) in features.active_features() {
         let key = feature.object().type_key();
-        let visible = match key {
-            "global_point" => visibility.points,
-            "editor_room" | "footprint_room" => visibility.rooms,
-            "grackle_point_light" => visibility.point_lights,
-            "spawn_point" => visibility.spawn_points,
-            "prop" | "weapon_pickup" => visibility.props,
-            "spectator_camera" => visibility.spectator_cameras,
-            "decal" => visibility.decals,
-            "animation_display" => visibility.animation_displays,
-            "animation_grid" => visibility.animation_grids,
-            "mirror" => visibility.mirrors,
-            "trigger" => visibility.triggers,
-            "block" => visibility.blocks,
-            _ => false,
-        };
+        let visible = visibility.shows(key);
         if !visible { continue; }
 
         match key {
-            "editor_room" | "footprint_room" | "block" => {
-                let own = cache.owned.get(&feature_id).cloned().unwrap_or_default();
+            _ if cache.owned.contains_key(&feature_id) => {
+                let own = cache.owned[&feature_id].clone();
                 for index in own {
                     if let Some((t, hit)) = cache.wall_hit(index, ray) {
                         if t < best_t {

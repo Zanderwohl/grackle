@@ -296,6 +296,14 @@ mod tests {
         footprint.resolve_references(timeline.features_map());
         assert!(footprint.name_region_at(bevy::math::Vec2::new(5.0, 3.0)), "the triangle encloses nothing there");
         timeline.apply_feature(Box::new(footprint));
+
+        let mut column = FootprintRoom::new(PointRef::absolute(1.0, 0.0, 1.0), 2.0);
+        let corners: Vec<_> = [(1.0, 1.0), (1.5, 1.0), (1.5, 1.5), (1.0, 1.5)]
+            .into_iter()
+            .map(|(x, z)| crate::editor::footprint_room::ChainCorner::New(PointRef::absolute(x, 0.0, z)))
+            .collect();
+        column.add_chain(&corners, true, timeline.features_map());
+        timeline.apply_feature(Box::new(crate::editor::footprint_block::FootprintBlock::from_footprint(column)));
         timeline
     }
 

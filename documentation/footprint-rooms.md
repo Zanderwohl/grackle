@@ -167,6 +167,9 @@ every corner, so another feature can reference one.
 - [x] Tried by hand in the editor.
 - Every drawing is one loop, made into a new footprint, whatever is
   selected: adding to the selected one joined drawings by accident.
+- [x] Under `Tools::FootprintBlock` the same drawing is a `FootprintBlock`:
+      the footprint wrapped, standing up a `Block` per room instead of a
+      `Room` (`FootprintRoom::stand_up`), so a column can be any floor plan.
 
 ### Stage 3 — editing one
 
