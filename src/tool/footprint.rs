@@ -1,7 +1,5 @@
 //! Drawing a footprint room: corners clicked on the floor plane, chained into
-//! a loop, closed on the first. With a footprint selected, the drawing is
-//! added to it instead: corners snap onto its own, and a chain that started on
-//! one ends on the next.
+//! a loop, closed on the first. Every drawing is a footprint of its own.
 //! See `documentation/footprint-rooms.md`.
 
 use crate::common::keybind::{Action, Actions};
@@ -10,9 +8,8 @@ use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 
 use crate::common::app_mode::AppMode;
-use crate::editor::editable::{EditEvent, Feature, FeatureId, FeatureTimeline, PointRef};
+use crate::editor::editable::{Feature, FeatureId, FeatureTimeline, PointRef};
 use crate::editor::footprint_room::{ChainCorner, FootprintRoom, DEFAULT_HEIGHT};
-use crate::prop::sketch::SketchId;
 use crate::editor::input::CurrentMouseInput;
 use crate::editor::multicam::Multicam;
 use crate::prop::sketch_edit::hatch;
@@ -22,9 +19,8 @@ use crate::tool::Tools;
 
 const SNAP: f32 = 0.1;
 
-/// How near a corner, in meters across the floor, a click lands on it — the
-/// first, to close the loop, or one of the footprint's own — rather than
-/// beside it.
+/// How near the first corner, in meters across the floor, a click closes the
+/// loop rather than landing beside it.
 const CLOSE_RADIUS: f32 = 0.3;
 
 /// Hatching across a loop that would close into a room, in meters.
@@ -54,7 +50,7 @@ pub struct Draft {
     /// Set by the first corner; every later one is on its plane.
     floor: Option<f32>,
     /// Where each corner is across the floor, and what it is.
-    corners: Vec<(Vec2, ChainCorner)>,
+    corners: Vec<(Vec2, PointRef)>,
 }
 
 impl Draft {
@@ -66,19 +62,9 @@ impl Draft {
         self.corners.is_empty()
     }
 
-    pub fn push(&mut self, at: Vec3, corner: ChainCorner) {
+    pub fn push(&mut self, at: Vec3, corner: PointRef) {
         self.floor.get_or_insert(at.y);
         self.corners.push((Vec2::new(at.x, at.z), corner));
-    }
-
-    /// Whether adding the footprint's own corner `id` would add nothing: it is
-    /// already the last.
-    fn ends_on(&self, id: SketchId) -> bool {
-        matches!(self.corners.last(), Some((_, ChainCorner::Existing(last))) if *last == id)
-    }
-
-    fn chain(&self) -> Vec<ChainCorner> {
-        self.corners.iter().map(|(_, corner)| corner.clone()).collect()
     }
 
     /// Takes the last corner back; the floor goes with the first.
@@ -94,38 +80,12 @@ impl Draft {
         self.corners.len() >= 3 && self.corners[0].0.distance(at) <= CLOSE_RADIUS
     }
 
-    /// Whether adding `corner` ends the chain on the footprint's own corner.
-    /// Only a chain that started on one does; a loose one ended there would
-    /// be a spur bounding nothing.
-    fn joins(&self, corner: &ChainCorner, closes: bool, onto_footprint: bool) -> bool {
-        let started_on_one = matches!(self.corners.first(), Some((_, ChainCorner::Existing(_))));
-        match corner {
-            ChainCorner::Existing(id) => onto_footprint && started_on_one && !closes && !self.ends_on(*id),
-            ChainCorner::New(_) => false,
-        }
-    }
-
-    /// `Some(closed)` when the click finishes the chain, which the draft then
-    /// holds whole; `None` while it goes on.
-    fn place(&mut self, at: Vec3, corner: ChainCorner, onto_footprint: bool) -> Option<bool> {
-        let closes = self.closes_at(Vec2::new(at.x, at.z));
-        let joins = self.joins(&corner, closes, onto_footprint);
-        if closes {
-            return Some(true);
-        }
-        let repeat = matches!(&corner, ChainCorner::Existing(id) if self.ends_on(*id));
-        if !repeat {
-            self.push(at, corner);
-        }
-        joins.then_some(false)
-    }
-
     pub fn points(&self) -> impl Iterator<Item = Vec2> + '_ {
         self.corners.iter().map(|(at, _)| *at)
     }
 
-    /// The loop as a new footprint, its regions named by the same rule as a
-    /// chain added to an existing one. `None` with fewer than three corners.
+    /// The loop as a new footprint with its region named. `None` with fewer
+    /// than three corners.
     pub fn finish(&self, height: f32, features: &HashMap<FeatureId, Feature>) -> Option<FootprintRoom> {
         let floor = self.floor?;
         if self.corners.len() < 3 {
@@ -133,7 +93,8 @@ impl Draft {
         }
         let first = self.corners[0].0;
         let mut room = FootprintRoom::new(PointRef::absolute(first.x, floor, first.y), height);
-        room.add_chain(&self.chain(), true, features);
+        let chain: Vec<_> = self.corners.iter().map(|(_, corner)| ChainCorner::New(corner.clone())).collect();
+        room.add_chain(&chain, true, features);
         Some(room)
     }
 }
@@ -141,11 +102,6 @@ impl Draft {
 #[derive(Resource)]
 struct FootprintTool {
     draft: Draft,
-    /// The footprint being drawn onto, if one was selected.
-    target: Option<FeatureId>,
-    /// Its floor and corners as they stood when the drawing started.
-    target_floor: Option<f32>,
-    target_corners: Vec<(SketchId, Vec3)>,
     /// Where the next corner would go, on the floor plane.
     cursor: Option<Vec3>,
     /// A feature's point under the pointer while Shift is held.
@@ -158,9 +114,6 @@ impl Default for FootprintTool {
     fn default() -> Self {
         Self {
             draft: Draft::default(),
-            target: None,
-            target_floor: None,
-            target_corners: Vec::new(),
             cursor: None,
             hovered_point: None,
             height: DEFAULT_HEIGHT,
@@ -171,38 +124,8 @@ impl Default for FootprintTool {
 impl FootprintTool {
     fn on_exit(mut tool: ResMut<Self>) {
         tool.draft = Draft::default();
-        tool.target = None;
         tool.cursor = None;
         tool.hovered_point = None;
-    }
-
-    /// Drawing onto a footprint, only what stands before it: a corner on it,
-    /// after it, or on a Mirror's copy of it would be a cycle.
-    fn pickable(&self, features: &FeatureTimeline) -> Vec<FeatureId> {
-        let active = features.active_features().map(|(id, _)| id);
-        match self.target {
-            Some(target) => active.take_while(|id| *id != target).collect(),
-            None => active.collect(),
-        }
-    }
-
-    /// Between drawings, whatever footprint is selected is what the next one
-    /// goes onto.
-    fn aim_at_selection(&mut self, features: &FeatureTimeline) {
-        if !self.draft.is_empty() {
-            return;
-        }
-        let footprint = features
-            .selected_feature()
-            .and_then(|id| features.get_feature(&id).and_then(|f| f.object().footprint()).map(|f| (id, f)));
-        self.target = footprint.map(|(id, _)| id);
-        self.target_floor = footprint.map(|(_, f)| f.floor_height());
-        self.target_corners = footprint.map(|(_, f)| f.corner_points().collect()).unwrap_or_default();
-    }
-
-    /// The footprint's own corner near `at`, if there is one.
-    fn target_corner_near(&self, at: Vec2) -> Option<(SketchId, Vec3)> {
-        self.target_corners.iter().copied().find(|(_, p)| Vec2::new(p.x, p.z).distance(at) <= CLOSE_RADIUS)
     }
 
     /// Where the pointer is on the floor plane. Before the first corner there
@@ -215,7 +138,7 @@ impl FootprintTool {
         cameras: &Query<(Entity, &Multicam)>,
         rooms: &MapVolumes,
     ) -> Option<Vec3> {
-        let Some(floor) = self.draft.floor().or(self.target_floor) else {
+        let Some(floor) = self.draft.floor() else {
             let start = Vec3::ZERO;
             return compute_cursor(mouse_input, cameras, start, true, SNAP, rooms);
         };
@@ -245,10 +168,7 @@ impl FootprintTool {
         mut features: ResMut<FeatureTimeline>,
         rooms: MapVolumes,
         mut next_tool: ResMut<NextState<Tools>>,
-        mut commands: Commands,
-        mut edit_events: MessageWriter<EditEvent>,
     ) {
-        tool.aim_at_selection(&features);
         if actions.just_pressed(Action::Cancel) {
             tool.draft = Draft::default();
             return;
@@ -263,52 +183,29 @@ impl FootprintTool {
 
         // With Shift, a feature's point under the pointer; with none there,
         // Shift changes nothing and the click goes on the grid.
-        let pickable = tool.pickable(&features);
         tool.hovered_point = mouse_input
             .world_pos
             .filter(|_| shift_held)
-            .and_then(|ray| find_hovered_point_filtered(&ray, &features, PICK_RADIUS, &pickable));
+            .and_then(|ray| find_hovered_point(&ray, &features, PICK_RADIUS));
         let placed = match tool.hovered_point.clone() {
             Some((feature, key, at)) => (mouse_input.released == Some(MouseButton::Left)).then(|| {
                 let mut point = PointRef::reference(feature);
                 point.point_key = key;
-                (at, ChainCorner::New(point))
+                (at, point)
             }),
-            None => {
-                let own = tool.cursor.and_then(|at| tool.target_corner_near(Vec2::new(at.x, at.z)));
-                if let Some((_, at)) = own {
-                    tool.cursor = Some(at);
-                }
-                tool.cursor.filter(|_| commit_at_cursor(&mouse_input, &actions)).map(|at| match own {
-                    Some((id, at)) => (at, ChainCorner::Existing(id)),
-                    None => (at, ChainCorner::New(PointRef::absolute(at.x, at.y, at.z))),
-                })
-            }
+            None => tool
+                .cursor
+                .filter(|_| commit_at_cursor(&mouse_input, &actions))
+                .map(|at| (at, PointRef::absolute(at.x, at.y, at.z))),
         };
         let Some((at, corner)) = placed else { return };
-
-        let onto_footprint = tool.target.is_some();
-        let Some(closes) = tool.draft.place(at, corner, onto_footprint) else { return };
-
-        match tool.target {
-            Some(target) => {
-                if let Some(mut feature) = features.features_mut().remove(&target) {
-                    if let Some(footprint) = feature.object_mut().footprint_mut() {
-                        footprint.add_chain(&tool.draft.chain(), closes, features.features_map());
-                    }
-                    if let Some(entity) = feature.object().entity() {
-                        feature.object_mut().apply_to_entity(&mut commands, entity);
-                        edit_events.write(EditEvent { editor_id: target._id(), feature_id: target, entity });
-                    }
-                    features.features_mut().insert(target, feature);
-                }
-            }
-            None => {
-                if let Some(room) = tool.draft.finish(tool.height, features.features_map()) {
-                    let id = features.apply_feature(Box::new(room));
-                    features.select(Some(id));
-                }
-            }
+        if !tool.draft.closes_at(Vec2::new(at.x, at.z)) {
+            tool.draft.push(at, corner);
+            return;
+        }
+        if let Some(room) = tool.draft.finish(tool.height, features.features_map()) {
+            let id = features.apply_feature(Box::new(room));
+            features.select(Some(id));
         }
         tool.draft = Draft::default();
         next_tool.set(Tools::Select);
@@ -325,10 +222,7 @@ impl FootprintTool {
         let closing = Color::srgb_u8(100, 255, 100);
 
         if let Some(ray) = mouse_input.world_pos.filter(|_| tool.hovered_point.is_some()) {
-            draw_picking_gizmos_filtered(&mut gizmos, &ray, &features, &tool.hovered_point, &tool.pickable(&features));
-        }
-        for (_, at) in &tool.target_corners {
-            gizmos.sphere(Isometry3d::from_translation(*at), 0.08, drawn);
+            draw_picking_gizmos(&mut gizmos, &ray, &features, &tool.hovered_point);
         }
 
         let Some(floor) = tool.draft.floor() else {
@@ -351,11 +245,7 @@ impl FootprintTool {
             dashed_line(&mut gizmos, at(*last), at(if closes { points[0] } else { next }), pending, 0.15, 0.1);
         }
         gizmos.sphere(Isometry3d::from_translation(at(points[0])), 0.15, if closes { closing } else { drawn });
-        let joins = tool.hovered_point.is_none()
-            && tool.target_corner_near(next).is_some_and(|(id, _)| {
-                tool.draft.joins(&ChainCorner::Existing(id), closes, tool.target.is_some())
-            });
-        gizmos.sphere(Isometry3d::from_translation(at(next)), 0.12, if joins { closing } else { pending });
+        gizmos.sphere(Isometry3d::from_translation(at(next)), 0.12, pending);
 
         // What would be a room if the loop closed here.
         let mut outline = points.clone();
@@ -385,7 +275,7 @@ mod tests {
     fn drawn(points: &[(f32, f32)]) -> Draft {
         let mut draft = Draft::default();
         for (x, z) in points {
-            draft.push(at(*x, *z), ChainCorner::New(PointRef::absolute(*x, 1.5, *z)));
+            draft.push(at(*x, *z), PointRef::absolute(*x, 1.5, *z));
         }
         draft
     }
@@ -439,86 +329,15 @@ mod tests {
         let mut timeline = FeatureTimeline::default();
         let anchor = timeline.apply_feature(Box::new(GlobalPoint::new(5.0, 1.5, 1.0)));
         let mut draft = drawn(&[(0.0, 0.0), (4.0, 0.0)]);
-        draft.push(Vec3::new(5.0, 1.5, 1.0), ChainCorner::New(PointRef::reference(anchor)));
-        draft.push(at(0.0, 4.0), ChainCorner::New(PointRef::absolute(0.0, 1.5, 4.0)));
+        draft.push(Vec3::new(5.0, 1.5, 1.0), PointRef::reference(anchor));
+        draft.push(at(0.0, 4.0), PointRef::absolute(0.0, 1.5, 4.0));
         let room = draft.finish(3.0, timeline.features_map()).unwrap();
         assert_eq!(room.parent_ids(), vec![anchor]);
         assert_eq!(room.rooms().len(), 1, "{:?}", room.problems());
     }
 
     #[test]
-    fn only_a_chain_that_started_on_an_own_corner_ends_on_one() {
-        let own = |id: u32| ChainCorner::Existing(SketchId(id));
-        let loose = drawn(&[(0.0, 0.0), (4.0, 0.0)]);
-        assert!(!loose.joins(&own(3), false, true), "a loose chain ended as a spur");
-
-        let mut anchored = Draft::default();
-        anchored.push(at(0.0, 0.0), own(1));
-        anchored.push(at(4.0, 0.0), ChainCorner::New(PointRef::absolute(4.0, 1.5, 0.0)));
-        assert!(anchored.joins(&own(3), false, true));
-        assert!(!anchored.joins(&own(3), false, false), "joined with no footprint to join");
-        assert!(!anchored.joins(&ChainCorner::New(PointRef::absolute(4.0, 1.5, 4.0)), false, true));
-        assert!(!anchored.joins(&own(3), true, true), "closing is not joining");
-        anchored.push(at(4.0, 4.0), own(3));
-        assert!(!anchored.joins(&own(3), false, true), "the corner it is already on");
-        assert!(!Draft::default().joins(&own(3), false, true), "the first corner ended the chain");
-    }
-
-    #[test]
-    fn a_click_finishes_the_chain_only_by_joining_or_closing() {
-        let own = |id: u32| ChainCorner::Existing(SketchId(id));
-        let new = |x: f32, z: f32| ChainCorner::New(PointRef::absolute(x, 1.5, z));
-
-        let mut loose = Draft::default();
-        assert_eq!(loose.place(at(0.0, 0.0), new(0.0, 0.0), true), None);
-        assert_eq!(loose.place(at(4.0, 0.0), own(3), true), None, "a loose chain ended on a corner");
-        assert_eq!(loose.points().count(), 2, "the corner passed through was not kept");
-        assert_eq!(loose.place(at(4.0, 0.0), own(3), true), None);
-        assert_eq!(loose.points().count(), 2, "the same corner twice");
-        assert_eq!(loose.place(at(4.0, 4.0), new(4.0, 4.0), true), None);
-        assert_eq!(loose.place(at(0.1, 0.1), new(0.1, 0.1), true), Some(true));
-        assert_eq!(loose.points().count(), 3, "the closing click added a corner");
-
-        let mut anchored = Draft::default();
-        anchored.place(at(0.0, 0.0), own(1), true);
-        assert_eq!(anchored.place(at(4.0, 0.0), own(3), false), None, "joined with no footprint");
-        let mut anchored = Draft::default();
-        anchored.place(at(0.0, 0.0), own(1), true);
-        assert_eq!(anchored.place(at(4.0, 0.0), own(3), true), Some(false));
-        assert_eq!(anchored.points().count(), 2, "the corner joined was not kept");
-    }
-
-    /// A loose chain through one of the footprint's corners, closed on its own
-    /// first corner, is a room.
-    #[test]
-    fn a_loose_loop_through_an_own_corner_is_a_room() {
-        let mut room = drawn(&[(0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (0.0, 4.0)]).finish(3.0, &HashMap::new()).unwrap();
-        let corner = room.corner_points().find(|(_, p)| p.x == 4.0 && p.z == 4.0).map(|(id, _)| id).unwrap();
-        let new = |x: f32, z: f32| ChainCorner::New(PointRef::absolute(x, 1.5, z));
-        room.add_chain(&[new(8.0, 0.0), new(8.0, 8.0), new(4.0, 8.0), ChainCorner::Existing(corner)], true, &HashMap::new());
-        assert_eq!(room.rooms().len(), 2, "{:?}", room.problems());
-        assert!(room.problems().is_empty(), "{:?}", room.problems());
-    }
-
-    #[test]
     fn two_corners_are_not_a_room() {
         assert!(drawn(&[(0.0, 0.0), (4.0, 0.0)]).finish(3.0, &HashMap::new()).is_none());
-    }
-
-    /// A corner on anything at or after the footprint, a Mirror copying it included, is a cycle.
-    #[test]
-    fn drawing_onto_a_footprint_offers_only_what_stands_before_it() {
-        use crate::editor::global_point::GlobalPoint;
-        use crate::editor::mirror::Mirror;
-
-        let mut timeline = FeatureTimeline::default();
-        let before = timeline.apply_feature(Box::new(GlobalPoint::new(0.0, 0.0, 0.0)));
-        let footprint = timeline.apply_feature(Box::new(FootprintRoom::new(PointRef::absolute(0.0, 0.0, 0.0), 3.0)));
-        timeline.apply_feature(Box::new(Mirror::new(PointRef::absolute(0.0, 0.0, 0.0)).with_sources(vec![footprint])));
-
-        let mut tool = FootprintTool::default();
-        assert_eq!(tool.pickable(&timeline).len(), 3, "a new footprint goes in after everything");
-        tool.target = Some(footprint);
-        assert_eq!(tool.pickable(&timeline), vec![before]);
     }
 }
