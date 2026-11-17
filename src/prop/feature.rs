@@ -25,7 +25,8 @@ use crate::prop::profile::revolve_steps;
 use crate::prop::region::{arrange, axis_clear, Region};
 use crate::prop::sketch::SketchId;
 use crate::prop::sketch::{PlacedSketch, Sketch};
-use crate::prop::reference::{face_at, pickables, GeomRef, Located, Outline, Pickable, Wire};
+use crate::prop::seam::{self, FaceTable, Junction, Seam};
+use crate::prop::reference::{pickables, GeomRef, Located, Outline, Pickable, Wire};
 use crate::prop::skin::{extrusion, revolution, skin, Run, SkinProblem, TaggedLoop};
 use crate::prop::solid::{is_full_turn, Shape, Solid};
 use crate::prop::surface::Surface;
@@ -453,6 +454,20 @@ pub struct Evaluated {
     pub points: Vec<DatumPoint>,
     /// Meters each way of the origin the origin planes and axes are drawn.
     pub origin_half: f32,
+    /// What every polygon's face tag names.
+    pub faces: FaceTable,
+    /// Every body's seams and junctions, each marked whether it is offered,
+    /// found the first time something asks: the game bakes props through
+    /// [`evaluate`] and never does.
+    found: std::sync::OnceLock<Found>,
+}
+
+/// Seams, junctions, and the generator edges a seam is offered in place of.
+#[derive(Clone, Debug, Default)]
+struct Found {
+    seams: Vec<Seam>,
+    junctions: Vec<Junction>,
+    replaced: Vec<GeomRef>,
 }
 
 impl Evaluated {
@@ -504,20 +519,15 @@ impl Evaluated {
             .min_by(|a, b| a.2.total_cmp(&b.2))
     }
 
-    /// What a click on a body's surface lands on: the body, and the named flat
-    /// face there if one matches. One that a boolean made has none.
+    /// What a click on a body's surface lands on: the body, and the named
+    /// face its polygon carries the tag of.
     pub fn surface_under(&self, ray: Ray3d) -> Option<(PropFeatureId, Option<GeomRef>)> {
-        self.surface_of_hit(ray, self.face_under(ray.origin, *ray.direction)?)
+        Some(self.surface_of_hit(self.face_under(ray.origin, *ray.direction)?))
     }
 
-    /// [`Evaluated::surface_under`] for a hit already cast down `ray`.
-    pub fn surface_of_hit(
-        &self,
-        ray: Ray3d,
-        (body, polygon, distance): (PropFeatureId, &Polygon, f32),
-    ) -> Option<(PropFeatureId, Option<GeomRef>)> {
-        let wires = self.wires.iter().find(|(id, _)| *id == body).map(|(_, wires)| wires.as_slice())?;
-        Some((body, face_at(wires, ray.get_point(distance), polygon.plane.normal)))
+    /// [`Evaluated::surface_under`] for a hit already cast.
+    pub fn surface_of_hit(&self, (body, polygon, _): (PropFeatureId, &Polygon, f32)) -> (PropFeatureId, Option<GeomRef>) {
+        (body, self.faces.name(polygon.surface.tag).cloned())
     }
 
     /// The sketch region under the pointer, nearest first, unless a face is
@@ -562,6 +572,33 @@ impl Evaluated {
             &self.points,
             self.origin_half,
         )
+        .with_seams(self.seams(), self.junctions())
+    }
+
+    pub fn seams(&self) -> &[Seam] {
+        &self.found().seams
+    }
+
+    pub fn junctions(&self) -> &[Junction] {
+        &self.found().junctions
+    }
+
+    /// Whether an offered seam stands in for this generator edge.
+    pub fn replaced(&self, edge: &GeomRef) -> bool {
+        self.found().replaced.contains(edge)
+    }
+
+    fn found(&self) -> &Found {
+        self.found.get_or_init(|| {
+            let (mut seams, mut junctions) = (vec![], vec![]);
+            for (body, solid) in &self.bodies {
+                let (found, meeting) = seam::find(*body, solid, &self.faces);
+                seams.extend(found);
+                junctions.extend(meeting);
+            }
+            let replaced = seam::offer(&mut seams, &mut junctions, &self.pickables);
+            Found { seams, junctions, replaced }
+        })
     }
 
     /// Where a reference is now, whether or not it can be seen.
@@ -735,6 +772,7 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
     let mut sketches = Vec::new();
     let mut axes = Vec::new();
     let mut points = Vec::new();
+    let mut faces = FaceTable::default();
     let mut live_before = Vec::with_capacity(features.len());
 
     for feature in features {
@@ -747,9 +785,10 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
         // Find before taking: a boolean that took one operand and failed to
         // find the other would delete a body it never used.
         let find = |id: PropFeatureId, live: &[Live]| live.iter().position(|body| body.id == id);
-        let made = |solid: Solid, outline: Outline| Live {
+        // A generator's polygons carry its own face numbers until here.
+        let made = |solid: Solid, outline: Outline, faces: &mut FaceTable| Live {
             id: feature.id,
-            solid,
+            solid: solid.retagged(|face| faces.of_generator(feature.id, face)),
             wires: vec![Wire::new(feature.id, outline)],
         };
         // Resolved against before anything this feature makes or takes.
@@ -760,13 +799,14 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
             &axes,
             &points,
             origin_half_of(&live),
-        );
+        )
+        .with_bodies(live.iter().map(|body| (body.id, &body.solid)), &faces);
         let resolved_axis = |axis: &CurveRef| axis.resolve(&scope).and_then(|curve| curve.line());
 
         match &feature.op {
             FeatureOp::Primitive { shape, placement, surface } => {
                 let solid = shape.solid(*surface).transformed(placement.transform());
-                live.push(made(solid, shape.outline().transformed(placement.transform())));
+                live.push(made(solid, shape.outline().transformed(placement.transform()), &mut faces));
             }
             FeatureOp::Extrude { sketch, symmetric, end, surface, regions } => {
                 let Some(placed) = sketches.iter().find(|placed: &&PlacedSketch| placed.id == *sketch) else {
@@ -777,7 +817,7 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
                 let depth = end.distance();
                 let run = |loops| extrusion(loops, depth, *symmetric);
                 match sweep(&found, run, |points| points.to_vec(), &[placed.plane.transform()], *surface) {
-                    Ok((solid, outline)) => live.push(made(solid, outline)),
+                    Ok((solid, outline)) => live.push(made(solid, outline, &mut faces)),
                     Err(message) => problems.push(Problem { feature: feature.id, message }),
                 }
             }
@@ -807,7 +847,7 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
                 };
                 let run = |loops| revolution(loops, *degrees, steps);
                 match sweep(&found, run, |points| frame.local(points), &[spin, frame.transform], *surface) {
-                    Ok((solid, outline)) => live.push(made(solid, outline)),
+                    Ok((solid, outline)) => live.push(made(solid, outline, &mut faces)),
                     Err(message) => problems.push(Problem { feature: feature.id, message }),
                 }
             }
@@ -862,7 +902,7 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
                 };
                 let normal = *plane.normal;
                 let origin = plane.origin + normal * *offset;
-                let reflected = body.solid.clone().mirrored(origin, normal);
+                let reflected = body.solid.clone().mirrored(origin, normal).retagged(|tag| faces.copied(tag, feature.id, 1));
                 let reflections = body
                     .wires
                     .iter()
@@ -920,7 +960,8 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
                 // Unioned, not concatenated: overlapping copies must become one
                 // closed surface or a later boolean keeps the wrong half.
                 let solid = (1..count).fold(body.solid.clone(), |joined, index| {
-                    joined.union(&body.solid.clone().transformed(along.copy(line, index, count)))
+                    let copy = body.solid.clone().transformed(along.copy(line, index, count));
+                    joined.union(&copy.retagged(|tag| faces.copied(tag, feature.id, index)))
                 });
                 let mut wires = body.wires.clone();
                 for index in 1..count {
@@ -936,11 +977,24 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
         }
     }
 
-    let pickables = live.iter().flat_map(|body| pickables(body.id, &body.solid, &body.wires)).collect();
+    let pickables: Vec<Pickable> = live.iter().flat_map(|body| pickables(body.id, &body.solid, &body.wires)).collect();
     let origin_half = origin_half_of(&live);
     planes.splice(0..0, OriginPlane::ALL.map(|which| Datum::origin(which, origin_half)));
     let (bodies, wires) = live.into_iter().map(|body| ((body.id, body.solid), (body.id, body.wires))).unzip();
-    Evaluated { bodies, wires, pickables, problems, live_before, planes, sketches, axes, points, origin_half }
+    Evaluated {
+        bodies,
+        wires,
+        pickables,
+        problems,
+        live_before,
+        planes,
+        sketches,
+        axes,
+        points,
+        origin_half,
+        faces,
+        found: Default::default(),
+    }
 }
 
 #[cfg(test)]

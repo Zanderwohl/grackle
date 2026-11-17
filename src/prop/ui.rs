@@ -1179,7 +1179,7 @@ fn inspector(
             feature_inspector(ui, editor, build, id, requests, tool)
         }
         Some(Pick::Plane(PlaneRef::Origin(which))) => origin_plane_inspector(ui, which),
-        Some(pick @ (Pick::Axis(_) | Pick::SketchCurve { .. } | Pick::SketchPoint { .. })) => {
+        Some(pick @ (Pick::Axis(_) | Pick::SketchCurve { .. } | Pick::SketchPoint { .. } | Pick::Seam(_) | Pick::Junction(_))) => {
             line_inspector(ui, editor, build, &pick)
         }
         Some(Pick::Region { sketch, region }) => {
@@ -1297,6 +1297,23 @@ fn pick_label(editor: &PropEditor, build: &PropBuild, pick: &Pick) -> String {
             };
         }
         Pick::Axis(axis) => return axis_name(*axis),
+        Pick::Seam(seam) => {
+            let face = |face: &GeomRef| pick_label(editor, build, &Pick::Geom(face.clone()));
+            let label = get!("prop.picks.seam", "a", face(&seam.faces[0]), "b", face(&seam.faces[1]), "index", seam.index + 1);
+            return match build.evaluated.scope().seam(seam) {
+                Some(_) => label,
+                None => get!("prop.picks.absent", "pick", label),
+            };
+        }
+        Pick::Junction(junction) => {
+            let face = |face: &GeomRef| pick_label(editor, build, &Pick::Geom(face.clone()));
+            let [a, b, c] = &junction.faces;
+            let label = get!("prop.picks.junction", "a", face(a), "b", face(b), "c", face(c));
+            return match build.evaluated.scope().junction(junction) {
+                Some(_) => label,
+                None => get!("prop.picks.absent", "pick", label),
+            };
+        }
         Pick::Geom(reference) => reference,
     };
     let source = reference.source.copies.iter().fold(name(reference.source.feature), |base, copy| {
@@ -1369,7 +1386,14 @@ fn line_inspector(ui: &mut Ui, editor: &PropEditor, build: &PropBuild, pick: &Pi
             });
             return;
         }
-        let Some((a, b)) = pick.as_curve().and_then(|curve| curve.resolve(&scope)?.line()) else { return };
+        let Some(curve) = pick.as_curve().and_then(|curve| curve.resolve(&scope)) else { return };
+        let Some((a, b)) = curve.line() else {
+            ui.horizontal(|ui| {
+                ui.label(get!("prop.inspector.length"));
+                ui.label(format!("{:.4} m", curve.length()));
+            });
+            return;
+        };
         ui.horizontal(|ui| {
             ui.label(get!("prop.inspector.direction"));
             ui.label(triple((b - a).normalize_or_zero()));

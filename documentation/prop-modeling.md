@@ -371,16 +371,19 @@ this plan; they need stage 4 and adjacency on the result, and get their own.
 - [x] Revolve on the core; one face per profile entity
 - [x] Primitives on the core; `Shape::sweep` and the old `Solid`/`Outline` sweeps removed
 - [x] `every_sweep_is_wound_consistently` covers every section producer
-- [ ] Edges along a revolve are still one segment per step; joined into one curve with stage 4's chains
+- [x] A revolved corner's edge is one curve: a seam lying along several offered generator edges is offered in their place (`seam::offer`)
 
 ### Named edges
-- [ ] `FaceTag` carried by `csg::Polygon`; face table in `Evaluated`
-- [ ] `subtract`/`intersect` repaint the tool but keep its tag
-- [ ] Seams found by segment overlap; `Element::Seam`, `Element::Junction`
-- [ ] A seam on a generator edge offered under the generator's name
-- [ ] Mirror and Pattern copies carry `CopyOf` on face names
-- [ ] `pickables` offers seams; edges between facets of one face never offered
-- [ ] Tests: bore rims, rims survive lengthening the bore, every shipped seam resolves, mirrored seams
+- [x] Face tag carried by `csg::Polygon` (`solid::Face`); `FaceTable` in `Evaluated`
+- [x] `subtract`/`intersect` repaint the tool but keep its tag
+- [x] A click reads its face off the polygon's tag; `face_at` removed
+- [x] Seams found by segment overlap. Built as their own types, `SeamRef` and `JunctionRef`, not `Element` variants: a `GeomRef` names one source and a seam names two faces with a source each
+- [x] A seam on a generator edge offered under the generator's name
+- [x] Mirror and Pattern copies carry `CopyOf` on face names
+- [x] Seams and junctions offered in the viewport (`Pick::Seam`, `Pick::Junction`); edges between facets of one face never offered
+- [x] `CurveRef::Seam` and `PointRef::Junction`; `Curve3::Polyline`
+- [x] Tests: bore rims, rims survive lengthening the bore, every shipped seam resolves, mirrored seams
+- [x] Found lazily, so the game's bakes skip it; 13–17 ms for the largest shipped props in a debug build
 
 ### Sketch curves
 - [ ] `Curve2` and `Curve3`

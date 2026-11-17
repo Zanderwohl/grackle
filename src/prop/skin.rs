@@ -20,7 +20,7 @@ use bevy::prelude::*;
 use crate::common::csg;
 use crate::prop::profile::triangulate;
 use crate::prop::reference::{newell, Outline, OutlineFace, OutlineFacet};
-use crate::prop::solid::{Polygon, Solid};
+use crate::prop::solid::{Face, Polygon, Solid, NO_FACE};
 use crate::prop::surface::Surface;
 
 /// A closed loop in a section's plane, each segment tagged with what made it:
@@ -126,8 +126,11 @@ pub fn skin(run: &Run, surface: Surface) -> Result<Swept, SkinProblem> {
         loops.iter().zip(frames).map(|(points, frame)| place(points, frame)).collect()
     };
 
+    let numbers = FaceNumbers::of(run);
+    let span_count = spans(run);
     let outer = loops(0);
-    let raw = shell(&rings(&outer, &frames), &outer, &frames, run.closed, surface);
+    let side = |k: usize, i: usize| numbers.side(k, 0, wound_to_authored(&first.loops[0], i));
+    let raw = shell(&rings(&outer, &frames), &outer, &frames, run.closed, surface, &side, (numbers.start, numbers.end));
     let outward = csg::signed_volume_x6(&raw) >= 0.0;
     let mut solid = Solid::from_polygons(raw);
     for hole in 1..first.loops.len() {
@@ -142,10 +145,94 @@ pub fn skin(run: &Run, surface: Surface) -> Result<Swept, SkinProblem> {
                 overrun(&frames, &first.loops[hole])
             }
         };
-        let cutter = shell(&rings(&hole_loops, &cutter_frames), &hole_loops, &cutter_frames, run.closed, surface);
+        // An open cutter has a span more at each end, beyond the body.
+        let shift = usize::from(!run.closed);
+        let side = |k: usize, i: usize| {
+            let k = k.saturating_sub(shift).min(span_count - 1);
+            numbers.side(k, hole, wound_to_authored(&first.loops[hole], i))
+        };
+        let ends = (NO_FACE, NO_FACE);
+        let cutter = shell(&rings(&hole_loops, &cutter_frames), &hole_loops, &cutter_frames, run.closed, surface, &side, ends);
         solid = solid.subtract(&Solid::from_polygons(cutter));
     }
     Ok(Swept { solid, outline: outline(run, outward) })
+}
+
+/// Which outline face each polygon is part of: the numbering
+/// [`outline`] lists faces in.
+struct FaceNumbers {
+    start: u32,
+    end: u32,
+    /// The path tag group of each span.
+    group_of_span: Vec<usize>,
+    /// Per group, per loop, per segment as authored.
+    sides: Vec<Vec<Vec<u32>>>,
+}
+
+impl FaceNumbers {
+    fn of(run: &Run) -> FaceNumbers {
+        let loops = &run.sections[0].loops;
+        let mut next = 0u32;
+        let (start, end) = match run.closed {
+            true => (NO_FACE, NO_FACE),
+            false => {
+                next = 2;
+                (0, 1)
+            }
+        };
+        let mut groups: Vec<u32> = Vec::new();
+        let group_of_span = run
+            .spans
+            .iter()
+            .take(spans(run))
+            .map(|tag| match groups.iter().position(|t| t == tag) {
+                Some(at) => at,
+                None => {
+                    groups.push(*tag);
+                    groups.len() - 1
+                }
+            })
+            .collect();
+        let sides = groups
+            .iter()
+            .map(|_| {
+                loops
+                    .iter()
+                    .map(|tagged| {
+                        let mut seen: Vec<(u32, u32)> = Vec::new();
+                        tagged
+                            .tags
+                            .iter()
+                            .map(|tag| match seen.iter().find(|(t, _)| t == tag) {
+                                Some((_, face)) => *face,
+                                None => {
+                                    seen.push((*tag, next));
+                                    next += 1;
+                                    next - 1
+                                }
+                            })
+                            .collect()
+                    })
+                    .collect()
+            })
+            .collect();
+        FaceNumbers { start, end, group_of_span, sides }
+    }
+
+    fn side(&self, span: usize, loop_index: usize, segment: usize) -> u32 {
+        self.sides[self.group_of_span[span]][loop_index][segment]
+    }
+}
+
+/// The authored segment that segment `i` of the loop wound counter-clockwise
+/// is: itself, or, for a loop authored clockwise and so reversed, the one
+/// running the other way between the same two points.
+fn wound_to_authored(tagged: &TaggedLoop, i: usize) -> usize {
+    let n = tagged.points.len();
+    match tagged.ccw() {
+        true => i,
+        false => (2 * n - 2 - i) % n,
+    }
 }
 
 fn empty() -> Swept {
@@ -210,7 +297,18 @@ fn translates(a: &Affine3A, b: &Affine3A) -> bool {
 /// every step translates and sides first otherwise, because the BSP picks its
 /// splitting planes in polygon order and a prop should build to the same
 /// triangles it always did.
-fn shell(rings: &[Vec<Vec3>], caps: &[Vec<Vec2>], frames: &[Affine3A], closed: bool, surface: Surface) -> Vec<Polygon> {
+/// `side` is the face a span's wound segment sweeps, and `(start, end)` the
+/// caps'.
+fn shell(
+    rings: &[Vec<Vec3>],
+    caps: &[Vec<Vec2>],
+    frames: &[Affine3A],
+    closed: bool,
+    surface: Surface,
+    side: &dyn Fn(usize, usize) -> u32,
+    (start_face, end_face): (u32, u32),
+) -> Vec<Polygon> {
+    let made = |tag: u32| Face { surface, tag };
     let s = rings.len();
     let n = rings[0].len();
     let spans = if closed { s } else { s - 1 };
@@ -222,13 +320,14 @@ fn shell(rings: &[Vec<Vec3>], caps: &[Vec<Vec2>], frames: &[Affine3A], closed: b
         let tail = &rings[next];
         for i in 0..n {
             let j = (i + 1) % n;
+            let face = made(side(k, i));
             if translates(&frames[k], &frames[next]) {
-                sides.extend(Polygon::new(vec![head[i], head[j], tail[j], tail[i]], surface));
+                sides.extend(Polygon::new(vec![head[i], head[j], tail[j], tail[i]], face));
             } else {
                 // A quad with a corner on a revolve's axis has two corners in
                 // one place, so triangles.
-                sides.extend(Polygon::new(vec![head[i], head[j], tail[j]], surface));
-                sides.extend(Polygon::new(vec![head[i], tail[j], tail[i]], surface));
+                sides.extend(Polygon::new(vec![head[i], head[j], tail[j]], face));
+                sides.extend(Polygon::new(vec![head[i], tail[j], tail[i]], face));
             }
         }
     }
@@ -241,8 +340,8 @@ fn shell(rings: &[Vec<Vec3>], caps: &[Vec<Vec2>], frames: &[Affine3A], closed: b
         let start = triangulate(&caps[0]);
         let end = triangulate(&caps[s - 1]);
         for (&[a, b, c], &[d, e, f]) in start.iter().zip(&end) {
-            ends.extend(Polygon::new(vec![last[d], last[e], last[f]], surface));
-            ends.extend(Polygon::new(vec![first[c], first[b], first[a]], surface));
+            ends.extend(Polygon::new(vec![last[d], last[e], last[f]], made(end_face)));
+            ends.extend(Polygon::new(vec![first[c], first[b], first[a]], made(start_face)));
         }
     }
     let all_translate = (0..spans).all(|k| translates(&frames[k], &frames[(k + 1) % s]));
@@ -425,6 +524,36 @@ mod tests {
 
     fn square() -> TaggedLoop {
         TaggedLoop::numbered(vec![Vec2::new(0.02, 0.0), Vec2::new(0.06, 0.0), Vec2::new(0.06, 0.1), Vec2::new(0.02, 0.1)])
+    }
+
+    /// Fails if a polygon is tagged with a face it does not lie on.
+    #[test]
+    fn every_polygon_lies_on_the_face_it_is_tagged_with() {
+        let clockwise = TaggedLoop::numbered(vec![Vec2::new(0.02, 0.0), Vec2::new(0.02, 0.1), Vec2::new(0.06, 0.1), Vec2::new(0.06, 0.0)]);
+        let outer = TaggedLoop::numbered(vec![Vec2::new(0.01, -0.1), Vec2::new(0.09, -0.1), Vec2::new(0.09, 0.2), Vec2::new(0.01, 0.2)]);
+        let runs = [
+            extrusion(vec![square()], 0.2, false),
+            extrusion(vec![clockwise.clone()], -0.2, true),
+            revolution(vec![square()], 360.0, 8),
+            revolution(vec![clockwise.clone()], 120.0, 4),
+            extrusion(vec![outer.clone(), square()], 0.1, false),
+            revolution(vec![outer, clockwise], 90.0, 3),
+        ];
+        for (n, run) in runs.iter().enumerate() {
+            let swept = skin(run, Surface::default()).unwrap();
+            for polygon in swept.solid.polygons() {
+                let tag = polygon.surface.tag;
+                assert_ne!(tag, NO_FACE, "run {n}");
+                let Some(face @ Located::Face { .. }) = swept.outline.locate(Element::Face(tag)) else { panic!("run {n}: no face {tag}") };
+                let Located::Face { facets, .. } = &face else { unreachable!() };
+                let center = polygon.vertices.iter().sum::<Vec3>() / polygon.vertices.len() as f32;
+                let on = facets.iter().any(|points| {
+                    let normal = newell(points).normalize_or_zero();
+                    normal != Vec3::ZERO && (center - points[0]).dot(normal).abs() < 1e-4
+                });
+                assert!(on, "run {n}: a polygon tagged {tag} is off that face");
+            }
+        }
     }
 
     #[test]

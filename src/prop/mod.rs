@@ -61,6 +61,7 @@ pub mod reference;
 pub mod refs;
 pub mod region;
 pub mod rig;
+pub mod seam;
 pub mod sketch;
 pub mod sketch_edit;
 pub mod skin;

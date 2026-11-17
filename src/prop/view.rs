@@ -425,10 +425,8 @@ fn draw_the_bench(
             }
             // Drawn with every other plane, axis and datum.
             Pick::Plane(_) | Pick::Axis(_) | Pick::DatumAxis(_) | Pick::DatumPoint(_) => {}
-            Pick::SketchCurve { .. } | Pick::SketchPoint { .. } => {
-                if let Some(at) = sketch_located(&build, pick) {
-                    draw_located(&mut gizmos, at, marker, picked_color(pick));
-                }
+            Pick::SketchCurve { .. } | Pick::SketchPoint { .. } | Pick::Seam(_) | Pick::Junction(_) => {
+                draw_reference(&mut gizmos, &build, pick, marker, picked_color(pick));
             }
             Pick::Region { sketch, region } => {
                 draw_region(&mut gizmos, &build, &mut regions, *sketch, region, picked_color(pick))
@@ -442,10 +440,8 @@ fn draw_the_bench(
             }
         }
         Some(Pick::Region { sketch, region }) => draw_region(&mut gizmos, &build, &mut regions, *sketch, region, HOVERED),
-        Some(pick @ (Pick::SketchCurve { .. } | Pick::SketchPoint { .. })) => {
-            if let Some(at) = sketch_located(&build, pick) {
-                draw_located(&mut gizmos, at, marker * 0.8, HOVERED);
-            }
+        Some(pick @ (Pick::SketchCurve { .. } | Pick::SketchPoint { .. } | Pick::Seam(_) | Pick::Junction(_))) => {
+            draw_reference(&mut gizmos, &build, pick, marker * 0.8, HOVERED);
         }
         Some(Pick::Body(body)) if tool.0.is_some() => draw_body_box(&mut gizmos, &build, *body, HOVERED),
         _ => {}
@@ -518,14 +514,23 @@ fn draw_the_bench(
     }
 }
 
-/// Where a sketch's point or curve picked from outside it is.
-fn sketch_located(build: &PropBuild, pick: &Pick) -> Option<Located> {
+/// A pick that stands for a point or a curve, drawn where it resolves: a
+/// sketch's point or line from outside it, a seam or a junction.
+fn draw_reference(gizmos: &mut Gizmos, build: &PropBuild, pick: &Pick, size: f32, color: Color) {
     let scope = build.evaluated.scope();
-    if let Some(point) = pick.as_point() {
-        return point.resolve(&scope).map(Located::Point);
+    if let Some(at) = pick.as_point().and_then(|point| point.resolve(&scope)) {
+        draw_located(gizmos, Located::Point(at), size, color);
+        return;
     }
-    let (a, b) = pick.as_curve()?.resolve(&scope)?.line()?;
-    Some(Located::Edge(a, b))
+    let Some(curve) = pick.as_curve().and_then(|curve| curve.resolve(&scope)) else { return };
+    match curve.line() {
+        Some((a, b)) => draw_located(gizmos, Located::Edge(a, b), size, color),
+        None => {
+            for (a, b) in curve.segments() {
+                gizmos.line(a, b, color);
+            }
+        }
+    }
 }
 
 const PICKED: Color = Color::srgb(1.0, 0.8, 0.2);

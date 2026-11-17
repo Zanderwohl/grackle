@@ -17,6 +17,7 @@ use crate::common::skeleton::clip::ClipSet;
 use crate::common::assets::{AssetError, Assets};
 use crate::prop::feature::{evaluate, Axis, Evaluated, FeatureOp, PropFeature, PropFeatureId};
 use crate::prop::refs::{AnyRef, CurveRef, DirectionRef, PointRef};
+use crate::prop::seam::{JunctionRef, SeamRef};
 use crate::prop::archetype::{Archetype, BreakableSpec, Collider, HatSpec, PickupSpec};
 use crate::prop::hold::{HoldSpec, MuzzleSpec, ViewmodelSpec};
 use crate::prop::reference::{Element, GeomRef};
@@ -47,6 +48,10 @@ pub enum Pick {
     Axis(Axis),
     DatumAxis(PropFeatureId),
     DatumPoint(PropFeatureId),
+    /// Where two faces of a body meet.
+    Seam(SeamRef),
+    /// Where three or more faces of a body meet.
+    Junction(JunctionRef),
 }
 
 impl Pick {
@@ -67,6 +72,7 @@ impl Pick {
             }
             Pick::SketchPoint { sketch, point } => Some(PointRef::Sketch { sketch: *sketch, point: *point }),
             Pick::DatumPoint(feature) => Some(PointRef::Datum { feature: *feature }),
+            Pick::Junction(junction) => Some(PointRef::Junction { junction: junction.clone() }),
             _ => None,
         }
     }
@@ -77,6 +83,7 @@ impl Pick {
             Pick::SketchCurve { sketch, entity } => Some(CurveRef::Sketch { sketch: *sketch, entity: *entity }),
             Pick::Axis(axis) => Some(CurveRef::Axis { axis: *axis }),
             Pick::DatumAxis(feature) => Some(CurveRef::Datum { feature: *feature }),
+            Pick::Seam(seam) => Some(CurveRef::Seam { seam: seam.clone() }),
             _ => None,
         }
     }
@@ -125,6 +132,7 @@ impl Pick {
             PointRef::Corner { corner } => Some(Pick::Geom(corner.clone())),
             PointRef::Sketch { sketch, point } => Some(Pick::SketchPoint { sketch: *sketch, point: *point }),
             PointRef::Datum { feature } => Some(Pick::DatumPoint(*feature)),
+            PointRef::Junction { junction } => Some(Pick::Junction(junction.clone())),
         }
     }
 
@@ -134,6 +142,7 @@ impl Pick {
             CurveRef::Edge { edge } => Pick::Geom(edge.clone()),
             CurveRef::Sketch { sketch, entity } => Pick::SketchCurve { sketch: *sketch, entity: *entity },
             CurveRef::Datum { feature } => Pick::DatumAxis(*feature),
+            CurveRef::Seam { seam } => Pick::Seam(seam.clone()),
         }
     }
 
@@ -166,6 +175,8 @@ impl Pick {
             }
             Pick::Plane(PlaneRef::Origin(_)) | Pick::Axis(_) => None,
             Pick::Geom(_) => self.body(evaluated),
+            Pick::Seam(name) => evaluated.seams().iter().find(|seam| seam.name == *name).map(|seam| seam.body),
+            Pick::Junction(name) => evaluated.junctions().iter().find(|j| j.name == *name).map(|j| j.body),
         }
     }
 
@@ -180,6 +191,8 @@ impl Pick {
                 Box::new(std::iter::once(*sketch))
             }
             Pick::Geom(reference) => Box::new(reference.source.features()),
+            Pick::Seam(name) => Box::new(name.features().into_iter()),
+            Pick::Junction(name) => Box::new(name.features().into_iter()),
         }
     }
 }

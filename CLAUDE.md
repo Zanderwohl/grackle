@@ -1130,14 +1130,30 @@ are pickable. Two things to keep: an `Outline` is numbered from the profile
 loop does not renumber everything; and a primitive's solid and outline both
 come from one `skin`, so the two cannot drift —
 `every_primitives_outline_lies_on_its_surface` is what notices if they do.
-The cost is that an edge a boolean *made*, where a bore leaves a face, has no
-name and cannot be picked.
 
-**A face is matched to its generator on the click, not carried through the
-kernel.** `Evaluated::surface_under` finds the polygon hit and `face_at` asks
-which named face has a facet in that polygon's plane containing the hit point
-— either facing, because a hole's wall faces the opposite way from the tool
-face that cut it — so a click on a sphere's band picks the band. Each facet
+**A face is carried through the kernel.** Every polygon's `Face` holds its
+material and a tag ([`solid.rs`](src/prop/solid.rs)): a sweep's own face
+number until the evaluator turns it into an index into the `FaceTable`
+([`seam.rs`](src/prop/seam.rs)), interned there as the face's `GeomRef` —
+mirror and pattern copies retagged through their `CopyOf` — and kept through
+every split, a subtract's repaint included. A click reads the face off the
+polygon it hit (`Evaluated::surface_of_hit`), so a piece of a cut face, a
+sphere's band and a hole's wall are all their named face.
+
+**An edge a boolean made is a seam**, named by the two faces it separates
+(`SeamRef`: both faces sorted, and an index when they meet more than once),
+and a corner where three or more meet is a `JunctionRef`. `seam::find` works
+on the finished solid: boundary segments are filed by the line they lie on
+(under both senses, on a grid moved half a cell so an axis sits mid-cell) and
+matched by overlap, never by shared corners, since the BSP leaves a corner of
+one polygon partway along another's edge; pieces between one pair of faces
+are joined into runs. A seam lying on one offered generator edge is not
+offered, so an edge keeps the name it had first; one lying along several — a
+revolved corner's circle — is offered as one curve in their place. They are found the first
+time something asks (`Evaluated::seams`, a `OnceLock`), since the game bakes
+props through the same `evaluate` and never asks. A `CurveRef::Seam`
+resolves to a polyline (`Curve3::Polyline`); a straight one serves wherever a
+line does. Each facet
 stores an `outward` direction rather than trusting its winding, which nothing
 promises before `Solid::oriented_outward` measures it;
 `every_flat_face_points_out_of_its_body` is what fails if that is ever derived

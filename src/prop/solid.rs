@@ -16,8 +16,21 @@ use serde::{Deserialize, Serialize};
 
 use crate::common::csg;
 
-/// A face of a prop, made of a [`Surface`].
-pub type Polygon = csg::Polygon<Surface>;
+/// What a polygon is made of, and which named face it is part of. Both ride
+/// through every split the kernel makes, so a piece of a cut face still
+/// knows its face.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Face {
+    pub surface: Surface,
+    /// A sweep's own face number until the evaluator turns it into an index
+    /// into [`crate::prop::seam::FaceTable`]; [`NO_FACE`] for none.
+    pub tag: u32,
+}
+
+pub const NO_FACE: u32 = u32::MAX;
+
+/// A face of a prop.
+pub type Polygon = csg::Polygon<Face>;
 use crate::prop::profile::{sides, Profile};
 use crate::prop::reference::Outline;
 use crate::prop::skin::{extrusion, revolution, skin, Run, Swept, TaggedLoop};
@@ -97,7 +110,17 @@ impl Solid {
 
     pub fn painted(mut self, surface: Surface) -> Solid {
         for polygon in &mut self.polygons {
-            polygon.surface = surface;
+            polygon.surface.surface = surface;
+        }
+        self
+    }
+
+    /// Every face tag rewritten; [`NO_FACE`] stays as it is.
+    pub fn retagged(mut self, mut tag: impl FnMut(u32) -> u32) -> Solid {
+        for polygon in &mut self.polygons {
+            if polygon.surface.tag != NO_FACE {
+                polygon.surface.tag = tag(polygon.surface.tag);
+            }
         }
         self
     }
@@ -141,9 +164,9 @@ impl Solid {
                 .windows(2)
                 .map(|w| (w[0] - a).cross(w[1] - a).length() / 2.0)
                 .sum();
-            match totals.iter_mut().find(|(surface, _)| *surface == polygon.surface) {
+            match totals.iter_mut().find(|(surface, _)| *surface == polygon.surface.surface) {
                 Some(entry) => entry.1 += area,
-                None => totals.push((polygon.surface, area)),
+                None => totals.push((polygon.surface.surface, area)),
             }
         }
         totals
@@ -169,10 +192,10 @@ impl Solid {
     pub fn meshes(&self) -> Vec<(Surface, Mesh)> {
         let mut groups: Vec<(Surface, MeshParts)> = Vec::new();
         for polygon in &self.polygons {
-            let group = match groups.iter_mut().find(|(surface, _)| *surface == polygon.surface) {
+            let group = match groups.iter_mut().find(|(surface, _)| *surface == polygon.surface.surface) {
                 Some((_, parts)) => parts,
                 None => {
-                    groups.push((polygon.surface, MeshParts::default()));
+                    groups.push((polygon.surface.surface, MeshParts::default()));
                     &mut groups.last_mut().expect("just pushed").1
                 }
             };
@@ -531,7 +554,7 @@ mod tests {
         let drilled = block.subtract(&bore);
         assert!(!drilled.is_empty(), "the subtraction removed everything");
         assert!(
-            drilled.polygons().iter().all(|polygon| polygon.surface == oak),
+            drilled.polygons().iter().all(|polygon| polygon.surface.surface == oak),
             "a face came back wearing the drill's surface",
         );
         assert_eq!(drilled.meshes().len(), 1, "the drill left a second material behind");

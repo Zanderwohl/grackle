@@ -14,6 +14,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::get;
 use crate::prop::datum::{DatumAxis, DatumPoint};
+use crate::prop::seam::{self, FaceTable, Junction, JunctionRef, Seam, SeamRef};
+use crate::prop::solid::Solid;
 use crate::prop::feature::{Axis, PropFeatureId};
 use crate::prop::plane::{Datum, Plane, PlaneRef};
 use crate::prop::reference::{Element, GeomRef, Located, Wire};
@@ -27,6 +29,8 @@ pub enum PointRef {
     Corner { corner: GeomRef },
     Sketch { sketch: PropFeatureId, point: SketchId },
     Datum { feature: PropFeatureId },
+    /// Where three or more faces of a body meet.
+    Junction { junction: JunctionRef },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -38,6 +42,8 @@ pub enum CurveRef {
     Edge { edge: GeomRef },
     Sketch { sketch: PropFeatureId, entity: SketchId },
     Datum { feature: PropFeatureId },
+    /// Where two faces of a body meet.
+    Seam { seam: SeamRef },
 }
 
 /// Curves joined end to end, in order. Each may run either way; resolving
@@ -81,6 +87,7 @@ impl PointRef {
             PointRef::Corner { corner } => corner.source.features().collect(),
             PointRef::Sketch { sketch, .. } => vec![*sketch],
             PointRef::Datum { feature } => vec![*feature],
+            PointRef::Junction { junction } => junction.features(),
         }
     }
 }
@@ -92,6 +99,7 @@ impl CurveRef {
             CurveRef::Edge { edge } => edge.source.features().collect(),
             CurveRef::Sketch { sketch, .. } => vec![*sketch],
             CurveRef::Datum { feature } => vec![*feature],
+            CurveRef::Seam { seam } => seam.features(),
         }
     }
 }
@@ -144,42 +152,81 @@ impl AnyRef {
     }
 }
 
-/// A resolved curve. Only lines until sketches have arcs.
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// A resolved curve: a line, or a run of straight pieces such as a seam.
+#[derive(Clone, Debug, PartialEq)]
 pub enum Curve3 {
     Line { a: Vec3, b: Vec3 },
+    /// A closed one does not repeat its first point.
+    Polyline { points: Vec<Vec3>, closed: bool },
 }
 
 impl Curve3 {
     pub fn start(&self) -> Vec3 {
-        match *self {
-            Curve3::Line { a, .. } => a,
+        match self {
+            Curve3::Line { a, .. } => *a,
+            Curve3::Polyline { points, .. } => points[0],
         }
     }
 
+    /// A closed run ends where it starts.
     pub fn end(&self) -> Vec3 {
-        match *self {
-            Curve3::Line { b, .. } => b,
+        match self {
+            Curve3::Line { b, .. } => *b,
+            Curve3::Polyline { points, closed: true } => points[0],
+            Curve3::Polyline { points, closed: false } => points[points.len() - 1],
         }
     }
 
     pub fn reversed(self) -> Curve3 {
         match self {
             Curve3::Line { a, b } => Curve3::Line { a: b, b: a },
+            Curve3::Polyline { mut points, closed } => {
+                points.reverse();
+                if closed {
+                    points.rotate_right(1);
+                }
+                Curve3::Polyline { points, closed }
+            }
         }
     }
 
     /// The two ends, if it is straight.
     pub fn line(&self) -> Option<(Vec3, Vec3)> {
-        match *self {
-            Curve3::Line { a, b } => Some((a, b)),
+        match self {
+            Curve3::Line { a, b } => Some((*a, *b)),
+            Curve3::Polyline { points, closed: false } if points.len() == 2 => Some((points[0], points[1])),
+            Curve3::Polyline { .. } => None,
         }
     }
 
-    pub fn midpoint(&self) -> Vec3 {
-        match *self {
-            Curve3::Line { a, b } => (a + b) / 2.0,
+    /// Every piece, end to end.
+    pub fn segments(&self) -> Vec<(Vec3, Vec3)> {
+        match self {
+            Curve3::Line { a, b } => vec![(*a, *b)],
+            Curve3::Polyline { points, closed } => {
+                let n = points.len();
+                let count = if *closed { n } else { n.saturating_sub(1) };
+                (0..count).map(|i| (points[i], points[(i + 1) % n])).collect()
+            }
         }
+    }
+
+    /// Meters along it.
+    pub fn length(&self) -> f32 {
+        self.segments().iter().map(|(a, b)| a.distance(*b)).sum()
+    }
+
+    /// Halfway along it.
+    pub fn midpoint(&self) -> Vec3 {
+        let mut left = self.length() / 2.0;
+        for (a, b) in self.segments() {
+            let piece = a.distance(b);
+            if left <= piece {
+                return a.lerp(b, left / piece.max(f32::EPSILON));
+            }
+            left -= piece;
+        }
+        self.start()
     }
 }
 
@@ -194,6 +241,11 @@ pub struct Scope<'a> {
     /// Meters each way of the origin an origin plane is drawn, which sizes
     /// what is made from one.
     pub origin_half: f32,
+    /// The bodies and what their face tags name, to find a seam on.
+    bodies: Vec<(PropFeatureId, &'a Solid)>,
+    faces: Option<&'a FaceTable>,
+    /// Every seam and junction already found, for a finished prop.
+    known: Option<(&'a [Seam], &'a [Junction])>,
 }
 
 impl<'a> Scope<'a> {
@@ -205,7 +257,55 @@ impl<'a> Scope<'a> {
         points: &'a [DatumPoint],
         origin_half: f32,
     ) -> Scope<'a> {
-        Scope { wires: wires.into_iter().collect(), planes, sketches, axes, points, origin_half }
+        Scope {
+            wires: wires.into_iter().collect(),
+            planes,
+            sketches,
+            axes,
+            points,
+            origin_half,
+            bodies: vec![],
+            faces: None,
+            known: None,
+        }
+    }
+
+    /// With the bodies seams are found on when asked for.
+    pub fn with_bodies(mut self, bodies: impl IntoIterator<Item = (PropFeatureId, &'a Solid)>, faces: &'a FaceTable) -> Self {
+        self.bodies = bodies.into_iter().collect();
+        self.faces = Some(faces);
+        self
+    }
+
+    /// With every seam and junction found already.
+    pub fn with_seams(mut self, seams: &'a [Seam], junctions: &'a [Junction]) -> Self {
+        self.known = Some((seams, junctions));
+        self
+    }
+
+    /// The body that has both faces' polygons on it, and all its seams.
+    fn seams_with(&self, names: &[GeomRef]) -> Option<(Vec<Seam>, Vec<Junction>)> {
+        let faces = self.faces?;
+        let tags: Vec<u32> = names.iter().map(|name| faces.tag(name)).collect::<Option<_>>()?;
+        let (body, solid) = self
+            .bodies
+            .iter()
+            .find(|(_, solid)| tags.iter().all(|tag| solid.polygons().iter().any(|p| p.surface.tag == *tag)))?;
+        Some(seam::find(*body, solid, faces))
+    }
+
+    pub fn seam(&self, name: &SeamRef) -> Option<Seam> {
+        if let Some((seams, _)) = self.known {
+            return seams.iter().find(|seam| seam.name == *name).cloned();
+        }
+        self.seams_with(&name.faces)?.0.into_iter().find(|seam| seam.name == *name)
+    }
+
+    pub fn junction(&self, name: &JunctionRef) -> Option<Junction> {
+        if let Some((_, junctions)) = self.known {
+            return junctions.iter().find(|junction| junction.name == *name).cloned();
+        }
+        self.seams_with(&name.faces)?.1.into_iter().find(|junction| junction.name == *name)
     }
 
     /// Where a named element is now, whether or not it can be seen.
@@ -265,6 +365,7 @@ impl Resolve for PointRef {
                 Some(placed.world(placed.sketch.point(*point)?))
             }
             PointRef::Datum { feature } => scope.points.iter().find(|p| p.id == *feature).map(|p| p.at),
+            PointRef::Junction { junction } => scope.junction(junction).map(|junction| junction.at),
         }
     }
 }
@@ -288,6 +389,10 @@ impl Resolve for CurveRef {
                 let axis = scope.axes.iter().find(|axis| axis.id == *feature)?;
                 (axis.a, axis.b)
             }
+            CurveRef::Seam { seam } => {
+                let seam = scope.seam(seam)?;
+                return Some(Curve3::Polyline { points: seam.points, closed: seam.closed });
+            }
         };
         (a.distance(b) > DEGENERATE).then_some(Curve3::Line { a, b })
     }
@@ -304,11 +409,11 @@ impl Resolve for PathRef {
             let next = match joined.last() {
                 None => match curves.get(1) {
                     // The first runs toward whichever end the second touches.
-                    Some(second) if touches(curve.start(), second) && !touches(curve.end(), second) => curve.reversed(),
-                    _ => *curve,
+                    Some(second) if touches(curve.start(), second) && !touches(curve.end(), second) => curve.clone().reversed(),
+                    _ => curve.clone(),
                 },
-                Some(last) if last.end().distance(curve.start()) < JOINS => *curve,
-                Some(last) if last.end().distance(curve.end()) < JOINS => curve.reversed(),
+                Some(last) if last.end().distance(curve.start()) < JOINS => curve.clone(),
+                Some(last) if last.end().distance(curve.end()) < JOINS => curve.clone().reversed(),
                 Some(_) => return None,
             };
             joined.push(next);

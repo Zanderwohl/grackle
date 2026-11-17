@@ -429,7 +429,18 @@ fn candidates_under<'a, P: Fn(Vec3) -> Option<Vec2>>(
             point_under(points, pointer)
         }),
         Box::new(move || point_under(evaluated.points.iter().map(|p| (Pick::DatumPoint(p.id), p.at)), pointer)),
-        Box::new(move || edge_under(&evaluated.pickables, pointer).map(geom)),
+        Box::new(move || {
+            let offered = evaluated.junctions().iter().filter(|junction| junction.offered);
+            point_under(offered.map(|junction| (Pick::Junction(junction.name.clone()), junction.at)), pointer)
+        }),
+        Box::new(move || {
+            edge_under(&evaluated.pickables, pointer).filter(|p| !evaluated.replaced(&p.reference)).map(geom)
+        }),
+        Box::new(move || {
+            let offered = evaluated.seams().iter().filter(|seam| seam.offered);
+            let pieces = offered.flat_map(|seam| seam.segments().map(move |(a, b)| (Pick::Seam(seam.name.clone()), a, b)));
+            segment_under(pieces, pointer)
+        }),
         Box::new(move || {
             let lines = evaluated.sketches.iter().flat_map(|placed| {
                 placed.sketch.lines().filter_map(|(entity, ..)| {
@@ -453,11 +464,10 @@ fn candidates_under<'a, P: Fn(Vec3) -> Option<Vec2>>(
                 .region_in_front_of(pointer.ray, pointer.face)
                 .map(|(sketch, region)| Pick::Region { sketch, region: region.name.clone() })
         }),
-        // A face a boolean made has no name, so is picked as its body; a named
-        // face already stands for its body.
+        // A named face stands for its body; a polygon with no face is
+        // picked as the body.
         Box::new(move || {
-            hit.and_then(|hit| evaluated.surface_of_hit(pointer.ray, hit))
-                .map(|(body, face)| face.map_or(Pick::Body(body), Pick::Geom))
+            hit.map(|hit| evaluated.surface_of_hit(hit)).map(|(body, face)| face.map_or(Pick::Body(body), Pick::Geom))
         }),
     ];
     finders.into_iter().filter_map(|find| find())

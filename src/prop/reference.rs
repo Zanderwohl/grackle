@@ -16,14 +16,14 @@ use crate::prop::solid::Solid;
 /// One duplication a piece of geometry went through. The original is never
 /// named, so inserting a pattern does not rename what it copies; a mirror's
 /// reflection is copy 1 whether or not the original is kept.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct CopyOf {
     pub by: PropFeatureId,
     pub index: u32,
 }
 
 /// The generator, and its copies in the order they were made.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Source {
     pub feature: PropFeatureId,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -37,7 +37,7 @@ impl Source {
 }
 
 /// An index into the generator's [`Outline`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Element {
     Point(u32),
@@ -46,7 +46,7 @@ pub enum Element {
 }
 
 /// `element` first: TOML needs every scalar before any sub-table.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct GeomRef {
     pub element: Element,
     pub source: Source,
@@ -198,44 +198,6 @@ impl Located {
             Located::Point(_) | Located::Edge(..) => true,
         }
     }
-}
-
-/// Whether `point` is inside a facet, in the facet's plane. Even-odd rather
-/// than a convex test, since a cap can be any loop a profile can.
-fn facet_contains(points: &[Vec3], normal: Vec3, point: Vec3) -> bool {
-    let Some(first) = points.first() else { return false };
-    if (point - *first).dot(normal).abs() > ON_SURFACE {
-        return false;
-    }
-    let (u, v) = normal.any_orthonormal_pair();
-    let flat = |p: Vec3| Vec2::new(p.dot(u), p.dot(v));
-    let at = flat(point);
-    let mut inside = false;
-    for i in 0..points.len() {
-        let (a, b) = (flat(points[i]), flat(points[(i + 1) % points.len()]));
-        if (a.y > at.y) != (b.y > at.y) && at.x < a.x + (at.y - a.y) / (b.y - a.y) * (b.x - a.x) {
-            inside = !inside;
-        }
-    }
-    inside
-}
-
-/// The named face a click at `hit`, on a polygon facing `facing`, landed on:
-/// the face one of whose facets lies square to the polygon and holds the
-/// hit, so a curved face is picked too. Either facing matches, because a
-/// hole's wall faces the other way from the tool face that cut it.
-pub fn face_at(wires: &[Wire], hit: Vec3, facing: Vec3) -> Option<GeomRef> {
-    wires.iter().find_map(|wire| {
-        let outline = &wire.outline;
-        outline.faces.iter().enumerate().find_map(|(i, face)| {
-            let landed = face.facets.iter().any(|facet| {
-                let points: Vec<Vec3> = facet.points.iter().map(|&p| outline.points[p as usize]).collect();
-                let Some(normal) = newell(&points).try_normalize() else { return false };
-                normal.dot(facing).abs() > 1.0 - 1e-3 && facet_contains(&points, normal, hit)
-            });
-            landed.then(|| GeomRef { element: Element::Face(i as u32), source: wire.source.clone() })
-        })
-    })
 }
 
 /// In the prop's space.
