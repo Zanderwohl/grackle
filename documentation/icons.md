@@ -51,3 +51,7 @@ When an icon ships, check its box.
 | [x] | `trash_can` | Trash can, macOS style | Cancel, Delete |
 | [x] | `diagonal_line` | Diagonal line from lower left to top right | Line |
 | [x] | `eraser` | Square rubber eraser | Erase |
+| [x] | `arc_dots` | Quarter arc, a dot at its center and at each end, dashed radii to the ends | Arc (sketch) |
+| [x] | `circle_dot` | Circle with a dot at its center | Circle (sketch) |
+| [x] | `curve_handles` | S-curve with a dashed handle from each end to a dot | Bézier (sketch) |
+| [x] | `curve_hull` | Wavy curve inside a dashed zigzag of control points | NURBS (sketch) |

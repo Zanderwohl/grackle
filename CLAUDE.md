@@ -1188,9 +1188,15 @@ curves and one sweep core under Extrude, Revolve, Sweep and Loft are planned in
 about what is built:
 
 - **A sketch is a flat set, not a feature list** ([`sketch.rs`](src/prop/sketch.rs)):
-  lines name their ends by id, so a shared corner is one point and "is this
+  lines and curves name their points by id, so a shared corner is one point and "is this
   closed" is about ids, not coordinates. It has no undo of its own; it is part
-  of `PropDoc`.
+  of `PropDoc`. Its entities are lines, arcs (center, start, end; the end kept
+  on the circle), circles, Béziers and NURBS; each resolves to a `Curve2`
+  ([`curve.rs`](src/prop/curve.rs)), cut into straight pieces within
+  `CHORD_TOLERANCE` for the arrangement. Every piece remembers its entity
+  (`Region::outer_entities`), and sweeps tag their loops with it, so an arc
+  sweeps one face however many pieces it was cut into, and a piece count
+  that changes as it is dragged renames nothing.
 - **Regions are derived** ([`region.rs`](src/prop/region.rs)) by cutting every
   line at its crossings and walking the faces of the planar graph, so crossing
   lines split rather than fail. A region is named by the lines round its

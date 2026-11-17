@@ -466,8 +466,10 @@ impl FootprintRoom {
         self.lines = sketch
             .entities
             .into_iter()
-            .map(|entity| match entity {
-                SketchEntity::Line { id, a, b, construction } => Line { id, a, b, construction },
+            // A footprint is lines; its tool draws nothing else.
+            .filter_map(|entity| match entity {
+                SketchEntity::Line { id, a, b, construction } => Some(Line { id, a, b, construction }),
+                _ => None,
             })
             .collect();
         self.regions = sketch

@@ -443,9 +443,9 @@ fn candidates_under<'a, P: Fn(Vec3) -> Option<Vec2>>(
         }),
         Box::new(move || {
             let lines = evaluated.sketches.iter().flat_map(|placed| {
-                placed.sketch.lines().filter_map(|(entity, ..)| {
-                    let (a, b) = placed.sketch.line(entity)?;
-                    Some((Pick::SketchCurve { sketch: placed.id, entity }, placed.world(a), placed.world(b)))
+                placed.sketch.curves().flat_map(move |(entity, curve, _)| {
+                    let pick = Pick::SketchCurve { sketch: placed.id, entity };
+                    curve.facets().windows(2).map(|f| (pick.clone(), placed.world(f[0]), placed.world(f[1]))).collect::<Vec<_>>()
                 })
             });
             segment_under(lines, pointer)

@@ -13,6 +13,7 @@ use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::get;
+use crate::prop::curve::Curve2;
 use crate::prop::datum::{DatumAxis, DatumPoint};
 use crate::prop::seam::{self, FaceTable, Junction, JunctionRef, Seam, SeamRef};
 use crate::prop::solid::Solid;
@@ -382,8 +383,17 @@ impl Resolve for CurveRef {
             },
             CurveRef::Sketch { sketch, entity } => {
                 let placed = scope.sketch(*sketch)?;
-                let (a, b) = placed.sketch.line(*entity)?;
-                (placed.world(a), placed.world(b))
+                match placed.sketch.curve(*entity)? {
+                    Curve2::Line { a, b } => (placed.world(a), placed.world(b)),
+                    curve => {
+                        let closed = curve.closed();
+                        let mut points: Vec<Vec3> = curve.facets().into_iter().map(|p| placed.world(p)).collect();
+                        if closed {
+                            points.pop();
+                        }
+                        return Some(Curve3::Polyline { points, closed });
+                    }
+                }
             }
             CurveRef::Datum { feature } => {
                 let axis = scope.axes.iter().find(|axis| axis.id == *feature)?;

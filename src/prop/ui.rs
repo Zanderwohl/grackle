@@ -33,7 +33,8 @@ use crate::prop::document::{self, Pick, PropDoc, PropEditor, PROP_EXTENSION};
 use crate::prop::plane::{OriginPlane, PickedPlane, Plane, PlaneRef};
 use crate::prop::reference::{Element, GeomRef, Located};
 use crate::prop::region::{Arrangement, Region};
-use crate::prop::sketch::{Sketch, SketchId};
+use crate::prop::curve::clamped_knots;
+use crate::prop::sketch::{Sketch, SketchEntity, SketchId};
 use crate::prop::sketch_edit::{sketch_of, sketch_of_mut, SketchPick, SketchSession, SketchTool};
 use crate::common::class::Class;
 use crate::common::rotation::{aim_and_spin, euler_from_quat, from_aim_and_spin};
@@ -47,7 +48,7 @@ use crate::prop::camera::ViewmodelPreview;
 use crate::prop::gizmo::HoldHandles;
 use crate::prop::hold::MuzzleSpec;
 use crate::prop::profile::{Placement, MAX_REVOLVE_STEPS, MIN_SIDES};
-use crate::prop::solid::Shape;
+use crate::prop::solid::{Shape, MIN_EXTENT};
 use crate::prop::surface::{Style, Surface};
 use crate::prop::camera::FrameTheProp;
 use crate::prop::view::PropBuild;
@@ -985,11 +986,21 @@ fn sketch_toolbar(ui: &mut Ui, editor: &mut PropEditor, session: &mut SketchSess
     let tools = [
         (SketchTool::Select, "cursor", "prop.sketch.select"),
         (SketchTool::Line, "diagonal_line", "prop.sketch.line"),
+        (SketchTool::Arc, "arc_dots", "prop.sketch.arc"),
+        (SketchTool::Circle, "circle_dot", "prop.sketch.circle"),
+        (SketchTool::Bezier, "curve_handles", "prop.sketch.bezier"),
+        (SketchTool::Nurbs, "curve_hull", "prop.sketch.nurbs"),
         (SketchTool::Erase, "eraser", "prop.sketch.erase"),
     ];
     let segments = tools.iter().map(|(tool, icon, key)| Segment::new(icon, get!(key)).selected(session.tool() == *tool));
     if let Some(index) = toolbar::clicked(&toolbar::joined(ui, segments)) {
         session.set_tool(tools[index].0);
+    }
+    if session.tool().open_ended() {
+        let done = Segment::new("check_mark", get!("prop.tool.done")).enabled(session.can_finish_curve());
+        if toolbar::clicked(&toolbar::joined(ui, [done])).is_some() {
+            session.finish_curve(editor);
+        }
     }
     ui.separator();
 
@@ -1049,6 +1060,7 @@ fn sketch_inspector(ui: &mut Ui, editor: &mut PropEditor, session: &mut SketchSe
         return;
     }
     let mut moved: Option<(SketchId, Vec2)> = None;
+    let mut edited: Option<SketchEntity> = None;
     let mut dropped = None;
     section(ui, "sketch_picks", get!("prop.inspector.picked", "count", session.picks.len()), |ui| {
         for pick in &session.picks {
@@ -1066,13 +1078,10 @@ fn sketch_inspector(ui: &mut Ui, editor: &mut PropEditor, session: &mut SketchSe
                         }
                     }
                     SketchPick::Line(line) => {
-                        ui.label(get!("prop.sketch.line_label", "id", line));
-                        let length = sketch
-                            .lines()
-                            .find(|(candidate, ..)| *candidate == line)
-                            .and_then(|(_, a, b, _)| Some(sketch.point(a)?.distance(sketch.point(b)?)));
-                        if let Some(length) = length {
-                            ui.label(format!("{length:.4} m"));
+                        if let Some(entity) = sketch.entities.iter().find(|entity| entity.id() == line) {
+                            if let Some(changed) = entity_row(ui, &sketch, entity) {
+                                edited = Some(changed);
+                            }
                         }
                     }
                 }
@@ -1090,9 +1099,82 @@ fn sketch_inspector(ui: &mut Ui, editor: &mut PropEditor, session: &mut SketchSe
             sketch.move_point(point, at);
         }
     }
+    if let Some(entity) = edited {
+        editor.begin_gesture();
+        if let Some(sketch) = sketch_of_mut(editor.doc_mut(), id)
+            && let Some(slot) = sketch.entities.iter_mut().find(|slot| slot.id() == entity.id())
+        {
+            *slot = entity;
+        }
+    }
     if let Some(pick) = dropped {
         session.toggle(pick);
     }
+}
+
+/// A picked line or curve: its name and length, and what of it is a number
+/// rather than a point. Returns the entity as edited, if it was.
+fn entity_row(ui: &mut Ui, sketch: &Sketch, entity: &SketchEntity) -> Option<SketchEntity> {
+    let id = entity.id();
+    let label = match entity {
+        SketchEntity::Line { .. } => get!("prop.sketch.line_label", "id", id),
+        SketchEntity::Arc { .. } => get!("prop.sketch.arc_label", "id", id),
+        SketchEntity::Circle { .. } => get!("prop.sketch.circle_label", "id", id),
+        SketchEntity::Bezier { .. } => get!("prop.sketch.bezier_label", "id", id),
+        SketchEntity::Nurbs { .. } => get!("prop.sketch.nurbs_label", "id", id),
+    };
+    let mut edited = entity.clone();
+    let mut changed = false;
+    ui.vertical(|ui| {
+        ui.horizontal(|ui| {
+            ui.label(label);
+            if let Some(curve) = sketch.curve(id) {
+                let length: f32 = curve.facets().windows(2).map(|f| f[0].distance(f[1])).sum();
+                ui.label(format!("{length:.4} m"));
+            }
+        });
+        match &mut edited {
+            SketchEntity::Line { .. } | SketchEntity::Bezier { .. } => {}
+            SketchEntity::Arc { clockwise, .. } => {
+                changed |= ui.checkbox(clockwise, get!("prop.sketch.clockwise")).changed();
+            }
+            SketchEntity::Circle { radius, .. } => {
+                changed |= drag(ui, get!("prop.inspector.radius"), radius, 0.001, "m");
+                *radius = radius.max(MIN_EXTENT);
+            }
+            SketchEntity::Nurbs { degree, points, weights, knots, .. } => {
+                let most = points.len().saturating_sub(1).max(1) as u32;
+                ui.horizontal(|ui| {
+                    ui.label(get!("prop.sketch.degree"));
+                    if ui.add(egui::Slider::new(degree, 1..=most)).changed() {
+                        // A new degree needs a new count of knots.
+                        *knots = clamped_knots(points.len(), *degree as usize);
+                        changed = true;
+                    }
+                });
+                ui.label(get!("prop.sketch.weights"));
+                ui.horizontal_wrapped(|ui| {
+                    for weight in weights.iter_mut() {
+                        changed |= ui.add(egui::DragValue::new(weight).speed(0.01).range(0.01..=100.0)).changed();
+                    }
+                });
+                ui.label(get!("prop.sketch.knots"));
+                ui.horizontal_wrapped(|ui| {
+                    for i in 0..knots.len() {
+                        // Kept between its neighbors, so the knots never decrease.
+                        let low = if i == 0 { f32::MIN } else { knots[i - 1] };
+                        let high = if i + 1 == knots.len() { f32::MAX } else { knots[i + 1] };
+                        let mut value = knots[i];
+                        if ui.add(egui::DragValue::new(&mut value).speed(0.01)).changed() {
+                            knots[i] = value.clamp(low, high);
+                            changed = true;
+                        }
+                    }
+                });
+            }
+        }
+    });
+    changed.then_some(edited)
 }
 
 /// The plane the picks make, unless they are one plane, which Use plane

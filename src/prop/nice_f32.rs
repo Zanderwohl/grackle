@@ -75,6 +75,18 @@ pub mod pairs {
     }
 }
 
+pub mod list {
+    use super::*;
+
+    pub fn serialize<S: Serializer>(value: &[f32], serializer: S) -> Result<S::Ok, S::Error> {
+        value.iter().map(|v| widen(*v)).collect::<Vec<_>>().serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<f32>, D::Error> {
+        Vec::<f64>::deserialize(deserializer).map(|values| values.into_iter().map(|v| v as f32).collect())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

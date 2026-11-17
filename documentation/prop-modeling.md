@@ -386,12 +386,15 @@ this plan; they need stage 4 and adjacency on the result, and get their own.
 - [x] Found lazily, so the game's bakes skip it; 13–17 ms for the largest shipped props in a debug build
 
 ### Sketch curves
-- [ ] `Curve2` and `Curve3`
-- [ ] `SketchEntity::Arc` and `Circle`, with draw tools in the sketch workspace
-- [ ] Facets tagged with entity and span in `arrange`
-- [ ] `SketchEntity::Bezier`
-- [ ] `SketchEntity::Nurbs`, weights and knots in the inspector
-- [ ] `CurveRef` resolves arcs and seams to curves, not two points
+- [x] `Curve2` (`curve.rs`: evaluation and chord-tolerance faceting) and `Curve3` (a line or a polyline)
+- [x] `SketchEntity::Arc` and `Circle`, with draw tools in the sketch workspace; an arc's end is kept on its circle
+- [x] Facets tagged with their entity in `arrange` (`Region::outer_entities`, `hole_entities`), so a swept curve is one face
+- [x] `SketchEntity::Bezier`, drawn by clicking control points
+- [x] `SketchEntity::Nurbs`: degree, weights and knots in the inspector; clamped, evenly spaced knots when made
+- [x] `CurveRef` resolves arcs and seams to curves, not two points (a polyline of the facets)
+- [ ] Erasing part of a curve: the eraser takes a curve whole
+- [ ] Shortcuts for the curve tools; they are toolbar buttons only
+- [ ] Footprint rooms on the map stay lines: their tool draws nothing else
 
 ### Sweeps
 - [ ] `Path` slot (a pick joins either end) and the Chain button

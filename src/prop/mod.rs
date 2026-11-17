@@ -47,6 +47,7 @@ pub mod archetype;
 pub mod baked;
 pub mod camera;
 pub mod construct;
+pub mod curve;
 pub mod datum;
 pub mod document;
 pub mod feature;

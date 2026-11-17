@@ -47,11 +47,27 @@ pub enum SketchTool {
     #[default]
     Select,
     Line,
+    /// Center, start, end; counter-clockwise from start to end.
+    Arc,
+    /// Center, then any point on the rim.
+    Circle,
+    /// Control points, finished by clicking the last again, `Enter` or Done.
+    Bezier,
+    /// As [`SketchTool::Bezier`], cubic where it has the points for it.
+    Nurbs,
     /// Takes away the piece of a line between the junctions either side of a
-    /// click, or every piece a drag passes through.
+    /// click, or every piece a drag passes through; a curve goes whole.
     Erase,
 }
 
+impl SketchTool {
+    /// Whether it collects points until told it is done.
+    pub fn open_ended(self) -> bool {
+        matches!(self, SketchTool::Bezier | SketchTool::Nurbs)
+    }
+}
+
+/// `Line` is any entity: a line or a curve.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SketchPick {
     Point(SketchId),
@@ -96,6 +112,8 @@ pub struct SketchSession {
     tool: SketchTool,
     /// The point the line tool draws from next.
     chain: Option<SketchId>,
+    /// The points a curve tool has been given so far.
+    pending: Vec<SketchId>,
     /// Oldest first, like the model's picks.
     pub picks: Vec<SketchPick>,
     hovered: Option<SketchPick>,
@@ -155,6 +173,29 @@ impl SketchSession {
     pub fn set_tool(&mut self, tool: SketchTool) {
         self.tool = tool;
         self.chain = None;
+        self.pending.clear();
+    }
+
+    /// Whether an open-ended curve tool has enough points to be finished.
+    pub fn can_finish_curve(&self) -> bool {
+        self.tool.open_ended() && self.pending.len() >= 2
+    }
+
+    /// Makes the curve the pending points describe, as one undo step.
+    pub fn finish_curve(&mut self, editor: &mut PropEditor) {
+        let (Some(id), true) = (self.editing, self.can_finish_curve()) else { return };
+        let points = std::mem::take(&mut self.pending);
+        let tool = self.tool;
+        editor.edit(|doc| {
+            let Some(sketch) = sketch_of_mut(doc, id) else { return };
+            match tool {
+                SketchTool::Bezier => sketch.add_bezier(points),
+                _ => {
+                    let degree = (points.len() as u32 - 1).min(3);
+                    sketch.add_nurbs(points, degree)
+                }
+            };
+        });
     }
 
     pub fn toggle(&mut self, pick: SketchPick) {
@@ -245,6 +286,9 @@ fn keep_the_session(
     }
     if session.chain.is_some_and(|chain| sketch.point(chain).is_none()) {
         session.chain = None;
+    }
+    if session.pending.iter().any(|point| sketch.point(*point).is_none()) {
+        session.pending.clear();
     }
 }
 
@@ -341,6 +385,10 @@ fn edit_the_sketch(
 
     if actions.just_pressed(Action::Cancel) {
         session.chain = None;
+        session.pending.clear();
+    }
+    if actions.just_pressed(Action::Confirm) {
+        session.finish_curve(&mut editor);
     }
     // Not mid-press, which would strand an eraser stroke or a drag. Onto the
     // tool already up it drops the line in progress, as the button does.
@@ -400,6 +448,33 @@ fn edit_the_sketch(
                 session.chain = editor
                     .edit(|doc| sketch_of_mut(doc, id).map(|sketch| draw_to(sketch, chain, target)))
                     .flatten();
+            }
+        }
+        SketchTool::Arc | SketchTool::Circle | SketchTool::Bezier | SketchTool::Nurbs => {
+            if let (true, Some(target)) = (clicked, cursor) {
+                // Clicking the last point again finishes an open-ended curve.
+                if session.tool.open_ended() && target.point.is_some() && target.point == session.pending.last().copied() {
+                    session.finish_curve(&mut editor);
+                    return;
+                }
+                let (tool, mut pending) = (session.tool, std::mem::take(&mut session.pending));
+                editor.edit(|doc| {
+                    let Some(sketch) = sketch_of_mut(doc, id) else { return };
+                    if let (SketchTool::Circle, Some(&center)) = (tool, pending.first()) {
+                        let radius = sketch.point(center).map_or(0.0, |c| c.distance(target.at));
+                        if radius > 0.0 {
+                            sketch.add_circle(center, radius);
+                        }
+                        pending.clear();
+                        return;
+                    }
+                    pending.push(target.point.unwrap_or_else(|| sketch.add_point(target.at)));
+                    if let (SketchTool::Arc, [center, start, end]) = (tool, &pending[..]) {
+                        sketch.add_arc(*center, *start, *end, false);
+                        pending.clear();
+                    }
+                });
+                session.pending = pending;
             }
         }
         SketchTool::Erase => {
@@ -513,13 +588,18 @@ fn under<P: Fn(Vec3) -> Option<Vec2>>(placed: &PlacedSketch, pointer: &Pointer<P
     point.or_else(|| line_under(placed, pointer).map(SketchPick::Line))
 }
 
+/// A line or curve, by its nearest piece.
 fn line_under<P: Fn(Vec3) -> Option<Vec2>>(placed: &PlacedSketch, pointer: &Pointer<P>) -> Option<SketchId> {
     placed
         .sketch
-        .lines()
-        .filter_map(|(id, a, b, _)| {
-            let (a, b) = (placed.sketch.point(a)?, placed.sketch.point(b)?);
-            Some((id, pointer.to_segment(placed.world(a), placed.world(b))?))
+        .curves()
+        .filter_map(|(id, curve, _)| {
+            let facets = curve.facets();
+            let nearest = facets
+                .windows(2)
+                .filter_map(|f| pointer.to_segment(placed.world(f[0]), placed.world(f[1])))
+                .min_by(f32::total_cmp)?;
+            Some((id, nearest))
         })
         .filter(|(_, pixels)| *pixels <= EDGE_PICK_PX)
         .min_by(|a, b| a.1.total_cmp(&b.1))
@@ -537,23 +617,27 @@ fn doomed(session: &SketchSession, sketch: &Sketch) -> Vec<(Vec2, Vec2)> {
         _ => return vec![],
     };
     let at = session.stroke.first().copied().or(session.on_plane);
-    at.and_then(|at| piece_at(sketch, line, at)).into_iter().collect()
+    at.map(|at| piece_at(sketch, line, at)).unwrap_or_default()
 }
 
-fn piece_at(sketch: &Sketch, line: SketchId, at: Vec2) -> Option<(Vec2, Vec2)> {
-    let (a, b) = sketch.line(line)?;
-    let (t0, t1) = sketch.piece_of(line, at)?;
-    Some((a.lerp(b, t0), a.lerp(b, t1)))
+/// The piece of a line between junctions, or a whole curve, as segments.
+fn piece_at(sketch: &Sketch, entity: SketchId, at: Vec2) -> Vec<(Vec2, Vec2)> {
+    if let Some((a, b)) = sketch.line(entity) {
+        return sketch.piece_of(entity, at).map(|(t0, t1)| vec![(a.lerp(b, t0), a.lerp(b, t1))]).unwrap_or_default();
+    }
+    let facets = sketch.curve(entity).map(|curve| curve.facets()).unwrap_or_default();
+    facets.windows(2).map(|f| (f[0], f[1])).collect()
 }
 
 fn crossed_pieces(sketch: &Sketch, from: Vec2, to: Vec2) -> Vec<(Vec2, Vec2)> {
     sketch
-        .lines()
-        .filter_map(|(line, ..)| {
-            let (a, b) = sketch.line(line)?;
-            let (_, _, at) = crossing(a, b, from, to)?;
-            piece_at(sketch, line, at)
+        .curves()
+        .filter_map(|(entity, curve, _)| {
+            let facets = curve.facets();
+            let at = facets.windows(2).find_map(|f| crossing(f[0], f[1], from, to).map(|(_, _, at)| at))?;
+            Some(piece_at(sketch, entity, at))
         })
+        .flatten()
         .collect()
 }
 
@@ -647,15 +731,28 @@ fn draw_the_session(
         let at = placed.world(Vec2::from_array(point.at));
         gizmos.sphere(Isometry3d::from_translation(at), marker, color);
     }
-    for (id, a, b, construction) in placed.sketch.lines() {
-        let (Some(a), Some(b)) = (placed.sketch.point(a), placed.sketch.point(b)) else { continue };
+    for (id, curve, construction) in placed.sketch.curves() {
         let color = color_of(SketchPick::Line(id)).unwrap_or(POINT);
-        let (a, b) = (placed.world(a), placed.world(b));
-        match construction {
-            true => dashed_line(&mut gizmos, a, b, color, marker * 2.0, marker),
-            false => {
-                gizmos.line(a, b, color);
+        for facet in curve.facets().windows(2) {
+            let (a, b) = (placed.world(facet[0]), placed.world(facet[1]));
+            match construction {
+                true => dashed_line(&mut gizmos, a, b, color, marker * 2.0, marker),
+                false => {
+                    gizmos.line(a, b, color);
+                }
             }
+        }
+    }
+    // What a curve tool has so far, joined up to the cursor.
+    if !session.pending.is_empty() {
+        let mut points: Vec<Vec2> = session.pending.iter().filter_map(|point| placed.sketch.point(*point)).collect();
+        points.extend(session.cursor.map(|cursor| cursor.at));
+        for step in points.windows(2) {
+            dashed_line(&mut gizmos, placed.world(step[0]), placed.world(step[1]), HOVERED, marker, marker);
+        }
+        if let (SketchTool::Circle, [center, rim]) = (session.tool, &points[..]) {
+            let facing = Quat::from_rotation_arc(Vec3::Z, *placed.plane.normal);
+            gizmos.circle(Isometry3d::new(placed.world(*center), facing), center.distance(*rim), HOVERED);
         }
     }
 
@@ -669,7 +766,7 @@ fn draw_the_session(
     }
 
     // Ringed when the click would join an existing point.
-    if session.tool == SketchTool::Line
+    if !matches!(session.tool, SketchTool::Select | SketchTool::Erase)
         && let Some(cursor) = session.cursor
     {
         let at = placed.world(cursor.at);
@@ -751,6 +848,30 @@ mod tests {
         assert_eq!(chain, None, "closing the triangle ends the chain");
         assert_eq!(sketch.points.len(), 4, "closing reused the first point");
         assert_eq!(arrange(&sketch).regions.len(), 1);
+    }
+
+    /// Fails if a curve tool's points are left loose, or its curve is more
+    /// than one undo step.
+    #[test]
+    fn finishing_a_curve_tool_makes_its_curve_in_one_step() {
+        use crate::prop::plane::{OriginPlane, PlaneRef};
+        let mut doc = PropDoc::new("test");
+        let mut sketch = Sketch::default();
+        let points: Vec<SketchId> = (0..4).map(|i| sketch.add_point(Vec2::new(i as f32 * 0.01, (i % 2) as f32 * 0.01))).collect();
+        let id = doc.push(FeatureOp::Sketch { on: PlaneRef::Origin(OriginPlane::Xy), sketch });
+        let mut editor = PropEditor::default();
+        editor.open(doc, None);
+        let mut session = SketchSession::default();
+        session.enter(id);
+        session.set_tool(SketchTool::Nurbs);
+        session.pending = points.clone();
+        assert!(session.can_finish_curve());
+        session.finish_curve(&mut editor);
+        let made = &sketch_of(editor.doc(), id).unwrap().entities;
+        assert!(matches!(&made[..], [crate::prop::sketch::SketchEntity::Nurbs { degree: 3, points: p, .. }] if *p == points));
+        assert!(session.pending.is_empty());
+        editor.undo();
+        assert!(sketch_of(editor.doc(), id).unwrap().entities.is_empty());
     }
 
     #[test]

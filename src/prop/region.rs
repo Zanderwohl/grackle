@@ -46,6 +46,11 @@ pub struct Region {
     pub outer: Vec<Vec2>,
     /// The outsides of whatever is drawn inside it, in no promised winding.
     pub holes: Vec<Vec<Vec2>>,
+    /// The entity each piece of `outer` lies on, piece `i` running from
+    /// point `i` to the next: the many pieces of one arc share its id.
+    pub outer_entities: Vec<SketchId>,
+    /// As `outer_entities`, per hole.
+    pub hole_entities: Vec<Vec<SketchId>>,
 }
 
 impl Region {
@@ -216,8 +221,10 @@ impl Arrangement {
         let edge_of_union = |h: usize| inside(h) && !inside(h ^ 1);
 
         let mut seen = vec![false; graph.next.len()];
-        let mut outer: Option<(Vec<Vec2>, Vec<Bound>)> = None;
+        let mut outer: Option<(Vec<Vec2>, Vec<SketchId>, Vec<Bound>)> = None;
         let mut holes: Vec<Vec<Vec2>> = members.iter().flat_map(|&m| self.regions[m].holes.clone()).collect();
+        let mut hole_entities: Vec<Vec<SketchId>> =
+            members.iter().flat_map(|&m| self.regions[m].hole_entities.clone()).collect();
         for start in (0..graph.next.len()).filter(|&h| edge_of_union(h)) {
             if seen[start] {
                 continue;
@@ -245,21 +252,24 @@ impl Arrangement {
                 }
                 h = n;
             }
-            let points: Vec<Vec2> =
-                cycle.iter().filter(|h| !divider_corners.contains(h)).map(|&h| graph.start(h)).collect();
+            let kept: Vec<usize> = cycle.iter().copied().filter(|h| !divider_corners.contains(h)).collect();
+            let points: Vec<Vec2> = kept.iter().map(|&h| graph.start(h)).collect();
+            let entities: Vec<SketchId> = kept.iter().map(|&h| graph.edges[h / 2].entity).collect();
             let bounds: Vec<Bound> = cycle.iter().map(|&h| graph.bound(h)).collect();
             if signed_area(&points) > TOLERANCE * TOLERANCE {
                 // A connected union has one outside.
-                if outer.replace((points, bounds)).is_some() {
+                if outer.replace((points, entities, bounds)).is_some() {
                     return None;
                 }
             } else {
                 holes.push(points);
+                hole_entities.push(entities);
             }
         }
-        let (outer, bounds) = outer?;
+        let (outer, outer_entities, bounds) = outer?;
         let bounds: BTreeSet<Bound> = bounds.into_iter().collect();
-        Some(Region { name: RegionRef { bounds: bounds.into_iter().collect() }, outer, holes })
+        let name = RegionRef { bounds: bounds.into_iter().collect() };
+        Some(Region { name, outer, holes, outer_entities, hole_entities })
     }
 
     pub fn region_at(&self, point: Vec2) -> Option<&Region> {
@@ -303,22 +313,25 @@ pub fn arrange(sketch: &Sketch) -> Arrangement {
             }
         }
     }
-    let vertex = |id: SketchId| vertex_of.iter().find(|(point, _)| *point == id).map(|(_, v)| *v);
 
+    // Every line and curve as straight pieces, each knowing its entity; a
+    // curve's ends land on its sketch points' vertices, being exactly there.
     let mut segments: Vec<(SketchId, usize, usize)> = Vec::new();
-    for (id, a, b, construction) in sketch.lines() {
-        if construction {
+    for entity in &sketch.entities {
+        let id = entity.id();
+        if entity.construction() {
             continue;
         }
-        let (Some(va), Some(vb)) = (vertex(a), vertex(b)) else {
+        let Some(curve) = sketch.curve(id) else {
             notes.push(Note::MissingPoint(id));
             continue;
         };
-        if va == vb {
+        let facets: Vec<usize> = curve.facets().into_iter().map(|p| vertex_near(&mut vertices, p)).collect();
+        let before = segments.len();
+        segments.extend(facets.windows(2).filter(|pair| pair[0] != pair[1]).map(|pair| (id, pair[0], pair[1])));
+        if segments.len() == before {
             notes.push(Note::ZeroLength(id));
-            continue;
         }
-        segments.push((id, va, vb));
     }
 
     let mut cuts: Vec<Vec<(f32, usize)>> = segments.iter().map(|&(_, a, b)| vec![(0.0, a), (1.0, b)]).collect();
@@ -370,7 +383,9 @@ pub fn arrange(sketch: &Sketch) -> Arrangement {
             break;
         }
     }
-    for &(entity, _, _) in &segments {
+    let mut entities: Vec<SketchId> = segments.iter().map(|segment| segment.0).collect();
+    entities.dedup();
+    for entity in entities {
         if !edges.iter().any(|edge| edge.entity == entity) {
             notes.push(Note::Open(entity));
         }
@@ -485,8 +500,9 @@ fn faces(vertices: Vec<Vec2>, edges: Vec<Edge>) -> (Vec<Region>, Graph) {
     }
 
     let points_of = |cycle: &[usize]| cycle.iter().map(|&h| vertices[half(h).0]).collect::<Vec<Vec2>>();
+    let entities_of = |cycle: &[usize]| cycle.iter().map(|&h| edges[h / 2].entity).collect::<Vec<SketchId>>();
     let mut bounded: Vec<(Region, usize)> = Vec::new();
-    let mut outsides: Vec<(Vec<Vec2>, usize)> = Vec::new();
+    let mut outsides: Vec<(Vec<Vec2>, Vec<SketchId>, usize)> = Vec::new();
     let mut face_of: Vec<Option<usize>> = vec![None; edges.len() * 2];
     let mut cycle_of: Vec<Vec<usize>> = Vec::new();
     for cycle in &cycles {
@@ -505,13 +521,14 @@ fn faces(vertices: Vec<Vec2>, edges: Vec<Edge>) -> (Vec<Region>, Graph) {
                 })
                 .collect();
             let name = RegionRef { bounds: bounds.into_iter().collect() };
-            bounded.push((Region { name, outer: points, holes: vec![] }, owner));
+            let outer_entities = entities_of(cycle);
+            bounded.push((Region { name, outer: points, holes: vec![], outer_entities, hole_entities: vec![] }, owner));
         } else {
-            outsides.push((points, owner));
+            outsides.push((points, entities_of(cycle), owner));
         }
     }
 
-    for (outside, owner) in outsides {
+    for (outside, outside_entities, owner) in outsides {
         let probe = outside[0];
         let container = bounded
             .iter()
@@ -521,6 +538,7 @@ fn faces(vertices: Vec<Vec2>, edges: Vec<Edge>) -> (Vec<Region>, Graph) {
             .map(|(at, _)| at);
         if let Some(at) = container {
             bounded[at].0.holes.push(outside);
+            bounded[at].0.hole_entities.push(outside_entities);
         }
     }
     let next = (0..edges.len() * 2).map(next).collect();

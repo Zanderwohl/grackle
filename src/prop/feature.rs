@@ -723,7 +723,14 @@ fn sweep(
     let mut outline = Outline::default();
     let mut solid: Option<Solid> = None;
     for region in regions {
-        let loops = std::iter::once(&region.outer).chain(&region.holes).map(|points| TaggedLoop::numbered(local(points))).collect();
+        // Tagged by entity, so an arc's many pieces sweep one face.
+        let tagged = |points: &Vec<Vec2>, entities: &Vec<SketchId>| TaggedLoop {
+            points: local(points),
+            tags: entities.iter().map(|entity| entity.0).collect(),
+        };
+        let loops = std::iter::once(tagged(&region.outer, &region.outer_entities))
+            .chain(region.holes.iter().zip(&region.hole_entities).map(|(hole, entities)| tagged(hole, entities)))
+            .collect();
         let swept = skin(&run_of(loops), surface).map_err(SkinProblem::message)?;
         let piece = places.iter().fold(swept.solid, |solid, place| solid.transformed(*place));
         solid = Some(match solid {
@@ -1562,6 +1569,70 @@ mod tests {
             }
             let text = to_text(&doc).unwrap();
             assert_eq!(parse(&text).unwrap(), doc, "{text}");
+        }
+
+        /// A circle swept is a cylinder with one side face, whose rims are
+        /// each one seam.
+        #[test]
+        fn an_extruded_circle_is_one_side_face_with_round_rims() {
+            let mut sketch = Sketch::default();
+            let center = sketch.add_point(Vec2::ZERO);
+            sketch.add_circle(center, 0.03);
+            let (_, evaluated) = swept(OriginPlane::Xy, sketch, 0.1, false, every);
+            assert!(evaluated.problems.is_empty(), "{:?}", evaluated.problems);
+            let wire = &evaluated.wires[0].1[0];
+            assert_eq!(wire.outline.faces.len(), 3, "two caps and one side");
+            let volume = evaluated.bodies[0].1.volume();
+            let round = std::f32::consts::PI * 0.03 * 0.03 * 0.1;
+            assert!(volume < round && volume > round * 0.97, "{volume} against {round}");
+            let rims: Vec<_> = evaluated.seams().iter().filter(|seam| seam.offered && seam.closed).collect();
+            assert_eq!(rims.len(), 2);
+        }
+
+        /// A D: a line and an arc, swept, make a flat side and a curved one.
+        #[test]
+        fn a_line_and_an_arc_sweep_a_face_each() {
+            let mut sketch = Sketch::default();
+            let center = sketch.add_point(Vec2::ZERO);
+            let a = sketch.add_point(Vec2::new(0.0, -0.03));
+            let b = sketch.add_point(Vec2::new(0.0, 0.03));
+            sketch.add_line(b, a);
+            sketch.add_arc(center, a, b, false);
+            let (_, evaluated) = swept(OriginPlane::Xy, sketch, 0.05, false, every);
+            assert!(evaluated.problems.is_empty(), "{:?}", evaluated.problems);
+            let outline = &evaluated.wires[0].1[0].outline;
+            assert_eq!(outline.faces.len(), 4);
+            let flat = (0..4).filter(|&i| outline.locate(crate::prop::reference::Element::Face(i)).is_some_and(|face| face.is_flat())).count();
+            assert_eq!(flat, 3, "the caps and the line's side");
+        }
+
+        #[test]
+        fn every_curve_survives_the_file() {
+            let mut sketch = Sketch::default();
+            let p: Vec<SketchId> = [[0.0, 0.0], [0.03, 0.0], [0.0, 0.03], [0.05, 0.02], [0.07, 0.05]]
+                .iter()
+                .map(|at| sketch.add_point(Vec2::from_array(*at)))
+                .collect();
+            sketch.add_arc(p[0], p[1], p[2], true);
+            sketch.add_circle(p[3], 0.0125);
+            sketch.add_bezier(vec![p[1], p[3], p[4]]);
+            sketch.add_nurbs(vec![p[0], p[1], p[3], p[4]], 3);
+            let mut doc = PropDoc::new("test");
+            doc.push(FeatureOp::Sketch { on: PlaneRef::Origin(OriginPlane::Xy), sketch });
+            let text = to_text(&doc).unwrap();
+            assert_eq!(parse(&text).unwrap(), doc, "{text}");
+        }
+
+        #[test]
+        fn an_arcs_end_stays_on_its_circle() {
+            let mut sketch = Sketch::default();
+            let center = sketch.add_point(Vec2::ZERO);
+            let start = sketch.add_point(Vec2::new(0.04, 0.0));
+            let end = sketch.add_point(Vec2::new(0.0, 0.01));
+            sketch.add_arc(center, start, end, false);
+            assert!((sketch.point(end).unwrap().length() - 0.04).abs() < 1e-6, "put on the circle when made");
+            sketch.move_point(start, Vec2::new(0.06, 0.0));
+            assert!((sketch.point(end).unwrap().length() - 0.06).abs() < 1e-6, "and kept there");
         }
     }
 

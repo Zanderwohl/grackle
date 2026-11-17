@@ -8,6 +8,7 @@
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use crate::prop::curve::{clamped_knots, Curve2};
 use crate::prop::plane::Plane;
 use crate::prop::region::{arrange, crossing, interior_param, Arrangement, Bound, Region, RegionRef, Side, TOLERANCE};
 
@@ -30,7 +31,9 @@ pub struct SketchPoint {
     pub at: [f32; 2],
 }
 
-/// Every field a scalar, so an entity is one flat TOML table.
+/// Every field a scalar or a list of them, so an entity is one flat TOML
+/// table. `construction` is drawn and snapped to, never part of a region: a
+/// revolve's axis, a center line.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SketchEntity {
@@ -38,8 +41,47 @@ pub enum SketchEntity {
         id: SketchId,
         a: SketchId,
         b: SketchId,
-        /// Drawn and snapped to, never part of a region: a revolve's axis, a
-        /// center line.
+        #[serde(default)]
+        construction: bool,
+    },
+    /// Round `center` from `start` to `end`, counter-clockwise unless
+    /// `clockwise`. Its radius is `start`'s distance; `end` is kept on it.
+    Arc {
+        id: SketchId,
+        center: SketchId,
+        start: SketchId,
+        end: SketchId,
+        #[serde(default)]
+        clockwise: bool,
+        #[serde(default)]
+        construction: bool,
+    },
+    Circle {
+        id: SketchId,
+        center: SketchId,
+        /// Meters.
+        #[serde(with = "crate::prop::nice_f32::scalar")]
+        radius: f32,
+        #[serde(default)]
+        construction: bool,
+    },
+    /// Through its first and last points, pulled toward the rest; its degree
+    /// is one less than its points.
+    Bezier {
+        id: SketchId,
+        points: Vec<SketchId>,
+        #[serde(default)]
+        construction: bool,
+    },
+    /// `weights` one per point, `knots` `points + degree + 1` of them.
+    Nurbs {
+        id: SketchId,
+        degree: u32,
+        points: Vec<SketchId>,
+        #[serde(with = "crate::prop::nice_f32::list")]
+        weights: Vec<f32>,
+        #[serde(with = "crate::prop::nice_f32::list")]
+        knots: Vec<f32>,
         #[serde(default)]
         construction: bool,
     },
@@ -48,19 +90,40 @@ pub enum SketchEntity {
 impl SketchEntity {
     pub fn id(&self) -> SketchId {
         match self {
-            SketchEntity::Line { id, .. } => *id,
+            SketchEntity::Line { id, .. }
+            | SketchEntity::Arc { id, .. }
+            | SketchEntity::Circle { id, .. }
+            | SketchEntity::Bezier { id, .. }
+            | SketchEntity::Nurbs { id, .. } => *id,
         }
     }
 
     pub fn construction(&self) -> bool {
         match self {
-            SketchEntity::Line { construction, .. } => *construction,
+            SketchEntity::Line { construction, .. }
+            | SketchEntity::Arc { construction, .. }
+            | SketchEntity::Circle { construction, .. }
+            | SketchEntity::Bezier { construction, .. }
+            | SketchEntity::Nurbs { construction, .. } => *construction,
+        }
+    }
+
+    fn construction_mut(&mut self) -> &mut bool {
+        match self {
+            SketchEntity::Line { construction, .. }
+            | SketchEntity::Arc { construction, .. }
+            | SketchEntity::Circle { construction, .. }
+            | SketchEntity::Bezier { construction, .. }
+            | SketchEntity::Nurbs { construction, .. } => construction,
         }
     }
 
     pub fn points(&self) -> Vec<SketchId> {
         match self {
             SketchEntity::Line { a, b, .. } => vec![*a, *b],
+            SketchEntity::Arc { center, start, end, .. } => vec![*center, *start, *end],
+            SketchEntity::Circle { center, .. } => vec![*center],
+            SketchEntity::Bezier { points, .. } | SketchEntity::Nurbs { points, .. } => points.clone(),
         }
     }
 }
@@ -116,6 +179,100 @@ impl Sketch {
         id
     }
 
+    /// `end` is put on the circle `start` makes round `center`.
+    pub fn add_arc(&mut self, center: SketchId, start: SketchId, end: SketchId, clockwise: bool) -> SketchId {
+        let id = self.take_id();
+        self.entities.push(SketchEntity::Arc { id, center, start, end, clockwise, construction: false });
+        self.true_arcs(&[end]);
+        id
+    }
+
+    pub fn add_circle(&mut self, center: SketchId, radius: f32) -> SketchId {
+        let id = self.take_id();
+        self.entities.push(SketchEntity::Circle { id, center, radius, construction: false });
+        id
+    }
+
+    pub fn add_bezier(&mut self, points: Vec<SketchId>) -> SketchId {
+        let id = self.take_id();
+        self.entities.push(SketchEntity::Bezier { id, points, construction: false });
+        id
+    }
+
+    /// Unit weights and clamped, evenly spaced knots: through its ends.
+    pub fn add_nurbs(&mut self, points: Vec<SketchId>, degree: u32) -> SketchId {
+        let id = self.take_id();
+        let degree = degree.clamp(1, points.len().saturating_sub(1).max(1) as u32);
+        let weights = vec![1.0; points.len()];
+        let knots = clamped_knots(points.len(), degree as usize);
+        self.entities.push(SketchEntity::Nurbs { id, degree, points, weights, knots, construction: false });
+        id
+    }
+
+    /// What entity `id` draws, where its points are now. `None` for a line or
+    /// curve naming a missing point, or a NURBS whose lists do not fit.
+    pub fn curve(&self, id: SketchId) -> Option<Curve2> {
+        let entity = self.entities.iter().find(|entity| entity.id() == id)?;
+        self.curve_of(entity)
+    }
+
+    fn curve_of(&self, entity: &SketchEntity) -> Option<Curve2> {
+        let at = |id: &SketchId| self.point(*id);
+        Some(match entity {
+            SketchEntity::Line { a, b, .. } => Curve2::Line { a: at(a)?, b: at(b)? },
+            SketchEntity::Arc { center, start, end, clockwise, .. } => {
+                let (center, start, end) = (at(center)?, at(start)?, at(end)?);
+                let (from, to) = (start - center, end - center);
+                let mut sweep = from.angle_to(to);
+                match clockwise {
+                    false if sweep <= 1e-6 => sweep += std::f32::consts::TAU,
+                    true if sweep >= -1e-6 => sweep -= std::f32::consts::TAU,
+                    _ => {}
+                }
+                Curve2::Arc { center, start, end, sweep }
+            }
+            SketchEntity::Circle { center, radius, .. } => Curve2::Circle { center: at(center)?, radius: *radius },
+            SketchEntity::Bezier { points, .. } => Curve2::Bezier { points: points.iter().map(at).collect::<Option<_>>()? },
+            SketchEntity::Nurbs { degree, points, weights, knots, .. } => {
+                let points: Vec<Vec2> = points.iter().map(at).collect::<Option<_>>()?;
+                let degree = *degree as usize;
+                if degree == 0 || weights.len() != points.len() || knots.len() != points.len() + degree + 1 {
+                    return None;
+                }
+                Curve2::Nurbs { degree, points, weights: weights.clone(), knots: knots.clone() }
+            }
+        })
+    }
+
+    /// Every entity's curve, with whether it is construction.
+    pub fn curves(&self) -> impl Iterator<Item = (SketchId, Curve2, bool)> + '_ {
+        self.entities.iter().filter_map(|entity| Some((entity.id(), self.curve_of(entity)?, entity.construction())))
+    }
+
+    /// Puts each arc's end back on the circle its start makes, for arcs
+    /// naming any of `moved`.
+    fn true_arcs(&mut self, moved: &[SketchId]) {
+        let arcs: Vec<(SketchId, SketchId, SketchId)> = self
+            .entities
+            .iter()
+            .filter_map(|entity| match *entity {
+                SketchEntity::Arc { center, start, end, .. }
+                    if moved.contains(&center) || moved.contains(&start) || moved.contains(&end) =>
+                {
+                    Some((center, start, end))
+                }
+                _ => None,
+            })
+            .collect();
+        for (center, start, end) in arcs {
+            let (Some(c), Some(s), Some(e)) = (self.point(center), self.point(start), self.point(end)) else { continue };
+            let radius = s.distance(c);
+            if let Some(direction) = (e - c).try_normalize() {
+                self.move_point_only(end, c + direction * radius);
+            }
+        }
+    }
+
     pub fn line(&self, id: SketchId) -> Option<(Vec2, Vec2)> {
         let (_, a, b, _) = self.lines().find(|(line, ..)| *line == id)?;
         Some((self.point(a)?, self.point(b)?))
@@ -125,18 +282,21 @@ impl Sketch {
         self.points.iter().find(|point| point.id == id).map(|point| Vec2::from_array(point.at))
     }
 
+    /// Arcs naming the point keep their ends on their circles.
     pub fn move_point(&mut self, id: SketchId, at: Vec2) {
+        self.move_point_only(id, at);
+        self.true_arcs(&[id]);
+    }
+
+    fn move_point_only(&mut self, id: SketchId, at: Vec2) {
         if let Some(point) = self.points.iter_mut().find(|point| point.id == id) {
             point.at = at.to_array();
         }
     }
 
-    pub fn set_construction(&mut self, line: SketchId, to: bool) {
-        for entity in &mut self.entities {
-            match entity {
-                SketchEntity::Line { id, construction, .. } if *id == line => *construction = to,
-                SketchEntity::Line { .. } => {}
-            }
+    pub fn set_construction(&mut self, entity: SketchId, to: bool) {
+        if let Some(found) = self.entities.iter_mut().find(|found| found.id() == entity) {
+            *found.construction_mut() = to;
         }
     }
 
@@ -180,6 +340,15 @@ impl Sketch {
     /// Erases the piece of `line` nearest `near`, leaving the rest where it
     /// was. A point left on no line goes too.
     pub fn erase_piece(&mut self, line: SketchId, near: Vec2) -> bool {
+        // A curve goes whole: cutting one into pieces is not built yet.
+        if let Some(entity) = self.entities.iter().find(|entity| entity.id() == line)
+            && !matches!(entity, SketchEntity::Line { .. })
+        {
+            let ends = entity.points();
+            self.entities.retain(|entity| entity.id() != line);
+            self.drop_loose_points(&ends);
+            return true;
+        }
         let Some((t0, t1)) = self.piece_of(line, near) else { return false };
         let Some((a, b)) = self.line(line) else { return false };
         let Some(SketchEntity::Line { a: from, b: to, construction, .. }) =
@@ -243,15 +412,17 @@ impl Sketch {
     pub fn erase_along(&mut self, path: &[Vec2]) -> usize {
         let mut hits: Vec<Vec2> = Vec::new();
         for step in path.windows(2) {
-            for (line, ..) in self.lines() {
-                let Some((a, b)) = self.line(line) else { continue };
-                hits.extend(crossing(a, b, step[0], step[1]).map(|(_, _, at)| at));
+            for (_, curve, _) in self.curves() {
+                for facet in curve.facets().windows(2) {
+                    hits.extend(crossing(facet[0], facet[1], step[0], step[1]).map(|(_, _, at)| at));
+                }
             }
         }
         let mut erased = 0;
         for at in hits {
-            let on = self.lines().map(|(line, ..)| line).find(|line| {
-                self.line(*line).is_some_and(|(a, b)| distance_to_segment(at, a, b) < TOLERANCE * 10.0)
+            let on = self.curves().map(|(id, curve, _)| (id, curve)).find_map(|(id, curve)| {
+                let near = curve.facets().windows(2).any(|f| distance_to_segment(at, f[0], f[1]) < TOLERANCE * 10.0);
+                near.then_some(id)
             });
             if let Some(line) = on
                 && self.erase_piece(line, at)
@@ -315,9 +486,11 @@ impl Sketch {
         self.regions.retain(|region| !region.label.is_empty() || used.contains(&region.id));
     }
 
+    /// The straight lines only; every entity is [`Self::curves`].
     pub fn lines(&self) -> impl Iterator<Item = (SketchId, SketchId, SketchId, bool)> + '_ {
-        self.entities.iter().map(|entity| match *entity {
-            SketchEntity::Line { id, a, b, construction } => (id, a, b, construction),
+        self.entities.iter().filter_map(|entity| match *entity {
+            SketchEntity::Line { id, a, b, construction } => Some((id, a, b, construction)),
+            _ => None,
         })
     }
 }
@@ -345,12 +518,13 @@ impl PlacedSketch {
         region_label(&self.sketch, id)
     }
 
-    /// In the prop's space. A line naming a missing point is left out.
+    /// Every piece of every line and curve, in the prop's space. One naming
+    /// a missing point is left out.
     pub fn world_lines(&self) -> Vec<(Vec3, Vec3, bool)> {
         self.sketch
-            .lines()
-            .filter_map(|(_, a, b, construction)| {
-                Some((self.world(self.sketch.point(a)?), self.world(self.sketch.point(b)?), construction))
+            .curves()
+            .flat_map(|(_, curve, construction)| {
+                curve.facets().windows(2).map(|f| (self.world(f[0]), self.world(f[1]), construction)).collect::<Vec<_>>()
             })
             .collect()
     }
