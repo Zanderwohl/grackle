@@ -238,7 +238,7 @@ TextureGraphFile(
             ),
             Layer(
                 id: 18,
-                name: "bedded ramp",
+                name: "bedded below ramp",
                 kind: ColorRamp(ColorRamp(
                     stops: [
                         ColorStop(
@@ -341,7 +341,7 @@ TextureGraphFile(
                             )),
                         ),
                         ColorStop(
-                            t: 0.497,
+                            t: 1.0,
                             color: Const(Oklch(
                                 l: 0.57,
                                 chroma: 0.04,
@@ -349,8 +349,25 @@ TextureGraphFile(
                                 alpha: 1.0,
                             )),
                         ),
+                    ],
+                    space: Oklch,
+                )),
+            ),
+            Layer(
+                id: 19,
+                name: "bedded below",
+                kind: Map(Map(
+                    value: Some(14),
+                    palette: Some(18),
+                )),
+            ),
+            Layer(
+                id: 20,
+                name: "bedded above ramp",
+                kind: ColorRamp(ColorRamp(
+                    stops: [
                         ColorStop(
-                            t: 0.503,
+                            t: 0.0,
                             color: Const(Oklch(
                                 l: 0.55,
                                 chroma: 0.014,
@@ -462,15 +479,61 @@ TextureGraphFile(
                 )),
             ),
             Layer(
-                id: 19,
-                name: "bedded",
+                id: 21,
+                name: "bedded above",
                 kind: Map(Map(
                     value: Some(14),
-                    palette: Some(18),
+                    palette: Some(20),
                 )),
             ),
             Layer(
-                id: 20,
+                id: 22,
+                name: "bedded step ramp",
+                kind: ColorRamp(ColorRamp(
+                    stops: [
+                        ColorStop(
+                            t: 0.497,
+                            color: Const(Oklch(
+                                l: 0.0,
+                                chroma: 0.0,
+                                hue: OklabHue(0.0),
+                                alpha: 1.0,
+                            )),
+                        ),
+                        ColorStop(
+                            t: 0.503,
+                            color: Const(Oklch(
+                                l: 1.0,
+                                chroma: 0.0,
+                                hue: OklabHue(0.0),
+                                alpha: 1.0,
+                            )),
+                        ),
+                    ],
+                    space: Oklch,
+                )),
+            ),
+            Layer(
+                id: 23,
+                name: "bedded step",
+                kind: Map(Map(
+                    value: Some(14),
+                    palette: Some(22),
+                )),
+            ),
+            Layer(
+                id: 24,
+                name: "bedded",
+                kind: Mix(Mix(
+                    a: Some(19),
+                    b: Some(21),
+                    mode: Blend,
+                    factor: Layer(23),
+                    space: Oklch,
+                )),
+            ),
+            Layer(
+                id: 25,
                 name: "parting lines wave",
                 kind: Wave(Wave(
                     input: Layer(17),
@@ -481,7 +544,7 @@ TextureGraphFile(
                 )),
             ),
             Layer(
-                id: 21,
+                id: 26,
                 name: "parting lines ramp",
                 kind: ColorRamp(ColorRamp(
                     stops: [
@@ -508,15 +571,15 @@ TextureGraphFile(
                 )),
             ),
             Layer(
-                id: 22,
+                id: 27,
                 name: "parting lines",
                 kind: Map(Map(
-                    value: Some(20),
-                    palette: Some(21),
+                    value: Some(25),
+                    palette: Some(26),
                 )),
             ),
             Layer(
-                id: 23,
+                id: 28,
                 name: "partings noise",
                 kind: Noise(Noise(
                     dims: D2,
@@ -536,7 +599,7 @@ TextureGraphFile(
                 )),
             ),
             Layer(
-                id: 24,
+                id: 29,
                 name: "partings mask ramp",
                 kind: ColorRamp(ColorRamp(
                     stops: [
@@ -563,26 +626,26 @@ TextureGraphFile(
                 )),
             ),
             Layer(
-                id: 25,
+                id: 30,
                 name: "partings mask",
                 kind: Map(Map(
-                    value: Some(23),
-                    palette: Some(24),
+                    value: Some(28),
+                    palette: Some(29),
                 )),
             ),
             Layer(
-                id: 26,
+                id: 31,
                 name: "partings",
                 kind: Mix(Mix(
                     a: Some(2),
-                    b: Some(22),
+                    b: Some(27),
                     mode: Blend,
-                    factor: Layer(25),
+                    factor: Layer(30),
                     space: Oklch,
                 )),
             ),
             Layer(
-                id: 27,
+                id: 32,
                 name: "parting share ramp",
                 kind: ColorRamp(ColorRamp(
                     stops: [
@@ -609,15 +672,15 @@ TextureGraphFile(
                 )),
             ),
             Layer(
-                id: 28,
+                id: 33,
                 name: "parting share",
                 kind: Map(Map(
-                    value: Some(26),
-                    palette: Some(27),
+                    value: Some(31),
+                    palette: Some(32),
                 )),
             ),
             Layer(
-                id: 29,
+                id: 34,
                 name: "parting",
                 kind: Color(Oklch(
                     l: 0.38,
@@ -627,18 +690,18 @@ TextureGraphFile(
                 )),
             ),
             Layer(
-                id: 30,
+                id: 35,
                 name: "parted",
                 kind: Mix(Mix(
-                    a: Some(19),
-                    b: Some(29),
+                    a: Some(24),
+                    b: Some(34),
                     mode: Blend,
-                    factor: Layer(28),
+                    factor: Layer(33),
                     space: Oklch,
                 )),
             ),
             Layer(
-                id: 31,
+                id: 36,
                 name: "silt wave",
                 kind: Wave(Wave(
                     input: Layer(14),
@@ -649,7 +712,7 @@ TextureGraphFile(
                 )),
             ),
             Layer(
-                id: 32,
+                id: 37,
                 name: "silt ramp",
                 kind: ColorRamp(ColorRamp(
                     stops: [
@@ -676,15 +739,15 @@ TextureGraphFile(
                 )),
             ),
             Layer(
-                id: 33,
+                id: 38,
                 name: "silt",
                 kind: Map(Map(
-                    value: Some(31),
-                    palette: Some(32),
+                    value: Some(36),
+                    palette: Some(37),
                 )),
             ),
             Layer(
-                id: 34,
+                id: 39,
                 name: "silt share ramp",
                 kind: ColorRamp(ColorRamp(
                     stops: [
@@ -711,15 +774,15 @@ TextureGraphFile(
                 )),
             ),
             Layer(
-                id: 35,
+                id: 40,
                 name: "silt share",
                 kind: Map(Map(
-                    value: Some(33),
-                    palette: Some(34),
+                    value: Some(38),
+                    palette: Some(39),
                 )),
             ),
             Layer(
-                id: 36,
+                id: 41,
                 name: "silt 2",
                 kind: Color(Oklch(
                     l: 0.72,
@@ -729,18 +792,18 @@ TextureGraphFile(
                 )),
             ),
             Layer(
-                id: 37,
+                id: 42,
                 name: "silted",
                 kind: Mix(Mix(
-                    a: Some(30),
-                    b: Some(36),
+                    a: Some(35),
+                    b: Some(41),
                     mode: Blend,
-                    factor: Layer(35),
+                    factor: Layer(40),
                     space: Oklch,
                 )),
             ),
             Layer(
-                id: 38,
+                id: 43,
                 name: "mottle",
                 kind: Noise(Noise(
                     dims: D2,
@@ -760,7 +823,7 @@ TextureGraphFile(
                 )),
             ),
             Layer(
-                id: 39,
+                id: 44,
                 name: "patches ramp",
                 kind: ColorRamp(ColorRamp(
                     stops: [
@@ -787,15 +850,15 @@ TextureGraphFile(
                 )),
             ),
             Layer(
-                id: 40,
+                id: 45,
                 name: "patches",
                 kind: Map(Map(
-                    value: Some(38),
-                    palette: Some(39),
+                    value: Some(43),
+                    palette: Some(44),
                 )),
             ),
             Layer(
-                id: 41,
+                id: 46,
                 name: "patch share",
                 kind: Color(Oklch(
                     l: 0.3,
@@ -805,18 +868,18 @@ TextureGraphFile(
                 )),
             ),
             Layer(
-                id: 42,
+                id: 47,
                 name: "patched",
                 kind: Mix(Mix(
-                    a: Some(37),
-                    b: Some(40),
+                    a: Some(42),
+                    b: Some(45),
                     mode: Blend,
-                    factor: Layer(41),
+                    factor: Layer(46),
                     space: Oklch,
                 )),
             ),
             Layer(
-                id: 43,
+                id: 48,
                 name: "wash noise",
                 kind: Noise(Noise(
                     dims: D2,
@@ -836,10 +899,10 @@ TextureGraphFile(
                 )),
             ),
             Layer(
-                id: 44,
+                id: 49,
                 name: "wash",
                 kind: Transform(Transform(
-                    source: Some(43),
+                    source: Some(48),
                     offset: (0.0, 0.0, 0.0),
                     rotate_uv: 0.0,
                     scale: (8.0, 1.0, 1.0),
@@ -848,7 +911,7 @@ TextureGraphFile(
                 )),
             ),
             Layer(
-                id: 45,
+                id: 50,
                 name: "washed ramp",
                 kind: ColorRamp(ColorRamp(
                     stops: [
@@ -875,15 +938,15 @@ TextureGraphFile(
                 )),
             ),
             Layer(
-                id: 46,
+                id: 51,
                 name: "washed",
                 kind: Map(Map(
-                    value: Some(44),
-                    palette: Some(45),
+                    value: Some(49),
+                    palette: Some(50),
                 )),
             ),
             Layer(
-                id: 47,
+                id: 52,
                 name: "wash share ramp",
                 kind: ColorRamp(ColorRamp(
                     stops: [
@@ -910,15 +973,15 @@ TextureGraphFile(
                 )),
             ),
             Layer(
-                id: 48,
+                id: 53,
                 name: "wash share",
                 kind: Map(Map(
-                    value: Some(46),
-                    palette: Some(47),
+                    value: Some(51),
+                    palette: Some(52),
                 )),
             ),
             Layer(
-                id: 49,
+                id: 54,
                 name: "stain",
                 kind: Color(Oklch(
                     l: 0.5,
@@ -928,18 +991,18 @@ TextureGraphFile(
                 )),
             ),
             Layer(
-                id: 50,
+                id: 55,
                 name: "stained",
                 kind: Mix(Mix(
-                    a: Some(42),
-                    b: Some(49),
+                    a: Some(47),
+                    b: Some(54),
                     mode: Blend,
-                    factor: Layer(48),
+                    factor: Layer(53),
                     space: Oklch,
                 )),
             ),
             Layer(
-                id: 51,
+                id: 56,
                 name: "grain",
                 kind: Noise(Noise(
                     dims: D2,
@@ -959,7 +1022,7 @@ TextureGraphFile(
                 )),
             ),
             Layer(
-                id: 52,
+                id: 57,
                 name: "sand ramp",
                 kind: ColorRamp(ColorRamp(
                     stops: [
@@ -986,15 +1049,15 @@ TextureGraphFile(
                 )),
             ),
             Layer(
-                id: 53,
+                id: 58,
                 name: "sand",
                 kind: Map(Map(
-                    value: Some(51),
-                    palette: Some(52),
+                    value: Some(56),
+                    palette: Some(57),
                 )),
             ),
             Layer(
-                id: 54,
+                id: 59,
                 name: "sand share",
                 kind: Color(Oklch(
                     l: 0.22,
@@ -1004,18 +1067,18 @@ TextureGraphFile(
                 )),
             ),
             Layer(
-                id: 55,
+                id: 60,
                 name: "color",
                 kind: Mix(Mix(
-                    a: Some(50),
-                    b: Some(53),
+                    a: Some(55),
+                    b: Some(58),
                     mode: Blend,
-                    factor: Layer(54),
+                    factor: Layer(59),
                     space: Oklch,
                 )),
             ),
             Layer(
-                id: 56,
+                id: 61,
                 name: "roughness ramp",
                 kind: ColorRamp(ColorRamp(
                     stops: [
@@ -1042,16 +1105,16 @@ TextureGraphFile(
                 )),
             ),
             Layer(
-                id: 57,
+                id: 62,
                 name: "roughness",
                 kind: Map(Map(
-                    value: Some(51),
-                    palette: Some(56),
+                    value: Some(56),
+                    palette: Some(61),
                 )),
             ),
             Layer(
-                id: 58,
-                name: "ledges ramp",
+                id: 63,
+                name: "ledges below ramp",
                 kind: ColorRamp(ColorRamp(
                     stops: [
                         ColorStop(
@@ -1154,7 +1217,7 @@ TextureGraphFile(
                             )),
                         ),
                         ColorStop(
-                            t: 0.497,
+                            t: 1.0,
                             color: Const(Oklch(
                                 l: 0.5,
                                 chroma: 0.0,
@@ -1162,8 +1225,25 @@ TextureGraphFile(
                                 alpha: 1.0,
                             )),
                         ),
+                    ],
+                    space: Oklch,
+                )),
+            ),
+            Layer(
+                id: 64,
+                name: "ledges below",
+                kind: Map(Map(
+                    value: Some(14),
+                    palette: Some(63),
+                )),
+            ),
+            Layer(
+                id: 65,
+                name: "ledges above ramp",
+                kind: ColorRamp(ColorRamp(
+                    stops: [
                         ColorStop(
-                            t: 0.503,
+                            t: 0.0,
                             color: Const(Oklch(
                                 l: 0.7,
                                 chroma: 0.0,
@@ -1275,15 +1355,61 @@ TextureGraphFile(
                 )),
             ),
             Layer(
-                id: 59,
-                name: "ledges",
+                id: 66,
+                name: "ledges above",
                 kind: Map(Map(
                     value: Some(14),
-                    palette: Some(58),
+                    palette: Some(65),
                 )),
             ),
             Layer(
-                id: 60,
+                id: 67,
+                name: "ledges step ramp",
+                kind: ColorRamp(ColorRamp(
+                    stops: [
+                        ColorStop(
+                            t: 0.497,
+                            color: Const(Oklch(
+                                l: 0.0,
+                                chroma: 0.0,
+                                hue: OklabHue(0.0),
+                                alpha: 1.0,
+                            )),
+                        ),
+                        ColorStop(
+                            t: 0.503,
+                            color: Const(Oklch(
+                                l: 1.0,
+                                chroma: 0.0,
+                                hue: OklabHue(0.0),
+                                alpha: 1.0,
+                            )),
+                        ),
+                    ],
+                    space: Oklch,
+                )),
+            ),
+            Layer(
+                id: 68,
+                name: "ledges step",
+                kind: Map(Map(
+                    value: Some(14),
+                    palette: Some(67),
+                )),
+            ),
+            Layer(
+                id: 69,
+                name: "ledges",
+                kind: Mix(Mix(
+                    a: Some(64),
+                    b: Some(66),
+                    mode: Blend,
+                    factor: Layer(68),
+                    space: Oklch,
+                )),
+            ),
+            Layer(
+                id: 70,
                 name: "split ramp",
                 kind: ColorRamp(ColorRamp(
                     stops: [
@@ -1310,26 +1436,26 @@ TextureGraphFile(
                 )),
             ),
             Layer(
-                id: 61,
+                id: 71,
                 name: "split",
                 kind: Map(Map(
-                    value: Some(26),
-                    palette: Some(60),
+                    value: Some(31),
+                    palette: Some(70),
                 )),
             ),
             Layer(
-                id: 62,
+                id: 72,
                 name: "cut",
                 kind: Mix(Mix(
-                    a: Some(59),
-                    b: Some(61),
+                    a: Some(69),
+                    b: Some(71),
                     mode: Subtract,
                     factor: Const(0.5),
                     space: Oklch,
                 )),
             ),
             Layer(
-                id: 63,
+                id: 73,
                 name: "grit ramp",
                 kind: ColorRamp(ColorRamp(
                     stops: [
@@ -1356,26 +1482,26 @@ TextureGraphFile(
                 )),
             ),
             Layer(
-                id: 64,
+                id: 74,
                 name: "grit",
                 kind: Map(Map(
-                    value: Some(51),
-                    palette: Some(63),
+                    value: Some(56),
+                    palette: Some(73),
                 )),
             ),
             Layer(
-                id: 65,
+                id: 75,
                 name: "gritty",
                 kind: Mix(Mix(
-                    a: Some(62),
-                    b: Some(64),
+                    a: Some(72),
+                    b: Some(74),
                     mode: Add,
                     factor: Const(0.5),
                     space: Oklch,
                 )),
             ),
             Layer(
-                id: 66,
+                id: 76,
                 name: "chipping",
                 kind: Noise(Noise(
                     dims: D2,
@@ -1395,7 +1521,7 @@ TextureGraphFile(
                 )),
             ),
             Layer(
-                id: 67,
+                id: 77,
                 name: "chips ramp",
                 kind: ColorRamp(ColorRamp(
                     stops: [
@@ -1422,29 +1548,29 @@ TextureGraphFile(
                 )),
             ),
             Layer(
-                id: 68,
+                id: 78,
                 name: "chips",
                 kind: Map(Map(
-                    value: Some(66),
-                    palette: Some(67),
+                    value: Some(76),
+                    palette: Some(77),
                 )),
             ),
             Layer(
-                id: 69,
+                id: 79,
                 name: "height",
                 kind: Mix(Mix(
-                    a: Some(65),
-                    b: Some(68),
+                    a: Some(75),
+                    b: Some(78),
                     mode: Add,
                     factor: Const(0.5),
                     space: Oklch,
                 )),
             ),
             Layer(
-                id: 70,
+                id: 80,
                 name: "normal",
                 kind: HeightToNormal(HeightToNormal(
-                    source: Some(69),
+                    source: Some(79),
                     strength: 0.005,
                 )),
             ),
@@ -1519,6 +1645,16 @@ TextureGraphFile(
             68,
             69,
             70,
+            71,
+            72,
+            73,
+            74,
+            75,
+            76,
+            77,
+            78,
+            79,
+            80,
         ],
         canvases: {
             "main": Canvas(
@@ -1541,68 +1677,78 @@ TextureGraphFile(
                     17: (1300.0, 150.0),
                     18: (0.0, 1200.0),
                     19: (1560.0, 0.0),
-                    20: (1560.0, 150.0),
-                    21: (0.0, 1350.0),
-                    22: (1820.0, 0.0),
-                    23: (0.0, 1500.0),
-                    24: (0.0, 1650.0),
-                    25: (260.0, 300.0),
-                    26: (2080.0, 0.0),
-                    27: (0.0, 1800.0),
-                    28: (2340.0, 0.0),
+                    20: (0.0, 1350.0),
+                    21: (1560.0, 150.0),
+                    22: (0.0, 1500.0),
+                    23: (1560.0, 300.0),
+                    24: (1820.0, 0.0),
+                    25: (1560.0, 450.0),
+                    26: (0.0, 1650.0),
+                    27: (1820.0, 150.0),
+                    28: (0.0, 1800.0),
                     29: (0.0, 1950.0),
-                    30: (2600.0, 0.0),
-                    31: (1560.0, 300.0),
+                    30: (260.0, 300.0),
+                    31: (2080.0, 0.0),
                     32: (0.0, 2100.0),
-                    33: (1820.0, 150.0),
+                    33: (2340.0, 0.0),
                     34: (0.0, 2250.0),
-                    35: (2080.0, 150.0),
-                    36: (0.0, 2400.0),
-                    37: (2860.0, 0.0),
-                    38: (0.0, 2550.0),
-                    39: (0.0, 2700.0),
-                    40: (260.0, 450.0),
-                    41: (0.0, 2850.0),
-                    42: (3120.0, 0.0),
-                    43: (0.0, 3000.0),
-                    44: (260.0, 600.0),
-                    45: (0.0, 3150.0),
-                    46: (520.0, 150.0),
-                    47: (0.0, 3300.0),
-                    48: (780.0, 150.0),
-                    49: (0.0, 3450.0),
-                    50: (3380.0, 0.0),
-                    51: (0.0, 3600.0),
-                    52: (0.0, 3750.0),
-                    53: (260.0, 750.0),
-                    54: (0.0, 3900.0),
-                    55: (3640.0, 0.0),
-                    56: (0.0, 4050.0),
-                    57: (260.0, 900.0),
-                    58: (0.0, 4200.0),
-                    59: (1560.0, 450.0),
-                    60: (0.0, 4350.0),
-                    61: (2340.0, 150.0),
-                    62: (2600.0, 150.0),
+                    35: (2600.0, 0.0),
+                    36: (1560.0, 600.0),
+                    37: (0.0, 2400.0),
+                    38: (1820.0, 300.0),
+                    39: (0.0, 2550.0),
+                    40: (2080.0, 150.0),
+                    41: (0.0, 2700.0),
+                    42: (2860.0, 0.0),
+                    43: (0.0, 2850.0),
+                    44: (0.0, 3000.0),
+                    45: (260.0, 450.0),
+                    46: (0.0, 3150.0),
+                    47: (3120.0, 0.0),
+                    48: (0.0, 3300.0),
+                    49: (260.0, 600.0),
+                    50: (0.0, 3450.0),
+                    51: (520.0, 150.0),
+                    52: (0.0, 3600.0),
+                    53: (780.0, 150.0),
+                    54: (0.0, 3750.0),
+                    55: (3380.0, 0.0),
+                    56: (0.0, 3900.0),
+                    57: (0.0, 4050.0),
+                    58: (260.0, 750.0),
+                    59: (0.0, 4200.0),
+                    60: (3640.0, 0.0),
+                    61: (0.0, 4350.0),
+                    62: (260.0, 900.0),
                     63: (0.0, 4500.0),
-                    64: (260.0, 1050.0),
-                    65: (2860.0, 150.0),
-                    66: (0.0, 4650.0),
+                    64: (1560.0, 750.0),
+                    65: (0.0, 4650.0),
+                    66: (1560.0, 900.0),
                     67: (0.0, 4800.0),
-                    68: (260.0, 1200.0),
-                    69: (3120.0, 150.0),
-                    70: (3380.0, 150.0),
+                    68: (1560.0, 1050.0),
+                    69: (1820.0, 450.0),
+                    70: (0.0, 4950.0),
+                    71: (2340.0, 150.0),
+                    72: (2600.0, 150.0),
+                    73: (0.0, 5100.0),
+                    74: (260.0, 1050.0),
+                    75: (2860.0, 150.0),
+                    76: (0.0, 5250.0),
+                    77: (0.0, 5400.0),
+                    78: (260.0, 1200.0),
+                    79: (3120.0, 150.0),
+                    80: (3380.0, 150.0),
                 },
                 output_pos: Some((3900.0, 0.0)),
             ),
         },
         output: Output(
-            color: Some(55),
-            roughness: Layer(57),
+            color: Some(60),
+            roughness: Layer(62),
             metallic: Const(0.0),
-            normal: Some(70),
+            normal: Some(80),
         ),
         params: {},
-        next_id: 71,
+        next_id: 81,
     ),
 )
