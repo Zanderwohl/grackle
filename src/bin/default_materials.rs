@@ -38,6 +38,12 @@ fn main() {
         ("painted_brick_green", painted_brick(Coat::GREEN)),
         ("corrugated_steel", corrugated_steel()),
         ("wooden_fence", wooden_fence()),
+        ("weathered_wood", weathered_wood()),
+        ("hardwood_floor", hardwood(None)),
+        ("hardwood_floor_worn", hardwood(Some(Wear { seed: 155 }))),
+        ("wood_grain_laminate", laminate()),
+        ("linoleum_tiles", linoleum()),
+        ("osb", osb()),
         ("tiles_white", tiles(Coat::GLAZE_WHITE)),
         ("tiles_orange", tiles(Coat::ORANGE)),
         ("tiles_red", tiles(Coat::RED)),
@@ -58,6 +64,26 @@ fn main() {
         let path = dir.join(format!("{name}.{}", material::FILE_EXTENSION));
         material::save(&path, &graph).unwrap_or_else(|e| panic!("{e}"));
         println!("wrote {}", path.display());
+    }
+}
+
+/// `add_layer` that numbers a name already taken, so a helper called twice in one graph — a
+/// second layer of strands — needs no name of its own.
+trait AddUnique {
+    fn add_unique(&mut self, name: impl Into<String>, kind: LayerKind) -> Result<LayerId, GraphError>;
+}
+
+impl AddUnique for Graph {
+    fn add_unique(&mut self, name: impl Into<String>, kind: LayerKind) -> Result<LayerId, GraphError> {
+        let name = name.into();
+        let taken = |n: &str| self.layers.iter().any(|layer| layer.name == n);
+        let mut unique = name.clone();
+        let mut count = 1;
+        while taken(&unique) {
+            count += 1;
+            unique = format!("{name} {count}");
+        }
+        self.add_layer(unique, kind)
     }
 }
 
@@ -126,8 +152,8 @@ fn empty() -> Graph {
 
 /// `value` through a ramp: the usual way a noise becomes a color or a gray.
 fn mapped(g: &mut Graph, name: &str, value: LayerId, stops: &[(f32, Color)]) -> LayerId {
-    let palette = g.add_layer(format!("{name} ramp"), ramp(stops)).unwrap();
-    g.add_layer(name, LayerKind::Map(Map { value: Some(value), palette: Some(palette) })).unwrap()
+    let palette = g.add_unique(format!("{name} ramp"), ramp(stops)).unwrap();
+    g.add_unique(name, LayerKind::Map(Map { value: Some(value), palette: Some(palette) })).unwrap()
 }
 
 fn coordinate(g: &mut Graph, axis: Axis) -> LayerId {
@@ -136,14 +162,14 @@ fn coordinate(g: &mut Graph, axis: Axis) -> LayerId {
         Axis::V => "v",
         Axis::W => "w",
     };
-    g.add_layer(name, LayerKind::Coordinate(Coordinate { axis })).unwrap()
+    g.add_unique(name, LayerKind::Coordinate(Coordinate { axis })).unwrap()
 }
 
 /// Unsigned: `[0, 1]`. A triangle peaks at 1 where `input * frequency + phase` is a quarter cycle
 /// in, so `phase: 0.25` puts its peaks where `input * frequency` is a whole number. A whole
 /// `frequency` over `u` or `v` keeps the tile seamless.
 fn wave(g: &mut Graph, name: &str, input: LayerId, shape: WaveShape, frequency: f32, phase: f32) -> LayerId {
-    g.add_layer(
+    g.add_unique(
         name,
         LayerKind::Wave(Wave {
             input: ScalarInput::Layer(input),
@@ -167,7 +193,7 @@ fn scaled(g: &mut Graph, name: &str, x: LayerId, lo: f32, hi: f32) -> LayerId {
 }
 
 fn mix(g: &mut Graph, name: &str, a: LayerId, b: LayerId, mode: BlendMode) -> LayerId {
-    g.add_layer(
+    g.add_unique(
         name,
         LayerKind::Mix(Mix { a: Some(a), b: Some(b), mode, factor: ScalarInput::Const(0.5), space: BlendSpace::Oklch }),
     )
@@ -176,7 +202,7 @@ fn mix(g: &mut Graph, name: &str, a: LayerId, b: LayerId, mode: BlendMode) -> La
 
 /// `a` toward `b` by `by`'s L.
 fn blend(g: &mut Graph, name: &str, a: LayerId, b: LayerId, by: LayerId) -> LayerId {
-    g.add_layer(
+    g.add_unique(
         name,
         LayerKind::Mix(Mix {
             a: Some(a),
@@ -192,7 +218,7 @@ fn blend(g: &mut Graph, name: &str, a: LayerId, b: LayerId, by: LayerId) -> Laye
 /// [`blend`] in linear light, for two colors far apart in hue, which an Oklch blend would carry
 /// round the hue circle through colors neither of them is.
 fn blend_linear(g: &mut Graph, name: &str, a: LayerId, b: LayerId, by: LayerId) -> LayerId {
-    g.add_layer(
+    g.add_unique(
         name,
         LayerKind::Mix(Mix {
             a: Some(a),
@@ -207,16 +233,16 @@ fn blend_linear(g: &mut Graph, name: &str, a: LayerId, b: LayerId, by: LayerId) 
 
 /// Of two grays. Luma is monotonic in L for a gray.
 fn pick(g: &mut Graph, name: &str, a: LayerId, b: LayerId, mode: MinMaxMode) -> LayerId {
-    g.add_layer(name, LayerKind::MinMax(MinMax { a: Some(a), b: Some(b), mode, criterion: Criterion::Luma }))
+    g.add_unique(name, LayerKind::MinMax(MinMax { a: Some(a), b: Some(b), mode, criterion: Criterion::Luma }))
         .unwrap()
 }
 
 fn solid(g: &mut Graph, name: &str, c: Color) -> LayerId {
-    g.add_layer(name, LayerKind::Color(c)).unwrap()
+    g.add_unique(name, LayerKind::Color(c)).unwrap()
 }
 
 fn normal_of(g: &mut Graph, height: LayerId, strength: f32) -> LayerId {
-    g.add_layer("normal", LayerKind::HeightToNormal(HeightToNormal { source: Some(height), strength }))
+    g.add_unique("normal", LayerKind::HeightToNormal(HeightToNormal { source: Some(height), strength }))
         .unwrap()
 }
 
@@ -248,19 +274,19 @@ fn finish(mut g: Graph, output: Output) -> Graph {
 /// middle-sized noise repeating every tile reads as a pattern rather than as concrete.
 fn concrete() -> Graph {
     let mut g = empty();
-    let patches = g.add_layer("patches", tiling_fbm(0, 1, 3)).unwrap();
+    let patches = g.add_unique("patches", tiling_fbm(0, 1, 3)).unwrap();
     let base = mapped(&mut g, "base", patches, &[
         (0.25, oklcha(0.70, 0.008, 75.0, 1.0)),
         (0.75, oklcha(0.77, 0.010, 78.0, 1.0)),
     ]);
-    let grain = g.add_layer("grain", tiling_fbm(1, 128, 2)).unwrap();
+    let grain = g.add_unique("grain", tiling_fbm(1, 128, 2)).unwrap();
     let sand = mapped(&mut g, "sand", grain, &[
         (0.3, oklcha(0.64, 0.010, 72.0, 1.0)),
         (0.7, oklcha(0.80, 0.008, 80.0, 1.0)),
     ]);
     let sand_share = solid(&mut g, "sand share", gray(0.18));
     let sanded = blend(&mut g, "sanded", base, sand, sand_share);
-    let pocking = g.add_layer("pocking", tiling_fbm(2, 64, 2)).unwrap();
+    let pocking = g.add_unique("pocking", tiling_fbm(2, 64, 2)).unwrap();
     let holes = remap(&mut g, "holes", pocking, 0.81, 0.85);
     let hole_share = scaled(&mut g, "hole share", holes, 0.0, 0.35);
     let shade = solid(&mut g, "shade", oklcha(0.48, 0.008, 70.0, 1.0));
@@ -281,15 +307,15 @@ fn concrete() -> Graph {
 /// Rolled steel: metal, cool gray, smoother than concrete, with faint waviness from the mill.
 fn steel_plate() -> Graph {
     let mut g = empty();
-    let sheen = g.add_layer("sheen", tiling_fbm(10, 2, 4)).unwrap();
+    let sheen = g.add_unique("sheen", tiling_fbm(10, 2, 4)).unwrap();
     let color = mapped(&mut g, "color", sheen, &[
         (0.2, oklcha(0.62, 0.008, 240.0, 1.0)),
         (0.8, oklcha(0.72, 0.006, 240.0, 1.0)),
     ]);
     let roughness = mapped(&mut g, "roughness", sheen, &[(0.2, gray(0.30)), (0.8, gray(0.45))]);
-    let waves = g.add_layer("waves", tiling_fbm(11, 4, 2)).unwrap();
+    let waves = g.add_unique("waves", tiling_fbm(11, 4, 2)).unwrap();
     let normal = g
-        .add_layer("waviness", LayerKind::HeightToNormal(HeightToNormal { source: Some(waves), strength: 0.01 }))
+        .add_unique("waviness", LayerKind::HeightToNormal(HeightToNormal { source: Some(waves), strength: 0.01 }))
         .unwrap();
     finish(g, Output {
         color: Some(color),
@@ -342,7 +368,7 @@ fn tread_plate() -> Graph {
     let those = mix(&mut g, "those", along_q, other, BlendMode::Multiply);
     let height = pick(&mut g, "height", these, those, MinMaxMode::Max);
 
-    let grime = g.add_layer("grime", tiling_fbm(20, 4, 5)).unwrap();
+    let grime = g.add_unique("grime", tiling_fbm(20, 4, 5)).unwrap();
     let (grimy, clean) = noisy_pair(oklcha(0.58, 0.006, 70.0, 1.0), oklcha(0.72, 0.004, 230.0, 1.0));
     let sheet = mapped(&mut g, "sheet", grime, &[(0.25, grimy), (0.75, clean)]);
     let polished = solid(&mut g, "polished", oklcha(0.86, 0.004, 230.0, 1.0));
@@ -390,9 +416,9 @@ fn board_formed_concrete() -> Graph {
     let boards = wave(&mut g, "boards", v, WaveShape::Triangle, 12.0, 0.25);
     let board_seam = remap(&mut g, "board seam", boards, 0.93, 0.99);
     let board_tone = wave(&mut g, "board tone", v, WaveShape::Square, 6.0, 0.0);
-    let grain_noise = g.add_layer("grain noise", tiling_fbm(3, 8, 3)).unwrap();
+    let grain_noise = g.add_unique("grain noise", tiling_fbm(3, 8, 3)).unwrap();
     let grain = g
-        .add_layer(
+        .add_unique(
             "grain",
             LayerKind::Transform(Transform {
                 source: Some(grain_noise),
@@ -407,16 +433,16 @@ fn board_formed_concrete() -> Graph {
         )
         .unwrap();
 
-    let mottle = g.add_layer("mottle", tiling_fbm(0, 4, 6)).unwrap();
+    let mottle = g.add_unique("mottle", tiling_fbm(0, 4, 6)).unwrap();
     let middle = oklcha(0.61, 0.008, 75.0, 1.0);
     let base = mapped(&mut g, "base", mottle, &[
         (0.2, toward(middle, oklcha(0.52, 0.007, 75.0, 1.0))),
         (0.5, middle),
         (0.8, toward(middle, oklcha(0.69, 0.010, 75.0, 1.0))),
     ]);
-    let streak_noise = g.add_layer("streak noise", tiling_fbm(2, 4, 4)).unwrap();
+    let streak_noise = g.add_unique("streak noise", tiling_fbm(2, 4, 4)).unwrap();
     let streaks = g
-        .add_layer(
+        .add_unique(
             "streaks",
             LayerKind::Transform(Transform {
                 source: Some(streak_noise),
@@ -445,7 +471,7 @@ fn board_formed_concrete() -> Graph {
 
     let (smooth, rough) = noisy(0.82, 0.95);
     let roughness = scaled(&mut g, "roughness", mottle, smooth, rough);
-    let pits = g.add_layer("pits", tiling_fbm(1, 32, 3)).unwrap();
+    let pits = g.add_unique("pits", tiling_fbm(1, 32, 3)).unwrap();
     let fine = scaled(&mut g, "fine", pits, 0.0, 0.04 * NOISE);
     let face = remap(&mut g, "face", recess, 0.9, 0.0);
     let imprint = scaled(&mut g, "imprint", board_seam, 0.0, 0.08);
@@ -476,7 +502,7 @@ fn lattice(seed_offset: u32, cells: u32) -> LayerKind {
 /// Value noise stretched by a whole `scale` per axis, so it still tiles. A scale of 8 in `v`
 /// draws features eight times shorter in `v`, so they run along `u`.
 fn stretched(g: &mut Graph, name: &str, source: LayerId, scale: [f32; 2]) -> LayerId {
-    g.add_layer(
+    g.add_unique(
         name,
         LayerKind::Transform(Transform {
             source: Some(source),
@@ -543,8 +569,8 @@ fn bricks(g: &mut Graph, bond: &Bond) -> Bricks {
     let course_share = scaled(g, "course share", course, 0.0, 1.0 / columns);
     let id_sum = mix(g, "id sum", column, course_share, BlendMode::Add);
     let id = wave(g, "id", id_sum, WaveShape::Sawtooth, 1.0, 0.0);
-    let draw = g.add_layer("draw", lattice(bond.seed, STRETCHERS * COURSES)).unwrap();
-    let lot = g.add_layer("lot", LayerKind::Map(Map { value: Some(id), palette: Some(draw) })).unwrap();
+    let draw = g.add_unique("draw", lattice(bond.seed, STRETCHERS * COURSES)).unwrap();
+    let lot = g.add_unique("lot", LayerKind::Map(Map { value: Some(id), palette: Some(draw) })).unwrap();
 
     // A triangle wave peaks at 1 on a joint's center line and falls by 2 per cycle, so `mm` from
     // the line it reads `1 - 2 * mm / cycle`.
@@ -572,7 +598,7 @@ fn bricks(g: &mut Graph, bond: &Bond) -> Bricks {
 
     // A signed driver, so an edge wanders both ways rather than moving off its line.
     let chipping = g
-        .add_layer(
+        .add_unique(
             "chipping",
             LayerKind::Noise(Noise {
                 dims: NoiseDims::D2,
@@ -588,7 +614,7 @@ fn bricks(g: &mut Graph, bond: &Bond) -> Bricks {
         .unwrap();
     let wander = bond.chips / TILE_MM;
     let warp = |g: &mut Graph, name: &str, source: LayerId| {
-        g.add_layer(
+        g.add_unique(
             name,
             LayerKind::Warp(Warp { source: Some(source), by: Some(chipping), mode: WarpMode::Scalar, amount: [wander, wander, 0.0] }),
         )
@@ -610,12 +636,12 @@ fn red_brick() -> Graph {
         (0.5, oklcha(0.46, 0.100, 35.0, 1.0)),
         (1.0, oklcha(0.53, 0.105, 42.0, 1.0)),
     ]);
-    let mottle = g.add_layer("mottle", tiling_fbm(51, 8, 5)).unwrap();
+    let mottle = g.add_unique("mottle", tiling_fbm(51, 8, 5)).unwrap();
     let scorched = remap(&mut g, "scorched", mottle, 0.45, 0.85);
     let scorch_share = scaled(&mut g, "scorch share", scorched, 0.0, 0.5);
     let scorch = solid(&mut g, "scorch", oklcha(0.30, 0.050, 30.0, 1.0));
     let clay = blend(&mut g, "clay", fired, scorch, scorch_share);
-    let speckle = g.add_layer("speckle", tiling_fbm(52, 128, 2)).unwrap();
+    let speckle = g.add_unique("speckle", tiling_fbm(52, 128, 2)).unwrap();
     let dark_fleck = remap(&mut g, "dark fleck", speckle, 0.24, 0.18);
     let dark_specks = scaled(&mut g, "dark specks", dark_fleck, 0.0, 0.6);
     let iron = solid(&mut g, "iron", oklcha(0.26, 0.030, 40.0, 1.0));
@@ -625,19 +651,19 @@ fn red_brick() -> Graph {
     let sand = solid(&mut g, "sand", oklcha(0.66, 0.050, 70.0, 1.0));
     let brick = blend(&mut g, "brick", flecked, sand, light_specks);
 
-    let mortar_grain = g.add_layer("mortar grain", tiling_fbm(53, 32, 4)).unwrap();
+    let mortar_grain = g.add_unique("mortar grain", tiling_fbm(53, 32, 4)).unwrap();
     let (dull, pale) = noisy_pair(oklcha(0.50, 0.010, 85.0, 1.0), oklcha(0.72, 0.010, 85.0, 1.0));
     let mortar = mapped(&mut g, "mortar", mortar_grain, &[(0.25, dull), (0.75, pale)]);
     let color = blend(&mut g, "color", brick, mortar, b.joint);
 
-    let grit = g.add_layer("grit", tiling_fbm(54, 64, 3)).unwrap();
+    let grit = g.add_unique("grit", tiling_fbm(54, 64, 3)).unwrap();
     let brick_rough = scaled(&mut g, "brick roughness", grit, 0.86, 0.96);
     let mortar_rough = solid(&mut g, "mortar roughness", gray(0.97));
     let roughness = blend(&mut g, "roughness", brick_rough, mortar_rough, b.joint);
 
-    let pitting = g.add_layer("pitting", tiling_fbm(55, 32, 3)).unwrap();
+    let pitting = g.add_unique("pitting", tiling_fbm(55, 32, 3)).unwrap();
     let pits = remap(&mut g, "pits", pitting, 0.64, 0.74);
-    let lumps = g.add_layer("lumps", tiling_fbm(56, 8, 3)).unwrap();
+    let lumps = g.add_unique("lumps", tiling_fbm(56, 8, 3)).unwrap();
     let swell = scaled(&mut g, "swell", lumps, 0.55, 0.70);
     let proud = scaled(&mut g, "proud", b.lot, 0.0, 0.12);
     let sharp = scaled(&mut g, "sharp", grit, 0.0, 1.0);
@@ -686,7 +712,7 @@ fn painted_brick(paint: Coat) -> Graph {
     let b = bricks(&mut g, &Bond { joint: 10.0, arris: 10.0, chips: 1.5, seed: 50 });
     let coat = |l: f32| oklcha(l, paint.chroma, paint.hue, 1.0);
 
-    let trowel = g.add_layer("roller", tiling_fbm(70, 4, 4)).unwrap();
+    let trowel = g.add_unique("roller", tiling_fbm(70, 4, 4)).unwrap();
     let (thin, thick) = noisy_pair(coat(paint.lightness - 0.03), coat(paint.lightness + 0.02));
     let wall = mapped(&mut g, "wall", trowel, &[(0.25, thin), (0.75, thick)]);
     // The brick under it still shows a little through the paint.
@@ -697,16 +723,16 @@ fn painted_brick(paint: Coat) -> Graph {
     let pooled_share = scaled(&mut g, "pooled share", b.joint, 0.0, 0.6);
     let color = blend(&mut g, "color", bricks_under, pooled, pooled_share);
 
-    let sheen = g.add_layer("sheen", tiling_fbm(72, 4, 3)).unwrap();
+    let sheen = g.add_unique("sheen", tiling_fbm(72, 4, 3)).unwrap();
     let (smooth, rough) = noisy(0.40, 0.55);
     let face_rough = scaled(&mut g, "face roughness", sheen, smooth, rough);
     let joint_rough = solid(&mut g, "joint roughness", gray(0.65));
     let roughness = blend(&mut g, "roughness", face_rough, joint_rough, b.joint);
 
-    let peel = g.add_layer("peel", tiling_fbm(71, 64, 2)).unwrap();
-    let pitting = g.add_layer("pitting", tiling_fbm(55, 32, 3)).unwrap();
+    let peel = g.add_unique("peel", tiling_fbm(71, 64, 2)).unwrap();
+    let pitting = g.add_unique("pitting", tiling_fbm(55, 32, 3)).unwrap();
     let pits = remap(&mut g, "pits", pitting, 0.68, 0.76);
-    let lumps = g.add_layer("lumps", tiling_fbm(56, 8, 3)).unwrap();
+    let lumps = g.add_unique("lumps", tiling_fbm(56, 8, 3)).unwrap();
     let swell = scaled(&mut g, "swell", lumps, 0.60, 0.68);
     let proud = scaled(&mut g, "proud", b.lot, 0.0, 0.05);
     let orange_peel = scaled(&mut g, "orange peel", peel, 0.0, 0.06);
@@ -749,8 +775,8 @@ fn tiles(glaze: Coat) -> Graph {
     let row_share = scaled(&mut g, "row share", row, 0.0, 1.0 / count);
     let id_sum = mix(&mut g, "id sum", column, row_share, BlendMode::Add);
     let id = wave(&mut g, "id", id_sum, WaveShape::Sawtooth, 1.0, 0.0);
-    let draw = g.add_layer("draw", lattice(95, TILES * TILES)).unwrap();
-    let lot = g.add_layer("lot", LayerKind::Map(Map { value: Some(id), palette: Some(draw) })).unwrap();
+    let draw = g.add_unique("draw", lattice(95, TILES * TILES)).unwrap();
+    let lot = g.add_unique("lot", LayerKind::Map(Map { value: Some(id), palette: Some(draw) })).unwrap();
 
     let at = |mm: f32| 1.0 - 2.0 * mm / cycle;
     let across_u = wave(&mut g, "across u", u, WaveShape::Triangle, count, 0.25);
@@ -768,7 +794,7 @@ fn tiles(glaze: Coat) -> Graph {
 
     let shade = |l: f32| oklcha(l, glaze.chroma, glaze.hue, 1.0);
     let glazed = mapped(&mut g, "glazed", lot, &[(0.0, shade(glaze.lightness - 0.025)), (1.0, shade(glaze.lightness + 0.01))]);
-    let grime = g.add_layer("grime", tiling_fbm(96, 16, 3)).unwrap();
+    let grime = g.add_unique("grime", tiling_fbm(96, 16, 3)).unwrap();
     let (dirty, clean) = noisy_pair(oklcha(0.50, 0.008, 80.0, 1.0), oklcha(0.66, 0.006, 80.0, 1.0));
     let grout_color = mapped(&mut g, "grout color", grime, &[(0.25, dirty), (0.75, clean)]);
     let color = blend_linear(&mut g, "color", glazed, grout_color, grout);
@@ -778,7 +804,7 @@ fn tiles(glaze: Coat) -> Graph {
     let grout_rough = solid(&mut g, "grout roughness", gray(0.92));
     let roughness = blend(&mut g, "roughness", glaze_rough, grout_rough, grout);
 
-    let ripple = g.add_layer("ripple", tiling_fbm(97, 32, 2)).unwrap();
+    let ripple = g.add_unique("ripple", tiling_fbm(97, 32, 2)).unwrap();
     let waves = scaled(&mut g, "waves", ripple, 0.0, 0.05);
     let lippage = scaled(&mut g, "lippage", lot, 0.75, 0.85);
     let top = mix(&mut g, "top", lippage, waves, BlendMode::Add);
@@ -807,14 +833,14 @@ fn corrugated_steel() -> Graph {
     let crest = remap(&mut g, "crest", profile, 0.55, 0.95);
     let trough = remap(&mut g, "trough", profile, 0.45, 0.05);
 
-    let spangle = g.add_layer("spangle", tiling_fbm(60, 6, 4)).unwrap();
+    let spangle = g.add_unique("spangle", tiling_fbm(60, 6, 4)).unwrap();
     let (dim, bright) = noisy_pair(oklcha(0.70, 0.006, 230.0, 1.0), oklcha(0.82, 0.004, 230.0, 1.0));
     let zinc = mapped(&mut g, "zinc", spangle, &[(0.25, dim), (0.75, bright)]);
 
-    let wear_noise = g.add_layer("wear noise", tiling_fbm(61, 2, 3)).unwrap();
+    let wear_noise = g.add_unique("wear noise", tiling_fbm(61, 2, 3)).unwrap();
     let wear = remap(&mut g, "wear", wear_noise, 0.30, 0.60);
     let scratch_noise = g
-        .add_layer(
+        .add_unique(
             "scratch noise",
             LayerKind::Noise(Noise {
                 dims: NoiseDims::D2,
@@ -840,15 +866,15 @@ fn corrugated_steel() -> Graph {
     let chalk_share = scaled(&mut g, "chalk share", wear, 0.0, 0.35);
     let weathered = blend(&mut g, "weathered", scuffed, chalky, chalk_share);
 
-    let streak_noise = g.add_layer("streak noise", tiling_fbm(63, 4, 5)).unwrap();
+    let streak_noise = g.add_unique("streak noise", tiling_fbm(63, 4, 5)).unwrap();
     let streak_lines = stretched(&mut g, "streak lines", streak_noise, [8.0, 1.0]);
     let streaks = remap(&mut g, "streaks", streak_lines, 0.42, 0.70);
-    let staining_noise = g.add_layer("staining noise", tiling_fbm(64, 2, 3)).unwrap();
+    let staining_noise = g.add_unique("staining noise", tiling_fbm(64, 2, 3)).unwrap();
     let staining = remap(&mut g, "staining", staining_noise, 0.30, 0.60);
     let gutter = scaled(&mut g, "gutter", trough, 0.3, 1.0);
     let run = product(&mut g, "run", zero, streaks, gutter);
     let stain = product(&mut g, "stain", zero, run, staining);
-    let kind = g.add_layer("rust or grime", tiling_fbm(65, 4, 3)).unwrap();
+    let kind = g.add_unique("rust or grime", tiling_fbm(65, 4, 3)).unwrap();
     let stain_color = mapped(&mut g, "stain color", kind, &[
         (0.35, oklcha(0.46, 0.085, 52.0, 1.0)),
         (0.65, oklcha(0.38, 0.020, 70.0, 1.0)),
@@ -868,7 +894,7 @@ fn corrugated_steel() -> Graph {
     let oxide = solid(&mut g, "oxide", gray(0.1));
     let metallic = blend(&mut g, "metallic", metal, oxide, stain_share);
 
-    let dent_noise = g.add_layer("dent noise", tiling_fbm(66, 4, 3)).unwrap();
+    let dent_noise = g.add_unique("dent noise", tiling_fbm(66, 4, 3)).unwrap();
     let dents = scaled(&mut g, "dents", dent_noise, 0.0, 0.08);
     let grooves = scaled(&mut g, "grooves", scuff, 0.0, 0.01);
     let dented = mix(&mut g, "dented", profile, dents, BlendMode::Add);
@@ -902,18 +928,18 @@ fn wooden_fence() -> Graph {
     let board_step = scaled(&mut g, "board step", into_board, 0.0, 1.0 / boards);
     let column_start = mix(&mut g, "column start", u, board_step, BlendMode::Subtract);
     let column = wave(&mut g, "column", column_start, WaveShape::Sawtooth, 1.0, 0.0);
-    let draw = g.add_layer("draw", lattice(80, BOARDS)).unwrap();
-    let lot = g.add_layer("lot", LayerKind::Map(Map { value: Some(column), palette: Some(draw) })).unwrap();
+    let draw = g.add_unique("draw", lattice(80, BOARDS)).unwrap();
+    let lot = g.add_unique("lot", LayerKind::Map(Map { value: Some(column), palette: Some(draw) })).unwrap();
 
     // The figure: lines about six to a board, running down it, wandering with noise stretched
     // down the board and bent round the knots. `u` plus the wander, through a whole number of
     // cycles, so the lines tile.
     const LINES: f32 = 6.0;
-    let figure_noise = g.add_layer("figure noise", tiling_fbm(81, 4, 3)).unwrap();
+    let figure_noise = g.add_unique("figure noise", tiling_fbm(81, 4, 3)).unwrap();
     let figure = stretched(&mut g, "figure", figure_noise, [4.0, 1.0]);
     let wander = scaled(&mut g, "wander", figure, 0.0, 3.0 / (LINES * boards));
     let wandering = mix(&mut g, "wandering", u, wander, BlendMode::Add);
-    let knot_spots = g.add_layer("knot spots", tiling_fbm(82, 8, 2)).unwrap();
+    let knot_spots = g.add_unique("knot spots", tiling_fbm(82, 8, 2)).unwrap();
     let knot_noise = stretched(&mut g, "knot noise", knot_spots, [2.0, 1.0]);
     let knot_swirl = remap(&mut g, "knot swirl", knot_noise, 0.70, 0.84);
     let swirl = scaled(&mut g, "swirl", knot_swirl, 0.0, 2.0 / (LINES * boards));
@@ -921,10 +947,10 @@ fn wooden_fence() -> Graph {
     let rings = wave(&mut g, "rings", bent, WaveShape::Triangle, LINES * boards, 0.0);
     let late_wood = remap(&mut g, "late wood", rings, 0.70, 0.95);
     let knot_core = remap(&mut g, "knot core", knot_noise, 0.82, 0.84);
-    let fiber_noise = g.add_layer("fiber noise", tiling_fbm(83, 8, 4)).unwrap();
+    let fiber_noise = g.add_unique("fiber noise", tiling_fbm(83, 8, 4)).unwrap();
     let fibers = stretched(&mut g, "fibers", fiber_noise, [16.0, 1.0]);
     let split_noise = g
-        .add_layer(
+        .add_unique(
             "split noise",
             LayerKind::Noise(Noise {
                 dims: NoiseDims::D2,
@@ -942,7 +968,7 @@ fn wooden_fence() -> Graph {
     let splits = remap(&mut g, "splits", split_lines, 0.93, 0.98);
     // Shifted by the board's own value; the same at a tile's two edges, since the id wraps.
     let shift = |g: &mut Graph, name: &str, source: LayerId| {
-        g.add_layer(
+        g.add_unique(
             name,
             LayerKind::Warp(Warp { source: Some(source), by: Some(lot), mode: WarpMode::Scalar, amount: [0.5, 0.5, 0.0] }),
         )
@@ -998,7 +1024,7 @@ fn wooden_fence() -> Graph {
     let run_down = remap(&mut g, "run down", below_rail, 0.12, 0.0);
     let run_width = remap(&mut g, "run width", nail_u, 0.86, 0.96);
     let run = product(&mut g, "run", zero, run_width, run_down);
-    let rust_noise = g.add_layer("rust noise", tiling_fbm(85, 32, 3)).unwrap();
+    let rust_noise = g.add_unique("rust noise", tiling_fbm(85, 32, 3)).unwrap();
     let blotchy = scaled(&mut g, "blotchy", rust_noise, 0.3, 0.9);
     let rust_share = product(&mut g, "rust share", zero, run, blotchy);
     let rust = solid(&mut g, "rust", oklcha(0.40, 0.080, 48.0, 1.0));
@@ -1061,7 +1087,7 @@ fn stripes(paint: StripePaint) -> Graph {
     let across = wave(&mut g, "across", u, WaveShape::Triangle, PAIRS, 0.25);
     let light_stripe = remap(&mut g, "light stripe", across, 0.485, 0.515);
 
-    let trowel = g.add_layer("trowel", tiling_fbm(90, 2, 5)).unwrap();
+    let trowel = g.add_unique("trowel", tiling_fbm(90, 2, 5)).unwrap();
     let coat = |l: f32| oklcha(l, paint.chroma, paint.hue, 1.0);
     let (dark_lo, dark_hi) = noisy_pair(coat(paint.dark - 0.03), coat(paint.dark + 0.03));
     let dark = mapped(&mut g, "dark coat", trowel, &[(0.25, dark_lo), (0.75, dark_hi)]);
@@ -1069,10 +1095,10 @@ fn stripes(paint: StripePaint) -> Graph {
     let light = mapped(&mut g, "light coat", trowel, &[(0.25, light_lo), (0.75, light_hi)]);
     let color = blend(&mut g, "color", dark, light, light_stripe);
 
-    let sheen = g.add_layer("sheen", tiling_fbm(92, 4, 3)).unwrap();
+    let sheen = g.add_unique("sheen", tiling_fbm(92, 4, 3)).unwrap();
     let (smooth, rough) = noisy(0.70, 0.85);
     let roughness = scaled(&mut g, "roughness", sheen, smooth, rough);
-    let peel = g.add_layer("peel", tiling_fbm(91, 64, 2)).unwrap();
+    let peel = g.add_unique("peel", tiling_fbm(91, 64, 2)).unwrap();
     let fine = scaled(&mut g, "fine", peel, 0.0, 0.5);
     // The second coat stands a hair proud of the first.
     let coat_edge = scaled(&mut g, "coat edge", light_stripe, 0.0, 0.15);
@@ -1107,19 +1133,19 @@ impl Paint {
 /// orange-peel relief from the paint roller.
 fn plaster(paint: Paint) -> Graph {
     let mut g = empty();
-    let trowel = g.add_layer("trowel", tiling_fbm(30, 2, 5)).unwrap();
+    let trowel = g.add_unique("trowel", tiling_fbm(30, 2, 5)).unwrap();
     let (shaded, bright) = noisy_pair(
         oklcha(paint.lightness.0, paint.chroma.0, paint.hue, 1.0),
         oklcha(paint.lightness.1, paint.chroma.1, paint.hue, 1.0),
     );
     let color = mapped(&mut g, "color", trowel, &[(0.25, shaded), (0.75, bright)]);
-    let sheen = g.add_layer("sheen", tiling_fbm(32, 4, 3)).unwrap();
+    let sheen = g.add_unique("sheen", tiling_fbm(32, 4, 3)).unwrap();
     let (smooth, rough) = noisy(0.80, 0.95);
     let roughness = scaled(&mut g, "roughness", sheen, smooth, rough);
-    let peel = g.add_layer("peel", tiling_fbm(31, 64, 2)).unwrap();
+    let peel = g.add_unique("peel", tiling_fbm(31, 64, 2)).unwrap();
     let fine = scaled(&mut g, "fine", peel, 0.0, 0.5);
     // The trowel's undulation, much broader and so much gentler in slope than the peel.
-    let skim = g.add_layer("skim", tiling_fbm(33, 3, 3)).unwrap();
+    let skim = g.add_unique("skim", tiling_fbm(33, 3, 3)).unwrap();
     let broad = scaled(&mut g, "broad", skim, 0.0, 0.5);
     let height = mix(&mut g, "height", fine, broad, BlendMode::Add);
     let normal = normal_of(&mut g, height, 0.003 * NOISE);
@@ -1174,7 +1200,7 @@ fn grid(paint: GridPaint) -> Graph {
     let line_v = remap(&mut g, "line v", across_v, 0.966, 0.974);
     let lines = pick(&mut g, "lines", line_u, line_v, MinMaxMode::Max);
 
-    let trowel = g.add_layer("trowel", tiling_fbm(40, 2, 5)).unwrap();
+    let trowel = g.add_unique("trowel", tiling_fbm(40, 2, 5)).unwrap();
     let (shaded, bright) = noisy_pair(
         oklcha(paint.lightness.0, paint.chroma, paint.hue - 2.0, 1.0),
         oklcha(paint.lightness.1, paint.chroma, paint.hue + 2.0, 1.0),
@@ -1183,12 +1209,817 @@ fn grid(paint: GridPaint) -> Graph {
     let stripe = solid(&mut g, "stripe", oklcha(paint.stripe_lightness, paint.stripe_chroma, paint.hue + 10.0, 1.0));
     let color = blend(&mut g, "color", base, stripe, lines);
 
-    let sheen = g.add_layer("sheen", tiling_fbm(42, 4, 3)).unwrap();
+    let sheen = g.add_unique("sheen", tiling_fbm(42, 4, 3)).unwrap();
     let (smooth, rough) = noisy(0.70, 0.85);
     let roughness = scaled(&mut g, "roughness", sheen, smooth, rough);
-    let peel = g.add_layer("peel", tiling_fbm(41, 64, 2)).unwrap();
+    let peel = g.add_unique("peel", tiling_fbm(41, 64, 2)).unwrap();
     let height = scaled(&mut g, "height", peel, 0.0, 0.5);
     let normal = normal_of(&mut g, height, 0.003 * NOISE);
+    finish(g, Output {
+        color: Some(color),
+        roughness: ScalarInput::Layer(roughness),
+        metallic: ScalarInput::Const(0.0),
+        normal: Some(normal),
+    })
+}
+
+/// A staggered grid down `v`: `rows` rows, each of `columns` pieces along `u`, each row slid along
+/// by its own random share of a piece, so joints in neighboring rows fall anywhere.
+///
+/// A piece's id is built as a brick's is ([`bricks`]), with the row's slide in place of the half
+/// brick.
+struct Courses {
+    /// `column / columns + row / (columns * rows)`, wrapped into `[0, 1)`.
+    id: LayerId,
+    /// 1 on the line between two rows, falling to 0 midway across one.
+    across_row: LayerId,
+    /// 1 on a joint between two pieces in a row, falling to 0 midway along one.
+    across_end: LayerId,
+    /// 0 at a row's top edge rising to 1 at its bottom.
+    into_row: LayerId,
+    /// The row's top edge, wrapped into `[0, 1)`.
+    row: LayerId,
+    /// The piece's left end along its row, unwrapped: up to one piece past 1.
+    column: LayerId,
+}
+
+/// `u` and `v` are where the grid is laid out from: the coordinates, or the coordinates bent.
+/// Each must be its coordinate plus something that tiles, so a tile's far edge reads one whole
+/// row or column on from its near one.
+fn courses(g: &mut Graph, u: LayerId, v: LayerId, columns: u32, rows: u32, seed: u32) -> Courses {
+    let (c, r) = (columns as f32, rows as f32);
+    let into_row = wave(g, "into row", v, WaveShape::Sawtooth, r, 0.0);
+    let row_step = scaled(g, "row step", into_row, 0.0, 1.0 / r);
+    let row_start = mix(g, "row start", v, row_step, BlendMode::Subtract);
+    let row = wave(g, "row", row_start, WaveShape::Sawtooth, 1.0, 0.0);
+    let slide_draw = g.add_unique("slide draw", lattice(seed, rows)).unwrap();
+    let row_lot = g.add_unique("row lot", LayerKind::Map(Map { value: Some(row), palette: Some(slide_draw) })).unwrap();
+    let slide = scaled(g, "slide", row_lot, 0.0, 1.0 / c);
+    let along = mix(g, "along", u, slide, BlendMode::Add);
+    let into_piece = wave(g, "into piece", along, WaveShape::Sawtooth, c, 0.0);
+    let piece_step = scaled(g, "piece step", into_piece, 0.0, 1.0 / c);
+    let column = mix(g, "column", along, piece_step, BlendMode::Subtract);
+    let row_share = scaled(g, "row share", row, 0.0, 1.0 / c);
+    let id_sum = mix(g, "id sum", column, row_share, BlendMode::Add);
+    let id = wave(g, "id", id_sum, WaveShape::Sawtooth, 1.0, 0.0);
+    let across_row = wave(g, "across row", v, WaveShape::Triangle, r, 0.25);
+    let across_end = wave(g, "across end", along, WaveShape::Triangle, c, 0.25);
+    Courses { id, across_row, across_end, into_row, row, column }
+}
+
+/// Lines drawn out along `u`: `noise` stretched `stretch` times shorter in `v`, which alone
+/// repeats `stretch` times down the tile, so each repeat is pushed aside by a broad noise of its
+/// own to break the ladder.
+fn streaks(g: &mut Graph, name: &str, noise: LayerKind, stretch: f32, seed: u32) -> LayerId {
+    let source = g.add_unique(format!("{name} noise"), noise).unwrap();
+    let long = stretched(g, &format!("{name} long"), source, [1.0, stretch]);
+    let scramble = g.add_unique(format!("{name} scramble"), tiling_fbm(seed, 4, 2)).unwrap();
+    shifted(g, name, long, scramble, 0.15)
+}
+
+/// A piece's own value in `[0, 1]` from a lattice of `cells` points, one per id. Up to about 256
+/// cells: the lattice is baked at [`grackle::material::TILE_TEXELS`] across, and ids closer than a
+/// texel or two would read the same value.
+fn lot_of(g: &mut Graph, name: &str, id: LayerId, cells: u32, seed: u32) -> LayerId {
+    let draw = g.add_unique(format!("{name} draw"), lattice(seed, cells)).unwrap();
+    g.add_unique(name, LayerKind::Map(Map { value: Some(id), palette: Some(draw) })).unwrap()
+}
+
+/// A value in `[0, 1)` for each of any number of ids: `fract(k2 * sin(k1 * id))`, the shader
+/// hash. It magnifies the id's rounding, so it suits only ids that do not wrap across a tile's
+/// edge, where the two halves of one piece would compute it from ids a rounding apart.
+fn hashed(g: &mut Graph, name: &str, id: LayerId, k1: f32, k2: f32) -> LayerId {
+    let inner = wave(g, &format!("{name} inner"), id, WaveShape::Sine, k1, 0.0);
+    wave(g, name, inner, WaveShape::Sawtooth, k2, 0.0)
+}
+
+/// `source` shifted along both axes by `by` times `amount`. The shift grows `source`'s bake domain
+/// by `amount` either way and the texel count stays, so a fine source wants a small amount.
+fn shifted(g: &mut Graph, name: &str, source: LayerId, by: LayerId, amount: f32) -> LayerId {
+    g.add_unique(name, LayerKind::Warp(Warp { source: Some(source), by: Some(by), mode: WarpMode::Scalar, amount: [amount, amount, 0.0] }))
+        .unwrap()
+}
+
+/// `fbm` with ridged octaves: thin bright lines where the noise crosses its middle.
+fn ridged(seed_offset: u32, frequency: u32, octaves: u32) -> LayerKind {
+    LayerKind::Noise(Noise {
+        dims: NoiseDims::D2,
+        seed_offset,
+        frequency: frequency as f32,
+        range: NoiseRange::Unsigned,
+        output: NoiseOutput::Grayscale,
+        kernel: NoiseKernel::Value,
+        period: [frequency, frequency, 0],
+        fractal: Fractal { octaves, lacunarity: 2.0, gain: 0.5, mode: FractalMode::Ridged, normalize: true },
+    })
+}
+
+/// The figure of a flat-sawn board whose length runs along `u`: growth rings cut by a plane, so
+/// they run as lines along the board and close into arches where the cut drifts toward the pith.
+///
+/// A ring is a contour of `0.6 * d² + 0.3 * drift + wobble`. `d` is the distance across the board
+/// from the pith, which each board puts somewhere of its own by its `lot`, within the board or
+/// beside it, so some boards run straight and some arch. `drift` is a broad noise along the board,
+/// read shifted by the `lot`, so no two neighbors match.
+struct Figure {
+    /// 1 on each ring's dark line of late wood.
+    late: LayerId,
+    /// Fine noise drawn out along the board.
+    fibers: LayerId,
+    /// 1 in a pore: short dashes along the grain.
+    pores: LayerId,
+}
+
+/// `across` runs 0 to 1 across the board.
+fn flat_sawn(g: &mut Graph, across: LayerId, lot: LayerId, rings: f32, seed: u32) -> Figure {
+    // `q` spans 0.35 of a board's width and is 0.5 at the pith: across the board's whole width
+    // when the lot is about 0.4, off one side or the other toward 0 or 1.
+    let narrow = scaled(g, "narrow across", across, 0.0, 0.35);
+    let pith = scaled(g, "pith", lot, 0.0, 0.65);
+    let q = mix(g, "q", narrow, pith, BlendMode::Add);
+    let stops: Vec<(f32, Color)> = (0..=8)
+        .map(|i| {
+            let q = i as f32 / 8.0;
+            (q, gray(0.6 * (2.0 * q - 1.0).powi(2)))
+        })
+        .collect();
+    let d_squared = mapped(g, "d²", q, &stops);
+    let drift_noise = g.add_unique("drift noise", tiling_fbm(seed, 2, 2)).unwrap();
+    let drift_board = shifted(g, "board drift", drift_noise, lot, 1.0);
+    let drift = scaled(g, "drift", drift_board, 0.0, 0.3);
+    let wobble_noise = g.add_unique("wobble noise", tiling_fbm(seed + 1, 4, 3)).unwrap();
+    let wobble_long = stretched(g, "wobble long", wobble_noise, [1.0, 4.0]);
+    let wobble_board = shifted(g, "board wobble", wobble_long, lot, 0.25);
+    let wobble = scaled(g, "wobble", wobble_board, 0.0, 0.08);
+    let cut = mix(g, "cut", d_squared, drift, BlendMode::Add);
+    let ring_at = mix(g, "ring at", cut, wobble, BlendMode::Add);
+    let ring_wave = wave(g, "ring wave", ring_at, WaveShape::Triangle, rings, 0.0);
+    let late = mapped(g, "late wood", ring_wave, &[(0.55, gray(0.0)), (0.9, gray(0.8)), (1.0, gray(1.0))]);
+    let fibers = streaks(g, "fibers", tiling_fbm(seed + 2, 16, 3), 8.0, seed + 3);
+    let pore_lines = streaks(g, "pore lines", tiling_fbm(seed + 4, 48, 2), 3.0, seed + 5);
+    let pores = remap(g, "pores", pore_lines, 0.72, 0.80);
+    Figure { late, fibers, pores }
+}
+
+/// Barn siding left out for decades: boards two meters long across `u`, 250 mm wide, butted end
+/// to end at random, weathered silver with the brown still in the grooves. The soft early wood
+/// has worn away and left the late wood standing, the boards have checked along the grain, the
+/// knots are dark, and each nail at a stud has wept a dark stain down the board.
+fn weathered_wood() -> Graph {
+    const ROWS: u32 = 8;
+    const STUDS: f32 = 4.0;
+    let row_mm = TILE_MM / ROWS as f32;
+    let mut g = empty();
+    let zero = solid(&mut g, "zero", gray(0.0));
+    let (u, v) = (coordinate(&mut g, Axis::U), coordinate(&mut g, Axis::V));
+    let c = courses(&mut g, u, v, 1, ROWS, 140);
+    let lot = lot_of(&mut g, "lot", c.id, ROWS, 141);
+    let figure = flat_sawn(&mut g, c.into_row, lot, 36.0, 142);
+
+    let knot_spots = g.add_unique("knot spots", tiling_fbm(145, 6, 2)).unwrap();
+    let knot_long = stretched(&mut g, "knot long", knot_spots, [1.0, 2.0]);
+    let knots = shifted(&mut g, "board knots", knot_long, lot, 0.3);
+    let knot_core = remap(&mut g, "knot core", knots, 0.80, 0.83);
+    let knot_rim = remap(&mut g, "knot rim", knots, 0.68, 0.80);
+    let checks_long = streaks(&mut g, "checks long", ridged(146, 8, 3), 8.0, 149);
+    let checks = remap(&mut g, "checks", checks_long, 0.90, 0.97);
+
+    let at = |mm: f32, cycle: f32| 1.0 - 2.0 * mm / cycle;
+    let gap = remap(&mut g, "gap", c.across_row, at(4.0, row_mm), at(1.5, row_mm));
+    let end_gap = remap(&mut g, "end gap", c.across_end, at(3.0, TILE_MM), at(1.0, TILE_MM));
+    let gaps = pick(&mut g, "gaps", gap, end_gap, MinMaxMode::Max);
+    let row_edge = mapped(&mut g, "row edge", c.across_row, &[(at(14.0, row_mm), gray(1.0)), (at(6.0, row_mm), gray(0.8)), (at(2.0, row_mm), gray(0.0))]);
+    let end_edge = mapped(&mut g, "end edge", c.across_end, &[(at(10.0, TILE_MM), gray(1.0)), (at(4.0, TILE_MM), gray(0.8)), (at(1.0, TILE_MM), gray(0.0))]);
+    let face = pick(&mut g, "face", row_edge, end_edge, MinMaxMode::Min);
+
+    let silver = mapped(&mut g, "silver", lot, &[
+        (0.0, oklcha(0.55, 0.018, 70.0, 1.0)),
+        (0.4, oklcha(0.63, 0.012, 78.0, 1.0)),
+        (0.8, oklcha(0.68, 0.008, 85.0, 1.0)),
+        (1.0, oklcha(0.60, 0.022, 68.0, 1.0)),
+    ]);
+    let patches = g.add_unique("patches", tiling_fbm(147, 3, 4)).unwrap();
+    let (dim, bright) = noisy_pair(oklcha(0.50, 0.020, 70.0, 1.0), oklcha(0.74, 0.006, 90.0, 1.0));
+    let weather = mapped(&mut g, "weather", patches, &[(0.25, dim), (0.75, bright)]);
+    let weather_share = solid(&mut g, "weather share", gray(0.35));
+    let weathered = blend(&mut g, "weathered", silver, weather, weather_share);
+    let fiber_share = scaled(&mut g, "fiber share", figure.fibers, 0.0, 0.35);
+    let groove = solid(&mut g, "groove", oklcha(0.40, 0.025, 62.0, 1.0));
+    let fibered = blend(&mut g, "fibered", weathered, groove, fiber_share);
+    // The late wood stands proud and bleaches; the early wood between is grooved and keeps its brown.
+    let early = remap(&mut g, "early", figure.late, 0.6, 0.0);
+    let early_share = scaled(&mut g, "early share", early, 0.0, 0.30);
+    let grooved = blend(&mut g, "grooved", fibered, groove, early_share);
+    let bleach = solid(&mut g, "bleach", oklcha(0.76, 0.006, 90.0, 1.0));
+    let ridge_share = scaled(&mut g, "ridge share", figure.late, 0.0, 0.30);
+    let ridged_color = blend(&mut g, "ridged", grooved, bleach, ridge_share);
+    let rim_share = scaled(&mut g, "knot rim share", knot_rim, 0.0, 0.4);
+    let rimmed = blend(&mut g, "rimmed", ridged_color, groove, rim_share);
+    let knot = solid(&mut g, "knot", oklcha(0.28, 0.025, 55.0, 1.0));
+    let knotted = blend(&mut g, "knotted", rimmed, knot, knot_core);
+    let crack = solid(&mut g, "crack", oklcha(0.18, 0.015, 60.0, 1.0));
+    let cracked = blend(&mut g, "cracked", knotted, crack, checks);
+
+    // A nail at each stud, a third of the way down each board, weeping a stain 150 mm down it.
+    let stud = wave(&mut g, "stud", u, WaveShape::Triangle, STUDS, 0.25);
+    let nail_row = wave(&mut g, "nail row", v, WaveShape::Triangle, ROWS as f32, 0.25 - 1.0 / 3.0);
+    let half_stud = scaled(&mut g, "half stud", stud, 0.0, 0.5);
+    let half_row = scaled(&mut g, "half nail row", nail_row, 0.0, 0.5);
+    let nail_sum = mix(&mut g, "nail sum", half_stud, half_row, BlendMode::Add);
+    // In the sum, a stud cycle of 500 mm counts for half: `mm` off the stud line reads `mm / 500`.
+    let nail = remap(&mut g, "nail", nail_sum, 1.0 - 6.0 / 500.0, 1.0 - 4.0 / 500.0);
+    let below = wave(&mut g, "below nail", v, WaveShape::Sawtooth, ROWS as f32, -1.0 / 3.0);
+    let run_down = remap(&mut g, "run down", below, 0.6, 0.0);
+    let run_width = remap(&mut g, "run width", stud, 1.0 - 2.0 * 12.0 / 500.0, 1.0 - 2.0 * 3.0 / 500.0);
+    let run = product(&mut g, "run", zero, run_width, run_down);
+    let weep_noise = g.add_unique("weep noise", tiling_fbm(148, 32, 3)).unwrap();
+    let blotchy = scaled(&mut g, "blotchy", weep_noise, 0.2, 0.7);
+    let weep_share = product(&mut g, "weep share", zero, run, blotchy);
+    let weep = solid(&mut g, "weep", oklcha(0.30, 0.020, 55.0, 1.0));
+    let wept = blend(&mut g, "wept", cracked, weep, weep_share);
+    let iron = solid(&mut g, "iron", oklcha(0.24, 0.010, 50.0, 1.0));
+    let nailed = blend(&mut g, "nailed", wept, iron, nail);
+    let shadow = solid(&mut g, "shadow", oklcha(0.12, 0.010, 60.0, 1.0));
+    let color = blend(&mut g, "color", nailed, shadow, gaps);
+
+    let rough_wood = scaled(&mut g, "wood roughness", figure.fibers, 0.90, 0.97);
+    let rough = solid(&mut g, "rough", gray(0.98));
+    let roughness = blend(&mut g, "roughness", rough_wood, rough, gaps);
+
+    let base = solid(&mut g, "base", gray(0.45));
+    let warp = scaled(&mut g, "warp", lot, 0.0, 0.10);
+    let offset = mix(&mut g, "offset", base, warp, BlendMode::Add);
+    let raised = scaled(&mut g, "raised grain", figure.late, 0.0, 0.25);
+    let grained = mix(&mut g, "grained", offset, raised, BlendMode::Add);
+    let fuzz = scaled(&mut g, "fuzz", figure.fibers, 0.0, 0.12);
+    let fuzzy = mix(&mut g, "fuzzy", grained, fuzz, BlendMode::Add);
+    let check_depth = scaled(&mut g, "check depth", checks, 0.0, 0.35);
+    let checked = mix(&mut g, "checked", fuzzy, check_depth, BlendMode::Subtract);
+    let knot_rise = scaled(&mut g, "knot rise", knot_core, 0.0, 0.08);
+    let knot_top = mix(&mut g, "knot top", checked, knot_rise, BlendMode::Add);
+    let nail_dip = scaled(&mut g, "nail dip", nail, 0.0, 0.15);
+    let board_top = mix(&mut g, "board top", knot_top, nail_dip, BlendMode::Subtract);
+    let height = blend(&mut g, "height", zero, board_top, face);
+    let normal = normal_of(&mut g, height, 0.005);
+    finish(g, Output {
+        color: Some(color),
+        roughness: ScalarInput::Layer(roughness),
+        metallic: ScalarInput::Const(0.0),
+        normal: Some(normal),
+    })
+}
+
+/// Decades of foot traffic on a hardwood floor, drawn from its own noises.
+#[derive(Clone, Copy)]
+struct Wear {
+    seed: u32,
+}
+
+/// Red oak strip flooring under satin polyurethane: 83 mm boards, a meter long, laid across `u` with
+/// the joints staggered at random, each board its own shade, the open-pored figure flat-sawn,
+/// eased edges between boards. `None` is fresh from the sander and its last coat.
+///
+/// Worn, it has been walked on for decades without a refinish: the finish is gone to bare, grayed
+/// wood along the traffic, scratched every which way, dented by heels, and grime has packed into
+/// the joints and the pores.
+fn hardwood(wear: Option<Wear>) -> Graph {
+    const ROWS: u32 = 24;
+    const COLUMNS: u32 = 2;
+    let row_mm = TILE_MM / ROWS as f32;
+    let end_mm = TILE_MM / COLUMNS as f32;
+    let mut g = empty();
+    let zero = solid(&mut g, "zero", gray(0.0));
+    let (u, v) = (coordinate(&mut g, Axis::U), coordinate(&mut g, Axis::V));
+    let c = courses(&mut g, u, v, COLUMNS, ROWS, 150);
+    let lot = lot_of(&mut g, "lot", c.id, COLUMNS * ROWS, 151);
+    let figure = flat_sawn(&mut g, c.into_row, lot, 22.0, 152);
+
+    let at = |mm: f32, cycle: f32| 1.0 - 2.0 * mm / cycle;
+    let row_joint = remap(&mut g, "row joint", c.across_row, at(1.5, row_mm), at(0.5, row_mm));
+    let end_joint = remap(&mut g, "end joint", c.across_end, at(1.5, end_mm), at(0.5, end_mm));
+    let joint = pick(&mut g, "joint", row_joint, end_joint, MinMaxMode::Max);
+    let row_ease = mapped(&mut g, "row ease", c.across_row, &[(at(5.0, row_mm), gray(1.0)), (at(2.5, row_mm), gray(0.7)), (at(1.0, row_mm), gray(0.0))]);
+    let end_ease = mapped(&mut g, "end ease", c.across_end, &[(at(5.0, end_mm), gray(1.0)), (at(2.5, end_mm), gray(0.7)), (at(1.0, end_mm), gray(0.0))]);
+    let face = pick(&mut g, "face", row_ease, end_ease, MinMaxMode::Min);
+
+    let oak = mapped(&mut g, "oak", lot, &[
+        (0.0, oklcha(0.70, 0.070, 74.0, 1.0)),
+        (0.3, oklcha(0.64, 0.085, 64.0, 1.0)),
+        (0.6, oklcha(0.60, 0.090, 55.0, 1.0)),
+        (0.85, oklcha(0.66, 0.080, 68.0, 1.0)),
+        (1.0, oklcha(0.53, 0.080, 52.0, 1.0)),
+    ]);
+    let late = solid(&mut g, "late", oklcha(0.44, 0.085, 50.0, 1.0));
+    let fiber_share = scaled(&mut g, "fiber share", figure.fibers, 0.0, 0.12);
+    let fibered = blend(&mut g, "fibered", oak, late, fiber_share);
+    let ring_share = scaled(&mut g, "ring share", figure.late, 0.0, 0.50);
+    let grained = blend(&mut g, "grained", fibered, late, ring_share);
+    // Oak's pores open in the late wood: dark flecks along the rings.
+    let late_pores = product(&mut g, "late pores", zero, figure.pores, figure.late);
+    let pore = solid(&mut g, "pore", oklcha(0.34, 0.060, 48.0, 1.0));
+    let pore_share = scaled(&mut g, "pore share", late_pores, 0.0, 0.6);
+    let pored = blend(&mut g, "pored", grained, pore, pore_share);
+    let joint_color = solid(&mut g, "joint color", oklcha(0.30, 0.050, 50.0, 1.0));
+    let eased = remap(&mut g, "eased", face, 1.0, 0.0);
+    let ease_share = scaled(&mut g, "ease share", eased, 0.0, 0.35);
+    let edged = blend(&mut g, "edged", pored, joint_color, ease_share);
+    let wood = blend(&mut g, "wood", edged, joint_color, joint);
+
+    let (gloss, satin) = noisy(0.26, 0.36);
+    let sheen = g.add_unique("sheen", tiling_fbm(153, 4, 3)).unwrap();
+    let finish_rough = scaled(&mut g, "finish roughness", sheen, gloss, satin);
+    let joint_rough = solid(&mut g, "joint roughness", gray(0.7));
+    let fresh_rough = blend(&mut g, "fresh roughness", finish_rough, joint_rough, joint);
+
+    let base = solid(&mut g, "base", gray(0.5));
+    let lippage = scaled(&mut g, "lippage", lot, 0.0, 0.06);
+    let laid = mix(&mut g, "laid", base, lippage, BlendMode::Add);
+    let ring_relief = scaled(&mut g, "ring relief", figure.late, 0.0, 0.03);
+    let pore_relief = scaled(&mut g, "pore relief", late_pores, 0.0, 0.08);
+    let ringed = mix(&mut g, "ringed", laid, ring_relief, BlendMode::Add);
+    let fresh_top = mix(&mut g, "fresh top", ringed, pore_relief, BlendMode::Subtract);
+
+    let (color, roughness, top) = match wear {
+        None => (wood, fresh_rough, fresh_top),
+        Some(wear) => {
+            let s = wear.seed;
+            // Where feet go: broad, uneven paths over most of the floor, broken up by grit, with
+            // the corners of the tile left closer to new.
+            let traffic_noise = g.add_unique("traffic noise", tiling_fbm(s, 2, 4)).unwrap();
+            let traffic = remap(&mut g, "traffic", traffic_noise, 0.25, 0.75);
+            let scuff_noise = g.add_unique("scuff noise", tiling_fbm(s + 1, 64, 3)).unwrap();
+            let scuff_spread = scaled(&mut g, "scuff spread", scuff_noise, 0.5, 1.0);
+            let worn = product(&mut g, "worn", zero, traffic, scuff_spread);
+
+            // Scratches along, across and diagonally. A single ridged octave is 1 exactly on the
+            // noise's middle contour, so it draws a thin line; a mask keeps a scatter of them.
+            let scratch_set = |g: &mut Graph, name: &str, lines: LayerId, seed: u32| {
+                let crisp = remap(g, &format!("{name} crisp"), lines, 0.93, 0.99);
+                let mask_noise = g.add_unique(format!("{name} mask noise"), tiling_fbm(seed, 8, 3)).unwrap();
+                let mask = remap(g, &format!("{name} mask"), mask_noise, 0.55, 0.68);
+                product(g, name, zero, crisp, mask)
+            };
+            let along_lines = streaks(&mut g, "along lines", ridged(s + 2, 16, 1), 6.0, s + 7);
+            let along = scratch_set(&mut g, "along scratches", along_lines, s + 9);
+            let across_noise = g.add_unique("across noise", ridged(s + 3, 16, 1)).unwrap();
+            let across_long = stretched(&mut g, "across long", across_noise, [6.0, 1.0]);
+            let across_scramble = g.add_unique("across scramble", tiling_fbm(s + 8, 4, 2)).unwrap();
+            let across_lines = shifted(&mut g, "across lines", across_long, across_scramble, 0.15);
+            let across = scratch_set(&mut g, "across scratches", across_lines, s + 10);
+            let slant_noise = g.add_unique("slant noise", ridged(s + 4, 12, 1)).unwrap();
+            // A quarter turn's half, scaled by √2: the turned lattice lands on whole cells, so it
+            // still tiles.
+            let slant_lines = g
+                .add_unique(
+                    "slant lines",
+                    LayerKind::Transform(Transform {
+                        source: Some(slant_noise),
+                        offset: [0.0; 3],
+                        rotate_uv: std::f32::consts::FRAC_PI_4,
+                        scale: [std::f32::consts::SQRT_2, 4.0 * std::f32::consts::SQRT_2, 1.0],
+                        coord_mode: CoordMode::Passthrough,
+                        edge_mode: EdgeMode::Extend,
+                    }),
+                )
+                .unwrap();
+            let slant = scratch_set(&mut g, "slant scratches", slant_lines, s + 11);
+            let cross = pick(&mut g, "cross", along, across, MinMaxMode::Max);
+            let lines = pick(&mut g, "lines", cross, slant, MinMaxMode::Max);
+            let reach = scaled(&mut g, "reach", traffic, 0.5, 1.0);
+            let scratches = product(&mut g, "scratches", zero, lines, reach);
+            let dent_noise = g.add_unique("dent noise", tiling_fbm(s + 5, 128, 1)).unwrap();
+            let dent_spots = remap(&mut g, "dent spots", dent_noise, 0.86, 0.92);
+            let dents = product(&mut g, "dents", zero, dent_spots, traffic);
+
+            // With the amber finish gone the wood is duller and grayer, and dirt is ground in.
+            let bare = solid(&mut g, "bare", oklcha(0.56, 0.045, 66.0, 1.0));
+            let bare_share = scaled(&mut g, "bare share", worn, 0.0, 0.65);
+            let stripped = blend(&mut g, "stripped", wood, bare, bare_share);
+            let dirt_noise = g.add_unique("dirt noise", tiling_fbm(s + 6, 8, 4)).unwrap();
+            let (dark_dirt, light_dirt) = noisy_pair(oklcha(0.32, 0.030, 62.0, 1.0), oklcha(0.46, 0.035, 66.0, 1.0));
+            let dirt = mapped(&mut g, "dirt", dirt_noise, &[(0.25, dark_dirt), (0.75, light_dirt)]);
+            let grime_share = scaled(&mut g, "grime share", worn, 0.0, 0.25);
+            let grimed = blend(&mut g, "grimed", stripped, dirt, grime_share);
+            let packed_grain = product(&mut g, "packed grain", zero, late_pores, traffic);
+            let packed_share = scaled(&mut g, "packed share", packed_grain, 0.0, 0.5);
+            let packed = blend(&mut g, "packed", grimed, dirt, packed_share);
+            let gunk = solid(&mut g, "gunk", oklcha(0.22, 0.020, 60.0, 1.0));
+            let edge_grime = scaled(&mut g, "edge grime", eased, 0.0, 0.6);
+            let edge_dirty = blend(&mut g, "edge dirty", packed, gunk, edge_grime);
+            let jointed = blend(&mut g, "jointed", edge_dirty, gunk, joint);
+            // A scratch through the finish shows as a pale line.
+            let scratch_white = solid(&mut g, "scratch white", oklcha(0.80, 0.030, 76.0, 1.0));
+            let scratch_share = scaled(&mut g, "scratch share", scratches, 0.0, 0.75);
+            let scratched = blend(&mut g, "scratched", jointed, scratch_white, scratch_share);
+            let dent_share = scaled(&mut g, "dent share", dents, 0.0, 0.5);
+            let color = blend(&mut g, "color", scratched, gunk, dent_share);
+
+            let bare_rough = solid(&mut g, "bare roughness", gray(0.72));
+            let worn_rough = blend(&mut g, "worn roughness", fresh_rough, bare_rough, worn);
+            let scratch_rough = solid(&mut g, "scratch roughness", gray(0.6));
+            let roughness = blend(&mut g, "roughness", worn_rough, scratch_rough, scratches);
+
+            let scratch_depth = scaled(&mut g, "scratch depth", scratches, 0.0, 0.10);
+            let dent_depth = scaled(&mut g, "dent depth", dents, 0.0, 0.25);
+            let raised = scaled(&mut g, "worn grain", figure.late, 0.0, 0.05);
+            let raised_worn = product(&mut g, "raised worn", zero, raised, worn);
+            let scratched_top = mix(&mut g, "scratched top", fresh_top, scratch_depth, BlendMode::Subtract);
+            let dented = mix(&mut g, "dented", scratched_top, dent_depth, BlendMode::Subtract);
+            let top = mix(&mut g, "worn top", dented, raised_worn, BlendMode::Add);
+            (color, roughness, top)
+        }
+    };
+    let height = blend(&mut g, "height", zero, top, face);
+    let normal = normal_of(&mut g, height, 0.0025);
+    finish(g, Output {
+        color: Some(color),
+        roughness: ScalarInput::Layer(roughness),
+        metallic: ScalarInput::Const(0.0),
+        normal: Some(normal),
+    })
+}
+
+/// 1970s wood-grain laminate, as on a desk or a stereo cabinet: a printed walnut in flitches
+/// 250 mm wide across `v`, orange-brown and darker than the real thing, cathedral figure, on a flat
+/// semi-gloss plastic with only a faint embossed pore. No joints: one sheet covers a desk.
+fn laminate() -> Graph {
+    const FLITCHES: u32 = 8;
+    let mut g = empty();
+    let v = coordinate(&mut g, Axis::V);
+    let into_flitch = wave(&mut g, "into flitch", v, WaveShape::Sawtooth, FLITCHES as f32, 0.0);
+    let flitch_step = scaled(&mut g, "flitch step", into_flitch, 0.0, 1.0 / FLITCHES as f32);
+    let flitch_start = mix(&mut g, "flitch start", v, flitch_step, BlendMode::Subtract);
+    let flitch = wave(&mut g, "flitch", flitch_start, WaveShape::Sawtooth, 1.0, 0.0);
+    // Hashed, not drawn from a lattice: eight lattice values can bunch, and flitches with near
+    // lots share a figure, lined up across the sheet.
+    let lot = hashed(&mut g, "lot", flitch, 71.93, 389.17);
+    let figure = flat_sawn(&mut g, into_flitch, lot, 40.0, 161);
+
+    let walnut = mapped(&mut g, "walnut", lot, &[
+        (0.0, oklcha(0.50, 0.085, 52.0, 1.0)),
+        (0.5, oklcha(0.55, 0.095, 58.0, 1.0)),
+        (1.0, oklcha(0.47, 0.080, 50.0, 1.0)),
+    ]);
+    let streak_long = streaks(&mut g, "streak long", tiling_fbm(162, 4, 4), 4.0, 165);
+    let (light, dark) = noisy_pair(oklcha(0.62, 0.100, 64.0, 1.0), oklcha(0.40, 0.070, 45.0, 1.0));
+    let streaks = mapped(&mut g, "streaks", streak_long, &[(0.25, light), (0.75, dark)]);
+    let streak_share = solid(&mut g, "streak share", gray(0.5));
+    let streaked = blend(&mut g, "streaked", walnut, streaks, streak_share);
+    let late = solid(&mut g, "late", oklcha(0.32, 0.060, 42.0, 1.0));
+    let ring_share = scaled(&mut g, "ring share", figure.late, 0.0, 0.70);
+    let grained = blend(&mut g, "grained", streaked, late, ring_share);
+    let fiber_share = scaled(&mut g, "fiber share", figure.fibers, 0.0, 0.25);
+    let fibered = blend(&mut g, "fibered", grained, late, fiber_share);
+    // The printed pores: a dot screen of dark dashes along the grain.
+    let pores = figure.pores;
+    let pore = solid(&mut g, "pore", oklcha(0.30, 0.055, 42.0, 1.0));
+    let pore_share = scaled(&mut g, "pore share", pores, 0.0, 0.3);
+    let color = blend(&mut g, "color", fibered, pore, pore_share);
+
+    let sheen = g.add_unique("sheen", tiling_fbm(163, 4, 3)).unwrap();
+    let (gloss, satin) = noisy(0.30, 0.38);
+    let roughness = scaled(&mut g, "roughness", sheen, gloss, satin);
+    let peel = g.add_unique("peel", tiling_fbm(164, 64, 2)).unwrap();
+    let fine = scaled(&mut g, "fine", peel, 0.0, 0.15);
+    let emboss = scaled(&mut g, "emboss", pores, 0.0, 0.25);
+    let height = mix(&mut g, "height", fine, emboss, BlendMode::Subtract);
+    let normal = normal_of(&mut g, height, 0.0015);
+    finish(g, Output {
+        color: Some(color),
+        roughness: ScalarInput::Layer(roughness),
+        metallic: ScalarInput::Const(0.0),
+        normal: Some(normal),
+    })
+}
+
+/// White speckled vinyl composition tile, seven to a two-meter tile, so 286 mm, about 11¼": an off
+/// white base flecked with gray, charcoal, beige and black chips in drifts, each tile a shade off
+/// its neighbors, tight butt joints with dirt in them, and a waxed finish scuffed dull in places.
+fn linoleum() -> Graph {
+    const TILES: u32 = 7;
+    let count = TILES as f32;
+    let cycle = TILE_MM / count;
+    let mut g = empty();
+    let zero = solid(&mut g, "zero", gray(0.0));
+    let u = coordinate(&mut g, Axis::U);
+    let v = coordinate(&mut g, Axis::V);
+    let into_column = wave(&mut g, "into column", u, WaveShape::Sawtooth, count, 0.0);
+    let column_step = scaled(&mut g, "column step", into_column, 0.0, 1.0 / count);
+    let column = mix(&mut g, "column", u, column_step, BlendMode::Subtract);
+    let into_row = wave(&mut g, "into row", v, WaveShape::Sawtooth, count, 0.0);
+    let row_step = scaled(&mut g, "row step", into_row, 0.0, 1.0 / count);
+    let row_start = mix(&mut g, "row start", v, row_step, BlendMode::Subtract);
+    let row = wave(&mut g, "row", row_start, WaveShape::Sawtooth, 1.0, 0.0);
+    let row_share = scaled(&mut g, "row share", row, 0.0, 1.0 / count);
+    let id_sum = mix(&mut g, "id sum", column, row_share, BlendMode::Add);
+    let id = wave(&mut g, "id", id_sum, WaveShape::Sawtooth, 1.0, 0.0);
+    let lot = lot_of(&mut g, "lot", id, TILES * TILES, 170);
+
+    let at = |mm: f32| 1.0 - 2.0 * mm / cycle;
+    let across_u = wave(&mut g, "across u", u, WaveShape::Triangle, count, 0.25);
+    let across_v = wave(&mut g, "across v", v, WaveShape::Triangle, count, 0.25);
+    // A butt joint is under a millimeter; drawn that thin it would catch a texel on one seam and
+    // miss the next, so it is spread soft over a texel either side.
+    let joint_u = remap(&mut g, "joint u", across_u, at(4.0), at(0.0));
+    let joint_v = remap(&mut g, "joint v", across_v, at(4.0), at(0.0));
+    let joint = pick(&mut g, "joint", joint_u, joint_v, MinMaxMode::Max);
+    let edge_u = remap(&mut g, "edge u", across_u, at(8.0), at(1.0));
+    let edge_v = remap(&mut g, "edge v", across_v, at(8.0), at(1.0));
+    let edge = pick(&mut g, "edge", edge_u, edge_v, MinMaxMode::Max);
+
+    let base = mapped(&mut g, "base", lot, &[
+        (0.0, oklcha(0.88, 0.014, 88.0, 1.0)),
+        (1.0, oklcha(0.92, 0.010, 92.0, 1.0)),
+    ]);
+    let cloud = g.add_unique("cloud", tiling_fbm(171, 8, 4)).unwrap();
+    let cloud_tile = shifted(&mut g, "tile cloud", cloud, lot, 0.25);
+    let (cloud_dim, cloud_bright) = noisy_pair(oklcha(0.84, 0.014, 85.0, 1.0), oklcha(0.94, 0.008, 95.0, 1.0));
+    let clouded = mapped(&mut g, "clouded", cloud_tile, &[(0.25, cloud_dim), (0.75, cloud_bright)]);
+    let cloud_share = solid(&mut g, "cloud share", gray(0.5));
+    let mottled = blend(&mut g, "mottled", base, clouded, cloud_share);
+    // Chips gather in drifts: the drift raises or lowers every chip's threshold.
+    let drift_noise = g.add_unique("drift", tiling_fbm(172, 16, 3)).unwrap();
+    let drift_tile = shifted(&mut g, "tile drift", drift_noise, lot, 0.2);
+    let drift = scaled(&mut g, "drift amount", drift_tile, 0.0, 0.10);
+    let chip = |g: &mut Graph, name: &str, seed: u32, frequency: u32, lo: f32, hi: f32| {
+        let noise = g.add_unique(format!("{name} noise"), tiling_fbm(seed, frequency, 2)).unwrap();
+        let tile_noise = shifted(g, &format!("tile {name}"), noise, lot, 0.05);
+        let drifted = mix(g, &format!("drifted {name}"), tile_noise, drift, BlendMode::Add);
+        remap(g, name, drifted, lo, hi)
+    };
+    let gray_chips = chip(&mut g, "gray chips", 173, 96, 0.84, 0.88);
+    let beige_chips = chip(&mut g, "beige chips", 174, 96, 0.85, 0.89);
+    let charcoal_chips = chip(&mut g, "charcoal chips", 175, 160, 0.89, 0.92);
+    let black_chips = chip(&mut g, "black chips", 176, 192, 0.91, 0.94);
+    let gray_chip = solid(&mut g, "gray chip", oklcha(0.68, 0.006, 250.0, 1.0));
+    let beige_chip = solid(&mut g, "beige chip", oklcha(0.78, 0.035, 75.0, 1.0));
+    let charcoal_chip = solid(&mut g, "charcoal chip", oklcha(0.45, 0.006, 250.0, 1.0));
+    let black_chip = solid(&mut g, "black chip", oklcha(0.24, 0.004, 250.0, 1.0));
+    let grayed = blend(&mut g, "grayed", mottled, gray_chip, gray_chips);
+    let beiged = blend(&mut g, "beiged", grayed, beige_chip, beige_chips);
+    let charcoaled = blend(&mut g, "charcoaled", beiged, charcoal_chip, charcoal_chips);
+    let flecked = blend(&mut g, "flecked", charcoaled, black_chip, black_chips);
+    let grime = solid(&mut g, "grime", oklcha(0.62, 0.030, 80.0, 1.0));
+    let edge_grime = scaled(&mut g, "edge grime", edge, 0.0, 0.25);
+    let edged = blend(&mut g, "edged", flecked, grime, edge_grime);
+    let gap = solid(&mut g, "gap", oklcha(0.40, 0.020, 75.0, 1.0));
+    let joint_share = scaled(&mut g, "joint share", joint, 0.0, 0.55);
+    let color = blend(&mut g, "color", edged, gap, joint_share);
+
+    let scuff_noise = g.add_unique("scuff noise", tiling_fbm(177, 4, 5)).unwrap();
+    let (waxed, dull) = noisy(0.25, 0.55);
+    let wax = scaled(&mut g, "wax", scuff_noise, waxed, dull);
+    let joint_rough = solid(&mut g, "joint roughness", gray(0.8));
+    let roughness = blend(&mut g, "roughness", wax, joint_rough, joint);
+
+    let ripple = g.add_unique("ripple", tiling_fbm(178, 32, 2)).unwrap();
+    let waves = scaled(&mut g, "waves", ripple, 0.0, 0.04);
+    let curl = scaled(&mut g, "curl", lot, 0.75, 0.80);
+    let top = mix(&mut g, "top", curl, waves, BlendMode::Add);
+    let face = remap(&mut g, "face", edge, 0.6, 0.0);
+    let height = blend(&mut g, "height", zero, top, face);
+    let normal = normal_of(&mut g, height, 0.001);
+    finish(g, Output {
+        color: Some(color),
+        roughness: ScalarInput::Layer(roughness),
+        metallic: ScalarInput::Const(0.0),
+        normal: Some(normal),
+    })
+}
+
+/// One layer of an OSB's strands: a staggered grid of flakes along `u`, each a share of the
+/// layer's cells, with ragged edges.
+struct Strands {
+    /// 1 where this layer's flake lies, 0 where the layer below shows.
+    cover: LayerId,
+    /// The flake's own value in `[0, 1)`.
+    lot: LayerId,
+    /// A rim a few millimeters wide round each flake, where it shades the layer below.
+    halo: LayerId,
+}
+
+/// `a * x + b * y` for whole `a` and `b`, over a base that keeps it positive. Add and Subtract are
+/// unclamped, and a whole multiple of a coordinate plus a constant is still something a grid of
+/// whole frequencies tiles over.
+fn combination(g: &mut Graph, name: &str, x: LayerId, y: LayerId, a: i32, b: i32) -> LayerId {
+    let base = 2.0 * (a.min(0).abs() + b.min(0).abs()) as f32;
+    let mut sum = solid(g, &format!("{name} base"), gray(base));
+    for (term, k) in [(x, a), (y, b)] {
+        let mode = if k > 0 { BlendMode::Add } else { BlendMode::Subtract };
+        for _ in 0..k.abs() {
+            sum = mix(g, name, sum, term, mode);
+        }
+    }
+    sum
+}
+
+/// Which way a layer's strands lie: along `(a, b)` in `(u, v)`. Whole numbers, so the turned grid
+/// still meets itself at the tile's edges; `(1, 0)` is along `u`.
+#[derive(Clone, Copy)]
+struct Lie {
+    a: i32,
+    b: i32,
+    /// How far a flake's ends and sides are torn, in mm, along `u` and `v` before turning.
+    rag_mm: (f32, f32),
+}
+
+impl Lie {
+    const ALONG: Lie = Lie { a: 1, b: 0, rag_mm: (30.0, 6.0) };
+
+    /// How many times larger the turned grid's coordinates run than the tile's.
+    fn stretch(self) -> f32 {
+        ((self.a * self.a + self.b * self.b) as f32).sqrt()
+    }
+}
+
+fn strands(g: &mut Graph, columns: u32, rows: u32, seed: u32, v_offset: f32, share: f32, lie: Lie) -> Strands {
+    // A turned grid runs `stretch` times faster, so a cycle is that much shorter on the board.
+    let (c, r) = (columns as f32 * lie.stretch(), rows as f32 * lie.stretch());
+    // Strands lie only roughly along `u` and their edges are torn: the grid is laid out from
+    // coordinates pushed about by a broad noise, which bends the rows, and a fine one, which
+    // rags the edges. Added rather than warped, so nothing downstream is a warp of a warp.
+    let push = |g: &mut Graph, name: &str, axis: Axis, offset: f32, bend_mm: f32, rag_mm: f32| {
+        let at = coordinate(g, axis);
+        let bend_noise = g.add_unique(format!("{name} bend noise"), tiling_fbm(seed + 2 + axis as u32, 4, 2)).unwrap();
+        let bend = scaled(g, &format!("{name} bend"), bend_noise, offset, offset + bend_mm / TILE_MM);
+        let rag_noise = g.add_unique(format!("{name} rag noise"), tiling_fbm(seed + 4 + axis as u32, 64, 2)).unwrap();
+        let rag = scaled(g, &format!("{name} rag"), rag_noise, 0.0, rag_mm / TILE_MM);
+        let bent = mix(g, &format!("{name} bent"), at, bend, BlendMode::Add);
+        mix(g, name, bent, rag, BlendMode::Add)
+    };
+    let u = push(g, "strand u", Axis::U, 0.0, 120.0, lie.rag_mm.0);
+    let v = push(g, "strand v", Axis::V, v_offset, 100.0, lie.rag_mm.1);
+    // Turned so the grid's rows run along `(a, b)`: `u'` rises along it and `v'` across it.
+    let (u, v) = if (lie.a, lie.b) == (1, 0) {
+        (u, v)
+    } else {
+        (combination(g, "turned u", u, v, lie.a, lie.b), combination(g, "turned v", u, v, -lie.b, lie.a))
+    };
+    let k = courses(g, u, v, columns, rows, seed);
+    // A flake's own values, one per draw: a row's value plus a column's, wrapped. Too many flakes
+    // for one lattice ([`lot_of`]), and a hash of the id would tell a flake's two halves at the
+    // tile's edge apart by the id's rounding. A lattice read a rounding off reads the same.
+    let column = wave(g, "flake column", k.column, WaveShape::Sawtooth, 1.0, 0.0);
+    let draw = |g: &mut Graph, name: &str, draw_seed: u32| {
+        let by_row = lot_of(g, &format!("{name} by row"), k.row, rows, draw_seed);
+        let by_column = lot_of(g, &format!("{name} by column"), column, columns, draw_seed + 1);
+        let sum = mix(g, &format!("{name} sum"), by_row, by_column, BlendMode::Add);
+        wave(g, name, sum, WaveShape::Sawtooth, 1.0, 0.0)
+    };
+    let lot = draw(g, "flake lot", seed + 10);
+    let presence = draw(g, "flake presence", seed + 12);
+    let present = remap(g, "present", presence, share + 0.01, share - 0.01);
+    // Each flake falls short of its cell by its own share, up to 40% of its length and half its
+    // width, so no two are the same size. Pushing the distance to the edge up moves the edge in.
+    let length_draw = draw(g, "flake length", seed + 14);
+    let width_draw = draw(g, "flake width", seed + 16);
+    let shorter = scaled(g, "shorter", length_draw, 0.0, 0.4);
+    let narrower = scaled(g, "narrower", width_draw, 0.0, 0.5);
+    let across_end = mix(g, "flake across end", k.across_end, shorter, BlendMode::Add);
+    let across_row = mix(g, "flake across row", k.across_row, narrower, BlendMode::Add);
+    // A flake fills what is left short of a gap at its edges and ends. Lengths in mm.
+    let at = |mm: f32, cycle: f32| 1.0 - 2.0 * mm / cycle;
+    let edge = |g: &mut Graph, name: &str, side_mm: (f32, f32), end_mm: (f32, f32)| {
+        let side = remap(g, &format!("{name} side"), across_row, at(side_mm.0, TILE_MM / r), at(side_mm.1, TILE_MM / r));
+        let end = remap(g, &format!("{name} end"), across_end, at(end_mm.0, TILE_MM / c), at(end_mm.1, TILE_MM / c));
+        let outside = pick(g, &format!("{name} outside"), side, end, MinMaxMode::Max);
+        remap(g, name, outside, 1.0, 0.0)
+    };
+    let inside = edge(g, "inside", (4.0, 1.5), (14.0, 4.0));
+    let wide = edge(g, "wide", (1.5, 0.0), (6.0, 0.0));
+    let zero = solid(g, "zero", gray(0.0));
+    let cover = product(g, "cover", zero, inside, present);
+    let wide_cover = product(g, "wide cover", zero, wide, present);
+    let halo = mix(g, "halo", wide_cover, cover, BlendMode::Subtract);
+    Strands { cover, lot, halo }
+}
+
+/// Oriented strand board: five layers of pine and aspen strands, up to 220 mm long and 50 mm wide,
+/// lying mostly along `u` but for a sparse third layer turned every which way, the upper ones
+/// covering part of the lower and shading it at their edges, every flake its own size and its own
+/// tone of straw or honey, dark gaps where none lies flat, a fiber grain inside each, and the waxy
+/// resin sheen of a pressed panel.
+fn osb() -> Graph {
+    let mut g = empty();
+    let bottom = strands(&mut g, 10, 44, 180, 0.0, 1.0, Lie::ALONG);
+    let lower = strands(&mut g, 12, 52, 195, 0.19, 0.7, Lie::ALONG);
+    // The third layer went into the press badly oriented: sparse flakes at five angles across the
+    // grain, each angle a layer of its own, its fibers turned with it.
+    const ASKEW: [(i32, i32); 5] = [(2, 1), (1, 2), (0, 1), (-1, 2), (-2, 1)];
+    let askew: Vec<(Strands, LayerId)> = ASKEW
+        .iter()
+        .enumerate()
+        .map(|(i, &(a, b))| {
+            let lie = Lie { a, b, rag_mm: (14.0, 14.0) };
+            let seed = 200 + 10 * i as u32;
+            // As many cells as the bottom layer's, fewer by the turned grid's stretch, so the
+            // flakes are as big.
+            let cells = |n: f32| (n / lie.stretch()).round() as u32;
+            let layer = strands(&mut g, cells(10.0), cells(44.0), seed, 0.31 + 0.13 * i as f32, 0.12, lie);
+            let noise = g.add_unique("askew fiber noise", tiling_fbm(seed + 7, 16, 3)).unwrap();
+            // Turned by -atan2(b, a) then scaled by |(a, b)|: whole entries, so it tiles, and the
+            // stretched noise's lines run along `(a, b)`.
+            let fibers = g
+                .add_unique(
+                    "askew fibers",
+                    LayerKind::Transform(Transform {
+                        source: Some(noise),
+                        offset: [0.0; 3],
+                        rotate_uv: -(b as f32).atan2(a as f32),
+                        scale: [lie.stretch(), 6.0 * lie.stretch(), 1.0],
+                        coord_mode: CoordMode::Passthrough,
+                        edge_mode: EdgeMode::Extend,
+                    }),
+                )
+                .unwrap();
+            (layer, fibers)
+        })
+        .collect();
+    let middle = strands(&mut g, 11, 48, 183, 0.43, 0.6, Lie::ALONG);
+    let top = strands(&mut g, 9, 40, 186, 0.71, 0.5, Lie::ALONG);
+
+    let tone = |g: &mut Graph, name: &str, lot: LayerId| {
+        mapped(g, name, lot, &[
+            (0.0, oklcha(0.84, 0.055, 88.0, 1.0)),
+            (0.25, oklcha(0.76, 0.080, 80.0, 1.0)),
+            (0.5, oklcha(0.68, 0.095, 70.0, 1.0)),
+            (0.75, oklcha(0.60, 0.090, 62.0, 1.0)),
+            (0.9, oklcha(0.50, 0.080, 56.0, 1.0)),
+            (1.0, oklcha(0.72, 0.040, 85.0, 1.0)),
+        ])
+    };
+    let void = solid(&mut g, "void", oklcha(0.46, 0.065, 60.0, 1.0));
+    let bottom_tone = tone(&mut g, "bottom tone", bottom.lot);
+    let middle_tone = tone(&mut g, "middle tone", middle.lot);
+    let top_tone = tone(&mut g, "top tone", top.lot);
+    // Each layer a little darker for the shade of the one above.
+    let shade = solid(&mut g, "shade", oklcha(0.40, 0.060, 60.0, 1.0));
+    let shade_share = solid(&mut g, "shade share", gray(0.15));
+    let bottom_shaded = blend(&mut g, "bottom shaded", bottom_tone, shade, shade_share);
+    let layer_bottom = blend(&mut g, "layer bottom", void, bottom_shaded, bottom.cover);
+    let lower_tone = tone(&mut g, "lower tone", lower.lot);
+    let lower_halo = scaled(&mut g, "lower halo share", lower.halo, 0.0, 0.35);
+    let bottom_halo = blend(&mut g, "bottom halo", layer_bottom, shade, lower_halo);
+    let lower_shade_share = solid(&mut g, "lower shade share", gray(0.11));
+    let lower_shaded = blend(&mut g, "lower shaded", lower_tone, shade, lower_shade_share);
+    let mut layer_one = blend(&mut g, "layer one", bottom_halo, lower_shaded, lower.cover);
+    let askew_shade_share = solid(&mut g, "askew shade share", gray(0.09));
+    for (layer, _) in &askew {
+        let askew_tone = tone(&mut g, "askew tone", layer.lot);
+        let halo_share = scaled(&mut g, "askew halo share", layer.halo, 0.0, 0.35);
+        let under = blend(&mut g, "under askew", layer_one, shade, halo_share);
+        let shaded = blend(&mut g, "askew shaded", askew_tone, shade, askew_shade_share);
+        layer_one = blend(&mut g, "askew layer", under, shaded, layer.cover);
+    }
+    let middle_shade_share = solid(&mut g, "middle shade share", gray(0.07));
+    let middle_shaded = blend(&mut g, "middle shaded", middle_tone, shade, middle_shade_share);
+    let middle_halo = scaled(&mut g, "middle halo share", middle.halo, 0.0, 0.35);
+    let one_shaded = blend(&mut g, "one shaded", layer_one, shade, middle_halo);
+    let layer_two = blend(&mut g, "layer two", one_shaded, middle_shaded, middle.cover);
+    let top_halo = scaled(&mut g, "top halo share", top.halo, 0.0, 0.35);
+    let two_shaded = blend(&mut g, "two shaded", layer_two, shade, top_halo);
+    let flakes = blend(&mut g, "flakes", two_shaded, top_tone, top.cover);
+
+    let fiber_along = streaks(&mut g, "fiber along", tiling_fbm(189, 32, 3), 6.0, 192);
+    // Each flake shows the fibers of its own lie: stacked as the flakes are.
+    let mut fiber_long = fiber_along;
+    for (layer, fibers) in &askew {
+        fiber_long = blend(&mut g, "fiber field", fiber_long, *fibers, layer.cover);
+    }
+    let fiber_long = blend(&mut g, "fiber field", fiber_long, fiber_along, middle.cover);
+    let fiber_long = blend(&mut g, "fiber field", fiber_long, fiber_along, top.cover);
+    let (fiber_dark, fiber_light) = noisy_pair(oklcha(0.50, 0.080, 62.0, 1.0), oklcha(0.86, 0.050, 88.0, 1.0));
+    let fiber_color = mapped(&mut g, "fiber color", fiber_long, &[(0.2, fiber_dark), (0.8, fiber_light)]);
+    let fiber_share = solid(&mut g, "fiber share", gray(0.45));
+    let fibered = blend(&mut g, "fibered", flakes, fiber_color, fiber_share);
+    let resin_noise = g.add_unique("resin noise", tiling_fbm(190, 8, 4)).unwrap();
+    let resin_spots = remap(&mut g, "resin spots", resin_noise, 0.62, 0.80);
+    let resin_share = scaled(&mut g, "resin share", resin_spots, 0.0, 0.25);
+    let resin = solid(&mut g, "resin", oklcha(0.50, 0.090, 58.0, 1.0));
+    let color = blend(&mut g, "color", fibered, resin, resin_share);
+
+    let wax = g.add_unique("wax", tiling_fbm(191, 4, 3)).unwrap();
+    let (waxy, dry) = noisy(0.62, 0.82);
+    let flake_rough = scaled(&mut g, "flake roughness", wax, waxy, dry);
+    let void_rough = solid(&mut g, "void roughness", gray(0.95));
+    let roughness = blend(&mut g, "roughness", void_rough, flake_rough, bottom.cover);
+
+    let zero = solid(&mut g, "zero", gray(0.0));
+    let bottom_height = scaled(&mut g, "bottom height", bottom.lot, 0.15, 0.25);
+    let base = product(&mut g, "base", zero, bottom_height, bottom.cover);
+    let one_height = scaled(&mut g, "one height", lower.lot, 0.30, 0.40);
+    let mut one = blend(&mut g, "one", base, one_height, lower.cover);
+    for (layer, _) in &askew {
+        let askew_height = scaled(&mut g, "askew height", layer.lot, 0.40, 0.48);
+        one = blend(&mut g, "askew one", one, askew_height, layer.cover);
+    }
+    let two_height = scaled(&mut g, "two height", middle.lot, 0.50, 0.58);
+    let two = blend(&mut g, "two", one, two_height, middle.cover);
+    let three_height = scaled(&mut g, "three height", top.lot, 0.65, 0.75);
+    let three = blend(&mut g, "three", two, three_height, top.cover);
+    let fiber_relief = scaled(&mut g, "fiber relief", fiber_long, 0.0, 0.08);
+    let height = mix(&mut g, "height", three, fiber_relief, BlendMode::Add);
+    let normal = normal_of(&mut g, height, 0.003);
     finish(g, Output {
         color: Some(color),
         roughness: ScalarInput::Layer(roughness),
