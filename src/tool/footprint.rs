@@ -1,6 +1,7 @@
 //! Drawing a footprint room: corners clicked on the floor plane, chained into
 //! a loop, closed on the first. With a footprint selected, the drawing is
-//! added to it instead: corners snap onto its own, and a chain may end on one.
+//! added to it instead: corners snap onto its own, and a chain that started on
+//! one ends on the next.
 //! See `documentation/footprint-rooms.md`.
 
 use crate::common::keybind::{Action, Actions};
@@ -91,6 +92,32 @@ impl Draft {
     /// Whether a corner put at `at` would close the loop instead.
     pub fn closes_at(&self, at: Vec2) -> bool {
         self.corners.len() >= 3 && self.corners[0].0.distance(at) <= CLOSE_RADIUS
+    }
+
+    /// Whether adding `corner` ends the chain on the footprint's own corner.
+    /// Only a chain that started on one does; a loose one ended there would
+    /// be a spur bounding nothing.
+    fn joins(&self, corner: &ChainCorner, closes: bool, onto_footprint: bool) -> bool {
+        let started_on_one = matches!(self.corners.first(), Some((_, ChainCorner::Existing(_))));
+        match corner {
+            ChainCorner::Existing(id) => onto_footprint && started_on_one && !closes && !self.ends_on(*id),
+            ChainCorner::New(_) => false,
+        }
+    }
+
+    /// `Some(closed)` when the click finishes the chain, which the draft then
+    /// holds whole; `None` while it goes on.
+    fn place(&mut self, at: Vec3, corner: ChainCorner, onto_footprint: bool) -> Option<bool> {
+        let closes = self.closes_at(Vec2::new(at.x, at.z));
+        let joins = self.joins(&corner, closes, onto_footprint);
+        if closes {
+            return Some(true);
+        }
+        let repeat = matches!(&corner, ChainCorner::Existing(id) if self.ends_on(*id));
+        if !repeat {
+            self.push(at, corner);
+        }
+        joins.then_some(false)
     }
 
     pub fn points(&self) -> impl Iterator<Item = Vec2> + '_ {
@@ -260,22 +287,8 @@ impl FootprintTool {
         };
         let Some((at, corner)) = placed else { return };
 
-        let closes = tool.draft.closes_at(Vec2::new(at.x, at.z));
-        // Onto a corner the footprint already has, a chain is joined to it and
-        // done: a line across a room, or a wing out and back.
-        let joins = match (&corner, tool.target) {
-            (ChainCorner::Existing(id), Some(_)) => !tool.draft.is_empty() && !closes && !tool.draft.ends_on(*id),
-            _ => false,
-        };
-        if !closes && !joins {
-            if !matches!(&corner, ChainCorner::Existing(id) if tool.draft.ends_on(*id)) {
-                tool.draft.push(at, corner);
-            }
-            return;
-        }
-        if joins {
-            tool.draft.push(at, corner);
-        }
+        let onto_footprint = tool.target.is_some();
+        let Some(closes) = tool.draft.place(at, corner, onto_footprint) else { return };
 
         match tool.target {
             Some(target) => {
@@ -338,7 +351,11 @@ impl FootprintTool {
             dashed_line(&mut gizmos, at(*last), at(if closes { points[0] } else { next }), pending, 0.15, 0.1);
         }
         gizmos.sphere(Isometry3d::from_translation(at(points[0])), 0.15, if closes { closing } else { drawn });
-        gizmos.sphere(Isometry3d::from_translation(at(next)), 0.12, pending);
+        let joins = tool.hovered_point.is_none()
+            && tool.target_corner_near(next).is_some_and(|(id, _)| {
+                tool.draft.joins(&ChainCorner::Existing(id), closes, tool.target.is_some())
+            });
+        gizmos.sphere(Isometry3d::from_translation(at(next)), 0.12, if joins { closing } else { pending });
 
         // What would be a room if the loop closed here.
         let mut outline = points.clone();
@@ -427,6 +444,60 @@ mod tests {
         let room = draft.finish(3.0, timeline.features_map()).unwrap();
         assert_eq!(room.parent_ids(), vec![anchor]);
         assert_eq!(room.rooms().len(), 1, "{:?}", room.problems());
+    }
+
+    #[test]
+    fn only_a_chain_that_started_on_an_own_corner_ends_on_one() {
+        let own = |id: u32| ChainCorner::Existing(SketchId(id));
+        let loose = drawn(&[(0.0, 0.0), (4.0, 0.0)]);
+        assert!(!loose.joins(&own(3), false, true), "a loose chain ended as a spur");
+
+        let mut anchored = Draft::default();
+        anchored.push(at(0.0, 0.0), own(1));
+        anchored.push(at(4.0, 0.0), ChainCorner::New(PointRef::absolute(4.0, 1.5, 0.0)));
+        assert!(anchored.joins(&own(3), false, true));
+        assert!(!anchored.joins(&own(3), false, false), "joined with no footprint to join");
+        assert!(!anchored.joins(&ChainCorner::New(PointRef::absolute(4.0, 1.5, 4.0)), false, true));
+        assert!(!anchored.joins(&own(3), true, true), "closing is not joining");
+        anchored.push(at(4.0, 4.0), own(3));
+        assert!(!anchored.joins(&own(3), false, true), "the corner it is already on");
+        assert!(!Draft::default().joins(&own(3), false, true), "the first corner ended the chain");
+    }
+
+    #[test]
+    fn a_click_finishes_the_chain_only_by_joining_or_closing() {
+        let own = |id: u32| ChainCorner::Existing(SketchId(id));
+        let new = |x: f32, z: f32| ChainCorner::New(PointRef::absolute(x, 1.5, z));
+
+        let mut loose = Draft::default();
+        assert_eq!(loose.place(at(0.0, 0.0), new(0.0, 0.0), true), None);
+        assert_eq!(loose.place(at(4.0, 0.0), own(3), true), None, "a loose chain ended on a corner");
+        assert_eq!(loose.points().count(), 2, "the corner passed through was not kept");
+        assert_eq!(loose.place(at(4.0, 0.0), own(3), true), None);
+        assert_eq!(loose.points().count(), 2, "the same corner twice");
+        assert_eq!(loose.place(at(4.0, 4.0), new(4.0, 4.0), true), None);
+        assert_eq!(loose.place(at(0.1, 0.1), new(0.1, 0.1), true), Some(true));
+        assert_eq!(loose.points().count(), 3, "the closing click added a corner");
+
+        let mut anchored = Draft::default();
+        anchored.place(at(0.0, 0.0), own(1), true);
+        assert_eq!(anchored.place(at(4.0, 0.0), own(3), false), None, "joined with no footprint");
+        let mut anchored = Draft::default();
+        anchored.place(at(0.0, 0.0), own(1), true);
+        assert_eq!(anchored.place(at(4.0, 0.0), own(3), true), Some(false));
+        assert_eq!(anchored.points().count(), 2, "the corner joined was not kept");
+    }
+
+    /// A loose chain through one of the footprint's corners, closed on its own
+    /// first corner, is a room.
+    #[test]
+    fn a_loose_loop_through_an_own_corner_is_a_room() {
+        let mut room = drawn(&[(0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (0.0, 4.0)]).finish(3.0, &HashMap::new()).unwrap();
+        let corner = room.corner_points().find(|(_, p)| p.x == 4.0 && p.z == 4.0).map(|(id, _)| id).unwrap();
+        let new = |x: f32, z: f32| ChainCorner::New(PointRef::absolute(x, 1.5, z));
+        room.add_chain(&[new(8.0, 0.0), new(8.0, 8.0), new(4.0, 8.0), ChainCorner::Existing(corner)], true, &HashMap::new());
+        assert_eq!(room.rooms().len(), 2, "{:?}", room.problems());
+        assert!(room.problems().is_empty(), "{:?}", room.problems());
     }
 
     #[test]
