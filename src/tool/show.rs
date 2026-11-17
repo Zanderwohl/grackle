@@ -42,7 +42,7 @@ impl Default for GizmoVisibility {
 
 impl GizmoVisibility {
     /// By `type_key`, so a Mirror's copy answers to its own kind's switch rather than the Mirror's.
-    fn shows(&self, type_key: &str) -> bool {
+    pub fn shows(&self, type_key: &str) -> bool {
         match type_key {
             "global_point" => self.points,
             "editor_room" | "footprint_room" => self.rooms,
@@ -55,7 +55,7 @@ impl GizmoVisibility {
             "animation_grid" => self.animation_grids,
             "mirror" => self.mirrors,
             "trigger" => self.triggers,
-            "block" => self.blocks,
+            "block" | "footprint_block" => self.blocks,
             _ => false,
         }
     }

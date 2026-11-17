@@ -92,6 +92,11 @@ checklist; the checklist is the source of truth for what is done.
 - [x] `EditorBlock` ([`block.rs`](../src/editor/block.rs)) standing up a
       `Block` and `RoomSurfaces`, drawn by the Room tool under `Tools::Block`;
       gizmos and their toggle, handles, picking, `mirror`, the save test.
+- [x] `FootprintBlock` ([`footprint_block.rs`](../src/editor/footprint_block.rs)),
+      a `FootprintRoom` whose regions stand up as `Block` prisms: columns of
+      any floor plan. Drawn by the Footprint tool under
+      `Tools::FootprintBlock`; its handles and inspector are the footprint's,
+      its gizmos and picking answer to the Blocks toggle.
 - [x] `MapVolumes` gathers rooms and blocks in order for the bake,
       auto-bake, collision and the cursor; picking orders features' own
       `volumes()` and their `standing_copies` by the same key. `room_share`,

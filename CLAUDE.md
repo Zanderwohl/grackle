@@ -2077,6 +2077,9 @@ object has no `Any` to downcast through. What a drawn chain makes a room is
 one rule, `FootprintRoom::add_chain`'s, for a new footprint and an added
 chain alike: a region a new line bounds that no room of it already covers.
 Ask it for `bounds`, `contains` and `solid` rather than treating it as a box.
+`FootprintBlock` ([`src/editor/footprint_block.rs`](src/editor/footprint_block.rs))
+is a footprint whose regions stand up as `Block`s rather than rooms, drawn by
+the same tool under `Tools::FootprintBlock`, for columns of any floor plan.
 **Each room's share is cut relative to its own corner**: the kernel's
 tolerance is absolute, and an angled face far enough from the origin is split
 by its own plane. The footprint tool, stairs and displacements are the stages
@@ -3454,7 +3457,7 @@ machine, and things happen in it.
 The core abstraction is `FeatureTrait` in
 [`src/editor/editable.rs`](src/editor/editable.rs) — a `#[typetag::serde]`
 trait object. Implementors today: `GlobalPoint`, `GracklePointLight`,
-`EditorRoom`, `FootprintRoom`, `EditorTrigger`, `EditorBlock`, `SpawnPoint`, `SpectatorCamera`, `EditorDecal`, `Prop`, `WeaponPickup`,
+`EditorRoom`, `FootprintRoom`, `FootprintBlock`, `EditorTrigger`, `EditorBlock`, `SpawnPoint`, `SpectatorCamera`, `EditorDecal`, `Prop`, `WeaponPickup`,
 `AnimationDisplay`, `AnimationGrid` and `Mirror`.
 
 A feature does not store bare coordinates. It stores `PointRef`s, which are

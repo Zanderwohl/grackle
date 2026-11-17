@@ -1,5 +1,6 @@
 //! Drawing a footprint room: corners clicked on the floor plane, chained into
-//! a loop, closed on the first. Every drawing is a footprint of its own.
+//! a loop, closed on the first. Every drawing is a footprint of its own, of
+//! air under `Tools::Footprint` and solid under `Tools::FootprintBlock`.
 //! See `documentation/footprint-rooms.md`.
 
 use crate::common::keybind::{Action, Actions};
@@ -8,8 +9,9 @@ use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 
 use crate::common::app_mode::AppMode;
-use crate::editor::editable::{Feature, FeatureId, FeatureTimeline, PointRef};
-use crate::editor::footprint_room::{ChainCorner, FootprintRoom, DEFAULT_HEIGHT};
+use crate::editor::editable::{Feature, FeatureId, FeatureTimeline, FeatureTrait, PointRef};
+use crate::editor::footprint_block::FootprintBlock;
+use crate::editor::footprint_room::{ChainCorner, FootprintRoom, DEFAULT_HEIGHT, LINE_COLOR};
 use crate::editor::input::CurrentMouseInput;
 use crate::editor::multicam::Multicam;
 use crate::prop::sketch_edit::hatch;
@@ -36,11 +38,23 @@ impl Plugin for FootprintPlugin {
                 Update,
                 (FootprintTool::interface, FootprintTool::draw_gizmos)
                     .chain()
-                    .run_if(in_state(Tools::Footprint))
+                    .run_if(drawing_a_footprint)
                     .run_if(in_state(AppMode::Editor)),
             )
-            .add_systems(OnExit(Tools::Footprint), FootprintTool::on_exit);
+            .add_systems(OnExit(Tools::Footprint), FootprintTool::on_exit)
+            .add_systems(OnExit(Tools::FootprintBlock), FootprintTool::on_exit);
     }
+}
+
+fn made_by(tool: &Tools, room: FootprintRoom) -> Box<dyn FeatureTrait> {
+    match tool {
+        Tools::FootprintBlock => Box::new(FootprintBlock::from_footprint(room)),
+        _ => Box::new(room),
+    }
+}
+
+fn drawing_a_footprint(tool: Res<State<Tools>>) -> bool {
+    matches!(tool.get(), Tools::Footprint | Tools::FootprintBlock)
 }
 
 /// The loop being drawn. Plain data, so what a click does is testable without
@@ -167,6 +181,7 @@ impl FootprintTool {
         actions: Res<Actions>,
         mut features: ResMut<FeatureTimeline>,
         rooms: MapVolumes,
+        current_tool: Res<State<Tools>>,
         mut next_tool: ResMut<NextState<Tools>>,
     ) {
         if actions.just_pressed(Action::Cancel) {
@@ -204,7 +219,7 @@ impl FootprintTool {
             return;
         }
         if let Some(room) = tool.draft.finish(tool.height, features.features_map()) {
-            let id = features.apply_feature(Box::new(room));
+            let id = features.apply_feature(made_by(current_tool.get(), room));
             features.select(Some(id));
         }
         tool.draft = Draft::default();
@@ -217,7 +232,7 @@ impl FootprintTool {
         mouse_input: Res<CurrentMouseInput>,
         mut gizmos: Gizmos,
     ) {
-        let drawn = Color::srgb_u8(200, 200, 120);
+        let drawn = LINE_COLOR;
         let pending = Color::srgb_u8(60, 120, 255);
         let closing = Color::srgb_u8(100, 255, 100);
 
@@ -266,7 +281,6 @@ impl FootprintTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::editor::editable::FeatureTrait;
 
     fn at(x: f32, z: f32) -> Vec3 {
         Vec3::new(x, 1.5, z)
@@ -334,6 +348,19 @@ mod tests {
         let room = draft.finish(3.0, timeline.features_map()).unwrap();
         assert_eq!(room.parent_ids(), vec![anchor]);
         assert_eq!(room.rooms().len(), 1, "{:?}", room.problems());
+    }
+
+    #[test]
+    fn a_loop_closed_under_footprint_block_is_solid() {
+        use crate::common::world_surface::Fill;
+        let square = || drawn(&[(0.0, 0.0), (2.0, 0.0), (2.0, 2.0), (0.0, 2.0)]).finish(3.0, &HashMap::new()).unwrap();
+        let block = made_by(&Tools::FootprintBlock, square());
+        assert_eq!(block.type_key(), "footprint_block");
+        assert!(block.rooms().is_empty());
+        assert!(!block.volumes().is_empty() && block.volumes().iter().all(|volume| volume.fill == Fill::Solid));
+        let room = made_by(&Tools::Footprint, square());
+        assert_eq!(room.type_key(), "footprint_room");
+        assert_eq!(room.rooms().len(), 1);
     }
 
     #[test]
