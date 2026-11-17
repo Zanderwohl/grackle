@@ -629,7 +629,8 @@ fn draw_bot_routes(
 pub struct FillsASlot;
 
 /// Keeps the slots nobody has taken filled with bots, or empty of them, as people come and go and
-/// the settings change. Bots seated by hand count against the slots and are left alone.
+/// the settings change. Bots seated by hand count against the slots and are left alone, unless
+/// bots are switched off, which retires every seat.
 ///
 /// A filler never keeps anybody out: the server's cap counts people only, and somebody joining
 /// takes a filler's seat and body away in the same frame, before
@@ -661,6 +662,9 @@ pub(crate) fn fill_empty_slots(
         *players.entry(team).or_default() += 1;
     }
     let mut retired = Vec::new();
+    if !settings.bots_enabled {
+        retired.extend(seats.iter().filter(|(_, fills, _)| !fills).map(|(seat, ..)| seat));
+    }
     while fillers.len() > wanted {
         let ahead = |team: Option<Team>| team.map_or(usize::MAX, |team| players.get(&team).copied().unwrap_or(0));
         let index = (0..fillers.len()).max_by_key(|index| (ahead(fillers[*index].1), fillers[*index].0)).expect("more than wanted");
@@ -831,6 +835,11 @@ mod tests {
         world.resource_mut::<RoundSettings>().fill_with_bots = false;
         run(&mut world);
         assert_eq!(count(&mut world), (0, 1), "the fillers stayed with filling off, or the hand-seated bot went");
+
+        world.resource_mut::<RoundSettings>().fill_with_bots = true;
+        world.resource_mut::<RoundSettings>().bots_enabled = false;
+        run(&mut world);
+        assert_eq!(count(&mut world), (0, 0), "a bot stayed seated with bots switched off");
     }
 
     /// Breaks if a spectating host keeps a slot from the bots.

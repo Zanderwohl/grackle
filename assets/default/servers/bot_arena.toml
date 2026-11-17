@@ -2,6 +2,8 @@
 # defaults to what the Round tab starts with.
 #
 # `slots`           players in a round, the host and bots included, 1 to 32.
+# `bots_enabled`    false seats no bot at all, and a round starts without
+#                   baking the nav graph (default true).
 # `fill_with_bots`  keep the slots nobody has taken filled with bots.
 # `bot_skill`       "easy", "normal" (the default), "hard", or "varied",
 #                   which rolls each trait across its whole range.

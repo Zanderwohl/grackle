@@ -25,8 +25,10 @@ const CHUNK: std::time::Duration = std::time::Duration::from_millis(50);
 #[cfg(target_arch = "wasm32")]
 const CHUNK: std::time::Duration = std::time::Duration::from_millis(8);
 
-/// How long the map has to be left alone before a background bake starts, so a drag is one bake.
-pub const SETTLE_SECONDS: f32 = 0.5;
+/// How long after the last change to what a bake reads before it starts, so a drag is one bake.
+/// Measured from the latest change, not the first: a map edited every frame never bakes until it
+/// is let go. Asking for a bake skips it.
+pub const SETTLE_SECONDS: f32 = 1.0;
 
 /// In the order a panel lists them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -176,7 +178,7 @@ pub struct BackgroundBake<J: BakeJob> {
     baked: Option<u64>,
     /// What the map is now, as last told to [`BackgroundBake::update`].
     current: Option<u64>,
-    /// A change not yet baked, and when it was first seen.
+    /// A change not yet baked, and when the map last changed. A new hash restarts the clock.
     pending: Option<(u64, f32)>,
     running: Option<Running<J>>,
     /// A bake asked for whatever auto-bake is doing.
@@ -294,6 +296,13 @@ impl<J: BakeJob> BackgroundBake<J> {
     /// Told every frame what the map is now. `ready` is false while what the bake reads is still
     /// being rebuilt; `job` makes the bake, and is only called to start one.
     pub fn update(&mut self, hash: u64, ready: bool, now: f32, job: impl FnOnce() -> J) {
+        self.update_since(hash, ready, now, None, job);
+    }
+
+    /// [`Self::update`], with the wait counted from `changed_at` rather than from when `hash`
+    /// was first seen: for a bake whose inputs are themselves rebuilt after a wait, so the two
+    /// waits do not add up.
+    pub fn update_since(&mut self, hash: u64, ready: bool, now: f32, changed_at: Option<f32>, job: impl FnOnce() -> J) {
         self.current = Some(hash);
         // A press is answered by a bake of the map as it stands, which one already landed may be.
         if self.baked == Some(hash) {
@@ -301,7 +310,7 @@ impl<J: BakeJob> BackgroundBake<J> {
             self.asked = false;
             return;
         }
-        // Seen while a bake runs too, so the map's stillness is counted from the change.
+        // Seen while a bake runs too, so the map's stillness is counted from the latest change.
         let since = match self.pending {
             Some((pending, since)) if pending == hash => since,
             _ => {
@@ -309,6 +318,7 @@ impl<J: BakeJob> BackgroundBake<J> {
                 now
             }
         };
+        let since = changed_at.unwrap_or(since);
         if !(self.auto || self.asked) || !ready || self.running.is_some() {
             return;
         }
@@ -439,6 +449,30 @@ mod tests {
         assert_eq!(output, 3);
         bake.update(1, true, 10.0, || panic!("an unchanged map was baked again"));
         assert_eq!(bake.status().state, BakeState::UpToDate);
+    }
+
+    /// A map that keeps changing does not bake until a full settle after it stops.
+    #[test]
+    fn every_change_restarts_the_wait() {
+        pool();
+        let mut bake = BackgroundBake::new(true);
+        for (n, hash) in (1..=10).enumerate() {
+            let now = n as f32 * SETTLE_SECONDS * 0.5;
+            bake.update(hash, true, now, || panic!("baked a map still being edited"));
+        }
+        let last = 9.0 * SETTLE_SECONDS * 0.5;
+        bake.update(10, true, last + SETTLE_SECONDS * 0.9, || panic!("baked before the map settled"));
+        assert_eq!(bake.status().state, BakeState::Waiting);
+        bake.update(10, true, last + SETTLE_SECONDS, count(1));
+        assert_eq!(bake.status().state, BakeState::Baking);
+    }
+
+    #[test]
+    fn a_wait_counted_from_an_earlier_change_is_not_waited_again() {
+        pool();
+        let mut bake = BackgroundBake::new(true);
+        bake.update_since(1, true, 5.0, Some(5.0 - SETTLE_SECONDS), count(1));
+        assert_eq!(bake.status().state, BakeState::Baking);
     }
 
     #[test]

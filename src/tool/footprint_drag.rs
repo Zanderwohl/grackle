@@ -1,5 +1,6 @@
-//! Handles on a selected footprint room: one per corner, dragged across the
-//! floor plane, and its floor and ceiling, dragged up and down.
+//! Handles on a selected footprint room: one per corner and one for its origin,
+//! dragged across the floor plane, and its floor and ceiling, dragged up and
+//! down.
 
 use bevy::prelude::*;
 
@@ -37,6 +38,8 @@ impl Plugin for FootprintDragPlugin {
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FootprintHandle {
     Corner(SketchId),
+    /// Carries every corner measured from the origin.
+    Origin,
     Floor,
     Ceiling,
 }
@@ -46,6 +49,7 @@ pub struct FootprintDragState {
     mesh: Option<Handle<Mesh>>,
     idle: Option<Handle<HandleMaterial>>,
     highlight: Option<Handle<HandleMaterial>>,
+    origin: Option<Handle<HandleMaterial>>,
     /// The footprint and the corners its handles were made for: a corner
     /// added or taken away is a new set of handles.
     tracked: Option<(FeatureId, Vec<SketchId>)>,
@@ -54,15 +58,19 @@ pub struct FootprintDragState {
     grab_offset: Option<Vec3>,
 }
 
-/// Where each handle goes: corners on the floor, and the floor and ceiling
-/// over the middle of the first room.
+/// Where each handle goes: corners on the floor, the origin a little above
+/// its point, and the floor and ceiling over the middle of the first room.
 fn handle_positions(footprint: &FootprintRoom) -> Vec<(FootprintHandle, Vec3)> {
     let mut handles: Vec<(FootprintHandle, Vec3)> =
         footprint.corner_points().map(|(id, at)| (FootprintHandle::Corner(id), at)).collect();
+    let corners = handles.len();
     let middle = footprint.rooms().first().map(|room| room.floor_point()).or_else(|| {
-        let count = handles.len() as f32;
+        let count = corners as f32;
         (count > 0.0).then(|| handles.iter().map(|(_, at)| *at).sum::<Vec3>() / count)
     });
+    if corners > 0 {
+        handles.push((FootprintHandle::Origin, footprint.origin_handle_point()));
+    }
     if let Some(middle) = middle {
         let floor = footprint.floor_height();
         handles.push((FootprintHandle::Floor, Vec3::new(middle.x, floor, middle.z)));
@@ -89,6 +97,11 @@ impl FootprintDragState {
         self.highlight = Some(materials.add(on_top(StandardMaterial {
             base_color: Color::srgb_u8(255, 255, 220),
             emissive: LinearRgba::rgb(0.45, 0.4, 0.25),
+            ..default()
+        })));
+        self.origin = Some(materials.add(on_top(StandardMaterial {
+            base_color: Color::srgb_u8(120, 220, 230),
+            emissive: LinearRgba::rgb(0.1, 0.3, 0.35),
             ..default()
         })));
     }
@@ -119,12 +132,13 @@ impl FootprintDragState {
 
         let Some((_, footprint)) = selected else { return };
         state.ensure_assets(&mut meshes, &mut materials);
-        let (Some(mesh), Some(idle)) = (state.mesh.clone(), state.idle.clone()) else { return };
+        let (Some(mesh), Some(idle), Some(origin)) = (state.mesh.clone(), state.idle.clone(), state.origin.clone()) else { return };
         for (handle, at) in handle_positions(footprint) {
+            let material = if handle == FootprintHandle::Origin { origin.clone() } else { idle.clone() };
             commands.spawn((
                 handle,
                 Mesh3d(mesh.clone()),
-                MeshMaterial3d(idle.clone()),
+                MeshMaterial3d(material),
                 crate::editor::multicam::editor_only(),
                 Transform::from_translation(at),
             ));
@@ -158,14 +172,15 @@ impl FootprintDragState {
         mut edit_events: MessageWriter<EditEvent>,
     ) {
         let Some((feature_id, _)) = state.tracked.clone() else { return };
-        let (Some(idle), Some(highlight)) = (state.idle.clone(), state.highlight.clone()) else { return };
+        let (Some(idle), Some(highlight), Some(origin)) = (state.idle.clone(), state.highlight.clone(), state.origin.clone()) else { return };
+        let materials = Materials { idle: &idle, origin: &origin, highlight: &highlight };
 
         let released = mouse_input.released == Some(MouseButton::Left);
         let just_pressed = mouse_input.just_pressed && mouse_input.pressed == Some(MouseButton::Left);
         let Some(ray) = mouse_input.world_pos.filter(|_| !released) else {
             state.grabbed = None;
             state.grab_offset = None;
-            paint(&mut handles, None, &idle, &highlight);
+            paint(&mut handles, None, &materials);
             return;
         };
 
@@ -175,7 +190,7 @@ impl FootprintDragState {
                 let settings = MeshRayCastSettings::default().with_filter(&filter);
                 ray_cast.cast_ray(ray, &settings).first().map(|(entity, _)| *entity)
             };
-            paint(&mut handles, hit, &idle, &highlight);
+            paint(&mut handles, hit, &materials);
             if let (Some(hit), true) = (hit, just_pressed) {
                 if let Ok((_, handle, _)) = handles.get(hit) {
                     state.grabbed = Some(*handle);
@@ -190,7 +205,7 @@ impl FootprintDragState {
 
         // Where the pointer is on the handle's own line or plane.
         let pointer = match grabbed {
-            FootprintHandle::Corner(_) => {
+            FootprintHandle::Corner(_) | FootprintHandle::Origin => {
                 let direction = Vec3::from(ray.direction);
                 if direction.y.abs() < 1.0e-4 {
                     return;
@@ -213,6 +228,7 @@ impl FootprintDragState {
         let Some(mut feature) = features.features_mut().remove(&feature_id) else { return };
         let moved = match (grabbed, feature.object_mut().footprint_mut()) {
             (FootprintHandle::Corner(id), Some(footprint)) => footprint.drag_corner(id, Vec2::new(wanted.x, wanted.z)),
+            (FootprintHandle::Origin, Some(footprint)) => footprint.drag_origin(Vec2::new(wanted.x, wanted.z)),
             (FootprintHandle::Floor, _) => feature.object_mut().drag_handle(false, 1, wanted.y),
             (FootprintHandle::Ceiling, _) => feature.object_mut().drag_handle(true, 1, wanted.y),
             _ => false,
@@ -237,17 +253,26 @@ impl FootprintDragState {
     }
 }
 
+struct Materials<'a> {
+    idle: &'a Handle<HandleMaterial>,
+    origin: &'a Handle<HandleMaterial>,
+    highlight: &'a Handle<HandleMaterial>,
+}
+
 /// Lights the handle under the pointer, writing a material only when it is
 /// not already the one wanted: this runs every frame, and a written material
 /// is re-extracted for rendering.
 fn paint(
     handles: &mut Query<(Entity, &FootprintHandle, &mut MeshMaterial3d<HandleMaterial>)>,
     highlighted: Option<Entity>,
-    idle: &Handle<HandleMaterial>,
-    highlight: &Handle<HandleMaterial>,
+    materials: &Materials,
 ) {
-    for (entity, _, mut material) in handles.iter_mut() {
-        let wanted = if highlighted == Some(entity) { highlight } else { idle };
+    for (entity, handle, mut material) in handles.iter_mut() {
+        let wanted = match handle {
+            _ if highlighted == Some(entity) => materials.highlight,
+            FootprintHandle::Origin => materials.origin,
+            _ => materials.idle,
+        };
         if material.0 != *wanted {
             material.0 = wanted.clone();
         }
@@ -258,10 +283,11 @@ fn paint(
 mod tests {
     use super::*;
     use crate::editor::editable::{FeatureTrait, PointRef};
+    use crate::editor::footprint_room::ORIGIN_HANDLE_RISE;
     use bevy::platform::collections::HashMap;
 
     #[test]
-    fn a_footprint_has_a_handle_per_corner_and_its_floor_and_ceiling() {
+    fn a_footprint_has_a_handle_per_corner_and_its_origin_floor_and_ceiling() {
         let mut room = FootprintRoom::new(PointRef::absolute(0.0, 1.0, 0.0), 2.0);
         let ids: Vec<SketchId> = [(0.0, 0.0), (4.0, 0.0), (4.0, 4.0)]
             .iter()
@@ -275,7 +301,8 @@ mod tests {
         room.resolve_references(&HashMap::new());
 
         let handles = handle_positions(&room);
-        assert_eq!(handles.len(), 5);
+        assert_eq!(handles.len(), 6);
+        assert!(handles.contains(&(FootprintHandle::Origin, Vec3::new(0.0, 1.0 + ORIGIN_HANDLE_RISE, 0.0))));
         assert!(handles.contains(&(FootprintHandle::Corner(ids[1]), Vec3::new(4.0, 1.0, 0.0))));
         let floor = handles.iter().find(|(h, _)| *h == FootprintHandle::Floor).unwrap().1;
         let ceiling = handles.iter().find(|(h, _)| *h == FootprintHandle::Ceiling).unwrap().1;

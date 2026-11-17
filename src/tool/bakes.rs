@@ -12,7 +12,7 @@ use crate::get;
 use crate::common::world_surface::Volume;
 use crate::tool::nav_overlay::{self, NavCommands};
 use crate::tool::bake_progress;
-use crate::tool::bake_job::{self, BakeKind, BakeProgress, BakeState, BakeStatus, VolumeLabels};
+use crate::tool::bake_job::{self, BakeKind, BakeProgress, BakeState, BakeStatus, VolumeLabels, SETTLE_SECONDS};
 use crate::tool::room::{Block, CalculateRoomGeometry, ClearRoomGeometry, MapVolumes, Room, RoomSlot, VolumeOrder};
 
 #[derive(Message)]
@@ -56,8 +56,12 @@ impl Plugin for BakePlugin {
 /// A volume's mesh depends on every volume touching it, since each cuts the
 /// other. So a volume whose box or place changed is queued with whatever
 /// touched its old box and whatever touches its new one. The old box is the
-/// one seen last frame rather than the one its mesh was baked from, which a
+/// one seen when last queued rather than the one its mesh was baked from, which a
 /// room dragged before its first bake does not have.
+///
+/// An edit is queued [`SETTLE_SECONDS`] after the last change to any volume,
+/// so a drag rebuilds its rooms once, when it stops. A load-in (nothing seen
+/// yet) and a bake asked for are queued at once.
 #[derive(Resource)]
 pub struct RoomBake {
     auto: bool,
@@ -69,6 +73,16 @@ pub struct RoomBake {
     seen: HashMap<Entity, (Volume, VolumeOrder)>,
     /// Bumped whenever `seen` is replaced or cleared, so an idle frame can skip comparing it.
     seen_version: u64,
+    /// When a volume last changed, while that change waits to be queued. Rewritten on every
+    /// change, so a map being edited keeps waiting.
+    last_stale: Option<f32>,
+    /// The volumes as they stood at `last_stale`. A volume re-inserted unchanged is not a change.
+    observed: HashMap<Entity, (Volume, VolumeOrder)>,
+    /// When a volume last changed, kept after it is queued, so a bake that reads the rooms can
+    /// count its own wait from the edit rather than from the rebuild.
+    last_edit: f32,
+    /// Queue what changed without waiting for it to settle.
+    asked: bool,
     material: Option<Handle<StandardMaterial>>,
 }
 
@@ -81,6 +95,10 @@ impl Default for RoomBake {
             stale: false,
             seen: HashMap::new(),
             seen_version: 0,
+            last_stale: None,
+            observed: HashMap::new(),
+            last_edit: 0.0,
+            asked: false,
             material: None,
         }
     }
@@ -93,7 +111,12 @@ impl RoomBake {
 
     /// Nothing waiting: every room's mesh is of the room as it stands.
     pub fn is_settled(&self) -> bool {
-        self.queue.is_empty()
+        self.queue.is_empty() && self.last_stale.is_none()
+    }
+
+    /// When a volume last changed, in real seconds.
+    pub fn last_edit(&self) -> f32 {
+        self.last_edit
     }
 
     pub fn set_auto(&mut self, auto: bool) {
@@ -101,6 +124,9 @@ impl RoomBake {
             // Rooms changed while it was off; every room reads as new.
             self.seen.clear();
             self.seen_version += 1;
+        }
+        if !auto {
+            self.last_stale = None;
         }
         self.auto = auto;
     }
@@ -110,6 +136,8 @@ impl RoomBake {
         // The queue only drains with auto-bake on; switched off partway, what is left is stale.
         let state = if self.auto && !self.queue.is_empty() {
             BakeState::Baking
+        } else if self.auto && self.last_stale.is_some() {
+            BakeState::Waiting
         } else if self.stale || !self.queue.is_empty() {
             BakeState::Stale
         } else {
@@ -153,6 +181,18 @@ impl RoomBake {
     }
 }
 
+/// Whether `seen` is every volume as it stands now.
+fn matches(seen: &HashMap<Entity, (Volume, VolumeOrder)>, volumes: &MapVolumes) -> bool {
+    seen.len() == volumes.entities().count()
+        && volumes.each().all(|(entity, shape, fill, order)| {
+            seen.get(&entity).is_some_and(|(seen, seen_order)| seen.fill == fill && seen.shape == *shape && seen_order == order)
+        })
+}
+
+fn snapshot(volumes: &MapVolumes) -> HashMap<Entity, (Volume, VolumeOrder)> {
+    volumes.placed().into_iter().map(|(order, volume, entity)| (entity, (volume, order))).collect()
+}
+
 /// Inclusive, because a shared wall is an opening too. Engulfing counts,
 /// which `clip_rect` would reject: a few spare rebakes, never a missed one.
 fn touches(a: &Volume, b: &Volume) -> bool {
@@ -194,18 +234,21 @@ impl BakePlugin {
         commands
     }
 
+    /// With auto-bake on the load-in covers it, and the request would only let an edit skip the
+    /// wait for the map to settle.
     fn post_startup(
         frames: Res<FrameCount>,
+        bake: Res<RoomBake>,
         mut room_events: MessageWriter<CalculateRoomGeometry>,
     ) {
-        if frames.0 == 5 {
+        if frames.0 == 5 && !bake.auto {
             room_events.write(CalculateRoomGeometry);
         }
     }
 
-    /// A request for everything at once. With auto-bake on it is already
-    /// covered, and honoring it would stall the frame the budget exists to
-    /// protect.
+    /// A request for everything at once. With auto-bake on it only skips the
+    /// wait for the map to settle: rebuilding everything this frame would stall
+    /// the frame the budget exists to protect.
     fn bake_room_geometry(
         mut events: MessageReader<CalculateRoomGeometry>,
         mut bake: ResMut<RoomBake>,
@@ -217,7 +260,10 @@ impl BakePlugin {
     ) {
         if events.read().next().is_none() { return; }
         events.clear();
-        if bake.auto { return; }
+        if bake.auto {
+            bake.asked = true;
+            return;
+        }
 
         bake_rooms(&mut bake, &rooms, &existing_bakes, &mut commands, &mut meshes, &mut materials);
     }
@@ -235,6 +281,7 @@ impl BakePlugin {
         mut removed_rooms: RemovedComponents<Room>,
         mut removed_blocks: RemovedComponents<Block>,
         mut removed_orders: RemovedComponents<VolumeOrder>,
+        time: Res<Time<Real>>,
         // The last answer and the `seen_version` it was against.
         mut known: Local<Option<(u64, bool)>>,
     ) {
@@ -244,10 +291,7 @@ impl BakePlugin {
         let unchanged = match *known {
             Some((version, unchanged)) if !touched && version == bake.seen_version => unchanged,
             _ => {
-                let unchanged = bake.seen.len() == volumes.entities().count()
-                    && volumes.each().all(|(entity, shape, fill, order)| {
-                        bake.seen.get(&entity).is_some_and(|(seen, seen_order)| seen.fill == fill && seen.shape == *shape && seen_order == order)
-                    });
+                let unchanged = matches(&bake.seen, &volumes);
                 *known = Some((bake.seen_version, unchanged));
                 unchanged
             }
@@ -256,6 +300,7 @@ impl BakePlugin {
             if bake.stale != !unchanged {
                 bake.stale = !unchanged;
             }
+            bake.asked = false;
             return;
         }
         if bake.stale {
@@ -271,8 +316,47 @@ impl BakePlugin {
             }
         }
 
-        if unchanged && bake.queue.is_empty() { return; }
+        let now = time.elapsed_secs();
+        let due = if unchanged {
+            // A request with nothing to bake is answered, not kept for the next edit.
+            bake.last_stale = None;
+            bake.asked = false;
+            false
+        } else {
+            if bake.last_stale.is_none() || (touched && !matches(&bake.observed, &volumes)) {
+                bake.last_stale = Some(now);
+                bake.last_edit = now;
+                bake.observed = snapshot(&volumes);
+            }
+            let settled = bake.last_stale.is_some_and(|since| now - since >= SETTLE_SECONDS);
+            bake.seen.is_empty() || bake.asked || settled
+        };
+        if due {
+            bake.last_stale = None;
+            bake.observed.clear();
+            bake.asked = false;
+            Self::queue_changes(&mut bake, &volumes);
+        }
 
+        if bake.queue.is_empty() { return; }
+        let placed = volumes.placed();
+        let material = bake.material(&mut materials);
+        let existing: HashMap<Entity, Entity> = bakes.iter().map(|(bake, baked)| (baked.room, bake)).collect();
+        let (entities, volumes): (Vec<Entity>, Vec<Volume>) = placed.into_iter().map(|(_, volume, entity)| (entity, volume)).unzip();
+        let mut done = 0;
+        while done < ROOMS_PER_FRAME {
+            let Some(entity) = bake.queue.pop_front() else { break };
+            // A volume deleted since it was queued still counts as done.
+            bake.batch_done += 1;
+            let Some(index) = entities.iter().position(|e| *e == entity) else { continue };
+            bake_one(index, &entities, &volumes, existing.get(&entity).copied(), &material, &mut commands, &mut meshes);
+            done += 1;
+        }
+    }
+
+    /// Queue every volume that changed since `seen`, with whatever touched it before and touches
+    /// it now, ahead of the rest of the queue.
+    fn queue_changes(bake: &mut RoomBake, volumes: &MapVolumes) {
         let placed = volumes.placed();
         let touching = |b: &Volume| placed.iter().filter(|(_, v, _)| touches(v, b)).map(|(_, _, e)| *e).collect::<Vec<_>>();
         let mut urgent = Vec::new();
@@ -300,20 +384,6 @@ impl BakePlugin {
             bake.jump_the_queue(urgent);
             bake.seen = placed.iter().map(|(order, volume, entity)| (*entity, (volume.clone(), order.clone()))).collect();
             bake.seen_version += 1;
-        }
-
-        if bake.queue.is_empty() { return; }
-        let material = bake.material(&mut materials);
-        let existing: HashMap<Entity, Entity> = bakes.iter().map(|(bake, baked)| (baked.room, bake)).collect();
-        let (entities, volumes): (Vec<Entity>, Vec<Volume>) = placed.into_iter().map(|(_, volume, entity)| (entity, volume)).unzip();
-        let mut done = 0;
-        while done < ROOMS_PER_FRAME {
-            let Some(entity) = bake.queue.pop_front() else { break };
-            // A volume deleted since it was queued still counts as done.
-            bake.batch_done += 1;
-            let Some(index) = entities.iter().position(|e| *e == entity) else { continue };
-            bake_one(index, &entities, &volumes, existing.get(&entity).copied(), &material, &mut commands, &mut meshes);
-            done += 1;
         }
     }
 
@@ -349,6 +419,7 @@ impl BakePlugin {
 
         bake.queue.clear();
         bake.batch_done = 0;
+        bake.last_stale = None;
         bake.seen.clear();
         bake.seen_version += 1;
         let count = existing_bakes.iter().count();
@@ -405,6 +476,8 @@ fn bake_rooms(
     bake.queue.clear();
     bake.batch_done = placed.len();
     bake.stale = false;
+    bake.last_stale = None;
+    bake.asked = false;
     bake.seen = placed.iter().map(|(order, volume, entity)| (*entity, (volume.clone(), order.clone()))).collect();
     bake.seen_version += 1;
     let (entities, volumes): (Vec<Entity>, Vec<Volume>) = placed.into_iter().map(|(_, volume, entity)| (entity, volume)).unzip();
@@ -477,6 +550,8 @@ pub struct RoomSlotMesh {
 mod tests {
     use super::*;
     use crate::game::GamePlugin;
+    use bevy::time::TimeUpdateStrategy;
+    use std::time::Duration;
 
     /// A headless app with nothing in it, enough to swap into Play.
     fn headless() -> App {
@@ -493,7 +568,18 @@ mod tests {
         app.init_asset::<StandardMaterial>();
         app.add_plugins(GamePlugin);
         app.add_plugins(BakePlugin);
+        app.insert_resource(TimeUpdateStrategy::ManualDuration(FRAME));
         app
+    }
+
+    /// How much real time an update takes in these tests.
+    const FRAME: Duration = Duration::from_millis(100);
+
+    /// One update that takes `seconds`.
+    fn advance(app: &mut App, seconds: f32) {
+        app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f32(seconds)));
+        app.update();
+        app.insert_resource(TimeUpdateStrategy::ManualDuration(FRAME));
     }
 
     /// Auto-bake off, so only the round bakes.
@@ -527,7 +613,7 @@ mod tests {
     fn settle(app: &mut App) {
         for _ in 0..64 {
             app.update();
-            if app.world().resource::<RoomBake>().queue.is_empty() {
+            if app.world().resource::<RoomBake>().is_settled() {
                 app.update();
                 return;
             }
@@ -686,9 +772,44 @@ mod tests {
 
         *app.world_mut().get_mut::<Room>(edited).unwrap() = cube_at(-5.0);
         app.update();
+        advance(&mut app, SETTLE_SECONDS);
 
         assert_ne!(before[&edited], meshes(&mut app)[&edited], "the edit waited behind the load-in");
         assert!(!app.world().resource::<RoomBake>().queue.is_empty(), "the load-in finished, so this proved nothing");
+    }
+
+    /// Breaks if a room is rebuilt while it is still being dragged: every frame of a drag would
+    /// be a bake of the rooms it touches.
+    #[test]
+    fn an_edit_waits_until_the_map_has_been_still_for_a_while() {
+        let mut app = headless();
+        let dragged = app.world_mut().spawn(cube_at(0.0)).id();
+        settle(&mut app);
+        let before = meshes(&mut app)[&dragged];
+
+        let frames = (2.0 * SETTLE_SECONDS / FRAME.as_secs_f32()) as usize;
+        for i in 0..frames {
+            *app.world_mut().get_mut::<Room>(dragged).unwrap() = cube_at((i + 1) as f32 * 0.1);
+            app.update();
+            assert_eq!(meshes(&mut app)[&dragged], before, "rebaked {i} frames into the drag");
+            assert_eq!(rooms_status(&app).state, BakeState::Waiting);
+        }
+        advance(&mut app, SETTLE_SECONDS * 0.5);
+        assert_eq!(meshes(&mut app)[&dragged], before, "rebaked before the map had been still long enough");
+        advance(&mut app, SETTLE_SECONDS * 0.5);
+        assert_ne!(meshes(&mut app)[&dragged], before, "never rebaked once the drag stopped");
+    }
+
+    #[test]
+    fn asking_for_a_bake_skips_the_wait() {
+        let mut app = headless();
+        let moved = app.world_mut().spawn(cube_at(0.0)).id();
+        settle(&mut app);
+        let before = meshes(&mut app)[&moved];
+        *app.world_mut().get_mut::<Room>(moved).unwrap() = cube_at(3.0);
+        app.world_mut().write_message(CalculateRoomGeometry);
+        app.update();
+        assert_ne!(meshes(&mut app)[&moved], before, "a bake asked for waited for the map to settle");
     }
 
     #[test]

@@ -11,10 +11,10 @@ use bevy_egui::{egui, EguiContexts, EguiPrimaryContextPass};
 
 use crate::common::app_mode::AppMode;
 use crate::common::net::NetRole;
+use crate::common::round_settings::RoundSettings;
 use crate::get;
 use crate::tool::bake_job::{BakeKind, BakeProgress, BakeState};
 use crate::tool::bake_progress;
-use crate::tool::bakes::RoomBake;
 use crate::tool::nav_bake::BakeNav;
 use crate::tool::room::CalculateRoomGeometry;
 use crate::tool::sun_bake::BakeSunlight;
@@ -22,6 +22,12 @@ use crate::tool::sun_bake::BakeSunlight;
 /// What `OnEnter(AppMode::Play)` would otherwise bake while the frame waits. Sightlines are left
 /// out: a round never waits for them.
 const WAITED_FOR: [BakeKind; 3] = [BakeKind::Rooms, BakeKind::Sunlight, BakeKind::Nav];
+
+/// What a round waits for: the nav graph only while bots may play.
+fn waited_for(settings: Option<&RoundSettings>) -> impl Iterator<Item = BakeKind> {
+    let bots = RoundSettings::wants_bots(settings);
+    WAITED_FOR.into_iter().filter(move |kind| bots || *kind != BakeKind::Nav)
+}
 
 const WINDOW_WIDTH: f32 = 360.0;
 
@@ -39,8 +45,8 @@ impl RoundPrep {
     }
 }
 
-fn ready(progress: &BakeProgress) -> bool {
-    WAITED_FOR.iter().all(|kind| progress.get(*kind).is_none_or(|status| status.state == BakeState::UpToDate))
+fn ready(progress: &BakeProgress, settings: Option<&RoundSettings>) -> bool {
+    waited_for(settings).all(|kind| progress.get(kind).is_none_or(|status| status.state == BakeState::UpToDate))
 }
 
 fn asked_to_play(next: &NextState<AppMode>) -> bool {
@@ -56,32 +62,34 @@ fn hold_the_round_for_its_bakes(
     mut prep: ResMut<RoundPrep>,
     progress: Res<BakeProgress>,
     frame: Res<FrameCount>,
-    rooms: Res<RoomBake>,
     mut bake_rooms: MessageWriter<CalculateRoomGeometry>,
     mut bake_sunlight: MessageWriter<BakeSunlight>,
     mut bake_nav: MessageWriter<BakeNav>,
+    settings: Option<Res<RoundSettings>>,
 ) {
+    let settings = settings.as_deref();
     if *mode.get() == AppMode::Play || !role.is_none_or(|role| role.is_authority()) {
         prep.since = None;
         return;
     }
     match prep.since {
-        None if asked_to_play(&next) && !ready(&progress) => {
+        None if asked_to_play(&next) && !ready(&progress, settings) => {
             next.reset();
             prep.since = Some(frame.0);
-            // With auto-bake on the rooms bake themselves; the sun waits for them either way.
-            if !rooms.auto() {
-                bake_rooms.write(CalculateRoomGeometry);
-            }
+            // With auto-bake on this only skips the wait for the map to settle; the sun waits for
+            // the rooms either way.
+            bake_rooms.write(CalculateRoomGeometry);
             bake_sunlight.write(BakeSunlight);
-            bake_nav.write(BakeNav);
+            if RoundSettings::wants_bots(settings) {
+                bake_nav.write(BakeNav);
+            }
         }
         Some(since) => {
             // Asked again while waiting: it is the same round.
             if asked_to_play(&next) {
                 next.reset();
             }
-            if frame.0 > since + 1 && ready(&progress) {
+            if frame.0 > since + 1 && ready(&progress, settings) {
                 prep.since = None;
                 next.set(AppMode::Play);
             }
@@ -90,7 +98,13 @@ fn hold_the_round_for_its_bakes(
     }
 }
 
-fn show_the_wait(mut contexts: EguiContexts, mut prep: ResMut<RoundPrep>, progress: Res<BakeProgress>, actions: Res<crate::common::keybind::Actions>) {
+fn show_the_wait(
+    mut contexts: EguiContexts,
+    mut prep: ResMut<RoundPrep>,
+    progress: Res<BakeProgress>,
+    actions: Res<crate::common::keybind::Actions>,
+    settings: Option<Res<RoundSettings>>,
+) {
     if !prep.is_waiting() {
         return;
     }
@@ -100,7 +114,7 @@ fn show_the_wait(mut contexts: EguiContexts, mut prep: ResMut<RoundPrep>, progre
         ui.set_width(WINDOW_WIDTH);
         ui.heading(get!("round_prep.title"));
         ui.add_space(4.0);
-        for kind in WAITED_FOR {
+        for kind in waited_for(settings.as_deref()) {
             let Some(status) = progress.get(kind) else { continue };
             ui.horizontal(|ui| {
                 ui.label(bake_progress::kind_name(kind));
@@ -153,7 +167,6 @@ mod tests {
         app.add_plugins((MinimalPlugins, bevy::state::app::StatesPlugin));
         app.init_state::<AppMode>();
         app.init_resource::<BakeProgress>();
-        app.init_resource::<RoomBake>();
         app.add_message::<CalculateRoomGeometry>();
         app.add_message::<BakeSunlight>();
         app.add_message::<BakeNav>();
@@ -199,5 +212,17 @@ mod tests {
         app.update();
         assert_eq!(mode(&app), AppMode::Play, "the bakes landed and the round never started");
         assert!(!app.world().resource::<RoundPrep>().is_waiting());
+    }
+
+    /// Breaks if a round without bots waits for, or asks for, a nav graph nothing will read.
+    #[test]
+    fn a_round_without_bots_does_not_wait_for_the_nav_graph() {
+        let mut app = app();
+        app.insert_resource(RoundSettings { bots_enabled: false, ..default() });
+        set(&mut app, BakeKind::Nav, BakeState::Stale);
+        app.world_mut().resource_mut::<NextState<AppMode>>().set(AppMode::Play);
+        app.update();
+        assert_eq!(mode(&app), AppMode::Play, "a round without bots was held for the nav graph");
+        assert!(app.world().resource::<Messages<BakeNav>>().is_empty(), "the nav graph was asked to bake");
     }
 }

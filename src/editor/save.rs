@@ -292,6 +292,8 @@ mod tests {
             footprint.add_line(from, to);
         }
         footprint.resolve_references(timeline.features_map());
+        assert!(footprint.rebase_on_own(&format!("corner#{}", c.0), "origin"), "a corner could not be measured from the origin");
+        footprint.resolve_references(timeline.features_map());
         assert!(footprint.name_region_at(bevy::math::Vec2::new(5.0, 3.0)), "the triangle encloses nothing there");
         timeline.apply_feature(Box::new(footprint));
         timeline
