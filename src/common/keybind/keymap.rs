@@ -41,6 +41,7 @@ fn defaults(action: Action) -> Vec<Chord> {
     match action {
         Action::ToggleMode => vec![key(K::F5)],
         Action::Settings => vec![command(K::Comma)],
+        Action::Screenshot => vec![key(K::F12)],
         Action::PerfOverlay => vec![key(K::F3)],
         Action::ShowHitboxes => vec![key(K::F4)],
         Action::ShowBones => vec![key(K::F6)],

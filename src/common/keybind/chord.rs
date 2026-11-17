@@ -111,6 +111,21 @@ impl Chord {
         }
     }
 
+    /// A function key or a mouse button, which a text field ignores. Ctrl and
+    /// Alt chords are text commands and characters there.
+    pub fn types_nothing(self) -> bool {
+        use KeyCode as K;
+        match self.input {
+            Input::Mouse(_) => true,
+            Input::Key(key) => matches!(
+                key,
+                K::F1 | K::F2 | K::F3 | K::F4 | K::F5 | K::F6 | K::F7 | K::F8 | K::F9 | K::F10 | K::F11 | K::F12
+                    | K::F13 | K::F14 | K::F15 | K::F16 | K::F17 | K::F18 | K::F19 | K::F20 | K::F21 | K::F22
+                    | K::F23 | K::F24
+            ),
+        }
+    }
+
     /// Escape and Enter belong to [`super::Action::FIXED`], with any modifiers.
     pub fn is_reserved(self) -> bool {
         matches!(self.input, Input::Key(KeyCode::Escape | KeyCode::Enter | KeyCode::NumpadEnter))

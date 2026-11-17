@@ -3,7 +3,7 @@
 //! and Close with changes asks first.
 //!
 //! A floating window, because every mode opens it and the dock belongs to the
-//! map editor. While it is open no action fires ([`Quiet`]).
+//! map editor. While it is open no action fires but a screenshot ([`Quiet`]).
 
 use bevy::input::keyboard::KeyboardInput;
 use bevy::input::InputSystems;
@@ -554,7 +554,7 @@ fn draw_settings(
 ) {
     let Ok(ctx) = contexts.ctx_mut() else {
         // No window can be drawn, so nothing may stay quiet for it.
-        quiet.set_if_neq(Quiet(false));
+        quiet.set_if_neq(Quiet::Off);
         return;
     };
     if keymap.is_changed() || !*published {
@@ -594,7 +594,11 @@ fn draw_settings(
         }
     }
     window.typing = ctx.text_edit_focused();
-    quiet.set_if_neq(Quiet(window.is_open()));
+    quiet.set_if_neq(match (window.is_open(), window.sheet.is_capturing()) {
+        (false, _) => Quiet::Off,
+        (true, false) => Quiet::Window,
+        (true, true) => Quiet::Binding,
+    });
 }
 
 #[cfg(test)]
