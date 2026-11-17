@@ -1,0 +1,825 @@
+TextureGraphFile(
+    format_version: 3,
+    metadata: FileMetadata(
+        name: "desert_sand",
+        description: None,
+        authors: [],
+        modified: "",
+        written_by: "grackle 0.1.0",
+    ),
+    graph: Graph(
+        layers: [
+            Layer(
+                id: 2,
+                name: "zero",
+                kind: Color(Oklch(
+                    l: 0.0,
+                    chroma: 0.0,
+                    hue: OklabHue(0.0),
+                    alpha: 1.0,
+                )),
+            ),
+            Layer(
+                id: 3,
+                name: "hummocks",
+                kind: Noise(Noise(
+                    dims: D2,
+                    seed_offset: 245,
+                    frequency: 8.0,
+                    range: Unsigned,
+                    output: Grayscale,
+                    kernel: Value,
+                    period: (8, 8, 0),
+                    fractal: Fractal(
+                        octaves: 4,
+                        lacunarity: 2.0,
+                        gain: 0.5,
+                        mode: Standard,
+                        normalize: true,
+                    ),
+                )),
+            ),
+            Layer(
+                id: 4,
+                name: "ripple ramp",
+                kind: ColorRamp(ColorRamp(
+                    stops: [
+                        ColorStop(
+                            t: 0.3,
+                            color: Const(Oklch(
+                                l: 0.0,
+                                chroma: 0.0,
+                                hue: OklabHue(0.0),
+                                alpha: 1.0,
+                            )),
+                        ),
+                        ColorStop(
+                            t: 0.7,
+                            color: Const(Oklch(
+                                l: 1.0,
+                                chroma: 0.0,
+                                hue: OklabHue(0.0),
+                                alpha: 1.0,
+                            )),
+                        ),
+                    ],
+                    space: Oklch,
+                )),
+            ),
+            Layer(
+                id: 5,
+                name: "ripple",
+                kind: Map(Map(
+                    value: Some(3),
+                    palette: Some(4),
+                )),
+            ),
+            Layer(
+                id: 6,
+                name: "strength noise",
+                kind: Noise(Noise(
+                    dims: D2,
+                    seed_offset: 242,
+                    frequency: 2.0,
+                    range: Unsigned,
+                    output: Grayscale,
+                    kernel: Value,
+                    period: (2, 2, 0),
+                    fractal: Fractal(
+                        octaves: 3,
+                        lacunarity: 2.0,
+                        gain: 0.5,
+                        mode: Standard,
+                        normalize: true,
+                    ),
+                )),
+            ),
+            Layer(
+                id: 7,
+                name: "strength ramp",
+                kind: ColorRamp(ColorRamp(
+                    stops: [
+                        ColorStop(
+                            t: 0.3,
+                            color: Const(Oklch(
+                                l: 0.0,
+                                chroma: 0.0,
+                                hue: OklabHue(0.0),
+                                alpha: 1.0,
+                            )),
+                        ),
+                        ColorStop(
+                            t: 0.65,
+                            color: Const(Oklch(
+                                l: 1.0,
+                                chroma: 0.0,
+                                hue: OklabHue(0.0),
+                                alpha: 1.0,
+                            )),
+                        ),
+                    ],
+                    space: Oklch,
+                )),
+            ),
+            Layer(
+                id: 8,
+                name: "strength",
+                kind: Map(Map(
+                    value: Some(6),
+                    palette: Some(7),
+                )),
+            ),
+            Layer(
+                id: 9,
+                name: "relief",
+                kind: Mix(Mix(
+                    a: Some(2),
+                    b: Some(5),
+                    mode: Blend,
+                    factor: Layer(8),
+                    space: Oklch,
+                )),
+            ),
+            Layer(
+                id: 10,
+                name: "drift",
+                kind: Noise(Noise(
+                    dims: D2,
+                    seed_offset: 243,
+                    frequency: 2.0,
+                    range: Unsigned,
+                    output: Grayscale,
+                    kernel: Value,
+                    period: (2, 2, 0),
+                    fractal: Fractal(
+                        octaves: 4,
+                        lacunarity: 2.0,
+                        gain: 0.5,
+                        mode: Standard,
+                        normalize: true,
+                    ),
+                )),
+            ),
+            Layer(
+                id: 11,
+                name: "base ramp",
+                kind: ColorRamp(ColorRamp(
+                    stops: [
+                        ColorStop(
+                            t: 0.25,
+                            color: Const(Oklch(
+                                l: 0.7525,
+                                chroma: 0.061249997,
+                                hue: OklabHue(72.0),
+                                alpha: 1.0,
+                            )),
+                        ),
+                        ColorStop(
+                            t: 0.75,
+                            color: Const(Oklch(
+                                l: 0.78749996,
+                                chroma: 0.05875,
+                                hue: OklabHue(82.0),
+                                alpha: 1.0,
+                            )),
+                        ),
+                    ],
+                    space: Oklch,
+                )),
+            ),
+            Layer(
+                id: 12,
+                name: "base",
+                kind: Map(Map(
+                    value: Some(10),
+                    palette: Some(11),
+                )),
+            ),
+            Layer(
+                id: 13,
+                name: "crest share ramp",
+                kind: ColorRamp(ColorRamp(
+                    stops: [
+                        ColorStop(
+                            t: 0.0,
+                            color: Const(Oklch(
+                                l: 0.0,
+                                chroma: 0.0,
+                                hue: OklabHue(0.0),
+                                alpha: 1.0,
+                            )),
+                        ),
+                        ColorStop(
+                            t: 1.0,
+                            color: Const(Oklch(
+                                l: 0.35,
+                                chroma: 0.0,
+                                hue: OklabHue(0.0),
+                                alpha: 1.0,
+                            )),
+                        ),
+                    ],
+                    space: Oklch,
+                )),
+            ),
+            Layer(
+                id: 14,
+                name: "crest share",
+                kind: Map(Map(
+                    value: Some(9),
+                    palette: Some(13),
+                )),
+            ),
+            Layer(
+                id: 15,
+                name: "crest",
+                kind: Color(Oklch(
+                    l: 0.84,
+                    chroma: 0.05,
+                    hue: OklabHue(82.0),
+                    alpha: 1.0,
+                )),
+            ),
+            Layer(
+                id: 16,
+                name: "crested",
+                kind: Mix(Mix(
+                    a: Some(12),
+                    b: Some(15),
+                    mode: Blend,
+                    factor: Layer(14),
+                    space: Oklch,
+                )),
+            ),
+            Layer(
+                id: 17,
+                name: "trough ramp",
+                kind: ColorRamp(ColorRamp(
+                    stops: [
+                        ColorStop(
+                            t: 0.12,
+                            color: Const(Oklch(
+                                l: 0.0,
+                                chroma: 0.0,
+                                hue: OklabHue(0.0),
+                                alpha: 1.0,
+                            )),
+                        ),
+                        ColorStop(
+                            t: 0.0,
+                            color: Const(Oklch(
+                                l: 1.0,
+                                chroma: 0.0,
+                                hue: OklabHue(0.0),
+                                alpha: 1.0,
+                            )),
+                        ),
+                    ],
+                    space: Oklch,
+                )),
+            ),
+            Layer(
+                id: 18,
+                name: "trough",
+                kind: Map(Map(
+                    value: Some(9),
+                    palette: Some(17),
+                )),
+            ),
+            Layer(
+                id: 19,
+                name: "trough strength",
+                kind: Mix(Mix(
+                    a: Some(2),
+                    b: Some(18),
+                    mode: Blend,
+                    factor: Layer(8),
+                    space: Oklch,
+                )),
+            ),
+            Layer(
+                id: 20,
+                name: "grain",
+                kind: Noise(Noise(
+                    dims: D2,
+                    seed_offset: 244,
+                    frequency: 128.0,
+                    range: Unsigned,
+                    output: Grayscale,
+                    kernel: Value,
+                    period: (128, 128, 0),
+                    fractal: Fractal(
+                        octaves: 2,
+                        lacunarity: 2.0,
+                        gain: 0.5,
+                        mode: Standard,
+                        normalize: true,
+                    ),
+                )),
+            ),
+            Layer(
+                id: 21,
+                name: "heavy ramp",
+                kind: ColorRamp(ColorRamp(
+                    stops: [
+                        ColorStop(
+                            t: 0.3,
+                            color: Const(Oklch(
+                                l: 0.0,
+                                chroma: 0.0,
+                                hue: OklabHue(0.0),
+                                alpha: 1.0,
+                            )),
+                        ),
+                        ColorStop(
+                            t: 0.22,
+                            color: Const(Oklch(
+                                l: 1.0,
+                                chroma: 0.0,
+                                hue: OklabHue(0.0),
+                                alpha: 1.0,
+                            )),
+                        ),
+                    ],
+                    space: Oklch,
+                )),
+            ),
+            Layer(
+                id: 22,
+                name: "heavy",
+                kind: Map(Map(
+                    value: Some(20),
+                    palette: Some(21),
+                )),
+            ),
+            Layer(
+                id: 23,
+                name: "heavy together",
+                kind: Mix(Mix(
+                    a: Some(2),
+                    b: Some(22),
+                    mode: Blend,
+                    factor: Layer(19),
+                    space: Oklch,
+                )),
+            ),
+            Layer(
+                id: 24,
+                name: "heavy in troughs ramp",
+                kind: ColorRamp(ColorRamp(
+                    stops: [
+                        ColorStop(
+                            t: 0.0,
+                            color: Const(Oklch(
+                                l: 0.0,
+                                chroma: 0.0,
+                                hue: OklabHue(0.0),
+                                alpha: 1.0,
+                            )),
+                        ),
+                        ColorStop(
+                            t: 1.0,
+                            color: Const(Oklch(
+                                l: 0.5,
+                                chroma: 0.0,
+                                hue: OklabHue(0.0),
+                                alpha: 1.0,
+                            )),
+                        ),
+                    ],
+                    space: Oklch,
+                )),
+            ),
+            Layer(
+                id: 25,
+                name: "heavy in troughs",
+                kind: Map(Map(
+                    value: Some(23),
+                    palette: Some(24),
+                )),
+            ),
+            Layer(
+                id: 26,
+                name: "scattered ramp",
+                kind: ColorRamp(ColorRamp(
+                    stops: [
+                        ColorStop(
+                            t: 0.0,
+                            color: Const(Oklch(
+                                l: 0.0,
+                                chroma: 0.0,
+                                hue: OklabHue(0.0),
+                                alpha: 1.0,
+                            )),
+                        ),
+                        ColorStop(
+                            t: 1.0,
+                            color: Const(Oklch(
+                                l: 0.1,
+                                chroma: 0.0,
+                                hue: OklabHue(0.0),
+                                alpha: 1.0,
+                            )),
+                        ),
+                    ],
+                    space: Oklch,
+                )),
+            ),
+            Layer(
+                id: 27,
+                name: "scattered",
+                kind: Map(Map(
+                    value: Some(22),
+                    palette: Some(26),
+                )),
+            ),
+            Layer(
+                id: 28,
+                name: "heavy share",
+                kind: MinMax(MinMax(
+                    a: Some(25),
+                    b: Some(27),
+                    mode: Max,
+                    criterion: Luma,
+                )),
+            ),
+            Layer(
+                id: 29,
+                name: "magnetite",
+                kind: Color(Oklch(
+                    l: 0.55,
+                    chroma: 0.045,
+                    hue: OklabHue(60.0),
+                    alpha: 1.0,
+                )),
+            ),
+            Layer(
+                id: 30,
+                name: "speckled",
+                kind: Mix(Mix(
+                    a: Some(16),
+                    b: Some(29),
+                    mode: Blend,
+                    factor: Layer(28),
+                    space: Oklch,
+                )),
+            ),
+            Layer(
+                id: 31,
+                name: "sand ramp",
+                kind: ColorRamp(ColorRamp(
+                    stops: [
+                        ColorStop(
+                            t: 0.3,
+                            color: Const(Oklch(
+                                l: 0.725,
+                                chroma: 0.05875,
+                                hue: OklabHue(65.0),
+                                alpha: 1.0,
+                            )),
+                        ),
+                        ColorStop(
+                            t: 0.7,
+                            color: Const(Oklch(
+                                l: 0.79499996,
+                                chroma: 0.05125,
+                                hue: OklabHue(88.0),
+                                alpha: 1.0,
+                            )),
+                        ),
+                    ],
+                    space: Oklch,
+                )),
+            ),
+            Layer(
+                id: 32,
+                name: "sand",
+                kind: Map(Map(
+                    value: Some(20),
+                    palette: Some(31),
+                )),
+            ),
+            Layer(
+                id: 33,
+                name: "sand share",
+                kind: Color(Oklch(
+                    l: 0.35,
+                    chroma: 0.0,
+                    hue: OklabHue(0.0),
+                    alpha: 1.0,
+                )),
+            ),
+            Layer(
+                id: 34,
+                name: "color",
+                kind: Mix(Mix(
+                    a: Some(30),
+                    b: Some(32),
+                    mode: Blend,
+                    factor: Layer(33),
+                    space: Oklch,
+                )),
+            ),
+            Layer(
+                id: 35,
+                name: "roughness ramp",
+                kind: ColorRamp(ColorRamp(
+                    stops: [
+                        ColorStop(
+                            t: 0.0,
+                            color: Const(Oklch(
+                                l: 0.92,
+                                chroma: 0.0,
+                                hue: OklabHue(0.0),
+                                alpha: 1.0,
+                            )),
+                        ),
+                        ColorStop(
+                            t: 1.0,
+                            color: Const(Oklch(
+                                l: 0.98,
+                                chroma: 0.0,
+                                hue: OklabHue(0.0),
+                                alpha: 1.0,
+                            )),
+                        ),
+                    ],
+                    space: Oklch,
+                )),
+            ),
+            Layer(
+                id: 36,
+                name: "roughness",
+                kind: Map(Map(
+                    value: Some(20),
+                    palette: Some(35),
+                )),
+            ),
+            Layer(
+                id: 37,
+                name: "base height",
+                kind: Color(Oklch(
+                    l: 0.3,
+                    chroma: 0.0,
+                    hue: OklabHue(0.0),
+                    alpha: 1.0,
+                )),
+            ),
+            Layer(
+                id: 38,
+                name: "swell ramp",
+                kind: ColorRamp(ColorRamp(
+                    stops: [
+                        ColorStop(
+                            t: 0.0,
+                            color: Const(Oklch(
+                                l: 0.0,
+                                chroma: 0.0,
+                                hue: OklabHue(0.0),
+                                alpha: 1.0,
+                            )),
+                        ),
+                        ColorStop(
+                            t: 1.0,
+                            color: Const(Oklch(
+                                l: 0.15,
+                                chroma: 0.0,
+                                hue: OklabHue(0.0),
+                                alpha: 1.0,
+                            )),
+                        ),
+                    ],
+                    space: Oklch,
+                )),
+            ),
+            Layer(
+                id: 39,
+                name: "swell",
+                kind: Map(Map(
+                    value: Some(10),
+                    palette: Some(38),
+                )),
+            ),
+            Layer(
+                id: 40,
+                name: "dune",
+                kind: Mix(Mix(
+                    a: Some(37),
+                    b: Some(39),
+                    mode: Add,
+                    factor: Const(0.5),
+                    space: Oklch,
+                )),
+            ),
+            Layer(
+                id: 41,
+                name: "rippled ramp",
+                kind: ColorRamp(ColorRamp(
+                    stops: [
+                        ColorStop(
+                            t: 0.0,
+                            color: Const(Oklch(
+                                l: 0.0,
+                                chroma: 0.0,
+                                hue: OklabHue(0.0),
+                                alpha: 1.0,
+                            )),
+                        ),
+                        ColorStop(
+                            t: 1.0,
+                            color: Const(Oklch(
+                                l: 0.45,
+                                chroma: 0.0,
+                                hue: OklabHue(0.0),
+                                alpha: 1.0,
+                            )),
+                        ),
+                    ],
+                    space: Oklch,
+                )),
+            ),
+            Layer(
+                id: 42,
+                name: "rippled",
+                kind: Map(Map(
+                    value: Some(9),
+                    palette: Some(41),
+                )),
+            ),
+            Layer(
+                id: 43,
+                name: "combed",
+                kind: Mix(Mix(
+                    a: Some(40),
+                    b: Some(42),
+                    mode: Add,
+                    factor: Const(0.5),
+                    space: Oklch,
+                )),
+            ),
+            Layer(
+                id: 44,
+                name: "grit ramp",
+                kind: ColorRamp(ColorRamp(
+                    stops: [
+                        ColorStop(
+                            t: 0.0,
+                            color: Const(Oklch(
+                                l: 0.0,
+                                chroma: 0.0,
+                                hue: OklabHue(0.0),
+                                alpha: 1.0,
+                            )),
+                        ),
+                        ColorStop(
+                            t: 1.0,
+                            color: Const(Oklch(
+                                l: 0.03,
+                                chroma: 0.0,
+                                hue: OklabHue(0.0),
+                                alpha: 1.0,
+                            )),
+                        ),
+                    ],
+                    space: Oklch,
+                )),
+            ),
+            Layer(
+                id: 45,
+                name: "grit",
+                kind: Map(Map(
+                    value: Some(20),
+                    palette: Some(44),
+                )),
+            ),
+            Layer(
+                id: 46,
+                name: "height",
+                kind: Mix(Mix(
+                    a: Some(43),
+                    b: Some(45),
+                    mode: Add,
+                    factor: Const(0.5),
+                    space: Oklch,
+                )),
+            ),
+            Layer(
+                id: 47,
+                name: "normal",
+                kind: HeightToNormal(HeightToNormal(
+                    source: Some(46),
+                    strength: 0.008,
+                )),
+            ),
+        ],
+        list_order: [
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            25,
+            26,
+            27,
+            28,
+            29,
+            30,
+            31,
+            32,
+            33,
+            34,
+            35,
+            36,
+            37,
+            38,
+            39,
+            40,
+            41,
+            42,
+            43,
+            44,
+            45,
+            46,
+            47,
+        ],
+        canvases: {
+            "main": Canvas(
+                positions: {
+                    2: (0.0, 0.0),
+                    3: (0.0, 150.0),
+                    4: (0.0, 300.0),
+                    5: (260.0, 0.0),
+                    6: (0.0, 450.0),
+                    7: (0.0, 600.0),
+                    8: (260.0, 150.0),
+                    9: (520.0, 0.0),
+                    10: (0.0, 750.0),
+                    11: (0.0, 900.0),
+                    12: (260.0, 300.0),
+                    13: (0.0, 1050.0),
+                    14: (780.0, 0.0),
+                    15: (0.0, 1200.0),
+                    16: (1040.0, 0.0),
+                    17: (0.0, 1350.0),
+                    18: (780.0, 150.0),
+                    19: (1040.0, 150.0),
+                    20: (0.0, 1500.0),
+                    21: (0.0, 1650.0),
+                    22: (260.0, 450.0),
+                    23: (1300.0, 0.0),
+                    24: (0.0, 1800.0),
+                    25: (1560.0, 0.0),
+                    26: (0.0, 1950.0),
+                    27: (520.0, 150.0),
+                    28: (1820.0, 0.0),
+                    29: (0.0, 2100.0),
+                    30: (2080.0, 0.0),
+                    31: (0.0, 2250.0),
+                    32: (260.0, 600.0),
+                    33: (0.0, 2400.0),
+                    34: (2340.0, 0.0),
+                    35: (0.0, 2550.0),
+                    36: (260.0, 750.0),
+                    37: (0.0, 2700.0),
+                    38: (0.0, 2850.0),
+                    39: (260.0, 900.0),
+                    40: (520.0, 300.0),
+                    41: (0.0, 3000.0),
+                    42: (780.0, 300.0),
+                    43: (1040.0, 300.0),
+                    44: (0.0, 3150.0),
+                    45: (260.0, 1050.0),
+                    46: (1300.0, 150.0),
+                    47: (1560.0, 150.0),
+                },
+                output_pos: Some((2600.0, 0.0)),
+            ),
+        },
+        output: Output(
+            color: Some(34),
+            roughness: Layer(36),
+            metallic: Const(0.0),
+            normal: Some(47),
+        ),
+        params: {},
+        next_id: 48,
+    ),
+)
