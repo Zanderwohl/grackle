@@ -6,7 +6,7 @@ use std::collections::HashMap;
 
 use bevy::prelude::*;
 
-use crate::common::sunlight::{Daylight, LitSurface};
+use crate::common::sunlight::{Daylight, LitSurface, AIR_RAYS};
 
 /// Meters between samples. Ambient light is smooth and a body is a meter wide.
 pub const AIR_STEP: f32 = 2.0;
@@ -19,25 +19,11 @@ pub struct AirLight {
 
 impl AirLight {
     pub fn bake(rooms: &[(Vec3, Vec3)], surface: &LitSurface, light: &Daylight) -> AirLight {
-        let mut samples = HashMap::new();
-        for &(min, max) in rooms {
-            let (lo, hi) = (lattice(min).ceil().as_ivec3(), lattice(max).floor().as_ivec3());
-            for x in lo.x..=hi.x {
-                for y in lo.y..=hi.y {
-                    for z in lo.z..=hi.z {
-                        let cell = IVec3::new(x, y, z);
-                        if samples.contains_key(&cell) {
-                            continue;
-                        }
-                        let point = world(cell);
-                        if surface.encloses(point) {
-                            samples.insert(cell, Vec3::splat(light.base) + surface.ambient_in_air(point, light));
-                        }
-                    }
-                }
-            }
+        let mut bake = AirBake::plan(rooms);
+        while !bake.is_done() {
+            bake.step(surface, light);
         }
-        AirLight { samples }
+        bake.finish()
     }
 
     /// Trilinear over whichever of the eight samples round `point` exist; one inside a wall does not.
@@ -75,6 +61,66 @@ impl AirLight {
 }
 
 /// Lattice coordinates: sample `cell` is at `(cell + 0.5) * AIR_STEP`.
+/// [`AirLight::bake`] a few samples at a time, its lattice counted before any ray is cast.
+pub struct AirBake {
+    /// Each once, in the order the rooms list them.
+    cells: Vec<IVec3>,
+    next: usize,
+    samples: HashMap<IVec3, Vec3>,
+}
+
+impl AirBake {
+    /// Samples per step: a few milliseconds.
+    const STEP: usize = 16;
+
+    pub fn plan(rooms: &[(Vec3, Vec3)]) -> Self {
+        let mut seen = std::collections::HashSet::new();
+        let mut cells = Vec::new();
+        for &(min, max) in rooms {
+            let (lo, hi) = (lattice(min).ceil().as_ivec3(), lattice(max).floor().as_ivec3());
+            for x in lo.x..=hi.x {
+                for y in lo.y..=hi.y {
+                    for z in lo.z..=hi.z {
+                        let cell = IVec3::new(x, y, z);
+                        if seen.insert(cell) {
+                            cells.push(cell);
+                        }
+                    }
+                }
+            }
+        }
+        AirBake { cells, next: 0, samples: HashMap::new() }
+    }
+
+    /// The rays the bake casts across spheres, counting those a sample outside the map skips.
+    pub fn rays(&self) -> usize {
+        self.cells.len() * AIR_RAYS
+    }
+
+    pub fn cast(&self) -> usize {
+        self.next * AIR_RAYS
+    }
+
+    pub fn is_done(&self) -> bool {
+        self.next >= self.cells.len()
+    }
+
+    pub fn step(&mut self, surface: &LitSurface, light: &Daylight) {
+        let end = (self.next + Self::STEP).min(self.cells.len());
+        for &cell in &self.cells[self.next..end] {
+            let point = world(cell);
+            if surface.encloses(point) {
+                self.samples.insert(cell, Vec3::splat(light.base) + surface.ambient_in_air(point, light));
+            }
+        }
+        self.next = end;
+    }
+
+    pub fn finish(self) -> AirLight {
+        AirLight { samples: self.samples }
+    }
+}
+
 fn lattice(point: Vec3) -> Vec3 {
     point / AIR_STEP - 0.5
 }

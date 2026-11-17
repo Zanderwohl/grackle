@@ -9,7 +9,7 @@
 use bevy::prelude::*;
 
 use crate::common::sky::{Brightness, SkyTime};
-use crate::common::sunlight::{Daylight, LitSurface};
+use crate::common::sunlight::{Daylight, LitSurface, GATHER_RAYS, SUN_RAYS};
 use crate::common::world_surface::Face;
 
 /// Meters per lightmap texel.
@@ -216,83 +216,200 @@ impl Atlas {
         (chart.lattice(point) - chart.origin.as_vec2() + chart.at.as_vec2()) / self.size.as_vec2()
     }
 
-    /// Light per texel, row by row from the top of the atlas. `sky` is per face: a sky face is not
-    /// lightmapped, and its texels are left at the base.
-    ///
-    /// Only texels within [`REACH`] of a face are baked, each sampled on the nearest face of its
-    /// chart; the rest of a chart is never read and stays at the base.
+    /// Light per texel, row by row from the top of the atlas, baked in one go. See [`LightmapBake`].
     pub fn bake(&self, faces: &[Face], sky: &[bool], surface: &LitSurface, light: &Daylight) -> Vec<Vec3> {
-        let mut texels = vec![Vec3::splat(light.base); (self.size.x * self.size.y) as usize];
-        for chart in &self.charts {
-            let lit: Vec<usize> = chart.faces.iter().copied().filter(|&index| !sky[index]).collect();
-            if lit.is_empty() {
-                continue;
-            }
-            let normal = chart.normal;
-            let n_dot_l = normal.dot(light.toward).max(0.0);
-            let outlines: Vec<Vec<Vec2>> =
-                lit.iter().map(|&index| faces[index].vertices.iter().map(|p| chart.lattice(*p)).collect()).collect();
-            let sample_on = |k: usize, at: Vec2| on_plane(&faces[lit[k]], chart, inside(&outlines[k], at));
-            let nearest_face = |at: Vec2| {
-                (0..lit.len())
-                    .map(|k| (k, distance_to(&outlines[k], at)))
-                    .min_by(|a, b| a.1.total_cmp(&b.1))
-                    .map_or(0, |(k, _)| k)
-            };
+        let mut bake = LightmapBake::plan(self.clone(), faces, sky, light);
+        while !bake.is_done() {
+            bake.step(faces, surface, light);
+        }
+        bake.finish().1
+    }
+}
 
-            // Which face each texel is sampled on, if it is near enough one to be read.
-            let width = chart.size.x as usize;
-            let mut nearest: Vec<Option<(usize, f32)>> = vec![None; width * chart.size.y as usize];
-            for (k, outline) in outlines.iter().enumerate() {
-                let (lo, hi) = outline.iter().fold((Vec2::INFINITY, Vec2::NEG_INFINITY), |(lo, hi), p| (lo.min(*p), hi.max(*p)));
-                let lo = ((lo - REACH).floor().as_ivec2() - chart.origin).max(IVec2::ZERO);
-                let hi = ((hi + REACH).ceil().as_ivec2() - chart.origin).min(chart.size.as_ivec2() - 1);
-                for j in lo.y..=hi.y {
-                    for i in lo.x..=hi.x {
-                        let center = (chart.origin + IVec2::new(i, j)).as_vec2() + 0.5;
-                        let distance = distance_to(outline, center);
-                        let slot = &mut nearest[j as usize * width + i as usize];
-                        if distance <= REACH && slot.is_none_or(|(_, best)| distance < best) {
-                            *slot = Some((k, distance));
+/// A room's lightmap, planned before any ray is cast and baked a row of a chart at a time, so a
+/// bake can say how far through a room it is. `sky` is per face: a sky face is not lightmapped.
+///
+/// Only texels within [`REACH`] of a face are baked, each sampled on the nearest face of its
+/// chart; the rest of a chart is never read and stays at the base. Gather samples are taken only
+/// where a baked texel reads them.
+pub struct LightmapBake {
+    atlas: Atlas,
+    charts: Vec<ChartPlan>,
+    texels: Vec<Vec3>,
+    /// The chart and row baked next.
+    chart: usize,
+    row: u32,
+    /// The current chart's gather samples, as they are taken.
+    gathered: Vec<Option<Vec3>>,
+    rays: usize,
+    cast: usize,
+}
+
+struct ChartPlan {
+    /// Into the atlas's charts.
+    chart: usize,
+    /// Its faces that are not sky; `nearest` and `outlines` index this.
+    lit: Vec<usize>,
+    outlines: Vec<Vec<Vec2>>,
+    /// Which face each texel is sampled on, if it is near enough one to be read.
+    nearest: Vec<Option<u32>>,
+    n_dot_l: f32,
+    /// The gather lattice's first sample and width. Sample `k` sits at
+    /// `k * AMBIENT_STEP + AMBIENT_STEP / 2`, enough of them that every texel center has one either
+    /// side.
+    k_lo: IVec2,
+    columns: usize,
+    samples: usize,
+}
+
+impl LightmapBake {
+    pub fn plan(atlas: Atlas, faces: &[Face], sky: &[bool], light: &Daylight) -> Self {
+        let mut rays = 0;
+        let charts = atlas
+            .charts
+            .iter()
+            .enumerate()
+            .filter_map(|(index, chart)| {
+                let lit: Vec<usize> = chart.faces.iter().copied().filter(|&face| !sky[face]).collect();
+                if lit.is_empty() {
+                    return None;
+                }
+                let outlines: Vec<Vec<Vec2>> =
+                    lit.iter().map(|&face| faces[face].vertices.iter().map(|p| chart.lattice(*p)).collect()).collect();
+                let width = chart.size.x as usize;
+                let mut nearest: Vec<Option<(u32, f32)>> = vec![None; width * chart.size.y as usize];
+                for (k, outline) in outlines.iter().enumerate() {
+                    let (lo, hi) =
+                        outline.iter().fold((Vec2::INFINITY, Vec2::NEG_INFINITY), |(lo, hi), p| (lo.min(*p), hi.max(*p)));
+                    let lo = ((lo - REACH).floor().as_ivec2() - chart.origin).max(IVec2::ZERO);
+                    let hi = ((hi + REACH).ceil().as_ivec2() - chart.origin).min(chart.size.as_ivec2() - 1);
+                    for j in lo.y..=hi.y {
+                        for i in lo.x..=hi.x {
+                            let center = (chart.origin + IVec2::new(i, j)).as_vec2() + 0.5;
+                            let distance = distance_to(outline, center);
+                            let slot = &mut nearest[j as usize * width + i as usize];
+                            if distance <= REACH && slot.is_none_or(|(_, best)| distance < best) {
+                                *slot = Some((k as u32, distance));
+                            }
                         }
                     }
                 }
-            }
+                let nearest: Vec<Option<u32>> = nearest.into_iter().map(|slot| slot.map(|(k, _)| k)).collect();
 
-            // The gather grid: sample `k` sits at `k * AMBIENT_STEP + AMBIENT_STEP / 2`, enough
-            // of them that every texel center has one either side. Gathered only where a baked
-            // texel reads it.
-            let half = AMBIENT_STEP / 2.0;
-            let first = chart.origin.as_vec2() + 0.5;
-            let last = first + (chart.size.as_vec2() - 1.0);
-            let k_lo = ((first - half) / AMBIENT_STEP).floor().as_ivec2();
-            let k_hi = ((last - half) / AMBIENT_STEP).floor().as_ivec2() + 1;
-            let columns = (k_hi.x - k_lo.x + 1) as usize;
-            let mut gathered: Vec<Option<Vec3>> = vec![None; columns * (k_hi.y - k_lo.y + 1) as usize];
+                let half = AMBIENT_STEP / 2.0;
+                let first = chart.origin.as_vec2() + 0.5;
+                let last = first + (chart.size.as_vec2() - 1.0);
+                let k_lo = ((first - half) / AMBIENT_STEP).floor().as_ivec2();
+                let k_hi = ((last - half) / AMBIENT_STEP).floor().as_ivec2() + 1;
+                let columns = (k_hi.x - k_lo.x + 1) as usize;
+                let samples = columns * (k_hi.y - k_lo.y + 1) as usize;
+                let n_dot_l = chart.normal.dot(light.toward).max(0.0);
+
+                let mut wanted = vec![false; samples];
+                let mut baked = 0;
+                for (at, slot) in nearest.iter().enumerate() {
+                    if slot.is_none() {
+                        continue;
+                    }
+                    baked += 1;
+                    let center = chart.origin.as_vec2() + Vec2::new((at % width) as f32, (at / width) as f32) + 0.5;
+                    let (x, y) = gather_cell(center, k_lo);
+                    for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+                        wanted[(y + dy) * columns + x + dx] = true;
+                    }
+                }
+                let sun_rays = if n_dot_l > 0.0 { baked * SUN_RAYS } else { 0 };
+                rays += sun_rays + wanted.iter().filter(|w| **w).count() * GATHER_RAYS;
+                Some(ChartPlan { chart: index, lit, outlines, nearest, n_dot_l, k_lo, columns, samples })
+            })
+            .collect::<Vec<_>>();
+        let texels = vec![Vec3::splat(light.base); (atlas.size.x * atlas.size.y) as usize];
+        let gathered = vec![None; charts.first().map_or(0, |plan: &ChartPlan| plan.samples)];
+        LightmapBake { atlas, charts, texels, chart: 0, row: 0, gathered, rays, cast: 0 }
+    }
+
+    /// The rays the bake casts at the sun and across hemispheres, not counting the one ray from each
+    /// surface a gather ray meets that asks whether the sun is on it.
+    pub fn rays(&self) -> usize {
+        self.rays
+    }
+
+    /// Of [`Self::rays`], those cast so far.
+    pub fn cast(&self) -> usize {
+        self.cast
+    }
+
+    pub fn is_done(&self) -> bool {
+        self.chart >= self.charts.len()
+    }
+
+    /// Bakes the next row of a chart with anything on it to bake.
+    pub fn step(&mut self, faces: &[Face], surface: &LitSurface, light: &Daylight) {
+        while let Some(plan) = self.charts.get(self.chart) {
+            let chart = &self.atlas.charts[plan.chart];
+            if self.row >= chart.size.y {
+                self.chart += 1;
+                self.row = 0;
+                self.gathered = vec![None; self.charts.get(self.chart).map_or(0, |plan| plan.samples)];
+                continue;
+            }
+            let (j, width) = (self.row, chart.size.x as usize);
+            self.row += 1;
+            let row = &plan.nearest[j as usize * width..(j as usize + 1) * width];
+            if row.iter().all(Option::is_none) {
+                continue;
+            }
+            let sample_on = |k: usize, at: Vec2| on_plane(&faces[plan.lit[k]], chart, inside(&plan.outlines[k], at));
+            let nearest_face = |at: Vec2| {
+                (0..plan.lit.len())
+                    .map(|k| (k, distance_to(&plan.outlines[k], at)))
+                    .min_by(|a, b| a.1.total_cmp(&b.1))
+                    .map_or(0, |(k, _)| k)
+            };
+            let (gathered, cast) = (&mut self.gathered, &mut self.cast);
             let mut gather = |x: usize, y: usize| {
-                *gathered[y * columns + x].get_or_insert_with(|| {
-                    let at = (IVec2::new(x as i32, y as i32) + k_lo).as_vec2() * AMBIENT_STEP + half;
-                    surface.ambient(sample_on(nearest_face(at), at), normal, light)
+                *gathered[y * plan.columns + x].get_or_insert_with(|| {
+                    *cast += GATHER_RAYS;
+                    let at = (IVec2::new(x as i32, y as i32) + plan.k_lo).as_vec2() * AMBIENT_STEP + AMBIENT_STEP / 2.0;
+                    surface.ambient(sample_on(nearest_face(at), at), chart.normal, light)
                 })
             };
-
-            for j in 0..chart.size.y {
-                for i in 0..chart.size.x {
-                    let Some((k, _)) = nearest[j as usize * width + i as usize] else { continue };
-                    let center = chart.origin.as_vec2() + Vec2::new(i as f32, j as f32) + 0.5;
-                    let sun = if n_dot_l > 0.0 { surface.sun_reaching(sample_on(k, center), normal, light.toward) } else { 0.0 };
-                    let f = (center - half) / AMBIENT_STEP - k_lo.as_vec2();
-                    let (cell, t) = (f.floor(), f.fract());
-                    let (x, y) = (cell.x as usize, cell.y as usize);
-                    let low = gather(x, y).lerp(gather(x + 1, y), t.x);
-                    let high = gather(x, y + 1).lerp(gather(x + 1, y + 1), t.x);
-                    let at = (chart.at.y + j) * self.size.x + chart.at.x + i;
-                    texels[at as usize] = light.base + light.sun * n_dot_l * sun + low.lerp(high, t.y);
-                }
+            let mut sun_rays = 0;
+            for (i, slot) in row.iter().enumerate() {
+                let Some(k) = slot else { continue };
+                let center = chart.origin.as_vec2() + Vec2::new(i as f32, j as f32) + 0.5;
+                let sun = if plan.n_dot_l > 0.0 {
+                    sun_rays += SUN_RAYS;
+                    surface.sun_reaching(sample_on(*k as usize, center), chart.normal, light.toward)
+                } else {
+                    0.0
+                };
+                let (x, y) = gather_cell(center, plan.k_lo);
+                let t = gather_fraction(center, plan.k_lo);
+                let low = gather(x, y).lerp(gather(x + 1, y), t.x);
+                let high = gather(x, y + 1).lerp(gather(x + 1, y + 1), t.x);
+                let at = (chart.at.y + j) * self.atlas.size.x + chart.at.x + i as u32;
+                self.texels[at as usize] = light.base + light.sun * plan.n_dot_l * sun + low.lerp(high, t.y);
             }
+            self.cast += sun_rays;
+            return;
         }
-        texels
     }
+
+    pub fn finish(self) -> (Atlas, Vec<Vec3>) {
+        (self.atlas, self.texels)
+    }
+}
+
+/// The gather sample at or before `center` in each axis, from the lattice's first.
+fn gather_cell(center: Vec2, k_lo: IVec2) -> (usize, usize) {
+    let cell = ((center - AMBIENT_STEP / 2.0) / AMBIENT_STEP - k_lo.as_vec2()).floor();
+    (cell.x as usize, cell.y as usize)
+}
+
+/// How far `center` is from its [`gather_cell`] to the next, 0 to 1 in each axis.
+fn gather_fraction(center: Vec2, k_lo: IVec2) -> Vec2 {
+    ((center - AMBIENT_STEP / 2.0) / AMBIENT_STEP - k_lo.as_vec2()).fract()
 }
 
 impl Atlas {
@@ -436,6 +553,28 @@ mod tests {
         // The texel holding x = 3.3 in each.
         let column = |chart: &Chart| (3.3 / TEXEL).floor() as i32 - chart.origin.x;
         assert_eq!(world(&a, column(&a)), world(&b, column(&b)));
+    }
+
+    /// A room is baked over many steps, each casting some of its rays, and casts exactly the rays
+    /// its plan counted.
+    #[test]
+    fn a_room_casts_the_rays_it_planned_a_row_at_a_time() {
+        let rooms = courtyard();
+        let surface = LitSurface::build(&rooms, |room, slot| room == 0 && slot == RoomSlot::Ceiling);
+        let faces = room_share(&rooms, 0);
+        let sky: Vec<bool> = faces.iter().map(|f| RoomSlot::of(f.plane.normal) == RoomSlot::Ceiling).collect();
+        let light = day(50.0, 135.0);
+        let mut bake = LightmapBake::plan(Atlas::of(&faces), &faces, &sky, &light);
+        assert!(bake.rays() > 0);
+        let (mut steps, mut last) = (0, 0);
+        while !bake.is_done() {
+            bake.step(&faces, &surface, &light);
+            assert!(bake.cast() >= last && bake.cast() <= bake.rays(), "{} after {last}, of {}", bake.cast(), bake.rays());
+            last = bake.cast();
+            steps += 1;
+        }
+        assert_eq!(bake.cast(), bake.rays());
+        assert!(steps > faces.len(), "{steps} steps for {} faces", faces.len());
     }
 
     /// An L-shaped floor comes out of the kernel in several pieces, and they are one chart: a

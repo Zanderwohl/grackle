@@ -111,6 +111,15 @@ texels within 1.5 texels of a face are baked, each sampled on the nearest face,
 and a gather sample is taken only where a baked texel reads it; the rest of the
 chart is never read and stays at the base.
 
+**A bake is counted in rays before any is cast.** The first step builds the
+surface and plans every room (`LightmapBake::plan`): which texels it bakes and
+which gather samples they read, so its sun and gather rays are known exactly.
+The air is planned the same way (`AirBake`). Progress is those rays, plus one
+per item, and the panel names the room being baked with its rays cast of its
+rays planned. A step is one row of a chart, or 16 air samples, so a big room
+reports as it goes and a wasm chunk is not one room long. The one ray from each
+surface a gather ray meets, asking whether the sun is on it, is not counted.
+
 One atlas **per room**, packed from that room's faces. Each slot mesh of the
 room gets a `Lightmap` pointing at it, with `ATTRIBUTE_UV_1` into it.
 
