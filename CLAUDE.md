@@ -842,10 +842,10 @@ algorithm written out, and **a solid is a bag of convex polygons that happens
 to be closed**. Nothing checks either property and both matter: a plane cuts a
 convex polygon into exactly two pieces, which is the assumption the splitter
 is written on, and "inside" only means anything for a surface with no gaps.
-That is why every sweep in [`solid.rs`](src/prop/solid.rs) emits triangles or
-planar convex faces, why a revolve's side faces are triangles (the quad
-between two steps is flat, but one with a corner on the axis has two corners
-in one place), and why a cap is **ear-clipped
+That is why the one sweep, [`skin.rs`](src/prop/skin.rs), emits triangles or
+planar convex faces — a quad only where a step just moves the loop, so the
+quad is a parallelogram; two triangles wherever a step turns it, since a quad
+with a corner on a revolve's axis has two corners in one place — and why a cap is **ear-clipped
 rather than fanned** — a fan is right for a rectangle and silently wrong for
 anything with a notch in it.
 
@@ -1104,6 +1104,18 @@ not stand in, and a plane is not a body. `Pick::feature` is the looser
 question the feature list, handles and Inspector ask: a body *or plane*,
 eaten or not.
 
+**Every sweep is one function** ([`skin.rs`](src/prop/skin.rs)): Extrude,
+Revolve and every primitive produce a `Run` of `Section`s — loops placed by
+frames — and `skin` builds the solid and its `Outline`, so all of them name
+their corners, edges and faces by one rule. A face is one profile segment
+swept along one piece of path (`OutlineFace` holds its facets), so a revolved
+segment is one face, flat or curved, not a ring of facets, and an edge between
+two facets of one face is not listed. `skin` reports sections that do not
+match, a mirrored frame and a profile folding back through itself as
+Problems. Its polygons come out in the order the old extrude and revolve used,
+because the BSP picks splitting planes in polygon order: moving onto it left
+every shipped prop's volume and triangle count unchanged.
+
 **A corner or edge is named by the generator that made it, never by the
 kernel's output** ([`reference.rs`](src/prop/reference.rs)). BSP polygons are
 split anew by every boolean, so nothing in a `Solid` survives an evaluation;
@@ -1116,20 +1128,22 @@ still *resolves*. It is not *offered*: only elements on their body's surface
 are pickable. Two things to keep: an `Outline` is numbered from the profile
 **as authored**, not as wound for the kernel, so dragging a point across the
 loop does not renumber everything; and a primitive's solid and outline both
-come from `Shape::sweep`, so the two cannot drift —
+come from one `skin`, so the two cannot drift —
 `every_primitives_outline_lies_on_its_surface` is what notices if they do.
 The cost is that an edge a boolean *made*, where a bore leaves a face, has no
 name and cannot be picked.
 
 **A face is matched to its generator on the click, not carried through the
 kernel.** `Evaluated::surface_under` finds the polygon hit and `face_at` asks
-which named face lies in that polygon's plane and contains the hit point —
-either facing, because a hole's wall faces the opposite way from the tool face
-that cut it. Each `OutlineFace` stores an `outward` direction rather than
-trusting its winding, which nothing promises before
-`Solid::oriented_outward` measures it; `every_flat_face_points_out_of_its_body`
-is what fails if that is ever derived instead. A revolve's side is flat — its
-two sweep edges are parallel chords — so a sphere's facets are faces too.
+which named face has a facet in that polygon's plane containing the hit point
+— either facing, because a hole's wall faces the opposite way from the tool
+face that cut it — so a click on a sphere's band picks the band. Each facet
+stores an `outward` direction rather than trusting its winding, which nothing
+promises before `Solid::oriented_outward` measures it;
+`every_flat_face_points_out_of_its_body` is what fails if that is ever derived
+instead. A face is flat only if all its facets are (`Located::is_flat`), so a
+revolved segment square to the axis is a flat ring something can be sketched
+on, and a cylinder is not.
 
 **A plane is a feature that makes no body** (`FeatureOp::Plane { def }`,
 [`plane.rs`](src/prop/plane.rs)): through three points, a line and a point,

@@ -587,11 +587,14 @@ const MIN_MARKER: f32 = 0.002;
 
 fn draw_located(gizmos: &mut Gizmos, at: Located, size: f32, color: Color) {
     match at {
-        Located::Face { points, .. } => {
-            for i in 0..points.len() {
-                gizmos.line(points[i], points[(i + 1) % points.len()], color);
+        Located::Face { facets, .. } => {
+            for points in &facets {
+                for i in 0..points.len() {
+                    gizmos.line(points[i], points[(i + 1) % points.len()], color);
+                }
             }
-            let center = points.iter().sum::<Vec3>() / points.len() as f32;
+            let points = facets.concat();
+            let center = points.iter().sum::<Vec3>() / points.len().max(1) as f32;
             gizmos.sphere(Isometry3d::from_translation(center), size * 0.5, color);
         }
         Located::Point(p) => {

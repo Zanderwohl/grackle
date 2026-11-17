@@ -236,7 +236,11 @@ struct Swept { solid: Solid, outline: Outline }
 ```
 
 - A `TaggedLoop` is a 2D loop whose segments carry the entity they came from
-  (section 4), outer counter-clockwise, holes clockwise.
+  (section 4), in either winding.
+- **Holes are cut, not skinned.** A hole's loop is skinned on its own past
+  both ends and subtracted, as the old sweeps did: a short way past a step
+  that only moves the loop, a whole step past one that turns it. A sliver of
+  a turned span beside a cap left the BSP keeping part of the hole.
 - Consecutive sections must have the same loops with the same segment counts.
   Side faces between them are emitted as **triangles**, since a quad between
   two frames is not planar in general and the kernel needs planar convex
@@ -360,13 +364,14 @@ this plan; they need stage 4 and adjacency on the result, and get their own.
 - [x] CLAUDE.md's "adding a feature" sentence updated
 
 ### Sweep core
-- [ ] `skin.rs`: `Section`, `TaggedLoop`, `skin`, `Swept`
-- [ ] Naming by `(entity, span)` and `Start`/`End` caps
-- [ ] Problems: mismatched sections, flipped frame, folding path
-- [ ] Extrude on the core, shipped props unchanged (volume and triangle count)
-- [ ] Revolve on the core; one face per profile entity
-- [ ] Primitives on the core; `Shape::sweep` removed
-- [ ] `every_sweep_is_wound_consistently` covers every section producer
+- [x] `skin.rs`: `Section`, `TaggedLoop`, `Run`, `skin`, `Swept`
+- [x] Naming by `(entity, span)` and `Start`/`End` caps; tags are each loop segment's index until sketches have curves
+- [x] Problems: mismatched sections, flipped frame, folding path (a point travelling backward through its section's plane)
+- [x] Extrude on the core, shipped props unchanged (volume and triangle count, all 13 compared before and after)
+- [x] Revolve on the core; one face per profile entity
+- [x] Primitives on the core; `Shape::sweep` and the old `Solid`/`Outline` sweeps removed
+- [x] `every_sweep_is_wound_consistently` covers every section producer
+- [ ] Edges along a revolve are still one segment per step; joined into one curve with stage 4's chains
 
 ### Named edges
 - [ ] `FaceTag` carried by `csg::Polygon`; face table in `Evaluated`

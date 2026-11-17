@@ -1331,6 +1331,9 @@ axis_off_plane = "turns about an axis off its sketch's plane"
 missing_line = "names a line that is not there"
 no_mirror_plane = "mirrors about a plane that is not there"
 axis_crosses = "turns a region about an axis that crosses it"
+skin_mismatch = "sweeps sections that do not match"
+skin_flips = "sweeps through a mirrored section"
+skin_folds = "sweeps a profile back through itself"
 
 [editor.picker]
 search = "Search"

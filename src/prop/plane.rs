@@ -295,7 +295,7 @@ fn all_points(located: &[Located]) -> Vec<Vec3> {
 /// The plane through points, lines or one flat face, already located.
 pub fn plane_through_located(located: &[Located]) -> Option<Plane> {
     match located {
-        [face @ Located::Face { points, normal }] => face.is_flat().then(|| face_frame(points, *normal)).flatten(),
+        [face @ Located::Face { normal, .. }] => face.is_flat().then(|| face_frame(&face.points(), *normal)).flatten(),
         _ => frame(&framing_points(located)?),
     }
 }

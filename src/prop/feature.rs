@@ -26,6 +26,7 @@ use crate::prop::region::{arrange, axis_clear, Region};
 use crate::prop::sketch::SketchId;
 use crate::prop::sketch::{PlacedSketch, Sketch};
 use crate::prop::reference::{face_at, pickables, GeomRef, Located, Outline, Pickable, Wire};
+use crate::prop::skin::{extrusion, revolution, skin, Run, SkinProblem, TaggedLoop};
 use crate::prop::solid::{is_full_turn, Shape, Solid};
 use crate::prop::surface::Surface;
 
@@ -671,6 +672,35 @@ fn origin_half_of(live: &[Live]) -> f32 {
 /// rounding, not a modeling tolerance.
 pub(crate) const IN_PLANE: f32 = 1e-4;
 
+/// Each region's loops, in `local` coordinates, skinned by the run `run_of`
+/// makes of them, moved by each of `places` in turn, and unioned into one
+/// body — unioned rather than gathered, since regions sharing a line must
+/// become one closed surface. `Err` is the Problem's message.
+fn sweep(
+    regions: &[Region],
+    run_of: impl Fn(Vec<TaggedLoop>) -> Run,
+    local: impl Fn(&[Vec2]) -> Vec<Vec2>,
+    places: &[Transform],
+    surface: Surface,
+) -> Result<(Solid, Outline), String> {
+    let mut outline = Outline::default();
+    let mut solid: Option<Solid> = None;
+    for region in regions {
+        let loops = std::iter::once(&region.outer).chain(&region.holes).map(|points| TaggedLoop::numbered(local(points))).collect();
+        let swept = skin(&run_of(loops), surface).map_err(SkinProblem::message)?;
+        let piece = places.iter().fold(swept.solid, |solid, place| solid.transformed(*place));
+        solid = Some(match solid {
+            Some(joined) => joined.union(&piece),
+            None => piece,
+        });
+        outline.append(places.iter().fold(swept.outline, |outline, place| outline.transformed(*place)));
+    }
+    match solid {
+        Some(solid) if !solid.is_empty() => Ok((solid, outline)),
+        _ => Err(get!("prop.problems.empty_sweep")),
+    }
+}
+
 /// Every region a sweep names, as the sketch now stands, or a Problem naming
 /// the first that is not there.
 fn resolve_regions(
@@ -744,26 +774,12 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
                     continue;
                 };
                 let Some(found) = resolve_regions(feature.id, placed, regions, &mut problems) else { continue };
-                let (frame, depth) = (placed.plane.transform(), end.distance());
-                let mut outline = Outline::default();
-                let mut solid: Option<Solid> = None;
-                for region in &found {
-                    let piece = Solid::extrude_region(&region.outer, &region.holes, depth, *symmetric, *surface)
-                        .transformed(frame);
-                    // Unioned rather than gathered: regions sharing a line
-                    // must become one closed surface.
-                    solid = Some(match solid {
-                        Some(joined) => joined.union(&piece),
-                        None => piece,
-                    });
-                    outline.append(Outline::extrude_region(&region.outer, &region.holes, depth, *symmetric));
+                let depth = end.distance();
+                let run = |loops| extrusion(loops, depth, *symmetric);
+                match sweep(&found, run, |points| points.to_vec(), &[placed.plane.transform()], *surface) {
+                    Ok((solid, outline)) => live.push(made(solid, outline)),
+                    Err(message) => problems.push(Problem { feature: feature.id, message }),
                 }
-                let solid = solid.unwrap_or_default();
-                if solid.is_empty() {
-                    problems.push(Problem { feature: feature.id, message: get!("prop.problems.empty_sweep") });
-                    continue;
-                }
-                live.push(made(solid, outline.transformed(frame)));
             }
             FeatureOp::Revolve { sketch, axis, degrees, steps, symmetric, surface, regions } => {
                 let Some(placed) = sketches.iter().find(|placed: &&PlacedSketch| placed.id == *sketch) else {
@@ -789,26 +805,11 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
                     true => Transform::from_rotation(Quat::from_rotation_y(-degrees.to_radians() / 2.0)),
                     false => Transform::IDENTITY,
                 };
-                let mut outline = Outline::default();
-                let mut solid: Option<Solid> = None;
-                for region in &found {
-                    let outer = frame.local(&region.outer);
-                    let holes: Vec<Vec<Vec2>> = region.holes.iter().map(|hole| frame.local(hole)).collect();
-                    let piece = Solid::revolve_region(&outer, &holes, *degrees, steps, *surface)
-                        .transformed(spin)
-                        .transformed(frame.transform);
-                    solid = Some(match solid {
-                        Some(joined) => joined.union(&piece),
-                        None => piece,
-                    });
-                    outline.append(Outline::revolve_region(&outer, &holes, *degrees, steps).transformed(spin));
+                let run = |loops| revolution(loops, *degrees, steps);
+                match sweep(&found, run, |points| frame.local(points), &[spin, frame.transform], *surface) {
+                    Ok((solid, outline)) => live.push(made(solid, outline)),
+                    Err(message) => problems.push(Problem { feature: feature.id, message }),
                 }
-                let solid = solid.unwrap_or_default();
-                if solid.is_empty() {
-                    problems.push(Problem { feature: feature.id, message: get!("prop.problems.empty_sweep") });
-                    continue;
-                }
-                live.push(made(solid, outline.transformed(frame.transform)));
             }
             FeatureOp::Boolean { op, target, tool } => {
                 // Otherwise reported as a missing body.
@@ -1478,9 +1479,9 @@ mod tests {
                 element: crate::prop::reference::Element::Face(1),
                 source: crate::prop::reference::Source { feature: PropFeatureId(1), copies: vec![] },
             };
-            let Some(Located::Face { normal, points }) = evaluated.locate(&far_cap) else { panic!() };
+            let Some(face @ Located::Face { normal, .. }) = evaluated.locate(&far_cap) else { panic!() };
             assert!(normal.distance(Vec3::Z) < 1e-6);
-            assert!(points.iter().all(|p| (p.z - 0.1).abs() < 1e-6));
+            assert!(face.points().iter().all(|p| (p.z - 0.1).abs() < 1e-6));
         }
 
         #[test]
