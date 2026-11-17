@@ -22,6 +22,7 @@ Blueprint(
             sun: 1500.0,
             sky: 600.0,
         ),
+        music: [],
     ),
     next_id: 215,
     features: [
@@ -49,14 +50,14 @@ Blueprint(
             name: Some("Plaza"),
             object: {
                 "footprint_room": FootprintRoom(
-                    floor: PointRef(
+                    origin: PointRef(
                         reference: Some(FeatureId(
                             _id: 0,
                         )),
                         point_key: "",
-                        x: Relative(0.0),
+                        x: Relative(-12.0),
                         y: Relative(0.0),
-                        z: Relative(0.0),
+                        z: Relative(-10.0),
                     ),
                     height: 14.0,
                     next_id: 17,
@@ -64,97 +65,81 @@ Blueprint(
                         Corner(
                             id: SketchId(0),
                             at: PointRef(
-                                reference: Some(FeatureId(
-                                    _id: 0,
-                                )),
+                                reference: None,
                                 point_key: "",
-                                x: Relative(-12.0),
+                                x: Relative(0.0),
                                 y: Relative(0.0),
-                                z: Relative(-10.0),
+                                z: Relative(0.0),
                             ),
                         ),
                         Corner(
                             id: SketchId(1),
                             at: PointRef(
-                                reference: Some(FeatureId(
-                                    _id: 0,
-                                )),
+                                reference: None,
                                 point_key: "",
-                                x: Relative(10.0),
+                                x: Relative(22.0),
                                 y: Relative(0.0),
-                                z: Relative(-10.0),
+                                z: Relative(0.0),
                             ),
                         ),
                         Corner(
                             id: SketchId(2),
                             at: PointRef(
-                                reference: Some(FeatureId(
-                                    _id: 0,
-                                )),
+                                reference: None,
                                 point_key: "",
-                                x: Relative(16.0),
+                                x: Relative(28.0),
                                 y: Relative(0.0),
-                                z: Relative(-4.0),
+                                z: Relative(6.0),
                             ),
                         ),
                         Corner(
                             id: SketchId(3),
                             at: PointRef(
-                                reference: Some(FeatureId(
-                                    _id: 0,
-                                )),
+                                reference: None,
                                 point_key: "",
-                                x: Relative(16.0),
+                                x: Relative(28.0),
                                 y: Relative(0.0),
-                                z: Relative(8.0),
+                                z: Relative(18.0),
                             ),
                         ),
                         Corner(
                             id: SketchId(4),
                             at: PointRef(
-                                reference: Some(FeatureId(
-                                    _id: 0,
-                                )),
+                                reference: None,
                                 point_key: "",
-                                x: Relative(10.0),
+                                x: Relative(22.0),
                                 y: Relative(0.0),
-                                z: Relative(14.0),
+                                z: Relative(24.0),
                             ),
                         ),
                         Corner(
                             id: SketchId(5),
                             at: PointRef(
-                                reference: Some(FeatureId(
-                                    _id: 0,
-                                )),
+                                reference: None,
                                 point_key: "",
-                                x: Relative(-10.0),
+                                x: Relative(2.0),
                                 y: Relative(0.0),
-                                z: Relative(14.0),
+                                z: Relative(24.0),
                             ),
                         ),
                         Corner(
                             id: SketchId(6),
                             at: PointRef(
-                                reference: Some(FeatureId(
-                                    _id: 0,
-                                )),
+                                reference: None,
                                 point_key: "",
-                                x: Relative(-16.0),
+                                x: Relative(-4.0),
                                 y: Relative(0.0),
-                                z: Relative(8.0),
+                                z: Relative(18.0),
                             ),
                         ),
                         Corner(
                             id: SketchId(7),
                             at: PointRef(
-                                reference: Some(FeatureId(
-                                    _id: 0,
-                                )),
+                                reference: None,
                                 point_key: "",
-                                x: Relative(-16.0),
+                                x: Relative(-4.0),
                                 y: Relative(0.0),
-                                z: Relative(-4.0),
+                                z: Relative(6.0),
                             ),
                         ),
                     ],
@@ -1883,14 +1868,14 @@ Blueprint(
             name: Some("Canal"),
             object: {
                 "footprint_room": FootprintRoom(
-                    floor: PointRef(
+                    origin: PointRef(
                         reference: Some(FeatureId(
                             _id: 0,
                         )),
                         point_key: "",
-                        x: Relative(0.0),
+                        x: Relative(22.0),
                         y: Relative(-4.5),
-                        z: Relative(0.0),
+                        z: Relative(-38.0),
                     ),
                     height: 13.5,
                     next_id: 25,
@@ -1898,145 +1883,121 @@ Blueprint(
                         Corner(
                             id: SketchId(0),
                             at: PointRef(
-                                reference: Some(FeatureId(
-                                    _id: 0,
-                                )),
+                                reference: None,
                                 point_key: "",
-                                x: Relative(22.0),
+                                x: Relative(0.0),
                                 y: Relative(0.0),
-                                z: Relative(-38.0),
+                                z: Relative(0.0),
                             ),
                         ),
                         Corner(
                             id: SketchId(1),
                             at: PointRef(
-                                reference: Some(FeatureId(
-                                    _id: 0,
-                                )),
+                                reference: None,
                                 point_key: "",
-                                x: Relative(29.0),
+                                x: Relative(7.0),
                                 y: Relative(0.0),
-                                z: Relative(-38.0),
+                                z: Relative(0.0),
                             ),
                         ),
                         Corner(
                             id: SketchId(2),
                             at: PointRef(
-                                reference: Some(FeatureId(
-                                    _id: 0,
-                                )),
+                                reference: None,
                                 point_key: "",
-                                x: Relative(29.0),
+                                x: Relative(7.0),
                                 y: Relative(0.0),
-                                z: Relative(-14.0),
+                                z: Relative(24.0),
                             ),
                         ),
                         Corner(
                             id: SketchId(3),
                             at: PointRef(
-                                reference: Some(FeatureId(
-                                    _id: 0,
-                                )),
+                                reference: None,
                                 point_key: "",
-                                x: Relative(32.0),
+                                x: Relative(10.0),
                                 y: Relative(0.0),
-                                z: Relative(-14.0),
+                                z: Relative(24.0),
                             ),
                         ),
                         Corner(
                             id: SketchId(4),
                             at: PointRef(
-                                reference: Some(FeatureId(
-                                    _id: 0,
-                                )),
+                                reference: None,
                                 point_key: "",
-                                x: Relative(32.0),
+                                x: Relative(10.0),
                                 y: Relative(0.0),
-                                z: Relative(12.0),
+                                z: Relative(50.0),
                             ),
                         ),
                         Corner(
                             id: SketchId(5),
                             at: PointRef(
-                                reference: Some(FeatureId(
-                                    _id: 0,
-                                )),
+                                reference: None,
                                 point_key: "",
-                                x: Relative(29.0),
+                                x: Relative(7.0),
                                 y: Relative(0.0),
-                                z: Relative(12.0),
+                                z: Relative(50.0),
                             ),
                         ),
                         Corner(
                             id: SketchId(6),
                             at: PointRef(
-                                reference: Some(FeatureId(
-                                    _id: 0,
-                                )),
+                                reference: None,
                                 point_key: "",
-                                x: Relative(29.0),
+                                x: Relative(7.0),
                                 y: Relative(0.0),
-                                z: Relative(34.0),
+                                z: Relative(72.0),
                             ),
                         ),
                         Corner(
                             id: SketchId(7),
                             at: PointRef(
-                                reference: Some(FeatureId(
-                                    _id: 0,
-                                )),
+                                reference: None,
                                 point_key: "",
-                                x: Relative(22.0),
+                                x: Relative(0.0),
                                 y: Relative(0.0),
-                                z: Relative(34.0),
+                                z: Relative(72.0),
                             ),
                         ),
                         Corner(
                             id: SketchId(8),
                             at: PointRef(
-                                reference: Some(FeatureId(
-                                    _id: 0,
-                                )),
+                                reference: None,
                                 point_key: "",
-                                x: Relative(22.0),
+                                x: Relative(0.0),
                                 y: Relative(0.0),
-                                z: Relative(10.0),
+                                z: Relative(48.0),
                             ),
                         ),
                         Corner(
                             id: SketchId(9),
                             at: PointRef(
-                                reference: Some(FeatureId(
-                                    _id: 0,
-                                )),
+                                reference: None,
                                 point_key: "",
-                                x: Relative(26.0),
+                                x: Relative(4.0),
                                 y: Relative(0.0),
-                                z: Relative(10.0),
+                                z: Relative(48.0),
                             ),
                         ),
                         Corner(
                             id: SketchId(10),
                             at: PointRef(
-                                reference: Some(FeatureId(
-                                    _id: 0,
-                                )),
+                                reference: None,
                                 point_key: "",
-                                x: Relative(26.0),
+                                x: Relative(4.0),
                                 y: Relative(0.0),
-                                z: Relative(-12.0),
+                                z: Relative(26.0),
                             ),
                         ),
                         Corner(
                             id: SketchId(11),
                             at: PointRef(
-                                reference: Some(FeatureId(
-                                    _id: 0,
-                                )),
+                                reference: None,
                                 point_key: "",
-                                x: Relative(22.0),
+                                x: Relative(0.0),
                                 y: Relative(0.0),
-                                z: Relative(-12.0),
+                                z: Relative(26.0),
                             ),
                         ),
                     ],

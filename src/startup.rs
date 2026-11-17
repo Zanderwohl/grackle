@@ -3,7 +3,6 @@ use clap::{Arg, ArgAction, Command};
 use std::path::PathBuf;
 
 use crate::common::net::{parse_endpoint, NetRole};
-use crate::common::round_settings::ServerConfig;
 use crate::constants::DEFAULT_PORT_TEXT;
 
 pub struct EditorParams {
@@ -22,9 +21,8 @@ pub struct EditorParams {
     pub profile: Option<u8>,
     /// `--map PATH`: the blueprint opened in place of the new-map template.
     pub map: Option<PathBuf>,
-    /// `--server-config PATH`, read and checked here so a bad file stops the process before it
-    /// opens a window.
-    pub server: Option<ServerConfig>,
+    /// `--server-config PATH`. Read by [`crate::common::round_settings::ServerConfig::resolve`], which falls back past a bad one.
+    pub server_config: Option<PathBuf>,
     pub start_spectating: bool,
     /// `--rounds N`: quit once N rounds have ended.
     pub rounds: Option<u32>,
@@ -44,7 +42,7 @@ impl EditorParams {
             || self.start_translating
             || self.map.is_some()
             || self.net != NetRole::Solo
-            || self.server.is_some()
+            || self.server_config.is_some()
             || self.start_spectating
             || self.rounds.is_some()
             || self.class.is_some()
@@ -218,13 +216,6 @@ impl EditorParams {
             None => None,
         };
 
-        let server = match matches.get_one::<PathBuf>("server_config") {
-            Some(path) => {
-                let text = std::fs::read_to_string(path).map_err(|error| format!("--server-config {}: {error}", path.display()))?;
-                Some(ServerConfig::parse(&text).map_err(|error| format!("--server-config {}: {error}", path.display()))?)
-            }
-            None => None,
-        };
 
         Ok(Self {
             lang,
@@ -238,7 +229,7 @@ impl EditorParams {
             start_translating: matches.get_flag("lang-editor"),
             profile: matches.get_one::<u8>("profile").copied(),
             map,
-            server,
+            server_config: matches.get_one::<PathBuf>("server_config").cloned(),
             start_spectating: matches.get_flag("spectate"),
             rounds: matches.get_one::<u32>("rounds").copied(),
             class,
@@ -370,15 +361,15 @@ mod tests {
         assert_eq!(parse(&["--class", "raptor"]).unwrap().class, Some(crate::common::class::Class::Raptor));
         assert!(parse(&["--class", "wizard"]).is_err(), "a class nobody defines was taken");
         let params = parse(&[]).unwrap();
-        assert!(params.map.is_none() && params.server.is_none() && !params.start_spectating && params.rounds.is_none());
+        assert!(params.map.is_none() && params.server_config.is_none() && !params.start_spectating && params.rounds.is_none());
     }
 
     /// The shipped example has to parse, or the documented way to start a bot round fails.
     #[test]
     fn the_shipped_server_config_is_read() {
         let params = parse(&["--server-config", "assets/default/servers/bot_arena.toml"]).unwrap();
-        assert!(params.server.unwrap().fill_with_bots);
-        assert!(parse(&["--server-config", "assets/default/servers/no_such_file.toml"]).is_err());
+        let (config, problems) = crate::common::round_settings::ServerConfig::resolve(params.server_config.as_deref(), std::path::Path::new("no_such_user_file.toml"));
+        assert!(config.fill_with_bots && problems.is_empty(), "{problems:?}");
     }
 
     #[test]

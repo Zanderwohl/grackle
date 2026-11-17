@@ -102,7 +102,10 @@ start with the launcher drawn. A `Goal` is a place or a pickup. The
 **Round** tab, right of Metadata, holds the server's `RoundSettings`
 ([`src/common/round_settings.rs`](src/common/round_settings.rs)) — not the
 map's, so neither saved nor sent: **slots**, the host and bots included, which
-caps the clients a server takes from when it starts listening, and **fill empty
+caps the clients a server takes from when it starts listening; **bots enabled**
+(on by default), which off retires every bot seat, grays out the other bot
+settings, and lets a round start without the nav graph or its sightlines,
+neither of which is baked during it (`RoundSettings::wants_bots`); and **fill empty
 slots with bots**, which `fill_empty_slots` keeps true through a round as
 people come and go, with seats marked `FillsASlot`; **allow bot-only
 matches** (off by default), without which no match starts while no person is
@@ -118,9 +121,15 @@ slot; somebody still choosing does. A **time limit** in seconds ends the round
 as the **frag limit** does — the server's for now, in every mode, though a
 mode's own `frag_limit` in `modes.toml` still decides whether it keeps a
 scoreboard — into the post-game, not back to the editor.
-`--server-config PATH` reads all of it, and bots to seat by hand, from a TOML
-file (`ServerConfig`; [`assets/default/servers/bot_arena.toml`](assets/default/servers/bot_arena.toml) is the
-example), refusing a bad one at startup. **An unattended round** is
+All of it is kept in `assets/user/server.toml` (`USER_SERVER_CONFIG`), which
+the Round tab writes back to half a second after its last change, editing the
+file in place so comments and `bots` survive (`RoundSettingsFilePlugin`, editor
+binary only). `--server-config PATH` reads all of it, and bots to seat by hand,
+from another TOML file for the run (`ServerConfig`;
+[`assets/default/servers/bot_arena.toml`](assets/default/servers/bot_arena.toml)
+is the example). A file that will not read is passed over with a warning in
+the log (`ServerConfig::resolve`): the named file, then the user's, then the
+defaults. **An unattended round** is
 `--map PATH --server-config PATH --play --spectate --rounds 1`: `--map` opens
 a blueprint as its file, `--spectate` takes the Spectate seat each round,
 `--rounds N` quits once N rounds have ended (the cycle starts each next one), and every round's standings are
@@ -223,7 +232,7 @@ shape is a new producer and not a rewrite of every consumer — see
 | `src/unlock/` | The crate-drop prototype. Orthogonal — see above. |
 | `src/bin/` | `ensure_lang` (fills missing translation keys), `new_map_template` (writes the new-map, demo-scene, arena, cloister, waterworks and showcase blueprints), `map_stats` (bakes a blueprint's nav graph headless and prints its statistics and top-down charts of each field), `decal_images` (rasterizes the default pack's decal SVGs), `bake_body_clips` (seeds a pack's body animations from the pose functions they replace, and writes the clips `seed::WRITTEN` generates key by key), `default_materials` (writes the default pack's materials), `crate_drop`. |
 | `assets/default/` | The default pack: `lang/`, `blueprints/`, `servers/` (example `--server-config` files). |
-| `assets/user/` | The user pack: gitignored, made at startup, last in `default_packs()` so it overrides the shipped one. A new map or prop is saved here unless the document already has a folder. |
+| `assets/user/` | The user pack: gitignored, made at startup, last in `default_packs()` so it overrides the shipped one. A new map or prop is saved here unless the document already has a folder. Also holds `settings.toml`, the player settings, `shortcuts.toml` and `server.toml` (the Round tab). |
 | `cache/` | Gitignored, derived from the packs and maps: `thumbnail/props/{name}.png`, `nav/{hash}.bin`, `lightmap/{hash}.bin`, `rounds/{map}/*.jsonl`. Safe to delete. |
 | `logs/` | Gitignored: the log's file drain, one file per launch. |
 
@@ -1780,13 +1789,19 @@ slightly differently.
 
 **Auto-bake** (`RoomBake`, on by default, a checkbox in the Bakes panel)
 rebuilds only the rooms a change touches, `ROOMS_PER_FRAME` at a time, so a
-big map opens into an editor you can already work in. A room's mesh depends on
+big map opens into an editor you can already work in. **Every bake waits
+`bake_job::SETTLE_SECONDS` (1 s) after the latest change** before it starts,
+so a drag is baked once, when it stops: `RoomBake::last_stale` and
+`BackgroundBake`'s pending hash are rewritten on every change, and the wait
+counts from them. A load-in (nothing seen yet) and a bake asked for do not
+wait. A room's mesh depends on
 every room touching it, so a changed box queues itself, whatever touched its
 old box and whatever touches its new one — the old box being the one *seen
-last frame*, not the one its mesh was baked from, which a room dragged before
-its first bake does not have. Edits jump ahead of a load-in still in progress.
-With it on, `CalculateRoomGeometry` is ignored (it would stall the frame the
-budget protects) and the panel's Bake is grayed out; Clear forgets what was
+when last queued*, not the one its mesh was baked from, which a room dragged
+before its first bake does not have. Edits jump ahead of a load-in still in
+progress. With it on, `CalculateRoomGeometry` only skips the wait (a round
+held for its bakes writes it; rebuilding everything at once would stall the
+frame the budget protects) and the panel's Bake is grayed out; Clear forgets what was
 seen, so it is a rebuild from scratch. Entering Play still bakes everything at
 once.
 
@@ -2048,7 +2063,10 @@ stands up a box; `FootprintRoom`
 ([`src/editor/footprint_room.rs`](src/editor/footprint_room.rs),
 [documentation/footprint-rooms.md](documentation/footprint-rooms.md)) is a
 sketch whose corners are `PointRef`s, each named region one room on a child
-entity, every one painted from the feature's one `RoomSurfaces`. Anything that needs a feature's rooms asks `FeatureTrait::rooms`,
+entity, every one painted from the feature's one `RoomSurfaces`. Its
+**origin** is the first corner drawn (the global origin in a file that names
+none), its `y` the floor; every corner naming no feature is an offset from it,
+so dragging its handle moves the whole footprint. Anything that needs a feature's rooms asks `FeatureTrait::rooms`,
 never its `type_key` or its box. Tools that edit a footprint's own drawing
 reach it through `FeatureTrait::footprint`/`footprint_mut` — a typetag trait
 object has no `Any` to downcast through. What a drawn chain makes a room is

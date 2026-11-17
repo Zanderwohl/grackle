@@ -8,7 +8,7 @@ use bevy_egui::{EguiPlugin};
 use bevy_vector_shapes::prelude::*;
 use grackle::{get, startup};
 use grackle::common::app_mode::StartInPlay;
-use grackle::common::round_settings::{BotsAtStartup, ServerConfig};
+use grackle::common::round_settings::{BotsAtStartup, RoundSettingsFilePlugin, ServerConfig, USER_SERVER_CONFIG};
 use grackle::editor::editable::StartupMap;
 use grackle::game::rounds::QuitAfterRounds;
 use grackle::game::spectate::StartSpectating;
@@ -48,6 +48,7 @@ fn main() {
             std::process::exit(1);
         });
     let (settings, settings_problem) = Settings::load();
+    let (server, server_problems) = ServerConfig::resolve(editor_params.server_config.as_deref(), std::path::Path::new(USER_SERVER_CONFIG));
     // Falls back to en-US rather than exiting: a bad `--lang` should not stop
     // the editor from opening.
     let lang = editor_params.lang.clone().or_else(|| settings.language.clone());
@@ -92,8 +93,8 @@ fn main() {
         .insert_resource(StartInMaterialEditor(editor_params.start_texturing))
         .insert_resource(grackle::weapon_editor::StartInWeaponEditor(editor_params.start_arming))
         .insert_resource(StartInLangEditor(editor_params.start_translating))
-        .insert_resource(editor_params.server.as_ref().map(ServerConfig::round).unwrap_or_default())
-        .insert_resource(BotsAtStartup(editor_params.server.as_ref().map_or(0, |server| server.bots)))
+        .insert_resource(server.round())
+        .insert_resource(BotsAtStartup(server.bots))
         .add_plugins((
             EguiPlugin::default(),
             Shape2dPlugin::default(),
@@ -124,10 +125,14 @@ fn main() {
             SkeletonPlugin,
             (PerfPlugin, SettingsPlugin, FontsPlugin, grackle::common::music::MusicPlugin, grackle::common::icons::IconsPlugin, UiShapePlugin, grackle::common::player_settings::PlayerSettingsPlugin { profile: editor_params.profile }),
             ))
+        .add_plugins(RoundSettingsFilePlugin { path: USER_SERVER_CONFIG.into() })
         .add_plugins(grackle::onboarding::OnboardingPlugin { skip: editor_params.chooses_where_to_start() })
         .add_systems(Startup, move || {
             // Read before the log existed, so said now.
             if let Some(problem) = &settings_problem {
+                warn!("{problem}");
+            }
+            for problem in &server_problems {
                 warn!("{problem}");
             }
         })

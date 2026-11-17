@@ -61,11 +61,13 @@ pub struct SunBake {
     snapshot: Option<Snapshot>,
     /// Bumped whenever `lit` changes, so the systems that read it can skip an unchanged frame.
     generation: u64,
+    /// When something it reads other than the rooms' meshes last changed, in real seconds.
+    painted_at: f32,
 }
 
 impl Default for SunBake {
     fn default() -> Self {
-        Self { lit: HashMap::new(), air: AirLight::default(), bake: BackgroundBake::new(true), looked_up: None, use_disk: true, snapshot: None, generation: 0 }
+        Self { lit: HashMap::new(), air: AirLight::default(), bake: BackgroundBake::new(true), looked_up: None, use_disk: true, snapshot: None, generation: 0, painted_at: 0.0 }
     }
 }
 
@@ -464,7 +466,7 @@ fn auto_bake_sunlight(
     sun: Res<SunPosition>,
     sky: Res<SkyTime>,
     brightness: Res<Brightness>,
-    edited: Query<(), Or<(Changed<BakedRoomGeometry>, Changed<RoomSurfaces>, Changed<Side>)>>,
+    (rebaked, repainted): (Query<(), Changed<BakedRoomGeometry>>, Query<(), Or<(Changed<RoomSurfaces>, Changed<Side>)>>),
     (mut rebuilt, mut unpainted, mut unsided): (
         RemovedComponents<BakedRoomGeometry>,
         RemovedComponents<RoomSurfaces>,
@@ -474,14 +476,18 @@ fn auto_bake_sunlight(
     mut open_sky: ResMut<OpenSky>,
 ) {
     let state = &mut *state;
-    let inputs_changed = rebuilt.read().count() > 0
-        || unpainted.read().count() > 0
+    let rooms_rebuilt = rebuilt.read().count() > 0 || !rebaked.is_empty();
+    let repainted = unpainted.read().count() > 0
         || unsided.read().count() > 0
-        || !edited.is_empty()
+        || !repainted.is_empty()
         || palette.is_changed()
         || sun.is_changed()
         || sky.is_changed()
         || brightness.is_changed();
+    if repainted {
+        state.painted_at = time.elapsed_secs();
+    }
+    let inputs_changed = rooms_rebuilt || repainted;
     if clears.read().count() > 0 {
         state.generation += 1;
         state.lit.clear();
@@ -518,7 +524,10 @@ fn auto_bake_sunlight(
         }
     };
     state.take_from_cache(&snapshot, &bakes, &mut images);
-    state.bake.update(snapshot.hash, rooms.is_settled(), time.elapsed_secs(), || snapshot.job(&bakes, &labels));
+    // The rooms waited for the map to settle before rebuilding, so their part of the wait is
+    // counted from the edit, not from the rebuild.
+    let changed_at = rooms.last_edit().max(state.painted_at);
+    state.bake.update_since(snapshot.hash, rooms.is_settled(), time.elapsed_secs(), Some(changed_at), || snapshot.job(&bakes, &labels));
     state.snapshot = Some(snapshot);
 }
 

@@ -12,6 +12,7 @@ use bevy::prelude::*;
 
 use crate::common::app_mode::AppMode;
 use crate::common::movement_rules::MovementRules;
+use crate::common::round_settings::RoundSettings;
 use crate::common::trigger::TriggerVolume;
 use crate::common::world_surface::{Face, Volume};
 use crate::common::weapon::WeaponCatalog;
@@ -67,6 +68,8 @@ pub struct NavBake {
     snapshot: Option<Snapshot>,
     /// When the map last changed, while `snapshot` is behind it.
     dirty_since: Option<f32>,
+    /// When the map last changed before `snapshot` was taken, which the bake's wait counts from.
+    changed_at: Option<f32>,
     /// The props and pickups last seen, which are compared rather than change-detected.
     seen_props: Vec<RoundedBox>,
     seen_pickups: Vec<PickupKey>,
@@ -89,6 +92,7 @@ impl Default for NavBake {
             looked_up: None,
             snapshot: None,
             dirty_since: None,
+            changed_at: None,
             seen_props: Vec::new(),
             seen_pickups: Vec::new(),
             // Off: several seconds on Halls in a debug build, too much to redo on every still moment.
@@ -516,8 +520,13 @@ fn auto_bake_nav(
     mut state: ResMut<NavBake>,
     mut inputs: NavInputs,
     time: Res<Time<Real>>,
+    (mode, settings): (Option<Res<State<AppMode>>>, Option<Res<RoundSettings>>),
 ) {
     let state = &mut *state;
+    // Nothing in a round without bots reads the graph; it catches up back in the editor.
+    if mode.is_some_and(|mode| *mode.get() == AppMode::Play) && !RoundSettings::wants_bots(settings.as_deref()) {
+        return;
+    }
     if clears.read().count() > 0 {
         state.replace(None, (NavGraph::default(), Vec::new()));
         state.bake.forget();
@@ -547,25 +556,29 @@ fn auto_bake_nav(
     let due = state.dirty_since.is_some_and(|since| now - since >= STILL_SECONDS);
     if state.snapshot.is_none() || (state.dirty_since.is_some() && (due || state.bake.asked())) {
         state.snapshot = Some(inputs.snapshot());
-        state.dirty_since = None;
+        state.changed_at = state.dirty_since.take();
     }
     // While the map is moving the snapshot is stale, and a bake of it must not start.
     if state.dirty_since.is_none() {
         let snapshot = state.snapshot.take().expect("taken above");
         state.take_from_cache(&snapshot);
         let snapshot = state.snapshot.insert(snapshot);
-        state.bake.update(snapshot.hash, true, now, || snapshot.job());
+        state.bake.update_since(snapshot.hash, true, now, state.changed_at, || snapshot.job());
     }
 
     if let Some(sight) = state.sight.poll() {
         state.add_sight(sight);
     }
     let NavBake { graph, built, built_from, sight, .. } = state;
-    sight.update(*built, true, time.elapsed_secs(), || SightJob::new(*built, built_from.clone(), graph.clone()));
+    // The graph it reads already waited for the map to settle.
+    sight.update_since(*built, true, time.elapsed_secs(), Some(f32::NEG_INFINITY), || SightJob::new(*built, built_from.clone(), graph.clone()));
 }
 
 /// A round never starts on a stale graph: bots will walk it.
-fn bake_nav_for_the_round(mut state: ResMut<NavBake>, inputs: NavInputs) {
+fn bake_nav_for_the_round(mut state: ResMut<NavBake>, inputs: NavInputs, settings: Option<Res<RoundSettings>>) {
+    if !RoundSettings::wants_bots(settings.as_deref()) {
+        return;
+    }
     let snapshot = inputs.snapshot();
     state.take_from_cache(&snapshot);
     if let Some(built) = state.bake.for_the_round(snapshot.hash, || snapshot.job()) {
@@ -659,6 +672,19 @@ mod tests {
         let status = app.world().resource::<BakeProgress>().get(BakeKind::Nav).cloned().unwrap();
         assert_eq!(status.state, bake_job::BakeState::UpToDate);
         assert_eq!(status.completed, status.scheduled);
+    }
+
+    /// Breaks if a round without bots still bakes a graph nothing reads.
+    #[test]
+    fn a_round_without_bots_bakes_no_graph() {
+        let mut app = headless();
+        app.insert_resource(RoundSettings { bots_enabled: false, ..default() });
+        app.world_mut().resource_mut::<NextState<AppMode>>().set(AppMode::Play);
+        for _ in 0..4 {
+            app.update();
+        }
+        assert!(app.world().resource::<NavBake>().graph().cells().is_empty(), "a round without bots baked the graph");
+        assert!(!app.world().resource::<NavBake>().bake.is_baking(), "a nav bake started in a round without bots");
     }
 
     /// Times each stage of the bake on a real map:

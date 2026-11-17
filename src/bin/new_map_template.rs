@@ -755,10 +755,12 @@ impl Builder {
         id
     }
 
-    /// A prism over `corners`, a closed loop in world `x`/`z`, with `inside` in its one region.
+    /// A prism over `corners`, a closed loop in world `x`/`z`, with `inside` in its one region. Its
+    /// origin is its first corner, and the corners are measured from it, so it moves as one.
     fn footprint(&mut self, name: &str, floor: f32, height: f32, corners: &[Vec2], inside: Vec2, surfaces: &RoomSurfaces) -> FeatureId {
-        let mut room = FootprintRoom::new(self.at(Vec3::new(0.0, floor, 0.0)), height).with_surfaces(surfaces.clone());
-        let ids: Vec<_> = corners.iter().map(|c| room.add_corner(self.at(Vec3::new(c.x, 0.0, c.y)))).collect();
+        let first = corners[0];
+        let mut room = FootprintRoom::new(self.at(Vec3::new(first.x, floor, first.y)), height).with_surfaces(surfaces.clone());
+        let ids: Vec<_> = corners.iter().map(|c| room.add_local_corner(*c - first)).collect();
         for (i, a) in ids.iter().enumerate() {
             room.add_line(*a, ids[(i + 1) % ids.len()]);
         }

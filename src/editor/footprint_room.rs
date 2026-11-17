@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::common::ray::ray_intersects_aabb;
 use crate::common::PointResolutionError;
-use crate::editor::editable::{insert_if_changed, Feature, FeatureId, FeatureTrait, PointRef, BROKEN};
+use crate::editor::editable::{insert_if_changed, AxisRef, Feature, FeatureId, FeatureTrait, OwnBase, PointRef, BROKEN};
 use crate::editor::mirror::Mirroring;
 use crate::get;
 use crate::prop::region::{arrange, Arrangement, Note, Region};
@@ -23,11 +23,36 @@ pub const DEFAULT_HEIGHT: f32 = 3.0;
 /// The lowest a ceiling may be dragged to over its floor.
 pub const MIN_HEIGHT: f32 = 0.1;
 
+/// How far above the origin its handle stands, in meters, so it is not on top
+/// of the first corner's; never more than half the height, so it stays under
+/// the ceiling's.
+pub const ORIGIN_HANDLE_RISE: f32 = 0.5;
+
+/// A corner naming no feature is measured from the footprint's origin, so
+/// moving the origin moves it. An absolute axis on one is a place in the
+/// world, turned into an offset from the origin when it is next resolved.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Corner {
     pub id: SketchId,
     /// Read for `x` and `z`; its `y` is the floor's business.
     pub at: PointRef,
+}
+
+impl Corner {
+    /// Turns any absolute axis into the same place measured from `origin`.
+    fn measure_from(&mut self, origin: Vec3) {
+        if self.at.reference.is_some() {
+            return;
+        }
+        for (axis, from) in [(&mut self.at.x, origin.x), (&mut self.at.z, origin.z)] {
+            if let AxisRef::Absolute(world) = *axis {
+                *axis = AxisRef::Relative(world - from);
+            }
+        }
+        if !self.at.y.is_relative() {
+            self.at.y = AxisRef::Relative(0.0);
+        }
+    }
 }
 
 /// A sketch line, as the map writes it. Not [`SketchEntity`]: that is
@@ -70,9 +95,11 @@ pub enum Problem {
 }
 
 #[derive(Serialize, Deserialize)]
+#[serde(from = "FootprintFile")]
 pub struct FootprintRoom {
-    /// Read for `y`.
-    floor: PointRef,
+    /// The footprint's own origin: its `y` is the floor, and every corner
+    /// naming no feature is measured from it, so moving it moves the plan.
+    origin: PointRef,
     /// Meters from the floor up to the ceiling.
     height: f32,
     /// Shared by corners, lines and region entries, and never reused, so a
@@ -88,7 +115,7 @@ pub struct FootprintRoom {
     #[serde(default, skip_serializing_if = "RoomSurfaces::is_empty")]
     surfaces: RoomSurfaces,
     #[serde(skip)]
-    resolved_floor: f32,
+    resolved_origin: Vec3,
     #[serde(skip)]
     resolved_corners: Vec<(SketchId, Vec2)>,
     #[serde(skip)]
@@ -101,10 +128,55 @@ pub struct FootprintRoom {
     room_entities: Vec<Entity>,
 }
 
+/// A footprint as a file has it. One written before the origin has a `floor`
+/// instead, read for `y` only, and its corners in the world: its origin is the
+/// global origin at that floor, from which those corners measure the same.
+#[derive(Deserialize)]
+#[serde(rename = "FootprintRoom")]
+struct FootprintFile {
+    #[serde(default, deserialize_with = "present")]
+    origin: Option<PointRef>,
+    #[serde(default, deserialize_with = "present")]
+    floor: Option<PointRef>,
+    height: f32,
+    next_id: u32,
+    corners: Vec<Corner>,
+    lines: Vec<Line>,
+    regions: Vec<SketchRegion>,
+    rooms: Vec<SketchId>,
+    #[serde(default)]
+    surfaces: RoomSurfaces,
+}
+
+/// A field written bare, as a struct field is, rather than as RON's `Some(..)`; absent is `None`.
+fn present<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<PointRef>, D::Error> {
+    PointRef::deserialize(deserializer).map(Some)
+}
+
+impl From<FootprintFile> for FootprintRoom {
+    fn from(file: FootprintFile) -> Self {
+        let mut corners = file.corners;
+        let origin = match (file.origin, file.floor) {
+            (Some(origin), _) => origin,
+            (None, floor) => {
+                let mut origin = floor.unwrap_or_else(|| PointRef::absolute(0.0, 0.0, 0.0));
+                origin.x = AxisRef::Absolute(0.0);
+                origin.z = AxisRef::Absolute(0.0);
+                for corner in &mut corners {
+                    corner.measure_from(Vec3::ZERO);
+                }
+                origin
+            }
+        };
+        Self { next_id: file.next_id, corners, lines: file.lines, regions: file.regions, rooms: file.rooms, ..Self::new(origin, file.height).with_surfaces(file.surfaces) }
+    }
+}
+
 impl FootprintRoom {
-    pub fn new(floor: PointRef, height: f32) -> Self {
+    /// `origin`'s `y` is the floor.
+    pub fn new(origin: PointRef, height: f32) -> Self {
         Self {
-            floor,
+            origin,
             height,
             next_id: 0,
             corners: Vec::new(),
@@ -112,7 +184,7 @@ impl FootprintRoom {
             regions: Vec::new(),
             rooms: Vec::new(),
             surfaces: RoomSurfaces::default(),
-            resolved_floor: 0.0,
+            resolved_origin: Vec3::ZERO,
             resolved_corners: Vec::new(),
             resolved: Vec::new(),
             problems: Vec::new(),
@@ -132,8 +204,25 @@ impl FootprintRoom {
         id
     }
 
+    /// A corner at `at`: a place in the world, measured from the origin once
+    /// resolved, or a point of another feature.
     pub fn add_corner(&mut self, at: PointRef) -> SketchId {
         let id = self.take_id();
+        self.corners.push(Corner { id, at });
+        id
+    }
+
+    /// A corner `offset` (`x`/`z`) from the origin, which moves with it.
+    pub fn add_local_corner(&mut self, offset: Vec2) -> SketchId {
+        let id = self.take_id();
+        let at = PointRef {
+            x: AxisRef::Relative(offset.x),
+            y: AxisRef::Relative(0.0),
+            z: AxisRef::Relative(offset.y),
+            // So a drag before the next resolve is measured from the origin.
+            resolved_reference: Some(self.resolved_origin),
+            ..PointRef::absolute(0.0, 0.0, 0.0)
+        };
         self.corners.push(Corner { id, at });
         id
     }
@@ -167,7 +256,17 @@ impl FootprintRoom {
     }
 
     pub fn floor_height(&self) -> f32 {
-        self.resolved_floor
+        self.resolved_origin.y
+    }
+
+    /// The origin as last resolved, on the floor.
+    pub fn origin_point(&self) -> Vec3 {
+        self.resolved_origin
+    }
+
+    /// Where the origin's handle stands.
+    pub fn origin_handle_point(&self) -> Vec3 {
+        self.resolved_origin + Vec3::Y * ORIGIN_HANDLE_RISE.min(self.height * 0.5)
     }
 
     pub fn height(&self) -> f32 {
@@ -176,7 +275,7 @@ impl FootprintRoom {
 
     /// Every resolved corner, on the floor.
     pub fn corner_points(&self) -> impl Iterator<Item = (SketchId, Vec3)> + '_ {
-        self.resolved_corners.iter().map(|(id, at)| (*id, Vec3::new(at.x, self.resolved_floor, at.y)))
+        self.resolved_corners.iter().map(|(id, at)| (*id, Vec3::new(at.x, self.resolved_origin.y, at.y)))
     }
 
     pub fn lines(&self) -> &[Line] {
@@ -255,7 +354,7 @@ impl FootprintRoom {
     pub fn set_room_at(&mut self, inside: Vec2, room: bool) {
         if room {
             self.name_region_at(inside);
-        } else if let Some(id) = self.regions_now().into_iter().find(|r| r.region.contains(inside - self.origin())).and_then(|r| r.room) {
+        } else if let Some(id) = self.regions_now().into_iter().find(|r| r.region.contains(inside - self.sketch_origin())).and_then(|r| r.room) {
             self.forget_room(id);
         }
         self.resolve_rooms();
@@ -289,7 +388,47 @@ impl FootprintRoom {
         moved_x || moved_z
     }
 
-    fn origin(&self) -> Vec2 {
+    /// Put the origin at `at` (world `x`/`z`), carrying every corner measured
+    /// from it.
+    pub fn drag_origin(&mut self, at: Vec2) -> bool {
+        let moved_x = self.origin.drag_axis(0, at.x);
+        let moved_z = self.origin.drag_axis(2, at.y);
+        moved_x || moved_z
+    }
+
+    /// Measure corner `id` from the origin, keeping where it resolves.
+    fn measure_from_origin(&mut self, id: SketchId) -> bool {
+        let Some(at) = self.corner_at(id) else { return false };
+        let origin = self.resolved_origin;
+        let Some(corner) = self.corners.iter_mut().find(|corner| corner.id == id) else { return false };
+        corner.at.reference = None;
+        corner.at.point_key.clear();
+        corner.at.x = AxisRef::Relative(at.x - origin.x);
+        corner.at.y = AxisRef::Relative(0.0);
+        corner.at.z = AxisRef::Relative(at.y - origin.z);
+        corner.at.resolved_reference = Some(origin);
+        true
+    }
+
+    fn corner_by_key(&self, key: &str) -> Option<SketchId> {
+        self.corners
+            .iter()
+            .find(|corner| key == format!("corner#{}", corner.id.0) || key == Self::corner_label(corner.id))
+            .map(|corner| corner.id)
+    }
+
+    fn is_origin_key(key: &str) -> bool {
+        matches!(key, "origin" | "floor") || key == get!("editor.features.footprint_room.origin")
+    }
+
+    fn resolve_origin(&mut self, features: &HashMap<FeatureId, Feature>) {
+        if let Ok(origin) = self.origin.resolve(features) {
+            self.resolved_origin = origin;
+        }
+    }
+
+    /// Where the arrangement measures from: the first corner.
+    fn sketch_origin(&self) -> Vec2 {
         self.resolved_corners.first().map_or(Vec2::ZERO, |(_, at)| *at)
     }
 
@@ -298,7 +437,7 @@ impl FootprintRoom {
     /// tests far from the origin pass without this, but it costs nothing and
     /// keeps the numbers the arrangement sees the size of the plan.
     fn local_sketch(&self) -> (Sketch, Vec2) {
-        let origin = self.resolved_corners.first().map_or(Vec2::ZERO, |(_, at)| *at);
+        let origin = self.sketch_origin();
         let sketch = Sketch {
             next_id: self.next_id,
             points: self
@@ -342,7 +481,7 @@ impl FootprintRoom {
         let (sketch, origin) = self.local_sketch();
         let arrangement: Arrangement = arrange(&sketch);
         self.problems = arrangement.notes.iter().cloned().map(Problem::Note).collect();
-        let (floor, ceiling) = (self.resolved_floor, self.resolved_floor + self.height);
+        let (floor, ceiling) = (self.resolved_origin.y, self.resolved_origin.y + self.height);
         let shifted = |points: &[Vec2]| points.iter().map(|p| *p + origin).collect::<Vec<_>>();
         self.resolved = self
             .rooms
@@ -375,8 +514,8 @@ impl FootprintRoom {
             .fold((Vec2::INFINITY, Vec2::NEG_INFINITY), |(lo, hi), (_, p)| (lo.min(*p), hi.max(*p)));
         (low.x <= high.x).then(|| {
             (
-                Vec3::new(low.x, self.resolved_floor, low.y),
-                Vec3::new(high.x, self.resolved_floor + self.height, high.y),
+                Vec3::new(low.x, self.resolved_origin.y, low.y),
+                Vec3::new(high.x, self.resolved_origin.y + self.height, high.y),
             )
         })
     }
@@ -396,6 +535,9 @@ impl FootprintRoom {
 #[typetag::serde(name = "footprint_room")]
 impl FeatureTrait for FootprintRoom {
     fn get_point(&self, key: &str) -> Result<Vec3, PointResolutionError> {
+        if key == "origin" {
+            return Ok(self.resolved_origin);
+        }
         if key.is_empty() || key == "floor" {
             return self
                 .resolved
@@ -412,7 +554,7 @@ impl FeatureTrait for FootprintRoom {
             .and_then(|id| id.parse().ok())
             .ok_or(PointResolutionError::NoSuchPoint)?;
         let at = self.corner_at(SketchId(id)).ok_or(PointResolutionError::NoSuchPoint)?;
-        Ok(Vec3::new(at.x, self.resolved_floor + up, at.y))
+        Ok(Vec3::new(at.x, self.resolved_origin.y + up, at.y))
     }
 
     fn editor_ui(&mut self, ui: &mut egui::Ui, features: &HashMap<FeatureId, Feature>, prior_feature_order: &[FeatureId], retarget_request: &mut Option<String>) -> bool {
@@ -433,6 +575,14 @@ impl FeatureTrait for FootprintRoom {
                 ui.end_row();
             }
         });
+
+        ui.separator();
+        let origin_label = get!("editor.features.footprint_room.origin");
+        if self.origin.editor_ui(ui, &origin_label, features, prior_feature_order, retarget_request) {
+            // Before the corners' widgets, which offer the origin as a base.
+            self.resolve_references(features);
+            changed = true;
+        }
 
         ui.separator();
         ui.label(egui::RichText::new(get!("editor.features.footprint_room.regions")).strong());
@@ -465,11 +615,17 @@ impl FeatureTrait for FootprintRoom {
             changed = true;
         }
 
-        ui.separator();
-        changed |= self.floor.editor_ui(ui, &get!("editor.features.footprint_room.floor"), features, prior_feature_order, retarget_request);
+        let origin = self.resolved_origin;
         for corner in &mut self.corners {
             ui.separator();
-            changed |= corner.at.editor_ui(ui, &Self::corner_label(corner.id), features, prior_feature_order, retarget_request);
+            // "None" leaves the corner where it is in the world, which the next resolve measures from
+            // the origin again.
+            let mut from_origin = corner.at.reference.is_none();
+            changed |= corner.at.editor_ui_with_own(ui, &Self::corner_label(corner.id), features, prior_feature_order, retarget_request, Some(OwnBase {
+                label: &origin_label,
+                point: origin,
+                active: &mut from_origin,
+            }));
         }
         if changed {
             self.resolve_references(features);
@@ -487,7 +643,7 @@ impl FeatureTrait for FootprintRoom {
     }
 
     fn debug_gizmos(&self, gizmos: &mut Gizmos) {
-        let at = |p: Vec2| Vec3::new(p.x, self.resolved_floor, p.y);
+        let at = |p: Vec2| Vec3::new(p.x, self.resolved_origin.y, p.y);
         for line in &self.lines {
             if let (Some(a), Some(b)) = (self.corner_at(line.a), self.corner_at(line.b)) {
                 gizmos.line(at(a), at(b), Color::srgb_u8(200, 200, 120));
@@ -498,6 +654,10 @@ impl FeatureTrait for FootprintRoom {
                 gizmos.line(a, b, Color::srgb_u8(100, 100, 100));
             }
         }
+    }
+
+    fn selected_gizmos(&self, gizmos: &mut Gizmos) {
+        gizmos.line(self.resolved_origin, self.origin_handle_point(), Color::srgb_u8(120, 220, 230));
     }
 
     fn entity(&self) -> Option<Entity> {
@@ -532,21 +692,28 @@ impl FeatureTrait for FootprintRoom {
     }
 
     fn resolve_references(&mut self, features: &HashMap<FeatureId, Feature>) {
-        if let Ok(floor) = self.floor.resolve(features) {
-            self.resolved_floor = floor.y;
-        }
+        self.resolve_origin(features);
+        let origin = self.resolved_origin;
         // A corner that does not resolve is left out, and the lines naming it
         // say so as missing points.
         self.resolved_corners = self
             .corners
             .iter_mut()
-            .filter_map(|corner| corner.at.resolve(features).ok().map(|at| (corner.id, Vec2::new(at.x, at.z))))
+            .filter_map(|corner| {
+                let at = if corner.at.reference.is_none() {
+                    corner.measure_from(origin);
+                    Some(corner.at.resolve_from(origin))
+                } else {
+                    corner.at.resolve(features).ok()
+                };
+                at.map(|at| (corner.id, Vec2::new(at.x, at.z)))
+            })
             .collect();
         self.resolve_rooms();
     }
 
     fn parent_ids(&self) -> Vec<FeatureId> {
-        let mut ids = self.floor.referenced_features();
+        let mut ids = self.origin.referenced_features();
         for corner in &self.corners {
             for id in corner.at.referenced_features() {
                 if !ids.contains(&id) {
@@ -558,7 +725,10 @@ impl FeatureTrait for FootprintRoom {
     }
 
     fn available_point_keys(&self) -> Vec<(String, String)> {
-        let mut keys = vec![("floor".to_string(), get!("editor.features.footprint_room.floor"))];
+        let mut keys = vec![
+            ("origin".to_string(), get!("editor.features.footprint_room.origin")),
+            ("floor".to_string(), get!("editor.features.footprint_room.floor")),
+        ];
         for corner in &self.corners {
             let label = Self::corner_label(corner.id);
             keys.push((format!("corner#{}", corner.id.0), label.clone()));
@@ -580,27 +750,37 @@ impl FeatureTrait for FootprintRoom {
     }
 
     fn point_refs(&self) -> Vec<&PointRef> {
-        std::iter::once(&self.floor).chain(self.corners.iter().map(|corner| &corner.at)).collect()
+        std::iter::once(&self.origin).chain(self.corners.iter().map(|corner| &corner.at)).collect()
     }
 
     fn get_point_ref(&self, key: &str) -> Option<&PointRef> {
-        if key == "floor" || key == get!("editor.features.footprint_room.floor") {
-            return Some(&self.floor);
+        if Self::is_origin_key(key) {
+            return Some(&self.origin);
         }
-        self.corners
-            .iter()
-            .find(|corner| key == format!("corner#{}", corner.id.0) || key == Self::corner_label(corner.id))
-            .map(|corner| &corner.at)
+        let id = self.corner_by_key(key)?;
+        self.corners.iter().find(|corner| corner.id == id).map(|corner| &corner.at)
     }
 
     fn get_point_ref_mut(&mut self, key: &str) -> Option<&mut PointRef> {
-        if key == "floor" || key == get!("editor.features.footprint_room.floor") {
-            return Some(&mut self.floor);
+        if Self::is_origin_key(key) {
+            return Some(&mut self.origin);
         }
-        self.corners
-            .iter_mut()
-            .find(|corner| key == format!("corner#{}", corner.id.0) || key == Self::corner_label(corner.id))
-            .map(|corner| &mut corner.at)
+        let id = self.corner_by_key(key)?;
+        self.corners.iter_mut().find(|corner| corner.id == id).map(|corner| &mut corner.at)
+    }
+
+    fn own_bases(&self, point_ref_key: &str) -> Vec<(String, Vec3)> {
+        match self.corner_by_key(point_ref_key) {
+            Some(_) => vec![("origin".into(), self.resolved_origin)],
+            None => Vec::new(),
+        }
+    }
+
+    fn rebase_on_own(&mut self, point_ref_key: &str, base: &str) -> bool {
+        match self.corner_by_key(point_ref_key) {
+            Some(id) if base == "origin" => self.measure_from_origin(id),
+            _ => false,
+        }
     }
 
     fn rooms(&self) -> Vec<Room> {
@@ -623,17 +803,18 @@ impl FeatureTrait for FootprintRoom {
             return false;
         }
         if is_max {
-            let height = (new_world_value - self.resolved_floor).max(MIN_HEIGHT);
+            let height = (new_world_value - self.resolved_origin.y).max(MIN_HEIGHT);
             let changed = height != self.height;
             self.height = height;
             changed
         } else {
-            self.floor.drag_axis(1, new_world_value)
+            self.origin.drag_axis(1, new_world_value)
         }
     }
 
     fn mirror(&mut self, mirroring: &Mirroring) -> bool {
-        let floor = self.resolved_floor;
+        let floor = self.resolved_origin.y;
+        self.resolved_origin = mirroring.point(self.resolved_origin);
         let across = |p: Vec2| {
             let moved = mirroring.point(Vec3::new(p.x, floor, p.y));
             Vec2::new(moved.x, moved.z)
@@ -975,6 +1156,102 @@ mod tests {
         let mut room = room;
         room.drag_handle(true, 1, -10.0);
         assert_eq!(room.height(), MIN_HEIGHT, "a ceiling went through its floor");
+    }
+
+    /// The square drawn with the tool, whose corners are measured from its
+    /// origin at its first corner.
+    fn a_drawn_square() -> FootprintRoom {
+        let mut room = FootprintRoom::new(PointRef::absolute(10.0, 1.0, 20.0), 3.0);
+        room.add_chain(&new_corners(&[(10.0, 20.0), (16.0, 20.0), (16.0, 26.0), (10.0, 26.0)]), true, &HashMap::new());
+        room
+    }
+
+    #[test]
+    fn a_drawn_footprint_moves_with_its_origin() {
+        let mut room = a_drawn_square();
+        assert_eq!(room.rooms().len(), 1);
+        assert!(room.corners.iter().all(|corner| corner.at.reference.is_none() && corner.at.x.is_relative() && corner.at.z.is_relative()), "a drawn corner was left in the world");
+        assert_eq!(room.rooms()[0].bounds().0, Vec3::new(10.0, 1.0, 20.0));
+
+        assert!(room.drag_origin(Vec2::new(-5.0, 3.0)));
+        assert!(room.drag_handle(false, 1, 2.0));
+        let room = resolved(room);
+        assert_eq!(room.rooms()[0].bounds(), (Vec3::new(-5.0, 2.0, 3.0), Vec3::new(1.0, 5.0, 9.0)));
+        assert!(room.problems().is_empty(), "the room was lost when its origin moved: {:?}", room.problems());
+    }
+
+    #[test]
+    fn a_corner_dragged_after_the_origin_moved_lands_where_it_was_put() {
+        let mut room = resolved(a_drawn_square());
+        room.drag_origin(Vec2::new(0.0, 0.0));
+        let mut room = resolved(room);
+        let third = room.corners[2].id;
+        assert!(room.drag_corner(third, Vec2::new(8.0, 6.0)));
+        let room = resolved(room);
+        assert_eq!(room.get_point(&format!("corner#{}", third.0)).unwrap(), Vec3::new(8.0, 1.0, 6.0));
+    }
+
+    /// A corner measured from another feature stays on that feature's point.
+    #[test]
+    fn a_corner_on_another_feature_stays_put_when_the_origin_moves() {
+        use crate::editor::editable::FeatureTimeline;
+        use crate::editor::global_point::GlobalPoint;
+
+        let mut timeline = FeatureTimeline::default();
+        let anchor = timeline.apply_feature(Box::new(GlobalPoint::new(4.0, 0.0, 0.0)));
+        let mut room = FootprintRoom::new(PointRef::absolute(0.0, 0.0, 0.0), 3.0);
+        let chain = [
+            ChainCorner::New(corner(0.0, 0.0)),
+            ChainCorner::New(PointRef::reference(anchor)),
+            ChainCorner::New(corner(0.0, 4.0)),
+        ];
+        room.add_chain(&chain, true, timeline.features_map());
+        assert!(room.corners[1].at.reference.is_some());
+        room.drag_origin(Vec2::new(-1.0, 0.0));
+        room.resolve_references(timeline.features_map());
+        assert_eq!(room.get_point(&format!("corner#{}", room.corners[1].id.0)).unwrap(), Vec3::new(4.0, 0.0, 0.0));
+        assert_eq!(room.get_point(&format!("corner#{}", room.corners[0].id.0)).unwrap(), Vec3::new(-1.0, 0.0, 0.0));
+    }
+
+    /// A corner put in the world, by the inspector's "None" or a caller, is
+    /// measured from the origin from then on, where it was.
+    #[test]
+    fn a_corner_put_in_the_world_is_measured_from_the_origin() {
+        let (mut room, ids) = a_square_room();
+        room.origin = PointRef::absolute(3.0, 0.0, 3.0);
+        let mut room = resolved(room);
+        let corner = room.corners.iter_mut().find(|corner| corner.id == ids[2]).unwrap();
+        corner.at = PointRef::absolute(6.0, 0.0, 6.0);
+        let mut room = resolved(room);
+        let key = format!("corner#{}", ids[2].0);
+        assert_eq!(room.get_point(&key).unwrap(), Vec3::new(6.0, 0.0, 6.0), "putting a corner in the world moved it");
+        assert!(room.corners.iter().all(|corner| corner.at.x.is_relative()), "a corner stayed in the world");
+        room.drag_origin(Vec2::new(4.0, 3.0));
+        let room = resolved(room);
+        assert_eq!(room.get_point(&key).unwrap(), Vec3::new(7.0, 0.0, 6.0), "the corner did not follow the origin");
+    }
+
+    /// A blueprint written before the origin has a `floor`, wherever its first
+    /// click was, and corners in the world. Read back, its origin is the global
+    /// origin at that floor and nothing moves.
+    #[test]
+    fn a_footprint_saved_with_a_floor_reads_the_global_origin_at_that_floor() {
+        let (mut room, ids) = a_square_room();
+        let before = room.rooms()[0].bounds();
+        room.origin = PointRef::absolute(5.0, 0.0, 7.0);
+        let corners = [(0.0, 0.0), (6.0, 0.0), (6.0, 6.0), (0.0, 6.0)];
+        for (corner, (x, z)) in room.corners.iter_mut().zip(corners) {
+            corner.at = PointRef::absolute(x, 0.0, z);
+        }
+        // With struct names, as a blueprint is written.
+        let config = ron::ser::PrettyConfig::new().struct_names(true);
+        let text = ron::ser::to_string_pretty(&room, config).unwrap().replacen("origin:", "floor:", 1);
+        assert!(text.contains("floor:") && !text.contains("origin:") && text.starts_with("FootprintRoom("), "{text}");
+
+        let read = resolved(ron::from_str::<FootprintRoom>(&text).unwrap());
+        assert_eq!(read.origin_point(), Vec3::ZERO);
+        assert_eq!(read.rooms()[0].bounds(), before, "an older footprint moved");
+        assert_eq!(read.get_point(&format!("corner#{}", ids[1].0)).unwrap(), Vec3::new(6.0, 0.0, 0.0));
     }
 
     /// The map's undo is whole-map snapshots, so a footprint's edits are

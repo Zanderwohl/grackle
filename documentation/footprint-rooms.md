@@ -43,12 +43,23 @@ Everything underneath is built ([collision.md](collision.md), Stages 1–4):
   that is internally tagged, and RON writes it with its struct name and then
   cannot read it back.
 - **Every corner is a `PointRef`**, read for `x` and `z`; its `y` is ignored.
-  Drawn corners are absolute; Shift-picking another feature's point while
-  drawing references it, as the Room tool does. A corner cannot reference the
-  feature it is on — that is a cycle — so "relative to my own first corner"
-  is not offered.
-- **The floor is a `PointRef` too**, read for `y`, and the height above it a
-  number. A floor anchored to another room's floor rides with it.
+  Every corner that names no feature is measured from the footprint's
+  **origin** (resolved with `PointRef::resolve_from`, as a room's max is from
+  its own min); an absolute axis on one is a place in the world, turned into
+  an offset from the origin when it is next resolved, so a corner is never
+  left in the world. Shift-picking another feature's point while drawing references it,
+  as the Room tool does. A corner cannot reference the feature it is on
+  through the timeline — that is a cycle — which is why the origin is an own
+  base rather than a published point.
+- **The origin is a `PointRef` too**, set by the first click, read for `x`,
+  `y` and `z`: its `y` is the floor, and the height above it a number.
+  Dragging its handle (a cyan cube half a meter over it) moves every corner
+  measured from it, so a footprint moves as one; a corner measured from
+  another feature stays on that feature's point. An origin anchored to
+  another feature rides with it. A footprint read with no origin — one
+  written before it, which has a `floor` and corners in the world — gets
+  the global origin at that floor (`FootprintFile`), so nothing moves. The
+  inspector shows the origin above the regions and lines.
 - **The feature names the regions it stands up**, as an extrude does
   (`rooms: Vec<SketchId>`, entries in the region list). One sketch can be
   several rooms at one floor height; each named region is one `Room`, on a
@@ -90,7 +101,7 @@ Everything underneath is built ([collision.md](collision.md), Stages 1–4):
 
 ```
 FootprintRoom {
-    floor: PointRef,                 // its y is the floor
+    origin: PointRef,                // its y is the floor
     height: f32,                     // ceiling above the floor, meters
     next_id: u32,                    // shared by corners, lines and regions
     corners: Vec<Corner>,
@@ -102,10 +113,10 @@ FootprintRoom {
     #[serde(skip)] entity, room_entities
 }
 
-Corner { id: SketchId, at: PointRef }
+Corner { id: SketchId, at: PointRef }   // from the origin unless it names a feature
 ```
 
-Published points: `floor`, and `corner#{id}` / `corner#{id}.ceiling` for
+Published points: `origin`, `floor`, and `corner#{id}` / `corner#{id}.ceiling` for
 every corner, so another feature can reference one.
 
 ## Checklist
@@ -184,6 +195,16 @@ every corner, so another feature can reference one.
       time. Nothing per edit is needed — the map's undo is snapshots of each
       feature's serde, taken when idle.
 - [x] Tried by hand in the editor.
+
+### Stage 4 — moving one
+
+- [x] `origin` replaces `floor`, and every corner naming no feature is
+      measured from it; the retarget tool and each corner's base dropdown
+      offer it as an own base. A file with no origin reads the global origin
+      at its `floor`.
+- [x] An origin handle under Select, dragged in its own horizontal plane.
+- [x] Waterworks' footprints written from their first corner.
+- [ ] Tried by hand in the editor.
 
 ### Later, not in this plan
 

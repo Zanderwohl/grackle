@@ -695,19 +695,8 @@ fn round_panel_ui(ui: &mut egui::Ui, settings: &mut RoundSettings) {
     ui.add(egui::DragValue::new(&mut settings.slots).range(1..=MOST_SLOTS));
 
     ui.heading(get!("editor.round.bots"));
-    ui.checkbox(&mut settings.fill_with_bots, get!("editor.round.fill_with_bots"));
-    ui.checkbox(&mut settings.bot_only_matches, get!("editor.round.bot_only_matches"));
-    let skill_name = |skill: BotSkill| match skill {
-        BotSkill::Easy => get!("editor.round.skill.easy"),
-        BotSkill::Normal => get!("editor.round.skill.normal"),
-        BotSkill::Hard => get!("editor.round.skill.hard"),
-        BotSkill::Varied => get!("editor.round.skill.varied"),
-    };
-    egui::ComboBox::from_label(get!("editor.round.skill.title")).selected_text(skill_name(settings.bot_skill)).show_ui(ui, |ui| {
-        for skill in BotSkill::ALL {
-            ui.selectable_value(&mut settings.bot_skill, skill, skill_name(skill));
-        }
-    });
+    ui.checkbox(&mut settings.bots_enabled, get!("editor.round.bots_enabled"));
+    ui.add_enabled_ui(settings.bots_enabled, |ui| bot_settings_ui(ui, settings));
 
     ui.heading(get!("editor.round.time"));
     ui.horizontal(|ui| {
@@ -738,6 +727,22 @@ fn round_panel_ui(ui: &mut egui::Ui, settings: &mut RoundSettings) {
             ui.add(egui::DragValue::new(length).range(0.0..=f32::MAX).speed(1.0).max_decimals(0).suffix(get!("editor.round.seconds_suffix")));
         });
     }
+}
+
+fn bot_settings_ui(ui: &mut egui::Ui, settings: &mut RoundSettings) {
+    ui.checkbox(&mut settings.fill_with_bots, get!("editor.round.fill_with_bots"));
+    ui.checkbox(&mut settings.bot_only_matches, get!("editor.round.bot_only_matches"));
+    let skill_name = |skill: BotSkill| match skill {
+        BotSkill::Easy => get!("editor.round.skill.easy"),
+        BotSkill::Normal => get!("editor.round.skill.normal"),
+        BotSkill::Hard => get!("editor.round.skill.hard"),
+        BotSkill::Varied => get!("editor.round.skill.varied"),
+    };
+    egui::ComboBox::from_label(get!("editor.round.skill.title")).selected_text(skill_name(settings.bot_skill)).show_ui(ui, |ui| {
+        for skill in BotSkill::ALL {
+            ui.selectable_value(&mut settings.bot_skill, skill, skill_name(skill));
+        }
+    });
 }
 
 /// Newest first, the newest open.
