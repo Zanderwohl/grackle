@@ -412,12 +412,17 @@ from the editor — they are written by
 ([`src/bin/new_map_template.rs`](src/bin/new_map_template.rs)), run from the
 repo root, and that file is where their contents are reviewable.
 
-Choice is uniform random among the spawns on the body's own side — a spawn's
+In a mode without teams a body takes the spawn farthest from every
+other living body — distances summed, each capped at 15 m and costing more
+inside 8 m, a spawn with anybody within
+`respawn::CROWDED` (2.5 m) all but last — counting each body stood up in the
+same frame, so a round start shares the spawns out before doubling up; ties,
+as with nobody else standing, are random. With teams, choice is uniform random among the spawns on the body's own side — a spawn's
 `Side`, from a Mirror (see "Mirroring half a map") — falling back to spawns
 nobody claimed, then to anybody's, so a map with no spawn for a team still
 starts. Sides are chosen before headroom: a team whose own spawns are all
 blocked goes to the largest room, not into the enemy base. Facing comes from the spawn point. Not dropping people on each other
-is still a gamemode question.
+in a team mode is still a gamemode question.
 
 ## Editor and game in one process
 

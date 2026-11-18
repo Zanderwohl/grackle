@@ -10,7 +10,7 @@ use lightyear::prelude::*;
 use crate::common::app_mode::AppMode;
 use std::collections::HashMap;
 
-use crate::common::damage::{Died, NextPlayerId, PlayerId};
+use crate::common::damage::{Damageable, Died, NextPlayerId, PlayerId};
 use crate::common::game_rules::{GameRules, ModeRules};
 use crate::common::round_settings::RoundSettings;
 use crate::common::player_color::lowest_free;
@@ -20,7 +20,9 @@ use crate::common::team::{Side, Team};
 use crate::common::weapon::WeaponCatalog;
 use crate::editor::spawn_point::SpawnPointMarker;
 use crate::game::collision::CollisionWorld;
-use crate::game::player::{spawn_player, LocalPlayer, Player, Simulated, Spawn};
+use crate::common::class::body_center_from_feet;
+use crate::game::death::Dying;
+use crate::game::player::{spawn_player, LocalPlayer, PhysicsBody, Player, Simulated, Spawn};
 use crate::game::bot::{BotIntent, BotOf, BotRoute, BotSeat, BotStride, RouteCosts};
 use crate::game::bot_sense::{BotMind, BotSenses};
 use crate::game::bot_fight::BotAim;
@@ -149,13 +151,15 @@ pub(crate) fn give_bodies_to_whoever_needs_one(
     rules: Res<GameRules>,
     catalog: Res<WeaponCatalog>,
     timers: Option<Res<RespawnTimers>>,
-    (seats, driven, round, mut taken, phase, winners): (
+    (seats, driven, round, mut taken, phase, winners, standing): (
         Query<(Entity, Option<&RouteCosts>, Option<&BotMind>), With<BotSeat>>,
         Query<&BotOf, With<Player>>,
         Option<Res<RoundSettings>>,
         Local<bevy::ecs::entity::EntityHashSet>,
         Option<Res<State<MatchPhase>>>,
         Option<Res<Winners>>,
+        // Health too: `Dying` is inserted by command, a frame after the pool empties.
+        Query<(&PhysicsBody, &Damageable), (With<Player>, Without<Dying>)>,
     ),
     standings: Query<&Standing>,
 ) {
@@ -173,6 +177,20 @@ pub(crate) fn give_bodies_to_whoever_needs_one(
     // Worked out only once somebody needs a body, so a frame with nobody waiting allocates nothing.
     let placed_once = std::cell::OnceCell::new();
     let placed = || placed_once.get_or_init(|| placed_spawns(&spawns));
+    // Each body stood up this frame is added, so a round start shares the spawns out.
+    // With teams a body starts beside its own team, so distance is not asked.
+    let mut occupied: Option<Vec<Vec3>> = None;
+    let mut place = |team: Option<Team>| {
+        if rules.teams {
+            return choose_spawn(placed(), team, &[], &collision);
+        }
+        let others = occupied.get_or_insert_with(|| {
+            standing.iter().filter(|(_, health)| health.is_alive()).map(|(body, _)| body.current).collect()
+        });
+        let spawn = choose_spawn(placed(), team, others, &collision);
+        others.push(body_center_from_feet(spawn.feet));
+        spawn
+    };
 
     // Decides the next player's color. Counted from existing identities, so
     // somebody leaving frees their hue up. A team is theirs to choose.
@@ -204,7 +222,7 @@ pub(crate) fn give_bodies_to_whoever_needs_one(
             }
         };
         if !waiting(who) && who.seat.is_playing() {
-            let spawn = choose_spawn(placed(), who.team(), &collision);
+            let spawn = place(who.team());
             info!("Standing our own body up as {} on {}", who.id, team_name(who.team()));
             let body = spawn_player(&mut commands, spawn, &who, who.color(&start), &rules, &catalog);
             commands.entity(body).insert(LocalPlayer);
@@ -235,7 +253,7 @@ pub(crate) fn give_bodies_to_whoever_needs_one(
         if waiting(who) || !who.seat.is_playing() {
             continue;
         }
-        let spawn = choose_spawn(placed(), who.team(), &collision);
+        let spawn = place(who.team());
         info!("Standing a client's body up as {} on {}", who.id, team_name(who.team()));
         spawn_body_for(&mut commands, spawn, (who, start), (link, peer.0), &rules, &catalog);
     }
@@ -286,7 +304,7 @@ pub(crate) fn give_bodies_to_whoever_needs_one(
         if waiting(who) || who.seat == Seat::Choosing {
             continue;
         }
-        let spawn = choose_spawn(placed(), who.team(), &collision);
+        let spawn = place(who.team());
         info!("Standing a bot's body up as {} on {}", who.id, team_name(who.team()));
         let body = spawn_player(&mut commands, spawn, &who, who.color(&start), &rules, &catalog);
         commands.entity(body).insert((BotOf(seat), BotIntent::default(), BotRoute::default(), BotStride::default(), costs, mind, BotSenses::default(), BotThought::default(), BotAim::default(), Name::new("Bot")));
