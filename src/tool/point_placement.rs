@@ -2,16 +2,17 @@
 //! preview, click to commit, or hold shift to pick a reference point and place
 //! relative to it. A tool supplies only a [`PlaceablePoint`].
 
-use crate::common::keybind::{Action, Actions};
+use crate::common::keybind::Actions;
 use std::marker::PhantomData;
 
 use bevy::app::App;
 use bevy::prelude::*;
 
 use crate::common::app_mode::AppMode;
-use crate::editor::editable::{FeatureId, FeatureTimeline, FeatureTrait, PointRef};
+use crate::editor::editable::{FeatureTimeline, FeatureTrait, PointRef};
 use crate::editor::input::CurrentMouseInput;
 use crate::editor::multicam::Multicam;
+use crate::tool::point_picker::{Picked, PointPicker};
 use crate::tool::room::MapVolumes;
 use crate::tool::tool_helpers::*;
 use crate::tool::Tools;
@@ -33,24 +34,11 @@ pub trait PlaceablePoint: Send + Sync + 'static {
     fn draw_preview(gizmos: &mut Gizmos, cursor: Vec3, color: Color);
 }
 
-#[derive(PartialEq, Eq, Clone, Copy)]
-enum PointPlacementMode {
-    Normal,
-    Picking,
-    RelativeSelected,
-}
-
 #[derive(Resource)]
 pub struct PointPlacementTool<F: PlaceablePoint> {
-    mode: PointPlacementMode,
+    picker: PointPicker,
     last_position: Vec3,
     cursor: Option<Vec3>,
-    reference_feature: Option<FeatureId>,
-    reference_key: String,
-    reference_resolved: Option<Vec3>,
-    hovered_point: Option<(FeatureId, String, Vec3)>,
-    /// The Shift held for picking was used to fly; releasing it keeps the reference.
-    flew: bool,
     snap: bool,
     snap_granularity: f32,
     _feature: PhantomData<F>,
@@ -59,14 +47,9 @@ pub struct PointPlacementTool<F: PlaceablePoint> {
 impl<F: PlaceablePoint> Default for PointPlacementTool<F> {
     fn default() -> Self {
         Self {
-            mode: PointPlacementMode::Normal,
+            picker: PointPicker::default(),
             last_position: Vec3::ZERO,
             cursor: None,
-            reference_feature: None,
-            reference_key: String::new(),
-            reference_resolved: None,
-            hovered_point: None,
-            flew: false,
             snap: true,
             snap_granularity: DEFAULT_SNAP_GRANULARITY,
             _feature: PhantomData,
@@ -88,12 +71,8 @@ pub fn add_point_placement_tool<F: PlaceablePoint>(app: &mut App) {
 
 impl<F: PlaceablePoint> PointPlacementTool<F> {
     fn on_exit(mut tool: ResMut<Self>) {
-        tool.mode = PointPlacementMode::Normal;
+        tool.picker.reset();
         tool.cursor = None;
-        tool.hovered_point = None;
-        tool.reference_feature = None;
-        tool.reference_key.clear();
-        tool.reference_resolved = None;
     }
 
     fn interface(
@@ -105,81 +84,17 @@ impl<F: PlaceablePoint> PointPlacementTool<F> {
         rooms: MapVolumes,
         mut next_tool: ResMut<NextState<Tools>>,
     ) {
-        let shift_held = actions.pressed(Action::Modify);
-        let shift_just_pressed = actions.just_pressed(Action::Modify);
-
-        tool.cursor = compute_cursor(
-            &mouse_input, &cameras, tool.last_position,
-            tool.snap, tool.snap_granularity, &rooms,
-        );
-
-        match tool.mode {
-            PointPlacementMode::Normal => {
-                if shift_held {
-                    tool.mode = PointPlacementMode::Picking;
-                    tool.hovered_point = None;
-                    tool.flew = false;
-                } else if let Some(cursor) = tool.cursor {
-                    if commit_at_cursor(&mouse_input, &actions) {
-                        let id = features.apply_feature(F::from_position(cursor));
-                        features.select(Some(id));
-                        tool.last_position = cursor;
-                        next_tool.set(Tools::Select);
-                    }
-                }
-            }
-            PointPlacementMode::Picking => {
-                tool.flew |= camera_dragging(&mouse_input);
-                if !shift_held {
-                    tool.hovered_point = None;
-                    if tool.flew && tool.reference_feature.is_some() {
-                        tool.mode = PointPlacementMode::RelativeSelected;
-                    } else {
-                        tool.mode = PointPlacementMode::Normal;
-                        tool.reference_feature = None;
-                        tool.reference_key.clear();
-                        tool.reference_resolved = None;
-                    }
-                    return;
-                }
-
-                tool.hovered_point = mouse_input.world_pos
-                    .and_then(|ray| find_hovered_point(&ray, &features, PICK_RADIUS));
-
-                if mouse_input.released == Some(MouseButton::Left) {
-                    if let Some((feature_id, key, resolved)) = tool.hovered_point.take() {
-                        tool.reference_feature = Some(feature_id);
-                        tool.reference_key = key;
-                        tool.reference_resolved = Some(resolved);
-                        tool.mode = PointPlacementMode::RelativeSelected;
-                    }
-                }
-            }
-            PointPlacementMode::RelativeSelected => {
-                // Kept until Shift comes up, in case it was held to fly faster.
-                if shift_just_pressed {
-                    tool.mode = PointPlacementMode::Picking;
-                    tool.hovered_point = None;
-                    tool.flew = false;
-                    return;
-                }
-
-                let (Some(ref_feature), Some(ref_resolved)) = (tool.reference_feature, tool.reference_resolved) else {
-                    return;
-                };
-                if let Some(at) = relative_commit(&mouse_input, &actions, tool.cursor, ref_resolved) {
-                    let d = at - ref_resolved;
-                    let mut pr = PointRef::reference_with_offset(ref_feature, d.x, d.y, d.z);
-                    if !tool.reference_key.is_empty() {
-                        pr.point_key = tool.reference_key.clone();
-                    }
-                    let id = features.apply_feature(F::from_point_ref(pr));
-                    features.select(Some(id));
-                    tool.last_position = at;
-                    next_tool.set(Tools::Select);
-                }
-            }
-        }
+        let tool = &mut *tool;
+        tool.cursor = compute_cursor(&mouse_input, &cameras, tool.last_position, tool.snap, tool.snap_granularity, &rooms);
+        let feature = match tool.picker.update(&mouse_input, &actions, &features, tool.cursor, None, Some) {
+            Picked::Nothing | Picked::Canceled => return,
+            Picked::Absolute(at) => (F::from_position(at), at),
+            Picked::Relative(point, at) => (F::from_point_ref(point), at),
+        };
+        let id = features.apply_feature(feature.0);
+        features.select(Some(id));
+        tool.last_position = feature.1;
+        next_tool.set(Tools::Select);
     }
 
     fn draw_gizmos(
@@ -189,23 +104,9 @@ impl<F: PlaceablePoint> PointPlacementTool<F> {
         mut gizmos: Gizmos,
     ) {
         if let Some(cursor) = tool.cursor {
-            let color = match tool.mode {
-                PointPlacementMode::RelativeSelected => F::relative_color(),
-                _ => F::normal_color(),
-            };
+            let color = if tool.picker.reference().is_some() { F::relative_color() } else { F::normal_color() };
             F::draw_preview(&mut gizmos, cursor, color);
-
-            if tool.mode == PointPlacementMode::RelativeSelected {
-                if let Some(base) = tool.reference_resolved {
-                    draw_taxicab_path(&mut gizmos, base, cursor);
-                }
-            }
         }
-
-        if tool.mode == PointPlacementMode::Picking {
-            if let Some(ray) = mouse_input.world_pos {
-                draw_picking_gizmos(&mut gizmos, &ray, &features, &tool.hovered_point);
-            }
-        }
+        tool.picker.draw(&mut gizmos, &mouse_input, &features, tool.cursor);
     }
 }

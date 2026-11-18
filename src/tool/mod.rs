@@ -33,6 +33,7 @@ pub mod point_drag;
 pub mod animation_display;
 pub mod animation_grid;
 pub mod point_placement;
+pub mod point_picker;
 pub mod mirror;
 pub mod prop;
 pub mod weapon_pickup;

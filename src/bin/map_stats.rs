@@ -70,8 +70,7 @@ fn main() {
     }
 
     let mut world = CollisionWorld::default();
-    let mut faces = world.rebuild_volumes(&volumes);
-    grackle::common::stairs::add_to_world(&mut world, &mut faces, &stairs);
+    let faces = world.rebuild_map(&volumes, &stairs);
     let mut graph = nav::graph(&world, &faces, &triggers, &rules, &spawns);
     graph.set_fields(nav_field::bake(&world, &graph, &triggers, &rules, pickups.clone(), spawns.clone()));
 

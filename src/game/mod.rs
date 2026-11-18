@@ -6,7 +6,7 @@ use crate::common::damage::NextPlayerId;
 use crate::common::movement_rules::MovementRules;
 use crate::common::net::NetRole;
 use crate::common::skeleton::AnimationClock;
-use crate::common::stairs::{self, Stairs};
+use crate::common::stairs::Stairs;
 use crate::common::world_surface::Volume;
 use crate::editor::multicam::Multicam;
 use crate::game::collision::CollisionWorld;
@@ -366,11 +366,11 @@ pub(crate) fn rebuild_collision_when_rooms_change(
     rebuild_collision(&mut collision, &volumes.volumes(), &stairs);
 }
 
-/// The map's surface and its stairs. Collision is built from the features' components rather
-/// than from the baked meshes, so a flight collides as soon as it is placed, bake or no bake.
+/// From the features' components rather than the baked meshes, so a flight collides as soon as
+/// it is placed.
 fn rebuild_collision(collision: &mut CollisionWorld, volumes: &[Volume], stairs: &Query<&Stairs>) {
-    let mut faces = collision.rebuild_volumes(volumes);
-    stairs::add_to_world(collision, &mut faces, stairs.iter().map(|flight| &flight.0));
+    let stairs: Vec<_> = stairs.iter().map(|flight| flight.0).collect();
+    collision.rebuild_map(volumes, &stairs);
 }
 
 #[cfg(test)]

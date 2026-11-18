@@ -13,7 +13,7 @@ use bevy::prelude::*;
 use crate::common::app_mode::AppMode;
 use crate::common::movement_rules::MovementRules;
 use crate::common::round_settings::RoundSettings;
-use crate::common::stairs::{self, Stairs, StairsShape};
+use crate::common::stairs::{Stairs, StairsShape};
 use crate::common::trigger::TriggerVolume;
 use crate::common::world_surface::{Face, Volume};
 use crate::common::weapon::WeaponCatalog;
@@ -214,8 +214,7 @@ impl Surface {
     /// The collision world, and the faces floor is sampled from.
     fn world(&self) -> (CollisionWorld, Vec<Face>) {
         let mut world = CollisionWorld::default();
-        let mut faces = world.rebuild_volumes(&self.volumes);
-        stairs::add_to_world(&mut world, &mut faces, &self.stairs);
+        let faces = world.rebuild_map(&self.volumes, &self.stairs);
         (world, faces)
     }
 }
@@ -342,7 +341,7 @@ impl NavInputs<'_, '_> {
         let volumes = self.volumes.volumes();
         let mut stairs: Vec<StairsShape> = self.stairs.iter().map(|flight| flight.0).collect();
         // Query order follows archetypes; the hash must not.
-        stairs.sort_by(|a, b| format!("{a:?}").cmp(&format!("{b:?}")));
+        stairs.sort_by_cached_key(|flight| format!("{flight:?}"));
         // Props are rebuilt every tick without change detection, so they are compared instead.
         let props = self.collision.props.clone();
         let triggers: Vec<TriggerVolume> = self.triggers.iter().copied().collect();

@@ -6,9 +6,9 @@
 //! and its distance from that plane is the rise. "Up" is toward the height point, so a footprint
 //! on a level floor with the height point above it is an ordinary flight.
 //!
-//! What is collided with is the ramp: a plane from the start edge on the base to the end edge at
-//! full height. Steps are drawn entirely under it, their nosings on it, so a body walks the
-//! plane and never catches on a step.
+//! What collides is the ramp from the start edge on the base toward the end edge at full height.
+//! It passes through the middle of every tread, so each step is half above it and half below,
+//! and a body walks the plane and does not catch on a step.
 
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -18,27 +18,25 @@ use crate::common::world_surface::Face;
 use crate::game::collision::Hull;
 use crate::game::player::WALKABLE;
 
-/// Under this, in meters, a run, width or height is no length at all.
+/// Meters. A shorter run, width or height is degenerate.
 const DEGENERATE: f32 = 1.0e-3;
 
-/// More steps than this is a ramp drawn the hard way.
+/// Caps the faces one flight makes.
 pub const MOST_STEPS: usize = 256;
 
 /// The thinnest a thin collider is made, so a sweep still has a slab to stop on.
 const THINNEST_COLLIDER: f32 = 0.02;
 
-/// How a flight is drawn and how solid it is. Each choice keeps its number when switched off, so
-/// switching back loses nothing.
+/// Flags and numbers rather than enums, so switching a choice off and back keeps its number.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
 pub struct StairsStyle {
-    /// Steps rather than one sloped surface.
     pub steps: bool,
     /// Meters. The height each step is asked to be; the flight rounds it so a whole number of
     /// steps makes the rise.
     pub rise: f32,
-    /// Solid down to the base, with walls round it, rather than a floating slab per step.
+    /// Solid down to the base, rather than floating slabs.
     pub thick: bool,
-    /// Meters. How thick a thin ramp or each thin step is.
+    /// Meters, for a thin flight.
     pub thickness: f32,
 }
 
@@ -48,10 +46,8 @@ impl Default for StairsStyle {
     }
 }
 
-/// Why four points make no flight.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Degenerate {
-    /// `start` and `end` are the same point.
     NoRun,
     /// `width` lies on the line through `start` and `end`.
     NoWidth,
@@ -101,8 +97,6 @@ impl Frame {
     }
 }
 
-/// How many steps a flight of `height` takes at `rise` each, and so each step's real rise and
-/// depth.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Steps {
     pub count: usize,
@@ -118,7 +112,6 @@ impl Steps {
     }
 }
 
-/// A flight as its feature resolved it: the four points and the style.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct StairsShape {
     pub start: Vec3,
@@ -166,7 +159,7 @@ impl StairsShape {
         self.style.steps.then(|| Steps::of(&frame, self.style.rise))
     }
 
-    /// What is drawn, each face pointing out into the air. None for a degenerate flight.
+    /// What is drawn, each face pointing out into the air.
     pub fn faces(&self) -> Vec<Face> {
         let Ok(frame) = self.frame() else { return Vec::new() };
         let mut faces = Faces { frame, faces: Vec::new() };
@@ -175,18 +168,20 @@ impl StairsShape {
             (false, false) => faces.thin_ramp(self.style.thickness),
             (true, thick) => {
                 let steps = Steps::of(&frame, self.style.rise);
-                // Step k (from 1) sits between risers k and k + 1, its nosing on the ramp. The last
-                // riser is the end edge, up onto whatever floor the flight leads to.
-                for k in 1..steps.count {
-                    let (near, far, top) = (k as f32 * steps.depth, (k + 1) as f32 * steps.depth, k as f32 * steps.rise);
+                // Tread k's middle is on the ramp, so the first riser and the last, onto the floor
+                // past the end edge, are half a step.
+                for k in 0..steps.count {
+                    let (near, far) = (k as f32 * steps.depth, (k + 1) as f32 * steps.depth);
+                    let top = (k as f32 + 0.5) * steps.rise;
                     if thick {
-                        faces.thick_step(near, far, top, steps.rise);
+                        faces.thick_step(near, far, top, if k == 0 { top } else { steps.rise });
                     } else {
-                        faces.block(near, far, top - self.style.thickness, top);
+                        // Never below the base: the first tread's top is only half a step up.
+                        faces.block(near, far, (top - self.style.thickness).max(0.0), top);
                     }
                 }
-                if thick && steps.count > 1 {
-                    faces.back(steps.rise * (steps.count - 1) as f32);
+                if thick {
+                    faces.back(frame.height - steps.rise / 2.0);
                 }
             }
         }
@@ -200,38 +195,53 @@ impl StairsShape {
         face(corners.to_vec(), frame.ramp_normal())
     }
 
-    /// What is collided with: thick, the wedge under the ramp, so nothing gets under it from any
-    /// side; thin, the ramp alone, as deep as the flight is thin.
+    /// Where the collider's slope ends, along, and how high its top is. For steps it stops at the
+    /// last tread's height, halfway along it, so nothing solid stands above what is drawn there.
+    pub fn collider_top(&self, frame: &Frame) -> (f32, f32) {
+        if !self.style.steps {
+            return (frame.run, frame.height);
+        }
+        let steps = Steps::of(frame, self.style.rise);
+        (frame.run - steps.depth / 2.0, frame.height - steps.rise / 2.0)
+    }
+
+    /// What is collided with: thick, the solid under the collider's top faces, so nothing gets
+    /// under it from any side; thin, a slab under each top face, as deep as what is drawn there.
     pub fn hulls(&self) -> Vec<Hull> {
         let Ok(frame) = self.frame() else { return Vec::new() };
+        let (knee, top) = self.collider_top(&frame);
         if self.style.thick {
-            let (h, r, w) = (frame.height, frame.run, frame.width);
-            let corners = [frame.at(0.0, 0.0, 0.0), frame.at(0.0, w, 0.0), frame.at(r, 0.0, 0.0), frame.at(r, w, 0.0), frame.at(r, 0.0, h), frame.at(r, w, h)];
-            let faces = [frame.ramp_normal(), -frame.up, frame.along, frame.across, -frame.across];
-            let edges = [frame.along, frame.across, frame.up, frame.along * r + frame.up * h];
+            let (r, w) = (frame.run, frame.width);
+            let corners = [
+                frame.at(0.0, 0.0, 0.0), frame.at(0.0, w, 0.0), frame.at(r, 0.0, 0.0), frame.at(r, w, 0.0),
+                frame.at(knee, 0.0, top), frame.at(knee, w, top), frame.at(r, 0.0, top), frame.at(r, w, top),
+            ];
+            let faces = [frame.ramp_normal(), frame.up, -frame.up, frame.along, frame.across, -frame.across];
+            let edges = [frame.along, frame.across, frame.up, frame.along * frame.run + frame.up * frame.height];
             vec![Hull::new(&corners, &faces, &edges)]
         } else {
-            let Some(ramp) = self.ramp() else { return Vec::new() };
-            vec![Hull::slab(&ramp.vertices, ramp.plane.normal, self.style.thickness.max(THINNEST_COLLIDER))]
+            // Drawn thickness is straight down, so across a sloped face it is thinner.
+            self.collider_faces()
+                .into_iter()
+                .map(|face| {
+                    let depth = (self.style.thickness * face.plane.normal.dot(frame.up)).max(THINNEST_COLLIDER);
+                    Hull::slab(&face.vertices, face.plane.normal, depth)
+                })
+                .collect()
         }
     }
 
-    /// The collider's faces, for what samples floor from faces (the nav graph's cells). Only the
-    /// ramp is floor; a thick flight's walls are walls whichever faces list them.
+    /// The collider's top, for what samples floor from faces (the nav graph's cells): the ramp up
+    /// to [`Self::collider_top`]'s knee, then flat to the end edge.
     pub fn collider_faces(&self) -> Vec<Face> {
-        self.ramp().into_iter().collect()
-    }
-}
-
-/// Adds every flight's colliders to `world`, and their faces to `faces` beside the surface's.
-pub fn add_to_world<'a>(world: &mut crate::game::collision::CollisionWorld, faces: &mut Vec<Face>, stairs: impl IntoIterator<Item = &'a StairsShape>) {
-    let mut hulls = Vec::new();
-    for flight in stairs {
-        hulls.extend(flight.hulls());
-        faces.extend(flight.collider_faces());
-    }
-    if !hulls.is_empty() {
-        world.add_hulls(hulls);
+        let Ok(frame) = self.frame() else { return Vec::new() };
+        let (knee, top) = self.collider_top(&frame);
+        let (r, w) = (frame.run, frame.width);
+        let mut faces: Vec<Face> = face(vec![frame.at(0.0, 0.0, 0.0), frame.at(0.0, w, 0.0), frame.at(knee, w, top), frame.at(knee, 0.0, top)], frame.ramp_normal()).into_iter().collect();
+        if r - knee > DEGENERATE {
+            faces.extend(face(vec![frame.at(knee, 0.0, top), frame.at(knee, w, top), frame.at(r, w, top), frame.at(r, 0.0, top)], frame.up));
+        }
+        faces
     }
 }
 
@@ -300,13 +310,11 @@ impl Faces {
         self.sides(&[(near, 0.0), (far, 0.0), (far, top), (near, top)]);
     }
 
-    /// The thick flight's back, at the end edge, up to `top`.
     fn back(&mut self, top: f32) {
         let f = self.frame;
         self.across((f.run, 0.0), (f.run, top), f.along);
     }
 
-    /// A floating slab between `near` and `far` along and `bottom` and `top` up.
     fn block(&mut self, near: f32, far: f32, bottom: f32, top: f32) {
         let f = self.frame;
         self.across((near, top), (far, top), f.up);
@@ -366,15 +374,15 @@ mod tests {
             let mut faces = flight(style).faces();
             // The base, so the volume is of a closed solid.
             if steps {
-                for k in 1..4 {
+                for k in 0..4 {
                     let (near, far) = (k as f32, k as f32 + 1.0);
                     faces.extend(face(vec![Vec3::new(near, 0.0, 0.0), Vec3::new(far, 0.0, 0.0), Vec3::new(far, 0.0, 2.0), Vec3::new(near, 0.0, 2.0)], Vec3::NEG_Y));
                 }
             } else {
                 faces.extend(face(vec![Vec3::ZERO, Vec3::X * 4.0, Vec3::new(4.0, 0.0, 2.0), Vec3::Z * 2.0], Vec3::NEG_Y));
             }
-            // Steps: 0.5 + 1.0 + 1.5 high, 1 m deep, 2 m wide. Ramp: half of 4 × 2 × 2.
-            let expected = if steps { 6.0 } else { 8.0 };
+            // Steps: 0.25 + 0.75 + 1.25 + 1.75 high, 1 m deep, 2 m wide. Ramp: half of 4 × 2 × 2.
+            let expected = 8.0;
             assert!((volume(&faces) - expected).abs() < 1e-3, "steps {steps}: {}", volume(&faces));
         }
     }
@@ -383,22 +391,23 @@ mod tests {
     fn a_thin_flight_is_closed() {
         for steps in [false, true] {
             let style = StairsStyle { steps, rise: 0.5, thick: false, thickness: 0.1 };
-            // Ramp: 4 m by 2 m, 0.1 m deep straight down. Steps: three 1 × 2 × 0.1 slabs.
-            let expected = if steps { 0.6 } else { 0.8 };
+            // Ramp: 4 m by 2 m, 0.1 m deep straight down. Steps: four 1 × 2 × 0.1 slabs.
+            let expected = 0.8;
             assert!((volume(&flight(style).faces()) - expected).abs() < 1e-3, "steps {steps}");
         }
     }
 
-    /// Breaks if a step stands proud of the ramp, where a body would catch on its nosing.
+    /// Breaks if the steps drift off the ramp: each tread's middle line is on it.
     #[test]
-    fn every_step_is_under_the_ramp() {
+    fn every_tread_is_halved_by_the_ramp() {
         for thick in [false, true] {
             let shape = flight(StairsStyle { steps: true, rise: 0.3, thick, thickness: 0.1 });
             let ramp = shape.ramp().unwrap();
-            for face in shape.faces() {
-                for vertex in face.vertices {
-                    assert!(ramp.plane.normal.dot(vertex) <= ramp.plane.w + 1e-4, "{vertex} is above the ramp");
-                }
+            let treads: Vec<Face> = shape.faces().into_iter().filter(|face| face.plane.normal.y > 0.99).collect();
+            assert_eq!(treads.len(), 7);
+            for tread in treads {
+                let middle = tread.vertices.iter().sum::<Vec3>() / tread.vertices.len() as f32;
+                assert!((ramp.plane.normal.dot(middle) - ramp.plane.w).abs() < 1e-4, "{middle} is off the ramp");
             }
         }
     }
@@ -423,9 +432,7 @@ mod tests {
     #[test]
     fn nothing_gets_under_a_thick_flight() {
         let mut world = CollisionWorld::default();
-        let mut faces = world.rebuild_volumes(&[Volume::air(Room::new(Vec3::new(-5.0, 0.0, -5.0), Vec3::new(10.0, 5.0, 5.0)))]);
-        let shape = flight(StairsStyle::default());
-        add_to_world(&mut world, &mut faces, [&shape]);
+        world.rebuild_map(&[Volume::air(Room::new(Vec3::new(-5.0, 0.0, -5.0), Vec3::new(10.0, 5.0, 5.0)))], &[flight(StairsStyle::default())]);
         let side = Ray3d::new(Vec3::new(3.0, 0.5, -3.0), Dir3::Z);
         assert!((world.ray_distance(&side, 10.0).unwrap() - 3.0).abs() < 1e-3);
         let back = Ray3d::new(Vec3::new(8.0, 0.5, 1.0), Dir3::NEG_X);
@@ -437,9 +444,7 @@ mod tests {
     #[test]
     fn a_thin_flight_lets_things_under_its_high_end() {
         let mut world = CollisionWorld::default();
-        let mut faces = world.rebuild_volumes(&[Volume::air(Room::new(Vec3::new(-5.0, 0.0, -5.0), Vec3::new(10.0, 5.0, 5.0)))]);
-        let shape = flight(StairsStyle { thick: false, ..default() });
-        add_to_world(&mut world, &mut faces, [&shape]);
+        world.rebuild_map(&[Volume::air(Room::new(Vec3::new(-5.0, 0.0, -5.0), Vec3::new(10.0, 5.0, 5.0)))], &[flight(StairsStyle { thick: false, ..default() })]);
         let under = Ray3d::new(Vec3::new(3.5, 0.5, -3.0), Dir3::Z);
         assert!((world.ray_distance(&under, 20.0).unwrap() - 8.0).abs() < 1e-3, "the thin ramp has walls");
     }
@@ -477,12 +482,33 @@ mod tests {
         let spawn = Vec3::new(-4.0, 0.0, 1.0);
         let on_the_platform = |with: &[StairsShape]| {
             let mut world = CollisionWorld::default();
-            let mut faces = world.rebuild_volumes(&[room.clone(), platform.clone()]);
-            add_to_world(&mut world, &mut faces, with);
+            let faces = world.rebuild_map(&[room.clone(), platform.clone()], with);
             let graph = nav::graph(&world, &faces, &[], &MovementRules::default(), &[spawn]);
             graph.cells().iter().filter(|cell| cell.feet.x > 7.0 && (cell.feet.y - 2.0).abs() < 0.1).count()
         };
         assert_eq!(on_the_platform(&[]), 0, "the platform is in reach without the flight, so this proves nothing");
         assert!(on_the_platform(&[flight]) > 0, "the nav graph does not climb the flight");
+    }
+
+    /// Breaks if a flight of one step draws nothing or stands nothing up.
+    #[test]
+    fn a_single_step_is_drawn_and_collides() {
+        let shape = flight(StairsStyle { rise: 3.0, ..default() });
+        assert_eq!(shape.steps().unwrap().count, 1);
+        assert!(!shape.faces().is_empty() && !shape.hulls().is_empty());
+    }
+
+    /// Breaks if the collider stands taller at the back than the steps drawn there.
+    #[test]
+    fn nothing_solid_stands_over_the_last_tread() {
+        for thick in [false, true] {
+            let mut world = CollisionWorld::default();
+            world.rebuild_map(&[Volume::air(Room::new(Vec3::new(-5.0, 0.0, -5.0), Vec3::new(10.0, 5.0, 5.0)))], &[flight(StairsStyle { rise: 0.5, thick, ..default() })]);
+            // Four steps: the last tread is 1.75 m up from 3 m to the end edge at 4 m.
+            let behind = Ray3d::new(Vec3::new(8.0, 1.85, 1.0), Dir3::NEG_X);
+            assert!((world.ray_distance(&behind, 20.0).unwrap() - 13.0).abs() < 1e-3, "thick {thick}: solid over the last tread");
+            let down = Ray3d::new(Vec3::new(3.75, 4.0, 1.0), Dir3::NEG_Y);
+            assert!((world.ray_distance(&down, 10.0).unwrap() - 2.25).abs() < 1e-3, "thick {thick}: the last tread is not the top");
+        }
     }
 }

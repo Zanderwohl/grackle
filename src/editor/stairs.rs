@@ -22,6 +22,25 @@ const TOO_STEEP_COLOR: Color = Color::srgb(0.95, 0.35, 0.25);
 /// The four points, in the order they are stored and listed.
 const KEYS: [&str; 4] = ["start", "end", "width", "height"];
 
+/// Each point's label, in [`KEYS`] order.
+const LABELS: [&str; 4] = [
+    "editor.features.stairs.start",
+    "editor.features.stairs.end",
+    "editor.features.stairs.width",
+    "editor.features.stairs.height",
+];
+
+/// The derived points: key, label, and where each is in the flight's frame as `(along, across,
+/// up)` in multiples of its run, width and height.
+const DERIVED: [(&str, &str, (f32, f32, f32)); 6] = [
+    ("", "editor.features.stairs.points.center", (0.5, 0.5, 0.0)),
+    ("start_far", "editor.features.stairs.points.start_far", (0.0, 1.0, 0.0)),
+    ("end_far", "editor.features.stairs.points.end_far", (1.0, 1.0, 0.0)),
+    ("top_near", "editor.features.stairs.points.top_near", (1.0, 0.0, 1.0)),
+    ("top_far", "editor.features.stairs.points.top_far", (1.0, 1.0, 1.0)),
+    ("top", "editor.features.stairs.points.top", (1.0, 0.5, 1.0)),
+];
+
 #[derive(Serialize, Deserialize)]
 pub struct EditorStairs {
     start: PointRef,
@@ -46,6 +65,7 @@ impl EditorStairs {
 
     /// A flight [`DEFAULT_SIZE`] long, wide and high from `start`, up along +X with its width
     /// toward +Z. Each point is `start` moved, so one naming a feature names the same one.
+    #[cfg(test)]
     pub fn from_start(start: PointRef) -> Self {
         let moved = |by: Vec3| {
             let mut point = start.clone();
@@ -78,13 +98,13 @@ impl EditorStairs {
     }
 
     fn label(index: usize) -> String {
-        get!(format!("editor.features.stairs.{}", KEYS[index]))
+        get!(LABELS[index])
     }
 
     /// Which point `key` names: its key, or the label the inspector shows it under, which is what
     /// the retarget tool hands back.
     fn index_of(key: &str) -> Option<usize> {
-        (0..KEYS.len()).find(|&index| key == KEYS[index] || key == Self::label(index))
+        KEYS.iter().position(|k| *k == key).or_else(|| (0..KEYS.len()).find(|&index| key == Self::label(index)))
     }
 
     fn points(&self) -> [&PointRef; 4] {
@@ -105,18 +125,8 @@ impl EditorStairs {
         self.resolved = resolved;
     }
 
-    /// The derived points, by key, each at `(along, across, up)` in the flight's frame in
-    /// multiples of its run, width and height.
     fn derived(key: &str) -> Option<(f32, f32, f32)> {
-        Some(match key {
-            "" => (0.5, 0.5, 0.0),
-            "start_far" => (0.0, 1.0, 0.0),
-            "end_far" => (1.0, 1.0, 0.0),
-            "top_near" => (1.0, 0.0, 1.0),
-            "top_far" => (1.0, 1.0, 1.0),
-            "top" => (1.0, 0.5, 1.0),
-            _ => return None,
-        })
+        DERIVED.iter().find(|(k, _, _)| *k == key).map(|(_, _, at)| *at)
     }
 
     fn style_ui(&mut self, ui: &mut egui::Ui) -> bool {
@@ -128,7 +138,7 @@ impl EditorStairs {
         });
         if style.steps {
             changed |= ui
-                .add(egui::DragValue::new(&mut style.rise).speed(0.01).range(0.05..=2.0).suffix(" m").prefix(format!("{}: ", get!("editor.features.stairs.step_height"))))
+                .add(egui::DragValue::new(&mut style.rise).speed(0.01).range(0.05..=2.0).suffix(get!("editor.features.stairs.meters")).prefix(format!("{}: ", get!("editor.features.stairs.step_height"))))
                 .changed();
             if let Some(steps) = self.shape().steps() {
                 ui.label(get!("editor.features.stairs.step_count", "count", steps.count, "rise", format!("{:.3}", steps.rise), "depth", format!("{:.3}", steps.depth)));
@@ -141,28 +151,36 @@ impl EditorStairs {
         });
         if !style.thick {
             changed |= ui
-                .add(egui::DragValue::new(&mut style.thickness).speed(0.01).range(0.01..=2.0).suffix(" m").prefix(format!("{}: ", get!("editor.features.stairs.thickness"))))
+                .add(egui::DragValue::new(&mut style.thickness).speed(0.01).range(0.01..=2.0).suffix(get!("editor.features.stairs.meters")).prefix(format!("{}: ", get!("editor.features.stairs.thickness"))))
                 .changed();
         }
         changed
     }
 }
 
-/// The footprint, the ramp and the back: the wedge the collider fills when thick.
-pub fn draw_wedge(gizmos: &mut Gizmos, frame: &Frame, color: Color) {
-    let (r, w, h) = (frame.run, frame.width, frame.height);
+/// The footprint and the collider's outline over it: up the ramp, flat to the end edge for steps,
+/// and down the back.
+pub fn draw_collider(gizmos: &mut Gizmos, shape: &StairsShape, color: Color) {
+    let Ok(frame) = shape.frame() else { return };
+    let (knee, top) = shape.collider_top(&frame);
+    let (r, w) = (frame.run, frame.width);
     let base = [frame.at(0.0, 0.0, 0.0), frame.at(r, 0.0, 0.0), frame.at(r, w, 0.0), frame.at(0.0, w, 0.0)];
-    let (top_near, top_far) = (frame.at(r, 0.0, h), frame.at(r, w, h));
     for i in 0..4 {
         gizmos.line(base[i], base[(i + 1) % 4], color);
     }
-    for (from, to) in [(base[0], top_near), (base[3], top_far), (top_near, top_far), (base[1], top_near), (base[2], top_far)] {
-        gizmos.line(from, to, color);
+    for side in [0.0, w] {
+        let outline = [frame.at(0.0, side, 0.0), frame.at(knee, side, top), frame.at(r, side, top), frame.at(r, side, 0.0)];
+        for pair in outline.windows(2) {
+            gizmos.line(pair[0], pair[1], color);
+        }
     }
+    gizmos.line(frame.at(knee, 0.0, top), frame.at(knee, w, top), color);
+    gizmos.line(frame.at(r, 0.0, top), frame.at(r, w, top), color);
 }
 
-/// Meters: each side of a flight the tool places.
-pub const DEFAULT_SIZE: f32 = 2.0;
+/// Meters: each side of a flight [`EditorStairs::from_start`] makes.
+#[cfg(test)]
+const DEFAULT_SIZE: f32 = 2.0;
 
 #[typetag::serde(name = "stairs")]
 impl FeatureTrait for EditorStairs {
@@ -231,14 +249,14 @@ impl FeatureTrait for EditorStairs {
         for (point, at) in self.points().into_iter().zip(self.resolved) {
             point.debug_gizmos(at, gizmos);
         }
-        let Ok(frame) = self.frame() else {
+        if self.frame().is_err() {
             for at in self.resolved {
                 gizmos.sphere(Isometry3d::from_translation(at), 0.1, TOO_STEEP_COLOR);
             }
             return;
-        };
+        }
         let color = if self.shape().walkable() { STAIRS_COLOR } else { TOO_STEEP_COLOR };
-        draw_wedge(gizmos, &frame, color);
+        draw_collider(gizmos, &self.shape(), color);
     }
 
     fn entity(&self) -> Option<Entity> {
@@ -274,11 +292,19 @@ impl FeatureTrait for EditorStairs {
 
     fn available_point_keys(&self) -> Vec<(String, String)> {
         let mut keys: Vec<(String, String)> = (0..KEYS.len()).map(|index| (KEYS[index].to_string(), Self::label(index))).collect();
-        for key in ["", "start_far", "end_far", "top_near", "top_far", "top"] {
-            let name = if key.is_empty() { "center" } else { key };
-            keys.push((key.to_string(), get!(format!("editor.features.stairs.points.{name}"))));
-        }
+        keys.extend(DERIVED.iter().map(|(key, label, _)| (key.to_string(), get!(label))));
         keys
+    }
+
+    fn point_label(&self, key: &str) -> Option<String> {
+        if let Some(index) = KEYS.iter().position(|k| *k == key) {
+            return Some(Self::label(index));
+        }
+        DERIVED.iter().find(|(k, _, _)| *k == key).map(|(_, label, _)| get!(label))
+    }
+
+    fn point_count(&self) -> usize {
+        KEYS.len() + DERIVED.len()
     }
 
     fn reference_points_for_ray(&self, ray: &Ray3d) -> Vec<(String, Vec3)> {
@@ -310,8 +336,7 @@ impl FeatureTrait for EditorStairs {
         self.points_mut().into_iter().nth(index)
     }
 
-    /// Each point carried across: a reflected flight keeps its width point on the reflected side,
-    /// and its faces are wound from the frame, so it is not drawn inside out.
+    /// Faces are wound from the frame, so a reflected flight is not drawn inside out.
     fn mirror(&mut self, mirroring: &Mirroring) -> bool {
         self.resolved = self.resolved.map(|at| mirroring.point(at));
         for point in self.points_mut() {

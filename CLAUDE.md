@@ -2147,13 +2147,17 @@ air.
 [`src/common/stairs.rs`](src/common/stairs.rs)) are four `PointRef`s: start and end give the
 run, the width point's distance off that line the width, the height point's distance off the
 footprint's plane the rise, "up" being toward it. What collides is the ramp from the start edge
-on the base to the end edge at full height — thick, the wedge under it; thin, a slab as deep as
-the flight is thin — so steps are drawn entirely under it, nosings on it, and the last riser is
-the end edge. A flight is no volume: it cuts nothing, its walls are a `BakedRoomGeometry` of its
+on the base toward the end edge at full height — thick, the solid under it; thin, a slab under
+it as deep as what is drawn. It passes through the middle of every tread, so each step is half
+above it and half below; the first and last risers are half a step, and for steps the collider
+goes flat at the last tread's height halfway along it. A flight is no volume: it cuts nothing, its walls are a `BakedRoomGeometry` of its
 own marked `BakedStairs` (painted, lit and decaled as a room's), baked under the room bake's
 auto-bake switch and settle wait, while its collider joins `CollisionWorld` straight from the
-`Stairs` component, as a room's walls do from `Room`. Anything building collision from volumes
-alone (the nav bake, `map_stats`) adds flights with `stairs::add_to_world`. The steepness
+`Stairs` component, as a room's walls do from `Room`. Collision from the map is
+`CollisionWorld::rebuild_map(volumes, stairs)`, which the game, the nav bake and `map_stats` call. The Stairs tool
+([`src/tool/stairs.rs`](src/tool/stairs.rs)) picks the four points one at a time as the Room tool
+picks corners, previewing the run, the width and then the ramp, and keeps the height point at
+least 0.1 m above the footprint. The steepness
 warning is `WALKABLE`, which every class shares.
 
 A `Room` is a prism — a floor plan, not necessarily convex and possibly with
