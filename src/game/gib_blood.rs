@@ -611,8 +611,10 @@ pub struct GibBloodPlugin;
 impl Plugin for GibBloodPlugin {
     fn build(&self, app: &mut App) {
         warm_up::ensure(app);
-        app.add_plugins(HanabiPlugin)
-            .add_systems(Startup, (make_the_effects, warm_up_the_blood).chain())
+        if !app.is_plugin_added::<HanabiPlugin>() {
+            app.add_plugins(HanabiPlugin);
+        }
+        app.add_systems(Startup, (make_the_effects, warm_up_the_blood).chain())
             // Ungated: corpses arrive from the wire whenever.
             .add_systems(Update, (bleed_from_new_gibs, follow_the_severed_ends).chain())
             .add_systems(Update, (spurt_from_hits, end_the_bursts, start_the_warm_up));

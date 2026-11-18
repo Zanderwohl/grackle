@@ -41,15 +41,20 @@
 # That is the minigun, and it is an absent clip rather than a clip the size of
 # the reserve, which would be a lie the reload system then has to keep
 # believing.
+#
+# A hitscan action's `trail` is how its shot is drawn, and every one must say:
+# `"streak"` flies a short white streak down each pellet's path, and `"beam"`
+# stands a line in the shooter's color over the whole path, fading in over a
+# quarter second and out over the next second.
 
-[weapons.laser_rifle]
-name_key = "weapon.names.laser_rifle"
+[weapons.sniper_rifle]
+name_key = "weapon.names.sniper_rifle"
 bucket = 1
 deploy = 0.6
 model = "sniper_rifle"
-icon = "kill_laser_rifle"
+icon = "kill_sniper_rifle"
 magazine = { clip = 12, reserve = 60, reload = 1.0 }
-primary = { cadence = { kind = "semi", interval = 0.5 }, cost = { kind = "ammo", rounds = 1 }, action = { kind = "hitscan", range = 200.0, damage = 30, headshot_multiplier = 3, shove_per_damage = 0.15, shove_radius = 0.4 } }
+primary = { cadence = { kind = "semi", interval = 1.5 }, cost = { kind = "ammo", rounds = 1 }, action = { kind = "hitscan", range = 200.0, damage = 50, headshot_multiplier = 3, shove_per_damage = 0.15, shove_radius = 0.4, trail = "beam" } }
 secondary = { cadence = { kind = "semi" }, cost = { kind = "free" }, action = { kind = "scope", zoom = 2.5 } }
 
 # TF2's: 90 at the center of the blast, which is also what a rocket landing on
@@ -109,7 +114,7 @@ secondary = { cadence = { kind = "semi" }, cost = { kind = "free" }, action = { 
 # Weak and quick, for finishing what something else started, and what arena
 # starts everybody with. Twelve in the clip, forty-eight in all, as TF2's. The
 # shotgun's lines: half again point blank, full at 5 m, half at 10 m and
-# beyond. No headshot bonus: that is the laser rifle's.
+# beyond. No headshot bonus: that is the sniper rifle's.
 [weapons.pistol]
 name_key = "weapon.names.pistol"
 bucket = 2
@@ -117,7 +122,7 @@ deploy = 0.35
 model = "pistol"
 icon = "kill_pistol"
 magazine = { clip = 12, reserve = 36, reload = 1.25 }
-primary = { cadence = { kind = "semi", interval = 0.17 }, cost = { kind = "ammo", rounds = 1 }, action = { kind = "hitscan", range = 120.0, damage = 15, headshot_multiplier = 1, shove_per_damage = 0.15, shove_radius = 0.35, ramp_up = { near = 0.0, far = 5.0, scale = 1.5 }, falloff = { near = 5.0, far = 10.0, scale = 0.5 } } }
+primary = { cadence = { kind = "semi", interval = 0.17 }, cost = { kind = "ammo", rounds = 1 }, action = { kind = "hitscan", range = 120.0, damage = 15, headshot_multiplier = 1, shove_per_damage = 0.15, shove_radius = 0.35, ramp_up = { near = 0.0, far = 5.0, scale = 1.5 }, falloff = { near = 5.0, far = 10.0, scale = 0.5 }, trail = "streak" } }
 secondary = { cadence = { kind = "semi" }, cost = { kind = "free" }, action = { kind = "none" } }
 
 # Nine pellets in a fixed 3×3 square that is a meter wide at thirty meters,
@@ -134,7 +139,7 @@ deploy = 0.5
 model = "shotgun"
 icon = "kill_shotgun"
 magazine = { clip = 6, reserve = 32, reload = 0.625, reload_one_at_a_time = true }
-primary = { cadence = { kind = "semi", interval = 0.625 }, cost = { kind = "ammo", rounds = 1 }, action = { kind = "hitscan", range = 100.0, damage = 7, headshot_multiplier = 1, shove_per_damage = 0.15, shove_radius = 0.3, pellets = { across = 3, spread = 30.0 }, ramp_up = { near = 0.0, far = 5.0, scale = 1.5 }, falloff = { near = 5.0, far = 10.0, scale = 0.5 }, kill_shove = { speed = 10.0, lift = 3.0, radius = 1.2 } } }
+primary = { cadence = { kind = "semi", interval = 0.625 }, cost = { kind = "ammo", rounds = 1 }, action = { kind = "hitscan", range = 100.0, damage = 7, headshot_multiplier = 1, shove_per_damage = 0.15, shove_radius = 0.3, pellets = { across = 3, spread = 30.0 }, ramp_up = { near = 0.0, far = 5.0, scale = 1.5 }, falloff = { near = 5.0, far = 10.0, scale = 0.5 }, kill_shove = { speed = 10.0, lift = 3.0, radius = 1.2 }, trail = "streak" } }
 secondary = { cadence = { kind = "semi" }, cost = { kind = "free" }, action = { kind = "none" } }
 
 # No clip: the whole supply is loaded, and it never reloads. A puff is 125%

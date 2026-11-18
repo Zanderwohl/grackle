@@ -1,10 +1,12 @@
-//! A white mesh streak down each hitscan pellet's path, one per [`ShotPath`].
+//! A white mesh streak down each hitscan pellet's path, one per [`ShotPath`]
+//! whose weapon's trail is [`HitscanTrail::Streak`].
 //! Drawing only: the shot was resolved on the tick.
 
 use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
 
 use crate::common::app_mode::AppMode;
+use crate::common::weapon::HitscanTrail;
 use crate::game::hitscan::{mark_tracers, ShotPath};
 use crate::game::player::PlayerCamera;
 use crate::game::warm_up::{self, WarmUp};
@@ -57,17 +59,22 @@ impl Streak {
     /// distance from `eye` to its nearest point.
     fn transform(&self, (tail, head): (f32, f32), eye: Option<Vec3>) -> Transform {
         let direction = (self.to - self.from).normalize_or(Vec3::NEG_Z);
-        let radius = eye.map_or(RADIUS, |eye| {
-            let along = (eye - self.from).dot(direction).clamp(tail, head);
-            RADIUS.max(eye.distance(self.from + direction * along) * RADIUS_PER_METER)
-        });
-        let width = radius / RADIUS;
+        let width = widened(self.from, direction, (tail, head), eye, RADIUS, RADIUS_PER_METER) / RADIUS;
         Transform {
             translation: self.from + direction * (tail + head) * 0.5,
             rotation: Quat::from_rotation_arc(Vec3::Y, direction),
             scale: Vec3::new(width, (head - tail).max(1.0e-4), width),
         }
     }
+}
+
+/// `base` meters, or `per_meter` times the distance from `eye` to the nearest
+/// point of the span (meters along `direction` from `from`) if that is more.
+pub(crate) fn widened(from: Vec3, direction: Vec3, (start, end): (f32, f32), eye: Option<Vec3>, base: f32, per_meter: f32) -> f32 {
+    eye.map_or(base, |eye| {
+        let along = (eye - from).dot(direction).clamp(start, end);
+        base.max(eye.distance(from + direction * along) * per_meter)
+    })
 }
 
 #[derive(Resource)]
@@ -113,7 +120,7 @@ fn launch_streaks(
     eye: Option<Single<&GlobalTransform, With<PlayerCamera>>>,
 ) {
     let eye = eye.map(|eye| eye.translation());
-    for path in paths.read() {
+    for path in paths.read().filter(|path| path.trail == HitscanTrail::Streak) {
         let streak = Streak::new(path.from, path.to);
         let Some(span) = streak.span() else { continue };
         commands.spawn((
@@ -224,7 +231,7 @@ mod tests {
         let mut app = an_app_that_draws_shots();
         for x in 0..9 {
             let to = Vec3::new(x as f32, 0.0, -20.0);
-            app.world_mut().write_message(crate::common::effects::Effect::Tracer { from: Vec3::ZERO, to, hit: false, by: None });
+            app.world_mut().write_message(crate::common::effects::Effect::Tracer { from: Vec3::ZERO, to, hit: false, by: None, trail: HitscanTrail::Streak });
         }
         app.update();
         let world = app.world_mut();
@@ -235,7 +242,7 @@ mod tests {
     #[test]
     fn clearing_takes_every_streak() {
         let mut app = an_app_that_draws_shots();
-        app.world_mut().write_message(ShotPath { from: Vec3::ZERO, to: Vec3::NEG_Z * 20.0 });
+        app.world_mut().write_message(ShotPath { from: Vec3::ZERO, to: Vec3::NEG_Z * 20.0, by: None, trail: HitscanTrail::Streak });
         app.update();
         let world = app.world_mut();
         world.run_system_once(clear_streaks).unwrap();
