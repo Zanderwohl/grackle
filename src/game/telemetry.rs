@@ -8,6 +8,9 @@
 //!   who they first see, and every body's place once a second. Derived and disposable, like the
 //!   rest of `cache/`. Native only.
 //!
+//! A round is one match's live phase, so matches played back to back are a file each; without
+//! the match cycle (the game's tests) it is the whole of Play.
+//!
 //! Nothing here is read back by the game: it only watches.
 
 use std::collections::HashMap;
@@ -17,6 +20,7 @@ use serde::Serialize;
 
 use crate::common::app_mode::AppMode;
 use crate::common::class::Stance;
+use crate::common::match_phase::MatchPhase;
 use crate::common::damage::{Armor, DamageDealt, DamageSource, Damageable, Died, How, PlayerId};
 use crate::common::net::has_authority;
 use crate::common::round_settings::{BotSkill, RoundSettings};
@@ -31,6 +35,8 @@ use crate::game::world_prop::{PickupTaken, PickupWhat};
 use crate::tool::nav_bake::NavBake;
 use crate::get;
 
+/// Where round files go, a folder per map.
+pub const ROUNDS_DIR: &str = "cache/rounds";
 /// Game seconds between samples of where everybody is.
 const SAMPLE_EVERY: f32 = 1.0;
 /// A bot seeing somebody it last saw longer ago than this has found them again.
@@ -178,6 +184,9 @@ fn name_of(id: PlayerId, named: Option<&str>) -> String {
 
 #[derive(Resource, Default)]
 struct Round {
+    /// Between opening and closing. Outside it the systems still read every message, so one
+    /// from a post-game cannot wait unread for the next match, and write nothing.
+    open: bool,
     number: u32,
     map: String,
     /// Game seconds at its start.
@@ -197,6 +206,9 @@ struct Round {
 
 impl Round {
     fn write(&mut self, event: &Event) {
+        if !self.open {
+            return;
+        }
         #[cfg(test)]
         self.written.push(event.clone());
         #[cfg(not(target_arch = "wasm32"))]
@@ -230,11 +242,14 @@ pub struct TelemetryPlugin;
 
 impl Plugin for TelemetryPlugin {
     fn build(&self, app: &mut App) {
+        // With the match cycle a round is one match's live phase, so back-to-back matches are a
+        // file each. Leaving Play mid-match leaves `Live` too, the phase being Play's sub-state.
+        let no_cycle = not(resource_exists::<crate::game::match_cycle::MatchCycle>);
         app.init_resource::<Round>()
             .add_message::<Died>()
             .add_message::<DamageDealt>()
             .add_message::<PickupTaken>()
-            .add_systems(OnEnter(AppMode::Play), open_the_round.run_if(has_authority))
+            .add_systems(OnEnter(AppMode::Play), open_the_round.run_if(has_authority).run_if(no_cycle.clone()))
             .add_systems(
                 Update,
                 (note_the_skill, watch_bodies, note_damage, note_kills, note_pickups, note_thoughts, note_sightings, sample)
@@ -242,7 +257,9 @@ impl Plugin for TelemetryPlugin {
                     .run_if(in_state(AppMode::Play))
                     .run_if(has_authority),
             )
-            .add_systems(OnExit(AppMode::Play), close_the_round.run_if(has_authority));
+            .add_systems(OnExit(AppMode::Play), close_the_round.run_if(has_authority).run_if(no_cycle))
+            .add_systems(OnEnter(MatchPhase::Live), open_the_round.run_if(has_authority))
+            .add_systems(OnExit(MatchPhase::Live), close_the_round.run_if(has_authority));
     }
 }
 
@@ -257,7 +274,7 @@ fn weapon_key(catalog: Option<&WeaponCatalog>, weapon: Option<WeaponId>) -> Opti
 }
 
 /// The variant's name in lower case.
-fn want_name(want: Want) -> String {
+pub(crate) fn want_name(want: Want) -> String {
     match want {
         Want::Health => "health",
         Want::Armor => "armor",
@@ -292,10 +309,10 @@ fn open_the_round(
     let map = map_name(metadata.as_deref(), file.as_deref());
     let now = chrono::Local::now();
     let settings = settings.as_deref().copied().unwrap_or_default();
-    *round = Round { number, map: map.clone(), started: time.elapsed_secs(), bot_skill: settings.bot_skill, ..default() };
+    *round = Round { open: true, number, map: map.clone(), started: time.elapsed_secs(), bot_skill: settings.bot_skill, ..default() };
     #[cfg(not(target_arch = "wasm32"))]
     if recording.is_some() {
-        let directory = std::path::Path::new("cache/rounds").join(&map);
+        let directory = std::path::Path::new(ROUNDS_DIR).join(&map);
         let stamp = now.format("%Y-%m-%d_%H-%M-%S");
         // Never over another round's file: two servers, or a round under a second long.
         let opened = std::fs::create_dir_all(&directory).and_then(|_| {
@@ -456,7 +473,9 @@ fn note_kills(mut round: ResMut<Round>, time: Res<Time>, mut died: MessageReader
             (a.distance(b) * 100.0).round() / 100.0
         });
         let record = KillRecord { t, victim: party, killer, assist, weapon: weapon_key(catalog.as_deref(), cause.weapon), how: cause.how, reflected: cause.reflected, distance, life, damage };
-        info!("kill {}", ron::to_string(&record).expect("a kill is plain data"));
+        if round.open {
+            info!("kill {}", ron::to_string(&record).expect("a kill is plain data"));
+        }
         round.write(&Event::Kill(record));
     }
 }
@@ -561,10 +580,14 @@ fn close_the_round(
     standings: Query<&Standing>,
     seats: Query<(&Identity, &RouteCosts, &BotMind), With<BotSeat>>,
 ) {
+    if !round.open {
+        return;
+    }
     let t = time.elapsed_secs() - round.started;
     let scoreboard: Vec<Standing> = ranked(standings.iter()).into_iter().cloned().collect();
     round.write(&Event::RoundEnd { t, scoreboard: scoreboard.clone() });
     round.flush();
+    round.open = false;
     #[cfg(not(target_arch = "wasm32"))]
     {
         round.file = None;
@@ -587,7 +610,7 @@ mod tests {
     fn a_kill_is_recorded_with_its_cause_and_who_did_what() {
         let mut app = App::new();
         app.add_plugins(bevy::time::TimePlugin)
-            .init_resource::<Round>()
+            .insert_resource(Round { open: true, ..default() })
             .add_message::<DamageDealt>()
             .add_message::<Died>()
             .add_systems(Update, (watch_bodies, note_damage, note_kills).chain());
@@ -630,12 +653,57 @@ mod tests {
         assert_eq!(kill.distance, Some(10.0));
         assert!(round.written.iter().filter(|event| matches!(event, Event::Damage { .. })).count() == 2);
     }
+    /// Breaks if matches played back to back in one stay in Play share a file, or a kill in the
+    /// post-game is written into the match it followed.
+    #[test]
+    fn each_match_is_a_round_of_its_own() {
+        let mut app = App::new();
+        app.add_plugins((bevy::time::TimePlugin, bevy::state::app::StatesPlugin))
+            .init_state::<AppMode>()
+            .add_sub_state::<MatchPhase>()
+            .init_resource::<crate::game::match_cycle::MatchCycle>()
+            .add_plugins(TelemetryPlugin);
+        app.update();
+        let phase = |app: &mut App, phase: MatchPhase| {
+            app.world_mut().resource_mut::<NextState<MatchPhase>>().set(phase);
+            app.update();
+        };
+        app.world_mut().resource_mut::<NextState<AppMode>>().set(AppMode::Play);
+        app.update();
+        let victim = app.world_mut().spawn((PlayerId(1), Player::default(), PhysicsBody::at(Vec3::Y), Stance::Standing, Damageable::default())).id();
+        for _ in 0..2 {
+            phase(&mut app, MatchPhase::Live);
+            phase(&mut app, MatchPhase::PostGame);
+            app.world_mut().write_message(Died {
+                victim,
+                victim_name: None,
+                victim_id: Some(PlayerId(1)),
+                killer: DamageSource::World,
+                assist: None,
+                at: Vec3::Y,
+                cause: Cause::of(None, How::Kill),
+            });
+            app.update();
+            // With no pre-game or time between rounds, the next match starts at once.
+            phase(&mut app, MatchPhase::PreGame);
+        }
+        app.world_mut().resource_mut::<NextState<AppMode>>().set(AppMode::Editor);
+        app.update();
+
+        let round = app.world().resource::<Round>();
+        assert_eq!(round.number, 2, "the second match did not start a round of its own");
+        // What `written` holds is the second round's.
+        let count = |of: fn(&Event) -> bool| round.written.iter().filter(|event| of(event)).count();
+        assert_eq!(count(|event| matches!(event, Event::RoundEnd { .. })), 1, "leaving Play after the post-game closed the round again");
+        assert_eq!(count(|event| matches!(event, Event::Kill(_))), 0, "a post-game kill was written");
+    }
+
     /// Breaks if a bot's temperament rolled again mid-round is not recorded, or a new life's
     /// beliefs read as a new temperament.
     #[test]
     fn a_temperament_rolled_again_is_recorded_again() {
         let mut app = App::new();
-        app.add_plugins(bevy::time::TimePlugin).init_resource::<Round>().add_systems(Update, watch_bodies);
+        app.add_plugins(bevy::time::TimePlugin).insert_resource(Round { open: true, ..default() }).add_systems(Update, watch_bodies);
         let bot = app.world_mut().spawn((PlayerId(1), Player::default(), PhysicsBody::at(Vec3::Y), Stance::Standing, RouteCosts::default(), BotMind::default())).id();
         app.update();
         app.world_mut().entity_mut(bot).insert(RouteCosts { beliefs: 7, ..default() });

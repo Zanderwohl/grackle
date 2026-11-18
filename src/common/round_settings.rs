@@ -76,6 +76,15 @@ pub enum BotSkill {
 impl BotSkill {
     pub const ALL: [BotSkill; 4] = [BotSkill::Easy, BotSkill::Normal, BotSkill::Hard, BotSkill::Varied];
 
+    pub fn name(self) -> String {
+        match self {
+            BotSkill::Easy => crate::get!("editor.round.skill.easy"),
+            BotSkill::Normal => crate::get!("editor.round.skill.normal"),
+            BotSkill::Hard => crate::get!("editor.round.skill.hard"),
+            BotSkill::Varied => crate::get!("editor.round.skill.varied"),
+        }
+    }
+
     /// The part of `range` this skill rolls in, `better` saying which end plays well: the
     /// bottom, middle or top 40%, overlapping so neighboring tiers are not cleanly apart, or all
     /// of it.
