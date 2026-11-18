@@ -29,7 +29,7 @@ use crate::material::picker::{material_button, material_names};
 use crate::editor::multicam::MulticamState;
 use crate::editor::net_menu::{network_menu, ConnectDialog};
 use crate::editor::save::{self, LoadedBlueprint};
-use crate::game::rounds::RoundHistory;
+use crate::editor::rounds_panel::{RoundsTab, RoundsView};
 use crate::get;
 use crate::tool::Tools;
 use crate::tool::bake_job::BakeProgress;
@@ -129,7 +129,7 @@ enum TabKinds {
     Round,
     /// The feature list with its rollback bar, and the selected feature's editor beneath.
     Features,
-    /// The last rounds' final standings.
+    /// Recorded rounds, as tables.
     Rounds,
 }
 
@@ -137,7 +137,7 @@ enum TabKinds {
 /// sixteen-parameter limit.
 #[derive(SystemParam)]
 struct PanelMessages<'w> {
-    rounds: Res<'w, RoundHistory>,
+    rounds: RoundsTab<'w>,
     music: Res<'w, MusicLibrary>,
     round: ResMut<'w, RoundSettings>,
     room: MessageWriter<'w, CalculateRoomGeometry>,
@@ -177,7 +177,7 @@ struct TabViewerAndResources<'a> {
     timeline_touched: bool,
     /// A client watches the server's map, so its panels are read-only.
     spectating: bool,
-    rounds: &'a RoundHistory,
+    rounds: RoundsView<'a>,
     music: &'a MusicLibrary,
     round: &'a mut RoundSettings,
 }
@@ -238,7 +238,7 @@ impl<'a> TabViewer for TabViewerAndResources<'a> {
                 );
             }
             TabKinds::Rounds => {
-                rounds_panel_ui(ui, self.rounds);
+                self.rounds.ui(ui);
             }
         }
     }
@@ -253,6 +253,7 @@ impl Plugin for EditorPanelPlugin {
             .init_resource::<RoundSettings>()
             .init_resource::<MusicLibrary>()
             .init_resource::<CurrentFilePath>()
+            .add_plugins(crate::editor::rounds_panel::RoundArchivePlugin)
             .add_systems(Startup, EditorPanels::set_multicam_size)
             .add_systems(Startup, crate::common::assets::create_the_user_pack)
             .add_systems(EguiPrimaryContextPass, EditorPanels::ui.run_if(in_state(AppMode::Editor)))
@@ -390,7 +391,7 @@ impl EditorPanels {
             retarget_request: &mut retarget_request,
             timeline_touched: false,
             spectating: !net_role.is_authority(),
-            rounds: &messages.rounds,
+            rounds: messages.rounds.view(),
             music: &messages.music,
             // Through `bypass_change_detection`: held every frame, it would read as changed every
             // frame.
@@ -735,56 +736,12 @@ fn round_panel_ui(ui: &mut egui::Ui, settings: &mut RoundSettings) {
 fn bot_settings_ui(ui: &mut egui::Ui, settings: &mut RoundSettings) {
     ui.checkbox(&mut settings.fill_with_bots, get!("editor.round.fill_with_bots"));
     ui.checkbox(&mut settings.bot_only_matches, get!("editor.round.bot_only_matches"));
-    let skill_name = |skill: BotSkill| match skill {
-        BotSkill::Easy => get!("editor.round.skill.easy"),
-        BotSkill::Normal => get!("editor.round.skill.normal"),
-        BotSkill::Hard => get!("editor.round.skill.hard"),
-        BotSkill::Varied => get!("editor.round.skill.varied"),
-    };
+    let skill_name = BotSkill::name;
     egui::ComboBox::from_label(get!("editor.round.skill.title")).selected_text(skill_name(settings.bot_skill)).show_ui(ui, |ui| {
         for skill in BotSkill::ALL {
             ui.selectable_value(&mut settings.bot_skill, skill, skill_name(skill));
         }
     });
-}
-
-/// Newest first, the newest open.
-fn rounds_panel_ui(ui: &mut egui::Ui, history: &RoundHistory) {
-    let mut any = false;
-    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-        for (index, round) in history.rounds().enumerate() {
-            any = true;
-            let length = round.length_text();
-            egui::CollapsingHeader::new(get!("editor.rounds.round", "number", round.number, "length", length))
-                .id_salt(("round", round.number))
-                .default_open(index == 0)
-                .show(ui, |ui| {
-                    egui::Grid::new(("round_standings", round.number)).striped(true).show(ui, |ui| {
-                        ui.label("");
-                        ui.strong(get!("editor.rounds.player"));
-                        ui.strong(get!("editor.rounds.frags"));
-                        ui.strong(get!("editor.rounds.deaths"));
-                        ui.end_row();
-                        for standing in &round.standings {
-                            let color = Srgba::from(standing.swatch());
-                            let (rect, _) = ui.allocate_exact_size(egui::vec2(12.0, 12.0), egui::Sense::hover());
-                            ui.painter().rect_filled(rect, 2.0, egui::Color32::from_rgb(
-                                (color.red * 255.0).round() as u8,
-                                (color.green * 255.0).round() as u8,
-                                (color.blue * 255.0).round() as u8,
-                            ));
-                            ui.label(standing.display_name());
-                            ui.label(standing.frags.to_string());
-                            ui.label(standing.deaths.to_string());
-                            ui.end_row();
-                        }
-                    });
-                });
-        }
-    });
-    if !any {
-        ui.label(get!("editor.rounds.none"));
-    }
 }
 
 fn map_metadata_panel_ui(ui: &mut egui::Ui, meta: &mut MapMetadata, music: &MusicLibrary) {

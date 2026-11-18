@@ -139,7 +139,8 @@ line in the log per kill — victim, killer and assist with health, place and
 goal pulls, the weapon, how it killed, every attacker's share — and a
 `RoundRecord` at the round's end with each bot's temperament and the
 scoreboard; and, where the `editor` binary asks (`RecordRounds`, so tests write
-nothing), a JSON Lines file per round at `cache/rounds/{map}/{started}.jsonl`:
+nothing), a JSON Lines file per round — each match's live phase, so matches
+back to back are a file each — at `cache/rounds/{map}/{started}.jsonl`:
 spawns, hits, kills, pickups, goal changes (a retreat marked), first sightings
 and every body once a second. A hit knows its weapon because `Damage` and
 `DamageDealt` carry a `Cause` — weapon, how, reflected — from the trigger pull
@@ -2361,7 +2362,14 @@ which the authority picks and replicates — never derived from join order. The
 new-map template is an arena map. A mode with a `frag_limit` keeps score on a
 replicated `Standing` per player ([`src/game/score.rs`](src/game/score.rs)),
 shows it top-left, and ends the round at the limit; the editor's **Rounds**
-tab keeps the last 20 rounds' standings ([`src/game/rounds.rs`](src/game/rounds.rs)).
+tab lists the newest 100 round files under `cache/rounds/`, read on the IO pool
+when a round ends or on Refresh, and shows the chosen one as sortable tables —
+players, weapons, who killed whom, bots' wants and senses, every kill, pickups —
+counted from the file's events, not its closing scoreboard
+([`src/game/round_file.rs`](src/game/round_file.rs),
+[`src/editor/rounds_panel.rs`](src/editor/rounds_panel.rs)). A client, which
+writes no files, also lists the standings of the rounds it saw
+([`src/game/rounds.rs`](src/game/rounds.rs)).
 The HUD is painted with `Swatch::of_body`: team, else player color, else
 neutral. See
 [documentation/arena.md](documentation/arena.md).

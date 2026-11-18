@@ -82,6 +82,7 @@ pub mod rounds;
 pub mod sunlit;
 pub mod score;
 pub mod telemetry;
+pub mod round_file;
 pub mod spectate;
 pub mod soundtrack;
 pub mod spray;
