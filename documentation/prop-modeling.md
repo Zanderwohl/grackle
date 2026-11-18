@@ -270,6 +270,10 @@ Each sweep is a way of producing sections:
 
 - Onto the core with no change in behavior first; the shipped props must build
   identically (volume and triangle count compared before and after).
+- As built: `taper` in degrees, `op`, `target`, `end`, `other` and
+  `direction`; up-to and direction are re-picked from the Extent section
+  through fields of their own, which stay empty while unset so every field
+  keeps its index.
 - Then: `direction: Option<DirectionRef>` (none is the sketch normal; a
   slanted extrude replaces the planned guide line), `End` gains `UpTo(AnyRef)`
   (a point, a flat face or a plane) and `ThroughAll`, a second `End` for the
@@ -415,5 +419,10 @@ this plan; they need stage 4 and adjacency on the result, and get their own.
 - [ ] A profile is one region; several regions per profile, matched across profiles, are not offered
 - [ ] Sections between profiles are the profiles themselves, so the faces are ruled; a smooth interpolation through three or more profiles is not built
 - [ ] Loft guide curves
-- [ ] Extrude: direction, `UpTo`, `ThroughAll`, two sides, taper
-- [ ] Extrude, Revolve, Sweep and Loft: Join / Cut / Intersect / New body
+- [x] Extrude: direction, `UpTo`, `ThroughAll`, two sides (`other`, replacing `symmetric`), taper
+- [x] Extrude, Revolve, Sweep and Loft: Join / Cut / Intersect / New body (`SweepOp` and `target`; a target that cannot be combined is put back)
+- [ ] An extrude's end stays parallel to its sketch: up to a slanted plane or face, it stops where the sketch's origin meets it rather than being trimmed to it
+- [ ] Through all reaches past every body's bounding box, not its surface
+- [ ] A taper shrinks the profile about its centroid, by the lean at its equivalent radius; it is not an offset, so a long thin profile leans more along its length than across it
+- [ ] Revolve keeps `symmetric`; two-sided angles are not built
+- [ ] A Join, Cut or Intersect target is chosen in the inspector (defaulting to the latest body), not picked as the tool's second slot

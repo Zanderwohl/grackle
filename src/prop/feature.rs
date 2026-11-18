@@ -30,7 +30,7 @@ use crate::prop::sketch::{PlacedSketch, Sketch};
 use crate::prop::seam::{self, FaceTable, Junction, Seam};
 use crate::prop::reference::{pickables, GeomRef, Located, Outline, Pickable, Wire};
 use crate::prop::path::{self, Orient, PathPoints};
-use crate::prop::skin::{extrusion, revolution, skin, Run, Section, SkinProblem, TaggedLoop};
+use crate::prop::skin::{pushed, revolution, skin, tapers_within, Run, Section, SkinProblem, TaggedLoop};
 use crate::prop::solid::{is_full_turn, Shape, Solid};
 use crate::prop::surface::Surface;
 
@@ -100,16 +100,28 @@ impl Axis {
 #[serde(tag = "feature", rename_all = "snake_case")]
 pub enum FeatureOp {
     Primitive { shape: Shape, placement: Placement, surface: Surface },
-    /// Regions of a sketch pushed along its plane's normal, joined into one
-    /// body. Scalars first: TOML needs every scalar before any sub-table.
+    /// Regions of a sketch pushed along a direction, its plane's normal
+    /// unless one is named, joined into one body. Scalars first: TOML needs
+    /// every scalar before any sub-table.
     Extrude {
         sketch: PropFeatureId,
         /// Entries in the sketch's own region list.
         regions: Vec<SketchId>,
-        /// Half each way.
+        /// Degrees each wall leans in, going away from the sketch's plane.
+        #[serde(default, with = "crate::prop::nice_f32::scalar")]
+        taper: f32,
         #[serde(default)]
-        symmetric: bool,
+        op: SweepOp,
+        /// The body `op` joins, cuts or intersects.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target: Option<PropFeatureId>,
+        /// Along the direction.
         end: End,
+        /// Back against the direction; none is one side only.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        other: Option<End>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        direction: Option<DirectionRef>,
         surface: Surface,
     },
     /// Regions of a sketch turned about a line lying in the sketch's plane,
@@ -125,6 +137,11 @@ pub enum FeatureOp {
         /// Half each way of the sketch's plane.
         #[serde(default)]
         symmetric: bool,
+        #[serde(default)]
+        op: SweepOp,
+        /// As for [`FeatureOp::Extrude`].
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target: Option<PropFeatureId>,
         axis: CurveRef,
         surface: Surface,
     },
@@ -142,6 +159,11 @@ pub enum FeatureOp {
         /// The profile's size at the end against its size at the start.
         #[serde(default = "unit", with = "crate::prop::nice_f32::scalar")]
         scale: f32,
+        #[serde(default)]
+        op: SweepOp,
+        /// As for [`FeatureOp::Extrude`].
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target: Option<PropFeatureId>,
         path: PathRef,
         surface: Surface,
     },
@@ -151,6 +173,11 @@ pub enum FeatureOp {
         /// The last profile joins the first, with no caps.
         #[serde(default)]
         closed: bool,
+        #[serde(default)]
+        op: SweepOp,
+        /// As for [`FeatureOp::Extrude`].
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        target: Option<PropFeatureId>,
         profiles: Vec<Profile>,
         surface: Surface,
     },
@@ -186,7 +213,6 @@ pub enum FeatureOp {
     Sketch { on: PlaneRef, sketch: Sketch },
 }
 
-/// One of a loft's profiles.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Profile {
     pub sketch: PropFeatureId,
@@ -198,22 +224,65 @@ pub struct Profile {
     pub start: Option<PointRef>,
 }
 
-/// An enum so that going up to a face or through everything can be added
-/// without changing the file.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+/// What a sweep does with the body it makes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SweepOp {
+    #[default]
+    NewBody,
+    Join,
+    /// Taken out of the target.
+    Cut,
+    /// Only what the target and the new body share is kept.
+    Intersect,
+}
+
+impl SweepOp {
+    pub const ALL: [SweepOp; 4] = [SweepOp::NewBody, SweepOp::Join, SweepOp::Cut, SweepOp::Intersect];
+
+    pub fn name(self) -> String {
+        match self {
+            SweepOp::NewBody => get!("prop.sweep_op.new_body"),
+            SweepOp::Join => get!("prop.sweep_op.join"),
+            SweepOp::Cut => get!("prop.sweep_op.cut"),
+            SweepOp::Intersect => get!("prop.sweep_op.intersect"),
+        }
+    }
+
+    /// With the target as the first operand and the new body the second.
+    fn boolean(self) -> Option<BooleanOp> {
+        match self {
+            SweepOp::NewBody => None,
+            SweepOp::Join => Some(BooleanOp::Union),
+            SweepOp::Cut => Some(BooleanOp::Subtract),
+            SweepOp::Intersect => Some(BooleanOp::Intersect),
+        }
+    }
+}
+
+/// How far an extrude goes on one side.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum End {
-    /// Meters along the plane's normal; negative goes the other way.
+    /// Meters along the direction; negative goes the other way.
     Distance {
         #[serde(with = "crate::prop::nice_f32::scalar")]
         distance: f32,
     },
+    /// Until the profile's own origin meets a point's level, a plane or a
+    /// flat face. The end stays parallel to the sketch.
+    UpTo { to: AnyRef },
+    /// Past every body standing when it runs.
+    ThroughAll,
 }
 
 impl End {
-    pub fn distance(&self) -> f32 {
-        match *self {
-            End::Distance { distance } => distance,
+    pub const DEFAULT_DISTANCE: f32 = 0.05;
+
+    pub fn bound(&self) -> Option<&AnyRef> {
+        match self {
+            End::UpTo { to } => Some(to),
+            End::Distance { .. } | End::ThroughAll => None,
         }
     }
 }
@@ -316,31 +385,47 @@ impl FeatureOp {
             picked: false,
             refs: vec![AnyRef::Regions { sketch: *sketch, entries: entries.clone() }],
         };
+        // Drawn in the feature's own sections rather than as rows, each
+        // empty while unset, so every field keeps its index.
+        let unpicked = |label, slot, refs: Vec<AnyRef>| Field { label, slot, consumed: false, picked: false, refs };
+        // The body a sweep joins, cuts or intersects, eaten only while it does.
+        let operand = |op: &SweepOp, target: &Option<PropFeatureId>| Field {
+            label: "prop.inspector.target",
+            slot: slot::BODY,
+            consumed: true,
+            picked: false,
+            refs: match op {
+                SweepOp::NewBody => vec![],
+                _ => target.iter().map(|body| AnyRef::Body { body: *body }).collect(),
+            },
+        };
+        let bound = |end: Option<&End>| end.and_then(End::bound).into_iter().cloned().collect();
         match self {
             FeatureOp::Primitive { .. } => vec![],
-            FeatureOp::Extrude { sketch, regions: entries, .. } => vec![regions(sketch, entries)],
-            FeatureOp::Sweep { sketch, regions: entries, path, .. } => vec![
+            FeatureOp::Extrude { sketch, regions: entries, direction, end, other, op, target, .. } => vec![
+                regions(sketch, entries),
+                unpicked("prop.inspector.direction", slot::DIRECTION, direction.iter().cloned().map(AnyRef::Direction).collect()),
+                unpicked("prop.extrude.up_to", slot::BOUND, bound(Some(end))),
+                unpicked("prop.extrude.up_to", slot::BOUND, bound(other.as_ref())),
+                operand(op, target),
+            ],
+            FeatureOp::Sweep { sketch, regions: entries, path, op, target, .. } => vec![
                 regions(sketch, entries),
                 field("prop.inspector.path", slot::PATH, vec![AnyRef::Path(path.clone())]),
+                operand(op, target),
             ],
-            FeatureOp::Revolve { sketch, regions: entries, axis, .. } => vec![
+            FeatureOp::Revolve { sketch, regions: entries, axis, op, target, .. } => vec![
                 regions(sketch, entries),
                 field("prop.inspector.axis", slot::AXIS, vec![AnyRef::Curve(axis.clone())]),
+                operand(op, target),
             ],
-            // The profiles, then each profile's start, drawn beside its
-            // profile rather than as a row of its own.
-            FeatureOp::Loft { profiles, .. } => std::iter::once(field(
+            FeatureOp::Loft { profiles, op, target, .. } => std::iter::once(field(
                 "prop.inspector.profiles",
                 slot::PROFILES,
                 profiles.iter().map(|p| AnyRef::Regions { sketch: p.sketch, entries: vec![p.region] }).collect(),
             ))
-            .chain(profiles.iter().map(|p| Field {
-                label: "prop.loft.start",
-                slot: slot::POINT,
-                consumed: false,
-                picked: false,
-                refs: p.start.iter().cloned().map(AnyRef::Point).collect(),
-            }))
+            .chain(profiles.iter().map(|p| unpicked("prop.loft.start", slot::POINT, p.start.iter().cloned().map(AnyRef::Point).collect())))
+            .chain(std::iter::once(operand(op, target)))
             .collect(),
             FeatureOp::Boolean { target, tool, .. } => vec![
                 body("prop.inspector.target", slot::BODY, target),
@@ -384,6 +469,12 @@ impl FeatureOp {
                 (*sketch, *regions) = (s, entries);
             }
             (FeatureOp::Sweep { path, .. }, 1, Resolved::Path(to)) => *path = to,
+            (FeatureOp::Extrude { direction, .. }, 1, Resolved::Direction(to)) => *direction = Some(to),
+            (FeatureOp::Extrude { end, .. }, 2, Resolved::Bound(to)) => *end = End::UpTo { to },
+            (FeatureOp::Extrude { other, .. }, 3, Resolved::Bound(to)) => *other = Some(End::UpTo { to }),
+            (FeatureOp::Extrude { target, .. }, 4, Resolved::Body(id))
+            | (FeatureOp::Revolve { target, .. } | FeatureOp::Sweep { target, .. }, 2, Resolved::Body(id)) => *target = Some(id),
+            (FeatureOp::Loft { profiles, target, .. }, at, Resolved::Body(id)) if at == profiles.len() + 1 => *target = Some(id),
             (FeatureOp::Loft { profiles, .. }, 0, Resolved::Profiles(to)) => {
                 // A profile on a sketch it already had keeps its start.
                 let kept = |sketch| profiles.iter().find(|p| p.sketch == sketch).and_then(|p| p.start.clone());
@@ -465,6 +556,10 @@ impl FeatureOp {
             | FeatureOp::Point { .. }
             | FeatureOp::Sketch { .. } => None,
         }
+    }
+
+    pub fn makes_body(&self) -> bool {
+        !matches!(self, FeatureOp::Plane { .. } | FeatureOp::Axis { .. } | FeatureOp::Point { .. } | FeatureOp::Sketch { .. })
     }
 
     /// Each sketch the feature sweeps regions of, and the entries it names.
@@ -781,6 +876,111 @@ impl AxisFrame {
     }
 }
 
+/// Stands a sweep's body up on its own, or joins, cuts or intersects its
+/// target with it under the sweep's id. A target that cannot be combined is
+/// put back where it stood.
+fn combine(body: Live, op: SweepOp, target: Option<PropFeatureId>, live: &mut Vec<Live>, problems: &mut Vec<Problem>) {
+    let Some(boolean) = op.boolean() else {
+        live.push(body);
+        return;
+    };
+    let Some(at) = target.and_then(|target| live.iter().position(|standing| standing.id == target)) else {
+        problems.push(Problem::missing_body(body.id));
+        return;
+    };
+    let target = live.remove(at);
+    let solid = match boolean {
+        BooleanOp::Union => target.solid.union(&body.solid),
+        BooleanOp::Subtract => target.solid.subtract(&body.solid),
+        BooleanOp::Intersect => target.solid.intersect(&body.solid),
+    };
+    if solid.is_empty() {
+        problems.push(Problem { feature: body.id, message: get!("prop.problems.nothing_left") });
+        live.insert(at, target);
+        return;
+    }
+    let wires = target.wires.into_iter().chain(body.wires).collect();
+    live.push(Live { id: body.id, solid, wires });
+}
+
+/// Meters an extrude through everything runs past the last body.
+const THROUGH_MARGIN: f32 = 1e-3;
+/// How far from lying in the sketch's plane an extrude's direction must be,
+/// as the cosine of its angle to the plane's normal.
+const LEAST_RISE: f32 = 1e-3;
+
+/// Where an extrude's sides end, as signed meters along its direction.
+struct Reach<'a> {
+    origin: Vec3,
+    normal: Vec3,
+    along: Vec3,
+    scope: &'a Scope<'a>,
+    live: &'a [Live],
+}
+
+impl<'a> Reach<'a> {
+    fn new(plane: &Plane, direction: Option<&DirectionRef>, scope: &'a Scope<'a>, live: &'a [Live]) -> Result<Reach<'a>, String> {
+        let normal = *plane.normal;
+        let along = match direction {
+            None => normal,
+            Some(direction) => *direction.resolve(scope).ok_or_else(|| get!("prop.problems.missing_direction"))?,
+        };
+        if along.dot(normal).abs() < LEAST_RISE {
+            return Err(get!("prop.problems.direction_in_plane"));
+        }
+        Ok(Reach { origin: plane.origin, normal, along, scope, live })
+    }
+
+    /// How far along the direction the sketch's origin goes to reach the
+    /// level of `point` or the plane through `point` with `normal`.
+    fn level(&self, point: Vec3, normal: Vec3) -> Option<f32> {
+        let rise = self.along.dot(normal);
+        (rise.abs() >= LEAST_RISE).then(|| (point - self.origin).dot(normal) / rise)
+    }
+
+    /// `sign` is 1 for the side along the direction and -1 for the other.
+    fn side(&self, end: &End, sign: f32) -> Result<f32, String> {
+        match end {
+            End::Distance { distance } => Ok(distance * sign),
+            End::UpTo { to } => {
+                let level = match to {
+                    AnyRef::Point(point) => point.resolve(self.scope).and_then(|at| self.level(at, self.normal)),
+                    AnyRef::Plane(on) => self.scope.plane(*on).and_then(|plane| self.level(plane.origin, *plane.normal)),
+                    AnyRef::Face { face } => match crate::prop::refs::flat_face(face, self.scope) {
+                        Some(Located::Face { facets, normal }) => facets.first().and_then(|f| f.first()).and_then(|at| self.level(*at, normal)),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                level.ok_or_else(|| get!("prop.problems.missing_bound"))
+            }
+            End::ThroughAll => {
+                let corners = self
+                    .live
+                    .iter()
+                    .filter_map(|body| body.solid.bounds())
+                    .flat_map(|(min, max)| (0..8).map(move |i| Vec3::select(BVec3::new(i & 1 != 0, i & 2 != 0, i & 4 != 0), max, min)));
+                let levels = corners.filter_map(|corner| self.level(corner, self.normal));
+                // Never past the sketch the wrong way: with nothing on this
+                // side, the side stops at the sketch.
+                let furthest = match sign > 0.0 {
+                    true => levels.fold(f32::NEG_INFINITY, f32::max).max(0.0),
+                    false => levels.fold(f32::INFINITY, f32::min).min(0.0),
+                };
+                match self.live.is_empty() {
+                    false => Ok(furthest + THROUGH_MARGIN * sign),
+                    true => Err(get!("prop.problems.through_nothing")),
+                }
+            }
+        }
+    }
+
+    /// The direction in the sketch's own coordinates, `z` along its normal.
+    fn local(&self, plane: &Plane) -> Vec3 {
+        Vec3::new(self.along.dot(*plane.x), self.along.dot(*plane.y()), self.along.dot(*plane.normal))
+    }
+}
+
 /// A body mid-evaluation, with the outlines of everything that went into it.
 struct Live {
     id: PropFeatureId,
@@ -913,20 +1113,40 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
                 let solid = shape.solid(*surface).transformed(placement.transform());
                 live.push(made(solid, shape.outline().transformed(placement.transform()), &mut faces));
             }
-            FeatureOp::Extrude { sketch, symmetric, end, surface, regions } => {
+            FeatureOp::Extrude { sketch, regions, taper, op, target, end, other, direction, surface } => {
                 let Some(placed) = sketches.iter().find(|placed: &&PlacedSketch| placed.id == *sketch) else {
                     problems.push(Problem { feature: feature.id, message: get!("prop.problems.missing_sketch") });
                     continue;
                 };
                 let Some(found) = resolve_regions(feature.id, placed, regions, &mut problems) else { continue };
-                let depth = end.distance();
-                let run = |loops| extrusion(loops, depth, *symmetric);
+                let reach = Reach::new(&placed.plane, direction.as_ref(), &scope, &live).and_then(|reach| {
+                    let near = match other {
+                        Some(other) => reach.side(other, -1.0)?,
+                        None => 0.0,
+                    };
+                    let far = reach.side(end, 1.0)?;
+                    Ok((reach, near.min(far), near.max(far)))
+                });
+                let (reach, from, to) = match reach {
+                    Ok(reached) => reached,
+                    Err(message) => {
+                        problems.push(Problem { feature: feature.id, message });
+                        continue;
+                    }
+                };
+                let rise = reach.along.dot(*placed.plane.normal).abs() * from.abs().max(to.abs());
+                if found.iter().any(|region| !tapers_within(&region.outer, *taper, rise)) {
+                    problems.push(Problem { feature: feature.id, message: get!("prop.problems.taper_closes") });
+                    continue;
+                }
+                let local = reach.local(&placed.plane);
+                let run = |loops| pushed(loops, from, to, local, *taper);
                 match sweep(&found, run, |points| points.to_vec(), &[placed.plane.transform()], *surface) {
-                    Ok((solid, outline)) => live.push(made(solid, outline, &mut faces)),
+                    Ok((solid, outline)) => combine(made(solid, outline, &mut faces), *op, *target, &mut live, &mut problems),
                     Err(message) => problems.push(Problem { feature: feature.id, message }),
                 }
             }
-            FeatureOp::Sweep { sketch, regions, orient, twist, scale, path, surface } => {
+            FeatureOp::Sweep { sketch, regions, orient, twist, scale, op, target, path, surface } => {
                 let Some(placed) = sketches.iter().find(|placed: &&PlacedSketch| placed.id == *sketch) else {
                     problems.push(Problem { feature: feature.id, message: get!("prop.problems.missing_sketch") });
                     continue;
@@ -968,11 +1188,11 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
                     closed: points.closed,
                 };
                 match sweep(&found, run, |points| points.to_vec(), &[], *surface) {
-                    Ok((solid, outline)) => live.push(made(solid, outline, &mut faces)),
+                    Ok((solid, outline)) => combine(made(solid, outline, &mut faces), *op, *target, &mut live, &mut problems),
                     Err(message) => problems.push(Problem { feature: feature.id, message }),
                 }
             }
-            FeatureOp::Loft { closed, profiles, surface } => {
+            FeatureOp::Loft { closed, op, target, profiles, surface } => {
                 let mut placed_profiles = Vec::with_capacity(profiles.len());
                 for profile in profiles {
                     let Some(placed) = sketches.iter().find(|placed: &&PlacedSketch| placed.id == profile.sketch) else {
@@ -1002,12 +1222,14 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
                     .map_err(|problem| problem.message())
                     .and_then(|run| skin(&run, *surface).map_err(SkinProblem::message));
                 match swept {
-                    Ok(swept) if !swept.solid.is_empty() => live.push(made(swept.solid, swept.outline, &mut faces)),
+                    Ok(swept) if !swept.solid.is_empty() => {
+                        combine(made(swept.solid, swept.outline, &mut faces), *op, *target, &mut live, &mut problems)
+                    }
                     Ok(_) => problems.push(Problem { feature: feature.id, message: get!("prop.problems.empty_sweep") }),
                     Err(message) => problems.push(Problem { feature: feature.id, message }),
                 }
             }
-            FeatureOp::Revolve { sketch, axis, degrees, steps, symmetric, surface, regions } => {
+            FeatureOp::Revolve { sketch, axis, degrees, steps, symmetric, op, target, surface, regions } => {
                 let Some(placed) = sketches.iter().find(|placed: &&PlacedSketch| placed.id == *sketch) else {
                     problems.push(Problem { feature: feature.id, message: get!("prop.problems.missing_sketch") });
                     continue;
@@ -1033,7 +1255,7 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
                 };
                 let run = |loops| revolution(loops, *degrees, steps);
                 match sweep(&found, run, |points| frame.local(points), &[spin, frame.transform], *surface) {
-                    Ok((solid, outline)) => live.push(made(solid, outline, &mut faces)),
+                    Ok((solid, outline)) => combine(made(solid, outline, &mut faces), *op, *target, &mut live, &mut problems),
                     Err(message) => problems.push(Problem { feature: feature.id, message }),
                 }
             }
@@ -1204,8 +1426,18 @@ mod tests {
         };
         let surface = Surface::default();
         vec![
-            FeatureOp::Extrude { sketch: id(100), regions: vec![SketchId(1)], symmetric: false, end: End::Distance { distance: 0.05 }, surface },
-            FeatureOp::Sweep {
+            FeatureOp::Extrude {
+                sketch: id(100),
+                regions: vec![SketchId(1)],
+                taper: 5.0,
+                op: SweepOp::Cut,
+                target: Some(id(137)),
+                end: End::UpTo { to: AnyRef::Face { face: geom(Element::Face(2), 138) } },
+                other: Some(End::UpTo { to: AnyRef::Plane(PlaneRef::Feature(id(139))) }),
+                direction: Some(DirectionRef::Normal { plane: PlaneRef::Feature(id(140)) }),
+                surface,
+            },
+            FeatureOp::Sweep { op: SweepOp::NewBody, target: None,
                 sketch: id(131),
                 regions: vec![SketchId(1)],
                 orient: Orient::Frenet,
@@ -1219,7 +1451,7 @@ mod tests {
                 },
                 surface,
             },
-            FeatureOp::Revolve {
+            FeatureOp::Revolve { op: SweepOp::NewBody, target: None,
                 sketch: id(101),
                 regions: vec![SketchId(1)],
                 degrees: 90.0,
@@ -1228,7 +1460,7 @@ mod tests {
                 axis: CurveRef::Datum { feature: id(102) },
                 surface,
             },
-            FeatureOp::Loft {
+            FeatureOp::Loft { op: SweepOp::NewBody, target: None,
                 closed: false,
                 profiles: vec![
                     Profile { sketch: id(134), region: SketchId(1), start: None },
@@ -1306,6 +1538,7 @@ mod tests {
             for (index, field) in op.fields().iter().enumerate() {
                 let value = match (field.slot.kind, &field.refs[..]) {
                     (Kind::Construct(_), _) => Resolved::Op(op.clone()),
+                    (Kind::Bound, [to]) => Resolved::Bound(to.clone()),
                     (Kind::Profiles, refs) => Resolved::Profiles(
                         refs.iter()
                             .map(|r| match r {
@@ -1321,8 +1554,8 @@ mod tests {
                     (_, [AnyRef::Plane(on)]) => Resolved::Plane(*on),
                     (_, [AnyRef::Path(path)]) => Resolved::Path(path.clone()),
                     (_, [AnyRef::Point(point)]) => Resolved::Point(point.clone()),
-                    // An unset loft start is not a value to write back.
-                    (Kind::Point, []) => continue,
+                    // An unset field is not a value to write back.
+                    (_, []) => continue,
                     other => panic!("field {index} of {op:?} holds {other:?}"),
                 };
                 let mut written = op.clone();
@@ -1588,8 +1821,13 @@ mod tests {
                     PropFeatureId(1),
                     FeatureOp::Extrude {
                         sketch: PropFeatureId(0),
-                        symmetric,
-                        end: End::Distance { distance },
+                        taper: 0.0,
+                        op: SweepOp::NewBody,
+                        target: None,
+                        // Half each way, as both sides at half the distance.
+                        end: End::Distance { distance: if symmetric { distance / 2.0 } else { distance } },
+                        other: symmetric.then_some(End::Distance { distance: distance / 2.0 }),
+                        direction: None,
                         surface: Surface::default(),
                         regions,
                     },
@@ -1702,8 +1940,12 @@ mod tests {
             let sweep = doc.push(FeatureOp::Extrude {
                 sketch: on,
                 regions: ids,
-                symmetric: false,
+                taper: 0.0,
+                op: SweepOp::NewBody,
+                target: None,
                 end: End::Distance { distance: 0.1 },
+                other: None,
+                direction: None,
                 surface: Surface::default(),
             });
 
@@ -1880,7 +2122,7 @@ mod tests {
                 PropFeature::new(PropFeatureId(1), FeatureOp::Sketch { on: PlaneRef::Origin(OriginPlane::Xz), sketch: path }),
                 PropFeature::new(
                     PropFeatureId(2),
-                    FeatureOp::Sweep {
+                    FeatureOp::Sweep { op: SweepOp::NewBody, target: None,
                         sketch: PropFeatureId(0),
                         regions,
                         orient,
@@ -1978,7 +2220,7 @@ mod tests {
                 PropFeature::new(PropFeatureId(0), FeatureOp::Sketch { on: PlaneRef::Origin(on), sketch }),
                 PropFeature::new(
                     PropFeatureId(1),
-                    FeatureOp::Revolve {
+                    FeatureOp::Revolve { op: SweepOp::NewBody, target: None,
                         sketch: PropFeatureId(0),
                         axis: CurveRef::Sketch { sketch: PropFeatureId(0), entity: axis },
                         degrees,
@@ -2068,7 +2310,7 @@ mod tests {
                     PropFeature::new(PropFeatureId(0), FeatureOp::Sketch { on: PlaneRef::Origin(OriginPlane::Xy), sketch: sketch.clone() }),
                     PropFeature::new(
                         PropFeatureId(1),
-                        FeatureOp::Revolve {
+                        FeatureOp::Revolve { op: SweepOp::NewBody, target: None,
                             sketch: PropFeatureId(0),
                             regions: regions.clone(),
                             degrees: 360.0,
@@ -2106,7 +2348,7 @@ mod tests {
                 PropFeature::new(PropFeatureId(0), FeatureOp::Sketch { on: PlaneRef::Origin(OriginPlane::Xy), sketch }),
                 PropFeature::new(
                     PropFeatureId(1),
-                    FeatureOp::Revolve {
+                    FeatureOp::Revolve { op: SweepOp::NewBody, target: None,
                         sketch: PropFeatureId(0),
                         axis: CurveRef::Sketch { sketch: PropFeatureId(0), entity: axis },
                         degrees: 120.0,
@@ -2133,7 +2375,7 @@ mod tests {
             let regions = adopt(&mut sketch, names);
             let mut doc = PropDoc::new("test");
             let on = doc.push(FeatureOp::Sketch { on: PlaneRef::Origin(OriginPlane::Xz), sketch });
-            doc.push(FeatureOp::Revolve {
+            doc.push(FeatureOp::Revolve { op: SweepOp::NewBody, target: None,
                 sketch: on,
                 axis: CurveRef::Sketch { sketch: on, entity: axis },
                 degrees: 270.0,
@@ -2192,7 +2434,7 @@ mod tests {
                 PropFeature::new(PropFeatureId(2), FeatureOp::Sketch { on: PlaneRef::Feature(PropFeatureId(1)), sketch: far }),
                 PropFeature::new(
                     PropFeatureId(3),
-                    FeatureOp::Loft {
+                    FeatureOp::Loft { op: SweepOp::NewBody, target: None,
                         closed: false,
                         profiles: vec![
                             Profile { sketch: PropFeatureId(0), region: entries[0], start: None },
@@ -2288,7 +2530,7 @@ mod tests {
                 features.push(PropFeature::new(sketch, FeatureOp::Sketch { on: PlaneRef::Feature(plane), sketch: drawn }));
                 profiles.push(Profile { sketch, region, start: None });
             }
-            features.push(PropFeature::new(PropFeatureId(6), FeatureOp::Loft { closed: true, profiles, surface: Surface::default() }));
+            features.push(PropFeature::new(PropFeatureId(6), FeatureOp::Loft { op: SweepOp::NewBody, target: None, closed: true, profiles, surface: Surface::default() }));
             let evaluated = evaluate(&features);
             assert!(evaluated.problems.is_empty(), "{:?}", evaluated.problems);
             assert!(evaluated.bodies[0].1.volume() > 0.0);
@@ -2304,7 +2546,7 @@ mod tests {
                 PropFeature::new(PropFeatureId(0), FeatureOp::Sketch { on: PlaneRef::Origin(OriginPlane::Xy), sketch }),
                 PropFeature::new(
                     PropFeatureId(1),
-                    FeatureOp::Loft {
+                    FeatureOp::Loft { op: SweepOp::NewBody, target: None,
                         closed: false,
                         profiles: vec![Profile { sketch: PropFeatureId(0), region, start: None }],
                         surface: Surface::default(),
@@ -2320,7 +2562,7 @@ mod tests {
             let mut doc = PropDoc::new("test");
             let near = doc.push(FeatureOp::Sketch { on: PlaneRef::Origin(OriginPlane::Xy), sketch: squares(&[0.06]) });
             let far = doc.push(FeatureOp::Sketch { on: PlaneRef::Origin(OriginPlane::Xy), sketch: squares(&[0.02]) });
-            doc.push(FeatureOp::Loft {
+            doc.push(FeatureOp::Loft { op: SweepOp::NewBody, target: None,
                 closed: true,
                 profiles: vec![
                     Profile { sketch: near, region: SketchId(5), start: None },
@@ -2330,6 +2572,258 @@ mod tests {
             });
             let text = to_text(&doc).unwrap();
             assert_eq!(parse(&text).unwrap(), doc, "{text}");
+        }
+    }
+
+    mod extrude_options {
+        use super::super::*;
+        use super::extrude::{adopt, every};
+        use crate::prop::plane::OriginPlane;
+        use crate::prop::region::arrange;
+        use crate::prop::sketch::Sketch;
+
+        const SIDE: f32 = 0.02;
+
+        /// A square `SIDE` wide centered on the origin, its one region adopted.
+        fn square() -> (Sketch, SketchId) {
+            let mut sketch = Sketch::default();
+            let h = SIDE / 2.0;
+            let corners: Vec<SketchId> =
+                [[-h, -h], [h, -h], [h, h], [-h, h]].iter().map(|at| sketch.add_point(Vec2::from_array(*at))).collect();
+            for i in 0..4 {
+                sketch.add_line(corners[i], corners[(i + 1) % 4]);
+            }
+            let names = every(&arrange(&sketch).regions);
+            let region = adopt(&mut sketch, names)[0];
+            (sketch, region)
+        }
+
+        fn extrude(sketch: u32, region: SketchId, end: End) -> FeatureOp {
+            FeatureOp::Extrude {
+                sketch: PropFeatureId(sketch),
+                regions: vec![region],
+                taper: 0.0,
+                op: SweepOp::NewBody,
+                target: None,
+                end,
+                other: None,
+                direction: None,
+                surface: Surface::default(),
+            }
+        }
+
+        fn cube() -> FeatureOp {
+            FeatureOp::Primitive { shape: Shape::Box { size: [0.1; 3] }, placement: Placement::default(), surface: Surface::default() }
+        }
+
+        /// A 0.1 m cube centered on the origin, the square sketched on the
+        /// XY plane through its middle, and `op` made from them.
+        fn on_the_cube(op: impl Fn(SketchId) -> FeatureOp) -> Evaluated {
+            let (sketch, region) = square();
+            evaluate(&[
+                PropFeature::new(PropFeatureId(0), cube()),
+                PropFeature::new(PropFeatureId(1), FeatureOp::Sketch { on: PlaneRef::Origin(OriginPlane::Xy), sketch }),
+                PropFeature::new(PropFeatureId(2), op(region)),
+            ])
+        }
+
+        fn only_volume(evaluated: &Evaluated) -> f32 {
+            assert!(evaluated.problems.is_empty(), "{:?}", evaluated.problems);
+            assert_eq!(evaluated.bodies.len(), 1);
+            evaluated.bodies[0].1.volume()
+        }
+
+        fn near(volume: f32, expected: f32) {
+            assert!((volume - expected).abs() < expected * 1e-3, "{volume} against {expected}");
+        }
+
+        #[test]
+        fn a_join_adds_to_its_target_under_its_own_id() {
+            let evaluated = on_the_cube(|region| {
+                let mut op = extrude(1, region, End::Distance { distance: 0.1 });
+                if let FeatureOp::Extrude { op: how, target, .. } = &mut op {
+                    (*how, *target) = (SweepOp::Join, Some(PropFeatureId(0)));
+                }
+                op
+            });
+            near(only_volume(&evaluated), 0.1f32.powi(3) + SIDE * SIDE * 0.05);
+            assert_eq!(evaluated.bodies[0].0, PropFeatureId(2));
+        }
+
+        #[test]
+        fn a_cut_through_all_both_ways_bores_the_cube() {
+            let evaluated = on_the_cube(|region| {
+                let mut op = extrude(1, region, End::ThroughAll);
+                if let FeatureOp::Extrude { op: how, target, other, .. } = &mut op {
+                    (*how, *target, *other) = (SweepOp::Cut, Some(PropFeatureId(0)), Some(End::ThroughAll));
+                }
+                op
+            });
+            near(only_volume(&evaluated), 0.1f32.powi(3) - SIDE * SIDE * 0.1);
+        }
+
+        #[test]
+        fn a_join_with_no_target_is_a_problem_and_makes_nothing() {
+            let evaluated = on_the_cube(|region| {
+                let mut op = extrude(1, region, End::Distance { distance: 0.1 });
+                if let FeatureOp::Extrude { op: how, .. } = &mut op {
+                    *how = SweepOp::Join;
+                }
+                op
+            });
+            assert_eq!(evaluated.problems.len(), 1);
+            assert_eq!(evaluated.bodies.len(), 1, "the cube stands as it was");
+            assert_eq!(evaluated.bodies[0].0, PropFeatureId(0));
+        }
+
+        #[test]
+        fn an_extrude_stops_at_a_plane() {
+            let (sketch, region) = square();
+            let evaluated = evaluate(&[
+                PropFeature::new(PropFeatureId(0), FeatureOp::Sketch { on: PlaneRef::Origin(OriginPlane::Xy), sketch }),
+                PropFeature::new(
+                    PropFeatureId(1),
+                    FeatureOp::Plane { def: PlaneDef::Offset { distance: 0.07, from: PlaneRef::Origin(OriginPlane::Xy) } },
+                ),
+                PropFeature::new(PropFeatureId(2), extrude(0, region, End::UpTo { to: AnyRef::Plane(PlaneRef::Feature(PropFeatureId(1))) })),
+            ]);
+            near(only_volume(&evaluated), SIDE * SIDE * 0.07);
+        }
+
+        /// Cavalieri: a slanted prism holds its base times its height.
+        #[test]
+        fn a_slanted_extrude_holds_its_base_times_its_height() {
+            let (sketch, region) = square();
+            let mut guide = Sketch::default();
+            // On the XZ plane, whose y runs along the prop's -Z: up and
+            // across at 30 degrees from the normal.
+            let (a, b) = (guide.add_point(Vec2::ZERO), guide.add_point(Vec2::new(0.5, -(3.0f32).sqrt() / 2.0)));
+            let line = guide.add_line(a, b);
+            let evaluated = evaluate(&[
+                PropFeature::new(PropFeatureId(0), FeatureOp::Sketch { on: PlaneRef::Origin(OriginPlane::Xy), sketch }),
+                PropFeature::new(PropFeatureId(1), FeatureOp::Sketch { on: PlaneRef::Origin(OriginPlane::Xz), sketch: guide }),
+                PropFeature::new(PropFeatureId(2), {
+                    let mut op = extrude(0, region, End::Distance { distance: 0.1 });
+                    if let FeatureOp::Extrude { direction, .. } = &mut op {
+                        *direction = Some(DirectionRef::Along { curve: CurveRef::Sketch { sketch: PropFeatureId(1), entity: line } });
+                    }
+                    op
+                }),
+            ]);
+            let height = 0.1 * 30f32.to_radians().cos();
+            near(only_volume(&evaluated).abs(), SIDE * SIDE * height);
+        }
+
+        /// The square shrinks about its middle by the lean at its
+        /// equivalent radius, so it is a square frustum.
+        #[test]
+        fn a_tapered_extrude_on_both_sides_is_two_frustums() {
+            let (sketch, region) = square();
+            let (taper, h) = (10.0f32, 0.02);
+            let evaluated = evaluate(&[
+                PropFeature::new(PropFeatureId(0), FeatureOp::Sketch { on: PlaneRef::Origin(OriginPlane::Xy), sketch }),
+                PropFeature::new(PropFeatureId(1), {
+                    let mut op = extrude(0, region, End::Distance { distance: h });
+                    if let FeatureOp::Extrude { taper: lean, other, .. } = &mut op {
+                        (*lean, *other) = (taper, Some(End::Distance { distance: h }));
+                    }
+                    op
+                }),
+            ]);
+            let radius = (SIDE * SIDE / std::f32::consts::PI).sqrt();
+            let k = 1.0 - h * taper.to_radians().tan() / radius;
+            let area = SIDE * SIDE;
+            let frustum = h / 3.0 * (area + area * k * k + area * k);
+            near(only_volume(&evaluated), 2.0 * frustum);
+            assert_eq!(evaluated.wires[0].1[0].outline.faces.len(), 10, "two caps and four sides on each half");
+        }
+
+        #[test]
+        fn a_taper_that_closes_the_region_is_a_problem() {
+            let (sketch, region) = square();
+            let evaluated = evaluate(&[
+                PropFeature::new(PropFeatureId(0), FeatureOp::Sketch { on: PlaneRef::Origin(OriginPlane::Xy), sketch }),
+                PropFeature::new(PropFeatureId(1), {
+                    let mut op = extrude(0, region, End::Distance { distance: 0.1 });
+                    if let FeatureOp::Extrude { taper, .. } = &mut op {
+                        *taper = 45.0;
+                    }
+                    op
+                }),
+            ]);
+            assert!(evaluated.bodies.is_empty());
+            assert_eq!(evaluated.problems.len(), 1);
+        }
+
+        #[test]
+        fn every_extrude_option_survives_the_file() {
+            use crate::prop::document::{parse, to_text, PropDoc};
+            use crate::prop::reference::{Element, Source};
+            let mut doc = PropDoc::new("test");
+            let body = doc.push(cube());
+            let (sketch, region) = square();
+            let on = doc.push(FeatureOp::Sketch { on: PlaneRef::Origin(OriginPlane::Xy), sketch });
+            let face = GeomRef { element: Element::Face(1), source: Source { feature: body, copies: vec![] } };
+            doc.push(FeatureOp::Extrude {
+                sketch: on,
+                regions: vec![region],
+                taper: 2.5,
+                op: SweepOp::Cut,
+                target: Some(body),
+                end: End::UpTo { to: AnyRef::Face { face } },
+                other: Some(End::ThroughAll),
+                direction: Some(DirectionRef::Normal { plane: PlaneRef::Origin(OriginPlane::Xz) }),
+                surface: Surface::default(),
+            });
+            doc.push(FeatureOp::Revolve {
+                sketch: on,
+                regions: vec![region],
+                degrees: 90.0,
+                steps: 6,
+                symmetric: false,
+                op: SweepOp::Intersect,
+                target: Some(body),
+                axis: CurveRef::Axis { axis: Axis::Y },
+                surface: Surface::default(),
+            });
+            let text = to_text(&doc).unwrap();
+            assert_eq!(parse(&text).unwrap(), doc, "{text}");
+        }
+
+        #[test]
+        fn a_revolve_can_cut_too() {
+            // A ring of the square's cross-section turned about the Y axis
+            // from x = 0.03, cut from the cube.
+            let mut sketch = Sketch::default();
+            let corners: Vec<SketchId> = [[0.03, -0.01], [0.05, -0.01], [0.05, 0.01], [0.03, 0.01]]
+                .iter()
+                .map(|at| sketch.add_point(Vec2::from_array(*at)))
+                .collect();
+            for i in 0..4 {
+                sketch.add_line(corners[i], corners[(i + 1) % 4]);
+            }
+            let names = every(&arrange(&sketch).regions);
+            let region = adopt(&mut sketch, names)[0];
+            let evaluated = evaluate(&[
+                PropFeature::new(PropFeatureId(0), cube()),
+                PropFeature::new(PropFeatureId(1), FeatureOp::Sketch { on: PlaneRef::Origin(OriginPlane::Xy), sketch }),
+                PropFeature::new(
+                    PropFeatureId(2),
+                    FeatureOp::Revolve {
+                        sketch: PropFeatureId(1),
+                        regions: vec![region],
+                        degrees: 360.0,
+                        steps: 24,
+                        symmetric: false,
+                        op: SweepOp::Cut,
+                        target: Some(PropFeatureId(0)),
+                        axis: CurveRef::Axis { axis: Axis::Y },
+                        surface: Surface::default(),
+                    },
+                ),
+            ]);
+            let volume = only_volume(&evaluated);
+            assert!(volume < 0.1f32.powi(3) && volume > 0.1f32.powi(3) * 0.8, "{volume}");
         }
     }
 }

@@ -12,7 +12,7 @@
 use crate::get;
 use crate::prop::construct::Making;
 use crate::prop::document::{Pick, PropDoc, PropEditor};
-use crate::prop::feature::{BooleanOp, End, Evaluated, FeatureOp, PatternKind, Profile, PropFeatureId};
+use crate::prop::feature::{BooleanOp, End, Evaluated, FeatureOp, PatternKind, Profile, PropFeatureId, SweepOp};
 use crate::prop::path::Orient;
 use crate::prop::refs::{Curve3, PathRef, Resolve, JOINS};
 use crate::prop::sketch::Sketch;
@@ -110,8 +110,17 @@ pub const TOOLS: &[ToolSpec] = &[
 
 fn extrude(values: Vec<Resolved>) -> Option<FeatureOp> {
     let [Resolved::Regions { sketch, entries }] = <[_; 1]>::try_from(values).ok()? else { return None };
-    let end = End::Distance { distance: 0.05 };
-    Some(FeatureOp::Extrude { sketch, regions: entries, symmetric: false, end, surface: Surface::default() })
+    Some(FeatureOp::Extrude {
+        sketch,
+        regions: entries,
+        taper: 0.0,
+        op: SweepOp::NewBody,
+        target: None,
+        end: End::Distance { distance: End::DEFAULT_DISTANCE },
+        other: None,
+        direction: None,
+        surface: Surface::default(),
+    })
 }
 
 fn revolve(values: Vec<Resolved>) -> Option<FeatureOp> {
@@ -122,6 +131,8 @@ fn revolve(values: Vec<Resolved>) -> Option<FeatureOp> {
         degrees: 360.0,
         steps: 12,
         symmetric: false,
+        op: SweepOp::NewBody,
+        target: None,
         axis,
         surface: Surface::default(),
     })
@@ -135,6 +146,8 @@ fn along(values: Vec<Resolved>) -> Option<FeatureOp> {
         orient: Orient::Minimal,
         twist: 0.0,
         scale: 1.0,
+        op: SweepOp::NewBody,
+        target: None,
         path,
         surface: Surface::default(),
     })
@@ -143,7 +156,7 @@ fn along(values: Vec<Resolved>) -> Option<FeatureOp> {
 fn loft(values: Vec<Resolved>) -> Option<FeatureOp> {
     let [Resolved::Profiles(profiles)] = <[_; 1]>::try_from(values).ok()? else { return None };
     let profiles = profiles.into_iter().map(|(sketch, region)| Profile { sketch, region, start: None }).collect();
-    Some(FeatureOp::Loft { closed: false, profiles, surface: Surface::default() })
+    Some(FeatureOp::Loft { closed: false, op: SweepOp::NewBody, target: None, profiles, surface: Surface::default() })
 }
 
 fn combine(op: BooleanOp, values: Vec<Resolved>) -> Option<FeatureOp> {
@@ -702,7 +715,7 @@ mod tests {
     fn a_repicked_axis_still_has_to_lie_in_the_sketch() {
         let mut doc = PropDoc::new("test");
         let sketch = doc.push(FeatureOp::Sketch { on: PlaneRef::Origin(OriginPlane::Xz), sketch: Sketch::default() });
-        let revolve = doc.push(FeatureOp::Revolve {
+        let revolve = doc.push(FeatureOp::Revolve { op: SweepOp::NewBody, target: None,
             sketch,
             regions: vec![],
             degrees: 360.0,

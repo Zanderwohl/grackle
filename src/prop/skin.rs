@@ -314,7 +314,8 @@ fn shell(
     let spans = if closed { s } else { s - 1 };
     // A quad is flat only between two copies of one loop moved apart; a
     // loft's loops differ.
-    let parallel = |k: usize, next: usize| translates(&frames[k], &frames[next]) && caps[k] == caps[next];
+    let one_loop = caps.windows(2).all(|pair| pair[0] == pair[1]);
+    let parallel = |k: usize, next: usize| one_loop && translates(&frames[k], &frames[next]);
     let mut sides = Vec::new();
     for k in 0..spans {
         // The last ring of a closed run equals the first only to within
@@ -500,6 +501,62 @@ pub fn extrusion(loops: Vec<TaggedLoop>, depth: f32, midplane: bool) -> Run {
     let (near, far) = if midplane { (-depth / 2.0, depth / 2.0) } else { (0.0, depth) };
     let at = |z: f32| Section { loops: loops.clone(), frame: Affine3A::from_translation(Vec3::Z * z) };
     Run { sections: vec![at(near), at(far)], spans: vec![0], closed: false }
+}
+
+/// Sections for an extrude from `from` to `to` meters along `along`, a unit
+/// direction in the loops' own coordinates. With a taper the loops shrink
+/// about the outside loop's centroid as they leave `z = 0`, by `taper`
+/// degrees of lean at the outside loop's equivalent radius, so a section is
+/// added at `z = 0` when the run crosses it.
+pub fn pushed(loops: Vec<TaggedLoop>, from: f32, to: f32, along: Vec3, taper: f32) -> Run {
+    if (to - from).abs() < f32::EPSILON || loops.is_empty() {
+        return Run { sections: vec![], spans: vec![], closed: false };
+    }
+    let (center, radius) = reach(&loops[0].points);
+    let lean = taper.to_radians().tan();
+    let mut stops = vec![from];
+    if lean != 0.0 && from < 0.0 && to > 0.0 {
+        stops.push(0.0);
+    }
+    stops.push(to);
+    let at = |s: f32| {
+        let k = 1.0 - (s * along.z).abs() * lean / radius.max(f32::EPSILON);
+        let shrink = Affine3A::from_translation(center.extend(0.0))
+            * Affine3A::from_scale(Vec3::new(k, k, 1.0))
+            * Affine3A::from_translation(-center.extend(0.0));
+        let frame = match lean == 0.0 {
+            true => Affine3A::from_translation(along * s),
+            false => Affine3A::from_translation(along * s) * shrink,
+        };
+        Section { loops: loops.clone(), frame }
+    };
+    let spans = (0..stops.len() as u32 - 1).collect();
+    Run { sections: stops.into_iter().map(at).collect(), spans, closed: false }
+}
+
+/// Whether a loop tapered by `taper` degrees still has some size `rise`
+/// meters from its plane: a tenth of its own, at least.
+pub fn tapers_within(points: &[Vec2], taper: f32, rise: f32) -> bool {
+    let (_, radius) = reach(points);
+    1.0 - rise * taper.to_radians().tan() / radius.max(f32::EPSILON) > 0.1
+}
+
+/// A loop's area centroid, and the radius of the circle of its area.
+fn reach(points: &[Vec2]) -> (Vec2, f32) {
+    let twice = area_x2(points);
+    if twice.abs() < f32::EPSILON {
+        let middle = points.iter().copied().sum::<Vec2>() / points.len().max(1) as f32;
+        return (middle, 0.0);
+    }
+    let n = points.len();
+    let center = (0..n)
+        .map(|i| {
+            let (a, b) = (points[i], points[(i + 1) % n]);
+            (a + b) * a.perp_dot(b)
+        })
+        .sum::<Vec2>()
+        / (3.0 * twice);
+    (center, (twice.abs() / 2.0 / std::f32::consts::PI).sqrt())
 }
 
 /// Sections for a turn about local `+Y` in `steps` straight steps; a whole

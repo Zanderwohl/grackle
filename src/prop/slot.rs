@@ -29,6 +29,8 @@ pub enum Kind {
     Profiles,
     /// A corner, a sketch point, a datum point or a junction.
     Point,
+    /// What an extrude goes up to: a point, a plane or a flat face.
+    Bound,
     /// A straight curve: an edge, a sketch's line, an axis.
     Curve,
     /// A straight curve, or a plane's or flat face's normal.
@@ -65,6 +67,7 @@ pub const AXIS: Slot = Slot { kind: Kind::Curve, prompt: "prop.tool.pick.axis", 
 pub const DIRECTION: Slot = Slot { kind: Kind::Direction, prompt: "prop.tool.pick.direction", checks: &[] };
 pub const PLANE: Slot = Slot { kind: Kind::Plane, prompt: "prop.tool.pick.plane", checks: &[] };
 pub const PROFILES: Slot = Slot { kind: Kind::Profiles, prompt: "prop.tool.pick.profile", checks: &[] };
+pub const BOUND: Slot = Slot { kind: Kind::Bound, prompt: "prop.tool.pick.bound", checks: &[] };
 pub const POINT: Slot = Slot { kind: Kind::Point, prompt: "prop.tool.pick.point", checks: &[] };
 pub const PATH: Slot = Slot { kind: Kind::Path, prompt: "prop.tool.pick.path", checks: &[] };
 pub const MAKE_PLANE: Slot = Slot { kind: Kind::Construct(Construct::Plane), prompt: "prop.tool.pick.through", checks: &[] };
@@ -81,6 +84,7 @@ pub enum Value {
     /// One region per sketch, in pick order.
     Profiles(Vec<(PropFeatureId, Region)>),
     Point(PointRef),
+    Bound(AnyRef),
     Curve(CurveRef),
     Direction(DirectionRef),
     Plane(PlaneSource),
@@ -97,6 +101,7 @@ pub enum Resolved {
     Regions { sketch: PropFeatureId, entries: Vec<SketchId> },
     Profiles(Vec<(PropFeatureId, SketchId)>),
     Point(PointRef),
+    Bound(AnyRef),
     Curve(CurveRef),
     Direction(DirectionRef),
     Plane(PlaneRef),
@@ -125,7 +130,7 @@ impl Kind {
         match self {
             // Whether one more is taken is the construction's question.
             Kind::Regions | Kind::Profiles | Kind::Path | Kind::Construct(_) => true,
-            Kind::Body | Kind::Point | Kind::Curve | Kind::Direction | Kind::Plane => has.is_empty(),
+            Kind::Body | Kind::Point | Kind::Bound | Kind::Curve | Kind::Direction | Kind::Plane => has.is_empty(),
         }
     }
 
@@ -146,6 +151,12 @@ impl Kind {
                 encloses && new_sketch
             }
             Kind::Point => pick.as_point().is_some_and(|point| point.resolve(&evaluated.scope()).is_some()),
+            Kind::Bound => bound(pick).is_some_and(|to| match to {
+                AnyRef::Point(point) => point.resolve(&evaluated.scope()).is_some(),
+                AnyRef::Plane(on) => evaluated.datum(on).is_some(),
+                AnyRef::Face { face } => flat_face(&face, evaluated),
+                _ => false,
+            }),
             Kind::Curve => pick.as_curve().is_some_and(|curve| straight(&curve, evaluated).is_some()),
             Kind::Direction => pick.as_direction().is_some_and(|direction| direction.resolve(&evaluated.scope()).is_some()),
             Kind::Plane => match pick.as_plane_source() {
@@ -207,6 +218,7 @@ impl Kind {
                     .collect::<Option<_>>()?,
             ),
             Kind::Point => Value::Point(first.as_point()?),
+            Kind::Bound => Value::Bound(bound(first)?),
             Kind::Curve => Value::Curve(first.as_curve()?),
             Kind::Direction => Value::Direction(first.as_direction()?),
             Kind::Plane => Value::Plane(first.as_plane_source()?),
@@ -249,6 +261,7 @@ impl Value {
                     .collect(),
             ),
             Value::Point(point) => Resolved::Point(point),
+            Value::Bound(to) => Resolved::Bound(to),
             Value::Curve(curve) => Resolved::Curve(curve),
             Value::Direction(direction) => Resolved::Direction(direction),
             Value::Plane(PlaneSource::Plane(on)) => Resolved::Plane(on),
@@ -268,6 +281,7 @@ impl Value {
             (Kind::Body, AnyRef::Body { body }) => Value::Body(*body),
             (Kind::Regions, AnyRef::Regions { sketch, .. }) => Value::Regions { sketch: *sketch, regions: vec![] },
             (Kind::Point, AnyRef::Point(point)) => Value::Point(point.clone()),
+            (Kind::Bound, to) => Value::Bound(to.clone()),
             (Kind::Curve, AnyRef::Curve(curve)) => Value::Curve(curve.clone()),
             (Kind::Direction, AnyRef::Direction(direction)) => Value::Direction(direction.clone()),
             (Kind::Plane, AnyRef::Plane(on)) => Value::Plane(PlaneSource::Plane(*on)),
@@ -307,6 +321,18 @@ pub fn chained(picks: &[Pick], evaluated: &Evaluated) -> Option<Vec<CurveRef>> {
         }
     }
     (!chain.is_empty()).then(|| chain.into_iter().map(|(reference, _)| reference).collect())
+}
+
+/// A pick as something to extrude up to: a point first, since a corner is
+/// also on a face.
+fn bound(pick: &Pick) -> Option<AnyRef> {
+    if let Some(point) = pick.as_point() {
+        return Some(AnyRef::Point(point));
+    }
+    match pick.as_plane_source()? {
+        PlaneSource::Plane(on) => Some(AnyRef::Plane(on)),
+        PlaneSource::Face(face) => Some(AnyRef::Face { face }),
+    }
 }
 
 fn straight(curve: &CurveRef, evaluated: &Evaluated) -> Option<(Vec3, Vec3)> {

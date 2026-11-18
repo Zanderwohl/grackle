@@ -1183,6 +1183,7 @@ path = "Pick curves end to end"
 profile = "Pick a region on each of two or more sketches"
 more_profiles = "Pick more profiles, or Done"
 point = "Pick a point"
+bound = "Pick a point, a plane or a flat face"
 more = "Pick more, or Done"
 
 [prop.lines]
@@ -1268,6 +1269,7 @@ mirror = "Mirror plane"
 pattern = "Pattern"
 swept_regions = "Regions"
 profiles = "Profiles"
+result = "Result"
 
 [prop.sweep]
 orient = "Turns"
@@ -1276,6 +1278,22 @@ frenet = "With the curve"
 fixed = "Never"
 twist = "Twist"
 scale = "End scale"
+
+[prop.sweep_op]
+new_body = "New body"
+join = "Join"
+cut = "Cut"
+intersect = "Intersect"
+
+[prop.extrude]
+side = "Along the direction"
+other_side = "Back the other way"
+distance = "Distance"
+up_to = "Up to"
+through_all = "Through all"
+normal = "Sketch normal"
+clear = "Clear"
+taper = "Taper"
 
 [prop.loft]
 start = "Starts at"
@@ -1376,6 +1394,11 @@ missing_path = "names a path that is not there"
 path_off_plane = "has a path that does not start on its sketch's plane"
 path_too_short = "has a path too short to sweep along"
 path_straight = "follows the curvature of a path with a straight stretch"
+missing_direction = "names a direction that is not there"
+direction_in_plane = "extrudes along its sketch's plane"
+missing_bound = "extrudes up to something that is not there or that it never reaches"
+through_nothing = "extrudes through all with no body to go through"
+taper_closes = "tapers a region to nothing"
 loft_too_few = "lofts fewer profiles than it needs"
 loft_holes = "lofts profiles with different numbers of holes"
 loft_coincident = "lofts two profiles centered on one point"

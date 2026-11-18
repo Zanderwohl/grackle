@@ -10,6 +10,7 @@
 //! as a change every frame. The gesture closes when the pointer and the
 //! keyboard are both idle, so typing a name is one undo step.
 
+use crate::prop::feature::SweepOp;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -1555,6 +1556,13 @@ fn feature_inspector(
             (*id, editor.doc().feature(*id).map(|f| f.name.clone()).unwrap_or_else(|| id.to_string()))
         })
         .collect();
+    // Past the rollback bar `choices` is every earlier feature; a sweep's
+    // target must be one that makes a body.
+    let bodies: Vec<(PropFeatureId, String)> = names
+        .iter()
+        .filter(|(id, _)| editor.doc().feature(*id).is_some_and(|f| f.op.makes_body()))
+        .cloned()
+        .collect();
 
     // Drawn against a copy: calling `PropEditor::doc_mut` marks the document
     // changed, which would rebuild the viewport and mark it dirty every frame.
@@ -1578,7 +1586,6 @@ fn feature_inspector(
         (_, Some(pick)) => pick_label(editor, build, &pick),
         (_, None) => get!("prop.picks.origin"),
     };
-    // Each loft profile's name, and what its start is.
     let profile_rows: Vec<(String, String)> = match &edited.op {
         FeatureOp::Loft { profiles, .. } => profiles
             .iter()
@@ -1592,16 +1599,16 @@ fn feature_inspector(
             .collect(),
         _ => vec![],
     };
+    // What every field names now, by index; empty while unset.
+    let shown: Vec<String> =
+        edited.op.fields().iter().map(|field| field.refs.iter().map(any_label).collect::<Vec<_>>().join(", ")).collect();
     let rows: Vec<(String, String, usize)> = edited
         .op
         .fields()
         .iter()
         .enumerate()
         .filter(|(_, field)| field.picked)
-        .map(|(index, field)| {
-            let shown: Vec<String> = field.refs.iter().map(any_label).collect();
-            (get!(field.label), shown.join(", "), index)
-        })
+        .map(|(index, field)| (get!(field.label), shown[index].clone(), index))
         .collect();
     let datum = build.evaluated.datum(PlaneRef::Feature(selected));
     let sketch_name = match &edited.op {
@@ -1649,7 +1656,7 @@ fn feature_inspector(
                     changed |= surface_ui(ui, surface);
                 });
             }
-            FeatureOp::Sweep { sketch, regions, orient, twist, scale, surface, .. } => {
+            FeatureOp::Sweep { sketch, regions, orient, twist, scale, op, target, surface, .. } => {
                 section(ui, "drawing", get!("prop.inspector.sections.drawing"), |ui| {
                     ui.horizontal(|ui| {
                         ui.label(get!("prop.inspector.sketch"));
@@ -1668,11 +1675,14 @@ fn feature_inspector(
                     changed |= drag(ui, get!("prop.sweep.scale"), scale, 0.01, "×");
                     *scale = scale.max(0.01);
                 });
+                section(ui, "result", get!("prop.inspector.sections.result"), |ui| {
+                    changed |= sweep_op_ui(ui, op, target, &bodies);
+                });
                 section(ui, "material", get!("prop.inspector.sections.material"), |ui| {
                     changed |= surface_ui(ui, surface);
                 });
             }
-            FeatureOp::Loft { closed, profiles, surface } => {
+            FeatureOp::Loft { closed, op, target, profiles, surface } => {
                 section(ui, "profiles", get!("prop.inspector.sections.profiles"), |ui| {
                     for (index, ((name, start), profile)) in profile_rows.iter().zip(profiles.iter_mut()).enumerate() {
                         ui.label(egui::RichText::new(format!("{}. {name}", index + 1)).strong());
@@ -1686,11 +1696,14 @@ fn feature_inspector(
                     }
                     changed |= ui.checkbox(closed, get!("prop.loft.closed")).changed();
                 });
+                section(ui, "result", get!("prop.inspector.sections.result"), |ui| {
+                    changed |= sweep_op_ui(ui, op, target, &bodies);
+                });
                 section(ui, "material", get!("prop.inspector.sections.material"), |ui| {
                     changed |= surface_ui(ui, surface);
                 });
             }
-            FeatureOp::Extrude { sketch, symmetric, end, surface, regions } => {
+            FeatureOp::Extrude { sketch, regions, taper, op, target, end, other, direction, surface } => {
                 section(ui, "drawing", get!("prop.inspector.sections.drawing"), |ui| {
                     ui.horizontal(|ui| {
                         ui.label(get!("prop.inspector.sketch"));
@@ -1699,18 +1712,44 @@ fn feature_inspector(
                     region_action = sweep_regions(ui, editor, build, *sketch, regions);
                 });
                 section(ui, "extent", get!("prop.inspector.sections.extent"), |ui| {
-                    match end {
-                        End::Distance { distance } => {
-                            changed |= drag(ui, get!("prop.inspector.distance"), distance, 0.001, "m");
-                        }
+                    let along = match direction {
+                        Some(_) => shown[1].clone(),
+                        None => get!("prop.extrude.normal"),
+                    };
+                    reference_row(ui, get!("prop.inspector.direction"), along, selected, 1, tool, requests);
+                    if direction.is_some() && ui.small_button(get!("prop.extrude.clear")).clicked() {
+                        *direction = None;
+                        changed = true;
                     }
-                    changed |= ui.checkbox(symmetric, get!("prop.inspector.symmetric")).changed();
+                    ui.separator();
+                    ui.label(get!("prop.extrude.side"));
+                    changed |= end_ui(ui, end, &shown[2], selected, 2, tool, requests);
+                    let mut both = other.is_some();
+                    if ui.checkbox(&mut both, get!("prop.extrude.other_side")).changed() {
+                        // A copied up-to or through-all would end where the
+                        // first side does, leaving nothing between.
+                        let start = match end {
+                            End::Distance { .. } => end.clone(),
+                            End::UpTo { .. } | End::ThroughAll => End::Distance { distance: End::DEFAULT_DISTANCE },
+                        };
+                        *other = both.then_some(start);
+                        changed = true;
+                    }
+                    if let Some(other) = other {
+                        changed |= end_ui(ui, other, &shown[3], selected, 3, tool, requests);
+                    }
+                    ui.separator();
+                    changed |= drag(ui, get!("prop.extrude.taper"), taper, 0.5, "°");
+                    *taper = taper.clamp(-80.0, 80.0);
+                });
+                section(ui, "result", get!("prop.inspector.sections.result"), |ui| {
+                    changed |= sweep_op_ui(ui, op, target, &bodies);
                 });
                 section(ui, "material", get!("prop.inspector.sections.material"), |ui| {
                     changed |= surface_ui(ui, surface);
                 });
             }
-            FeatureOp::Revolve { sketch, degrees, steps, symmetric, surface, regions, .. } => {
+            FeatureOp::Revolve { sketch, degrees, steps, symmetric, op, target, surface, regions, .. } => {
                 section(ui, "drawing", get!("prop.inspector.sections.drawing"), |ui| {
                     ui.horizontal(|ui| {
                         ui.label(get!("prop.inspector.sketch"));
@@ -1725,6 +1764,9 @@ fn feature_inspector(
                         changed |= ui.add(egui::Slider::new(steps, MIN_SIDES..=MAX_REVOLVE_STEPS)).changed();
                     });
                     changed |= ui.checkbox(symmetric, get!("prop.inspector.symmetric")).changed();
+                });
+                section(ui, "result", get!("prop.inspector.sections.result"), |ui| {
+                    changed |= sweep_op_ui(ui, op, target, &bodies);
                 });
                 section(ui, "material", get!("prop.inspector.sections.material"), |ui| {
                     changed |= surface_ui(ui, surface);
@@ -2806,6 +2848,71 @@ fn pattern_ui(ui: &mut Ui, count: &mut u32, along: &mut PatternKind) -> bool {
         PatternKind::Radial { degrees, .. } => {
             changed |= drag(ui, get!("prop.inspector.degrees"), degrees, 1.0, "°");
         }
+    }
+    changed
+}
+
+/// Choosing an operation with no target takes the latest body.
+fn sweep_op_ui(
+    ui: &mut Ui,
+    op: &mut SweepOp,
+    target: &mut Option<PropFeatureId>,
+    names: &[(PropFeatureId, String)],
+) -> bool {
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        ui.label(get!("prop.inspector.operation"));
+        for candidate in SweepOp::ALL {
+            changed |= ui.selectable_value(op, candidate, candidate.name()).changed();
+        }
+    });
+    if *op != SweepOp::NewBody {
+        if target.is_none() {
+            *target = names.last().map(|(id, _)| *id);
+            changed |= target.is_some();
+        }
+        match target {
+            Some(target) => changed |= body_picker(ui, get!("prop.inspector.target"), target, names),
+            None => {
+                ui.label(get!("prop.problems.missing_body"));
+            }
+        }
+    }
+    changed
+}
+
+/// Choosing "Up to" starts a pick, since an up-to end needs something to go
+/// up to.
+fn end_ui(
+    ui: &mut Ui,
+    end: &mut End,
+    shown: &str,
+    feature: PropFeatureId,
+    field: usize,
+    tool: Option<Task>,
+    requests: &mut PropRequests,
+) -> bool {
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        let distance = matches!(end, End::Distance { .. });
+        if ui.selectable_label(distance, get!("prop.extrude.distance")).clicked() && !distance {
+            *end = End::Distance { distance: End::DEFAULT_DISTANCE };
+            changed = true;
+        }
+        let up_to = matches!(end, End::UpTo { .. });
+        if ui.selectable_label(up_to, get!("prop.extrude.up_to")).clicked() && !up_to {
+            requests.task = Some(Task::Repick { feature, field });
+        }
+        let through = matches!(end, End::ThroughAll);
+        if ui.selectable_label(through, get!("prop.extrude.through_all")).clicked() && !through {
+            *end = End::ThroughAll;
+            changed = true;
+        }
+    });
+    match end {
+        End::Distance { distance } => changed |= drag(ui, get!("prop.inspector.distance"), distance, 0.001, "m"),
+        End::UpTo { .. } => reference_row(ui, get!("prop.extrude.up_to"), shown.to_string(), feature, field, tool, requests),
+        End::ThroughAll => {}
     }
     changed
 }

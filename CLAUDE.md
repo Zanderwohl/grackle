@@ -1125,7 +1125,12 @@ when every profile has as many, and otherwise cut to the largest point count
 with the extra points in the longest segments, so corners stay; each loop
 starts at a picked point or the turn nearest the profile before. Faces are
 named by the first profile's entities and the span. The skin draws a side as
-a quad only between two copies of one loop. Its polygons come out in the order the old extrude and revolve used,
+a quad only between two copies of one loop. An **Extrude** runs along its sketch's normal or a
+picked direction, each side a distance, up to a point, plane or flat face (the
+end stays parallel to the sketch), or through every body's bounds, with an
+optional taper. Extrude, Revolve, Sweep and Loft each carry a `SweepOp` —
+new body, join, cut, intersect — and a `target`, which the feature eats
+through `fields` while it joins, cuts or intersects, so one feature is a cut. Its polygons come out in the order the old extrude and revolve used,
 because the BSP picks splitting planes in polygon order: moving onto it left
 every shipped prop's volume and triangle count unchanged.
 
