@@ -12,7 +12,9 @@ use crate::prop::document::{Pick, PlaneSource, PropDoc};
 use crate::prop::feature::{Evaluated, FeatureOp, PropFeatureId, IN_PLANE};
 use crate::prop::plane::{Plane, PlaneDef, PlaneRef};
 use crate::prop::reference::{Element, GeomRef};
-use crate::prop::refs::{AnyRef, CurveRef, DirectionRef, Resolve};
+use std::collections::VecDeque;
+
+use crate::prop::refs::{AnyRef, Curve3, CurveRef, DirectionRef, PathRef, Resolve, JOINS};
 use crate::prop::region::Region;
 use crate::prop::sketch::SketchId;
 use crate::prop::sketch_edit::sketch_of_mut;
@@ -29,6 +31,8 @@ pub enum Kind {
     Direction,
     /// A plane, or a flat face to make one through.
     Plane,
+    /// Curves joined end to end, each joining either end of those before.
+    Path,
     /// Whatever makes the plane, axis or point; see [`crate::prop::construct`].
     Construct(Construct),
 }
@@ -56,6 +60,7 @@ pub const REGIONS: Slot = Slot { kind: Kind::Regions, prompt: "prop.tool.pick.re
 pub const AXIS: Slot = Slot { kind: Kind::Curve, prompt: "prop.tool.pick.axis", checks: &[in_the_regions_plane] };
 pub const DIRECTION: Slot = Slot { kind: Kind::Direction, prompt: "prop.tool.pick.direction", checks: &[] };
 pub const PLANE: Slot = Slot { kind: Kind::Plane, prompt: "prop.tool.pick.plane", checks: &[] };
+pub const PATH: Slot = Slot { kind: Kind::Path, prompt: "prop.tool.pick.path", checks: &[] };
 pub const MAKE_PLANE: Slot = Slot { kind: Kind::Construct(Construct::Plane), prompt: "prop.tool.pick.through", checks: &[] };
 pub const MAKE_AXIS: Slot = Slot { kind: Kind::Construct(Construct::Axis), prompt: "prop.tool.pick.axis_from", checks: &[] };
 pub const MAKE_POINT: Slot = Slot { kind: Kind::Construct(Construct::Point), prompt: "prop.tool.pick.point_from", checks: &[] };
@@ -70,6 +75,8 @@ pub enum Value {
     Curve(CurveRef),
     Direction(DirectionRef),
     Plane(PlaneSource),
+    /// In order along the path.
+    Path(PathRef),
     Making(Making),
 }
 
@@ -82,6 +89,7 @@ pub enum Resolved {
     Curve(CurveRef),
     Direction(DirectionRef),
     Plane(PlaneRef),
+    Path(PathRef),
     /// What a construction made, whole.
     Op(FeatureOp),
 }
@@ -105,7 +113,7 @@ impl Kind {
     pub fn open(self, has: &[Pick]) -> bool {
         match self {
             // Whether one more is taken is the construction's question.
-            Kind::Regions | Kind::Construct(_) => true,
+            Kind::Regions | Kind::Path | Kind::Construct(_) => true,
             Kind::Body | Kind::Curve | Kind::Direction | Kind::Plane => has.is_empty(),
         }
     }
@@ -127,6 +135,10 @@ impl Kind {
                 Some(PlaneSource::Face(face)) => flat_face(&face, evaluated),
                 None => false,
             },
+            Kind::Path => {
+                let with: Vec<Pick> = has.iter().chain([pick]).cloned().collect();
+                !has.contains(pick) && chained(&with, evaluated).is_some()
+            }
             Kind::Construct(construct) => construct.takes(has, pick, &evaluated.scope()),
         }
     }
@@ -143,7 +155,7 @@ impl Kind {
     /// to be told it is done.
     pub fn open_ended(self, has: &[Pick]) -> bool {
         match self {
-            Kind::Regions => true,
+            Kind::Regions | Kind::Path => true,
             Kind::Construct(construct) => construct.extendable(has),
             _ => false,
         }
@@ -168,6 +180,7 @@ impl Kind {
             Kind::Curve => Value::Curve(first.as_curve()?),
             Kind::Direction => Value::Direction(first.as_direction()?),
             Kind::Plane => Value::Plane(first.as_plane_source()?),
+            Kind::Path => Value::Path(PathRef { curves: chained(has, evaluated)? }),
             Kind::Construct(construct) => Value::Making(construct.making(has, &evaluated.scope())?),
         })
     }
@@ -202,6 +215,7 @@ impl Value {
             Value::Curve(curve) => Resolved::Curve(curve),
             Value::Direction(direction) => Resolved::Direction(direction),
             Value::Plane(PlaneSource::Plane(on)) => Resolved::Plane(on),
+            Value::Path(path) => Resolved::Path(path),
             Value::Plane(PlaneSource::Face(_)) => Resolved::Plane(PlaneRef::Feature(planes.next().expect("a plane per face"))),
             Value::Making(making) => {
                 let ids: Vec<PropFeatureId> = planes.take(making.faces().len()).collect();
@@ -219,9 +233,42 @@ impl Value {
             (Kind::Curve, AnyRef::Curve(curve)) => Value::Curve(curve.clone()),
             (Kind::Direction, AnyRef::Direction(direction)) => Value::Direction(direction.clone()),
             (Kind::Plane, AnyRef::Plane(on)) => Value::Plane(PlaneSource::Plane(*on)),
+            (Kind::Path, AnyRef::Path(path)) => Value::Path(path.clone()),
             _ => return None,
         })
     }
+}
+
+/// The picked curves in order along one path: each added after the last if
+/// it joins its end, before the first if it joins its start. `None` if one
+/// does not resolve, joins neither end, or the path has closed already.
+pub fn chained(picks: &[Pick], evaluated: &Evaluated) -> Option<Vec<CurveRef>> {
+    let scope = evaluated.scope();
+    let mut chain: VecDeque<(CurveRef, Curve3)> = VecDeque::new();
+    for pick in picks {
+        let reference = pick.as_curve()?;
+        let curve = reference.resolve(&scope)?;
+        let Some((first, last)) = chain.front().zip(chain.back()) else {
+            chain.push_back((reference, curve));
+            continue;
+        };
+        let (start, end) = (first.1.start(), last.1.end());
+        if chain.len() > 1 && start.distance(end) < JOINS {
+            return None;
+        }
+        if curve.start().distance(end) < JOINS {
+            chain.push_back((reference, curve));
+        } else if curve.end().distance(end) < JOINS {
+            chain.push_back((reference, curve.reversed()));
+        } else if curve.end().distance(start) < JOINS {
+            chain.push_front((reference, curve));
+        } else if curve.start().distance(start) < JOINS {
+            chain.push_front((reference, curve.reversed()));
+        } else {
+            return None;
+        }
+    }
+    (!chain.is_empty()).then(|| chain.into_iter().map(|(reference, _)| reference).collect())
 }
 
 fn straight(curve: &CurveRef, evaluated: &Evaluated) -> Option<(Vec3, Vec3)> {

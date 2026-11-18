@@ -334,7 +334,9 @@ impl PropDoc {
             .features
             .iter()
             .flat_map(|feature| match &feature.op {
-                FeatureOp::Extrude { sketch, regions, .. } | FeatureOp::Revolve { sketch, regions, .. } => {
+                FeatureOp::Extrude { sketch, regions, .. }
+                | FeatureOp::Revolve { sketch, regions, .. }
+                | FeatureOp::Sweep { sketch, regions, .. } => {
                     regions.iter().map(|region| (*sketch, *region)).collect()
                 }
                 _ => vec![],

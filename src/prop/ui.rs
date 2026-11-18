@@ -56,7 +56,8 @@ use crate::prop::construct::{Construct, Making};
 use crate::prop::plane::PlaneDef;
 use crate::prop::refs::{axis_name, AnyRef, CurveRef, DirectionRef, PointRef, Resolve};
 use crate::prop::tool::add_making;
-use crate::prop::tool::{advance, cancel, fill, is_ready, prompt, put_down, start, ActiveTool, Task, Tool};
+use crate::prop::tool::{advance, cancel, can_chain, chain, fill, is_ready, prompt, put_down, start, ActiveTool, Task, Tool};
+use crate::prop::path::Orient;
 
 /// What a file dialog came back with. A background thread, like the map
 /// editor's, so not wasm-ready; reading props does not come through here.
@@ -890,7 +891,7 @@ fn toolbar(
             surface: Surface::default(),
         });
     }
-    tool_family(ui, "prop_sweep", &[Tool::Extrude, Tool::Revolve], active, requests);
+    tool_family(ui, "prop_sweep", &[Tool::Extrude, Tool::Revolve, Tool::Sweep], active, requests);
 
     ui.separator();
 
@@ -928,6 +929,11 @@ fn toolbar(
         let asked = prompt(task, &filled, editor.doc(), &build.evaluated);
         ui.label(egui::RichText::new(asked).color(ui.visuals().warn_fg_color));
         let ready = is_ready(task, &filled, editor.doc(), &build.evaluated);
+        if can_chain(task, &filled, editor.doc())
+            && toolbar::clicked(&toolbar::joined(ui, [Segment::new("square_along_path", get!("prop.tool.chain"))])).is_some()
+        {
+            chain(task, editor, &build.evaluated);
+        }
         let done = ready.then(|| Segment::new("check_mark", get!("prop.tool.done")));
         let segments: Vec<Segment> = done.into_iter().chain([Segment::new("trash_can", get!("prop.tool.cancel"))]).collect();
         let last = segments.len() - 1;
@@ -1293,7 +1299,9 @@ fn inspector(
                 .filter_map(|id| {
                     let feature = editor.doc().feature(id)?;
                     match &feature.op {
-                        FeatureOp::Extrude { sketch: on, regions, .. } | FeatureOp::Revolve { sketch: on, regions, .. }
+                        FeatureOp::Extrude { sketch: on, regions, .. }
+                        | FeatureOp::Revolve { sketch: on, regions, .. }
+                        | FeatureOp::Sweep { sketch: on, regions, .. }
                             if *on == sketch =>
                         {
                             Some((id, feature.name.clone(), regions.clone()))
@@ -1578,7 +1586,7 @@ fn feature_inspector(
         .collect();
     let datum = build.evaluated.datum(PlaneRef::Feature(selected));
     let sketch_name = match &edited.op {
-        FeatureOp::Extrude { sketch, .. } | FeatureOp::Revolve { sketch, .. } => {
+        FeatureOp::Extrude { sketch, .. } | FeatureOp::Revolve { sketch, .. } | FeatureOp::Sweep { sketch, .. } => {
             Some(pick_label(editor, build, &Pick::Body(*sketch)))
         }
         _ => None,
@@ -1617,6 +1625,29 @@ fn feature_inspector(
                 });
                 section(ui, "placement", get!("prop.inspector.sections.placement"), |ui| {
                     changed |= placement_ui(ui, placement, main);
+                });
+                section(ui, "material", get!("prop.inspector.sections.material"), |ui| {
+                    changed |= surface_ui(ui, surface);
+                });
+            }
+            FeatureOp::Sweep { sketch, regions, orient, twist, scale, surface, .. } => {
+                section(ui, "drawing", get!("prop.inspector.sections.drawing"), |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(get!("prop.inspector.sketch"));
+                        ui.label(sketch_name.clone().unwrap_or_default());
+                    });
+                    region_action = sweep_regions(ui, editor, build, *sketch, regions);
+                });
+                section(ui, "extent", get!("prop.inspector.sections.extent"), |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(get!("prop.sweep.orient"));
+                        for candidate in Orient::ALL {
+                            changed |= ui.selectable_value(orient, candidate, candidate.name()).changed();
+                        }
+                    });
+                    changed |= drag(ui, get!("prop.sweep.twist"), twist, 1.0, "°");
+                    changed |= drag(ui, get!("prop.sweep.scale"), scale, 0.01, "×");
+                    *scale = scale.max(0.01);
                 });
                 section(ui, "material", get!("prop.inspector.sections.material"), |ui| {
                     changed |= surface_ui(ui, surface);

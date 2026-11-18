@@ -13,6 +13,8 @@ use crate::get;
 use crate::prop::construct::Making;
 use crate::prop::document::{Pick, PropDoc, PropEditor};
 use crate::prop::feature::{BooleanOp, End, Evaluated, FeatureOp, PatternKind, PropFeatureId};
+use crate::prop::path::Orient;
+use crate::prop::refs::{Curve3, PathRef, Resolve, JOINS};
 use crate::prop::sketch::Sketch;
 use crate::prop::sketch_edit::SketchSession;
 use crate::prop::slot::{self, plane_through_face, Resolved, Slot, SlotCx, Value};
@@ -23,6 +25,7 @@ use bevy::prelude::*;
 pub enum Tool {
     Extrude,
     Revolve,
+    Sweep,
     Combine(BooleanOp),
     Mirror,
     LinearPattern,
@@ -60,6 +63,7 @@ pub const TOOLS: &[ToolSpec] = &[
         slots: &[slot::REGIONS, slot::AXIS],
         build: revolve,
     },
+    ToolSpec { tool: Tool::Sweep, name: "prop.features.sweep", icon: "square_along_path", slots: &[slot::REGIONS, slot::PATH], build: along },
     ToolSpec {
         tool: Tool::Combine(BooleanOp::Union),
         name: "prop.boolean.union",
@@ -117,6 +121,19 @@ fn revolve(values: Vec<Resolved>) -> Option<FeatureOp> {
         steps: 12,
         symmetric: false,
         axis,
+        surface: Surface::default(),
+    })
+}
+
+fn along(values: Vec<Resolved>) -> Option<FeatureOp> {
+    let [Resolved::Regions { sketch, entries }, Resolved::Path(path)] = <[_; 2]>::try_from(values).ok()? else { return None };
+    Some(FeatureOp::Sweep {
+        sketch,
+        regions: entries,
+        orient: Orient::Minimal,
+        twist: 0.0,
+        scale: 1.0,
+        path,
         surface: Surface::default(),
     })
 }
@@ -351,6 +368,91 @@ pub fn cancel(active: &mut ActiveTool, editor: &mut PropEditor) {
     }
 }
 
+/// Whether `task` has a path slot with a curve in it to carry on from.
+pub fn can_chain(task: Task, filled: &Filled, doc: &PropDoc) -> bool {
+    task.slots(doc).iter().zip(&filled.0).any(|(slot, has)| slot.kind == slot::Kind::Path && !has.is_empty())
+}
+
+/// Carries the path slot's curves on, at both ends, along every curve that
+/// joins without a corner: offered seams and edges, and sketch lines and
+/// curves. What it finds is picked, so the path is stored as the plain list
+/// of curves and no rule is kept to chain differently later.
+pub fn chain(task: Task, editor: &mut PropEditor, evaluated: &Evaluated) {
+    let slots = task.slots(editor.doc());
+    let filled = fill(task, editor.picks(), editor.doc(), evaluated);
+    let Some(has) = slots.iter().zip(&filled.0).find(|(slot, _)| slot.kind == slot::Kind::Path).map(|(_, has)| has.clone())
+    else {
+        return;
+    };
+    let scope = evaluated.scope();
+    let mut candidates: Vec<(Pick, Curve3)> = Vec::new();
+    let mut offer = |pick: Pick| {
+        if let Some(curve) = pick.as_curve().and_then(|curve| curve.resolve(&scope)) {
+            candidates.push((pick, curve));
+        }
+    };
+    for seam in evaluated.seams().iter().filter(|seam| seam.offered) {
+        offer(Pick::Seam(seam.name.clone()));
+    }
+    for pickable in &evaluated.pickables {
+        if matches!(pickable.at, crate::prop::reference::Located::Edge(..)) && !evaluated.replaced(&pickable.reference) {
+            offer(Pick::Geom(pickable.reference.clone()));
+        }
+    }
+    for placed in &evaluated.sketches {
+        for (entity, _, construction) in placed.sketch.curves() {
+            if !construction {
+                offer(Pick::SketchCurve { sketch: placed.id, entity });
+            }
+        }
+    }
+    let Some(curves) = slot::chained(&has, evaluated) else { return };
+    let resolved: Option<Vec<Curve3>> = PathRef { curves }.resolve(&scope);
+    let Some(resolved) = resolved else { return };
+    let (mut start, mut end) = (resolved[0].clone(), resolved[resolved.len() - 1].clone());
+    let mut taken: Vec<Pick> = has.clone();
+    loop {
+        let found = candidates.iter().find_map(|(pick, curve)| {
+            if taken.contains(pick) {
+                return None;
+            }
+            let continues = |at: Vec3, along: Vec3, onto: &Curve3| {
+                [onto.clone(), onto.clone().reversed()]
+                    .into_iter()
+                    .find(|oriented| oriented.start().distance(at) < JOINS && starting_direction(oriented).dot(along) > SMOOTH)
+            };
+            if let Some(oriented) = continues(end.end(), ending_direction(&end), curve) {
+                return Some((pick.clone(), oriented, true));
+            }
+            let backward = start.clone().reversed();
+            continues(backward.end(), ending_direction(&backward), curve).map(|oriented| (pick.clone(), oriented.reversed(), false))
+        });
+        let Some((pick, oriented, at_end)) = found else { break };
+        match at_end {
+            true => end = oriented,
+            false => start = oriented,
+        }
+        taken.push(pick.clone());
+        editor.toggle(pick);
+        if start.start().distance(end.end()) < JOINS {
+            break;
+        }
+    }
+}
+
+/// The cosine of the sharpest turn between two curves that still chains.
+const SMOOTH: f32 = 0.94;
+
+fn starting_direction(curve: &Curve3) -> Vec3 {
+    let segments = curve.segments();
+    segments.first().map_or(Vec3::ZERO, |(a, b)| (*b - *a).normalize_or_zero())
+}
+
+fn ending_direction(curve: &Curve3) -> Vec3 {
+    let segments = curve.segments();
+    segments.last().map_or(Vec3::ZERO, |(a, b)| (*b - *a).normalize_or_zero())
+}
+
 /// Adds what a construction makes, with a plane feature first for each face
 /// standing in for a plane, as one undo step.
 pub fn add_making(editor: &mut PropEditor, making: &Making) -> PropFeatureId {
@@ -409,6 +511,7 @@ mod tests {
     use crate::prop::plane::{PlaneDef, PlaneRef};
     use crate::prop::reference::{Element, GeomRef};
     use crate::prop::refs::{CurveRef, DirectionRef};
+    use crate::prop::sketch::Sketch;
     use crate::prop::solid::Shape;
 
     fn cube(at: Vec3) -> FeatureOp {
@@ -625,6 +728,52 @@ mod tests {
             editor.doc().feature(plane).map(|f| &f.op),
             Some(&FeatureOp::Plane { def: PlaneDef::Offset { distance: 0.3, from: PlaneRef::Origin(OriginPlane::Xz) } })
         );
+    }
+
+    /// Three sketch pieces end to end: a line, a quarter arc tangent to it,
+    /// and a line square to the arc's end; and a fourth apart.
+    fn bent_path() -> PropDoc {
+        let mut sketch = Sketch::default();
+        // The arc ends heading +Y; the last line heads +X from there.
+        let p: Vec<_> = [[0.0, 0.0], [0.1, 0.0], [0.1, 0.1], [0.2, 0.1], [0.3, 0.1], [0.5, 0.5], [0.6, 0.5]]
+            .iter()
+            .map(|at| sketch.add_point(Vec2::from_array(*at)))
+            .collect();
+        sketch.add_line(p[0], p[1]);
+        sketch.add_arc(p[2], p[1], p[3], false);
+        sketch.add_line(p[3], p[4]);
+        sketch.add_line(p[5], p[6]);
+        let mut doc = PropDoc::new("test");
+        doc.push(FeatureOp::Sketch { on: PlaneRef::Origin(OriginPlane::Xy), sketch });
+        doc
+    }
+
+    fn piece(entity: u32) -> Pick {
+        Pick::SketchCurve { sketch: PropFeatureId(0), entity: crate::prop::sketch::SketchId(entity) }
+    }
+
+    #[test]
+    fn a_path_takes_a_curve_joining_either_end() {
+        let doc = bent_path();
+        let evaluated = evaluate(&doc.features);
+        let task = Task::Make(Tool::Sweep);
+        // Entities are numbered after the seven points.
+        let (line, arc, last, apart) = (piece(7), piece(8), piece(9), piece(10));
+        assert!(accepts(task, &[arc.clone()], &line, &doc, &evaluated), "joins the arc's start");
+        assert!(accepts(task, &[arc.clone()], &last, &doc, &evaluated), "joins the arc's end");
+        assert!(!accepts(task, &[arc], &apart, &doc, &evaluated));
+        assert!(!accepts(task, &[line], &last, &doc, &evaluated), "touches neither end");
+    }
+
+    #[test]
+    fn chain_follows_curves_that_carry_straight_on() {
+        let mut editor = PropEditor::default();
+        editor.open(bent_path(), None);
+        let evaluated = editor.doc().evaluate();
+        editor.set_picks(vec![piece(7)]);
+        chain(Task::Make(Tool::Sweep), &mut editor, &evaluated);
+        // The arc carries on from the line; the last line turns a corner.
+        assert_eq!(editor.picks(), &[piece(7), piece(8)]);
     }
 
     #[test]

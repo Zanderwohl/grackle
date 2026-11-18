@@ -10,6 +10,7 @@
 //!
 //! [`FeatureTimeline`]: crate::editor::editable::FeatureTimeline
 
+use bevy::math::Affine3A;
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -19,7 +20,7 @@ use crate::prop::solid::Polygon;
 use crate::prop::datum::{AxisDef, DatumAxis, DatumPoint, PointDef};
 use crate::prop::plane::{Datum, OriginPlane, PlaneDef, PlaneRef, MIN_ORIGIN_HALF};
 use crate::prop::plane::Plane;
-use crate::prop::refs::{AnyRef, CurveRef, DirectionRef, Resolve, Scope};
+use crate::prop::refs::{AnyRef, CurveRef, DirectionRef, PathRef, Resolve, Scope};
 use crate::prop::slot::{self, Field, Resolved};
 use crate::prop::profile::revolve_steps;
 use crate::prop::region::{arrange, axis_clear, Region};
@@ -27,7 +28,8 @@ use crate::prop::sketch::SketchId;
 use crate::prop::sketch::{PlacedSketch, Sketch};
 use crate::prop::seam::{self, FaceTable, Junction, Seam};
 use crate::prop::reference::{pickables, GeomRef, Located, Outline, Pickable, Wire};
-use crate::prop::skin::{extrusion, revolution, skin, Run, SkinProblem, TaggedLoop};
+use crate::prop::path::{self, Orient, PathPoints};
+use crate::prop::skin::{extrusion, revolution, skin, Run, Section, SkinProblem, TaggedLoop};
 use crate::prop::solid::{is_full_turn, Shape, Solid};
 use crate::prop::surface::Surface;
 
@@ -123,6 +125,23 @@ pub enum FeatureOp {
         #[serde(default)]
         symmetric: bool,
         axis: CurveRef,
+        surface: Surface,
+    },
+    /// Regions of a sketch carried along a path, which starts on the
+    /// sketch's plane. Scalars first, as for [`FeatureOp::Extrude`].
+    Sweep {
+        sketch: PropFeatureId,
+        /// As for [`FeatureOp::Extrude`].
+        regions: Vec<SketchId>,
+        #[serde(default)]
+        orient: Orient,
+        /// Degrees about the path over its whole length.
+        #[serde(default, with = "crate::prop::nice_f32::scalar")]
+        twist: f32,
+        /// The profile's size at the end against its size at the start.
+        #[serde(default = "unit", with = "crate::prop::nice_f32::scalar")]
+        scale: f32,
+        path: PathRef,
         surface: Surface,
     },
     Boolean { op: BooleanOp, target: PropFeatureId, tool: PropFeatureId },
@@ -241,6 +260,7 @@ impl FeatureOp {
         match self {
             FeatureOp::Primitive { shape, .. } => shape.name(),
             FeatureOp::Extrude { .. } => get!("prop.features.extrude"),
+            FeatureOp::Sweep { .. } => get!("prop.features.sweep"),
             FeatureOp::Revolve { .. } => get!("prop.features.revolve"),
             FeatureOp::Boolean { op, .. } => op.name(),
             FeatureOp::Mirror { .. } => get!("prop.features.mirror"),
@@ -276,6 +296,10 @@ impl FeatureOp {
         match self {
             FeatureOp::Primitive { .. } => vec![],
             FeatureOp::Extrude { sketch, regions: entries, .. } => vec![regions(sketch, entries)],
+            FeatureOp::Sweep { sketch, regions: entries, path, .. } => vec![
+                regions(sketch, entries),
+                field("prop.inspector.path", slot::PATH, vec![AnyRef::Path(path.clone())]),
+            ],
             FeatureOp::Revolve { sketch, regions: entries, axis, .. } => vec![
                 regions(sketch, entries),
                 field("prop.inspector.axis", slot::AXIS, vec![AnyRef::Curve(axis.clone())]),
@@ -312,9 +336,16 @@ impl FeatureOp {
     /// made, keeping the distance or angle when it is made the same way.
     pub fn set_field(&mut self, index: usize, value: Resolved) -> bool {
         match (self, index, value) {
-            (FeatureOp::Extrude { sketch, regions, .. } | FeatureOp::Revolve { sketch, regions, .. }, 0, Resolved::Regions { sketch: s, entries }) => {
+            (
+                FeatureOp::Extrude { sketch, regions, .. }
+                | FeatureOp::Revolve { sketch, regions, .. }
+                | FeatureOp::Sweep { sketch, regions, .. },
+                0,
+                Resolved::Regions { sketch: s, entries },
+            ) => {
                 (*sketch, *regions) = (s, entries);
             }
+            (FeatureOp::Sweep { path, .. }, 1, Resolved::Path(to)) => *path = to,
             (FeatureOp::Revolve { axis, .. }, 1, Resolved::Curve(curve)) => *axis = curve,
             (
                 FeatureOp::Boolean { target, .. }
@@ -377,6 +408,7 @@ impl FeatureOp {
             FeatureOp::Primitive { placement, .. } => Some(placement),
             FeatureOp::Extrude { .. }
             | FeatureOp::Revolve { .. }
+            | FeatureOp::Sweep { .. }
             | FeatureOp::Boolean { .. }
             | FeatureOp::Mirror { .. }
             | FeatureOp::Paint { .. }
@@ -409,6 +441,10 @@ pub struct PropFeature {
     /// Not `#[serde(flatten)]`: TOML needs every scalar before any sub-table,
     /// which a flattened enum with nested tables cannot promise.
     pub op: FeatureOp,
+}
+
+fn unit() -> f32 {
+    1.0
 }
 
 fn enabled_by_default() -> bool {
@@ -828,6 +864,52 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
                     Err(message) => problems.push(Problem { feature: feature.id, message }),
                 }
             }
+            FeatureOp::Sweep { sketch, regions, orient, twist, scale, path, surface } => {
+                let Some(placed) = sketches.iter().find(|placed: &&PlacedSketch| placed.id == *sketch) else {
+                    problems.push(Problem { feature: feature.id, message: get!("prop.problems.missing_sketch") });
+                    continue;
+                };
+                let Some(found) = resolve_regions(feature.id, placed, regions, &mut problems) else { continue };
+                let Some(curves) = path.resolve(&scope) else {
+                    problems.push(Problem { feature: feature.id, message: get!("prop.problems.missing_path") });
+                    continue;
+                };
+                let plane = placed.plane;
+                let Some(points) = PathPoints::of(&curves).from_plane(&plane, IN_PLANE) else {
+                    problems.push(Problem { feature: feature.id, message: get!("prop.problems.path_off_plane") });
+                    continue;
+                };
+                let frames = match path::frames(&points, *plane.x, *orient, *twist, *scale) {
+                    Ok(frames) => frames,
+                    Err(problem) => {
+                        problems.push(Problem { feature: feature.id, message: problem.message() });
+                        continue;
+                    }
+                };
+                // From the sketch's own coordinates, carried from where the
+                // path starts to each of its points.
+                let base = plane.transform().compute_affine();
+                let start = points.points[0];
+                let placements: Vec<Affine3A> = frames
+                    .iter()
+                    .zip(&points.points)
+                    .map(|((turn, size), at)| {
+                        Affine3A::from_translation(*at)
+                            * Affine3A::from_scale_rotation_translation(Vec3::splat(*size), *turn, Vec3::ZERO)
+                            * Affine3A::from_translation(-start)
+                            * base
+                    })
+                    .collect();
+                let run = |loops: Vec<TaggedLoop>| Run {
+                    sections: placements.iter().map(|frame| Section { loops: loops.clone(), frame: *frame }).collect(),
+                    spans: points.spans.clone(),
+                    closed: points.closed,
+                };
+                match sweep(&found, run, |points| points.to_vec(), &[], *surface) {
+                    Ok((solid, outline)) => live.push(made(solid, outline, &mut faces)),
+                    Err(message) => problems.push(Problem { feature: feature.id, message }),
+                }
+            }
             FeatureOp::Revolve { sketch, axis, degrees, steps, symmetric, surface, regions } => {
                 let Some(placed) = sketches.iter().find(|placed: &&PlacedSketch| placed.id == *sketch) else {
                     problems.push(Problem { feature: feature.id, message: get!("prop.problems.missing_sketch") });
@@ -1026,6 +1108,20 @@ mod tests {
         let surface = Surface::default();
         vec![
             FeatureOp::Extrude { sketch: id(100), regions: vec![SketchId(1)], symmetric: false, end: End::Distance { distance: 0.05 }, surface },
+            FeatureOp::Sweep {
+                sketch: id(131),
+                regions: vec![SketchId(1)],
+                orient: Orient::Frenet,
+                twist: 15.0,
+                scale: 0.5,
+                path: PathRef {
+                    curves: vec![
+                        CurveRef::Sketch { sketch: id(132), entity: SketchId(4) },
+                        CurveRef::Edge { edge: geom(Element::Edge(2), 133) },
+                    ],
+                },
+                surface,
+            },
             FeatureOp::Revolve {
                 sketch: id(101),
                 regions: vec![SketchId(1)],
@@ -1110,6 +1206,7 @@ mod tests {
                     (_, [AnyRef::Curve(curve)]) => Resolved::Curve(curve.clone()),
                     (_, [AnyRef::Direction(direction)]) => Resolved::Direction(direction.clone()),
                     (_, [AnyRef::Plane(on)]) => Resolved::Plane(*on),
+                    (_, [AnyRef::Path(path)]) => Resolved::Path(path.clone()),
                     other => panic!("field {index} of {op:?} holds {other:?}"),
                 };
                 let mut written = op.clone();
@@ -1633,6 +1730,105 @@ mod tests {
             assert!((sketch.point(end).unwrap().length() - 0.04).abs() < 1e-6, "put on the circle when made");
             sketch.move_point(start, Vec2::new(0.06, 0.0));
             assert!((sketch.point(end).unwrap().length() - 0.06).abs() < 1e-6, "and kept there");
+        }
+    }
+
+    mod sweep {
+        use super::super::*;
+        use super::extrude::{adopt, every};
+        use crate::prop::plane::OriginPlane;
+        use crate::prop::region::arrange;
+        use crate::prop::sketch::Sketch;
+
+        /// A square, side `side`, centered on the XY plane's origin.
+        fn square(side: f32) -> Sketch {
+            let mut sketch = Sketch::default();
+            let h = side / 2.0;
+            let corners: Vec<SketchId> =
+                [[-h, -h], [h, -h], [h, h], [-h, h]].iter().map(|at| sketch.add_point(Vec2::from_array(*at))).collect();
+            for i in 0..4 {
+                sketch.add_line(corners[i], corners[(i + 1) % 4]);
+            }
+            sketch
+        }
+
+        /// The square swept along whatever `path` draws on the XZ plane.
+        fn swept(side: f32, path: Sketch, orient: Orient) -> Evaluated {
+            let mut profile = square(side);
+            let names = every(&arrange(&profile).regions);
+            let regions = adopt(&mut profile, names);
+            let curves: Vec<CurveRef> =
+                path.entities.iter().map(|entity| CurveRef::Sketch { sketch: PropFeatureId(1), entity: entity.id() }).collect();
+            evaluate(&[
+                PropFeature::new(PropFeatureId(0), FeatureOp::Sketch { on: PlaneRef::Origin(OriginPlane::Xy), sketch: profile }),
+                PropFeature::new(PropFeatureId(1), FeatureOp::Sketch { on: PlaneRef::Origin(OriginPlane::Xz), sketch: path }),
+                PropFeature::new(
+                    PropFeatureId(2),
+                    FeatureOp::Sweep {
+                        sketch: PropFeatureId(0),
+                        regions,
+                        orient,
+                        twist: 0.0,
+                        scale: 1.0,
+                        path: PathRef { curves },
+                        surface: Surface::default(),
+                    },
+                ),
+            ])
+        }
+
+        /// The XZ plane's `y` runs along the prop's `-Z`; its `x` along `X`.
+        #[test]
+        fn a_straight_sweep_is_an_extrusion() {
+            let mut path = Sketch::default();
+            let (a, b) = (path.add_point(Vec2::ZERO), path.add_point(Vec2::new(0.0, -0.2)));
+            path.add_line(a, b);
+            let evaluated = swept(0.02, path, Orient::Minimal);
+            assert!(evaluated.problems.is_empty(), "{:?}", evaluated.problems);
+            let volume = evaluated.bodies[0].1.volume();
+            assert!((volume - 0.02 * 0.02 * 0.2).abs() < 1e-9, "{volume}");
+        }
+
+        /// Pappus: a profile swept round a circle of radius R encloses its
+        /// area times the distance its middle travels.
+        #[test]
+        fn a_sweep_round_a_quarter_arc_holds_what_pappus_says() {
+            let mut path = Sketch::default();
+            let center = path.add_point(Vec2::new(0.1, 0.0));
+            let start = path.add_point(Vec2::ZERO);
+            let end = path.add_point(Vec2::new(0.1, -0.1));
+            // Counter-clockwise from the leftmost point is the quarter below.
+            path.add_arc(center, start, end, false);
+            let evaluated = swept(0.02, path, Orient::Minimal);
+            assert!(evaluated.problems.is_empty(), "{:?}", evaluated.problems);
+            let volume = evaluated.bodies[0].1.volume();
+            let pappus = 0.02 * 0.02 * 0.1 * std::f32::consts::FRAC_PI_2;
+            assert!((volume - pappus).abs() < pappus * 0.01, "{volume} against {pappus}");
+            let faces = &evaluated.wires[0].1[0].outline.faces;
+            assert_eq!(faces.len(), 6, "two caps and four sides, each one face along the arc");
+        }
+
+        #[test]
+        fn a_sweep_round_a_closed_circle_is_a_ring() {
+            let mut path = Sketch::default();
+            let center = path.add_point(Vec2::new(0.08, 0.0));
+            path.add_circle(center, 0.08);
+            let evaluated = swept(0.02, path, Orient::Minimal);
+            assert!(evaluated.problems.is_empty(), "{:?}", evaluated.problems);
+            let volume = evaluated.bodies[0].1.volume();
+            let pappus = 0.02 * 0.02 * std::f32::consts::TAU * 0.08;
+            assert!((volume - pappus).abs() < pappus * 0.01, "{volume} against {pappus}");
+            assert_eq!(evaluated.wires[0].1[0].outline.faces.len(), 4, "no caps");
+        }
+
+        #[test]
+        fn a_path_that_misses_the_plane_is_a_problem() {
+            let mut path = Sketch::default();
+            let (a, b) = (path.add_point(Vec2::new(0.0, -0.05)), path.add_point(Vec2::new(0.0, -0.2)));
+            path.add_line(a, b);
+            let evaluated = swept(0.02, path, Orient::Minimal);
+            assert_eq!(evaluated.problems.len(), 1);
+            assert!(evaluated.bodies.is_empty());
         }
     }
 

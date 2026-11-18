@@ -1105,14 +1105,20 @@ question the feature list, handles and Inspector ask: a body *or plane*,
 eaten or not.
 
 **Every sweep is one function** ([`skin.rs`](src/prop/skin.rs)): Extrude,
-Revolve and every primitive produce a `Run` of `Section`s — loops placed by
+Revolve, Sweep and every primitive produce a `Run` of `Section`s — loops placed by
 frames — and `skin` builds the solid and its `Outline`, so all of them name
 their corners, edges and faces by one rule. A face is one profile segment
 swept along one piece of path (`OutlineFace` holds its facets), so a revolved
 segment is one face, flat or curved, not a ring of facets, and an edge between
 two facets of one face is not listed. `skin` reports sections that do not
 match, a mirrored frame and a profile folding back through itself as
-Problems. Its polygons come out in the order the old extrude and revolve used,
+Problems. A **Sweep** carries regions along a `PathRef` — curves end to end,
+picked into a `Path` slot that takes a curve joining either end, or extended
+by **Chain** along everything that continues without a corner — placing the
+profile at frames from [`path.rs`](src/prop/path.rs): rotation-minimizing by
+double reflection, Frenet, or fixed, with a twist and an end scale by
+distance, a closed path's leftover turn spread along it. Its faces are named
+per path curve and profile entity. Its polygons come out in the order the old extrude and revolve used,
 because the BSP picks splitting planes in polygon order: moving onto it left
 every shipped prop's volume and triangle count unchanged.
 

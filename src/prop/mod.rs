@@ -57,6 +57,7 @@ pub mod hold;
 pub mod nice_f32;
 pub mod picker;
 pub mod plane;
+pub mod path;
 pub mod profile;
 pub mod reference;
 pub mod refs;

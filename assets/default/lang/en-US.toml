@@ -1155,6 +1155,7 @@ point = "Point"
 sketch = "Sketch"
 extrude = "Extrude"
 revolve = "Revolve"
+sweep = "Sweep"
 mirror = "Mirror"
 paint = "Repaint"
 pattern = "Pattern"
@@ -1163,6 +1164,7 @@ radial_pattern = "Circle pattern"
 
 [prop.tool]
 done = "Done"
+chain = "Chain"
 cancel = "Cancel"
 
 [prop.tool.pick]
@@ -1176,6 +1178,7 @@ plane = "Pick a plane or a flat face"
 through = "Pick points, lines, a face or planes"
 axis_from = "Pick two points, two planes, or a plane and a point"
 point_from = "Pick a line, or a line and a plane"
+path = "Pick curves end to end"
 more = "Pick more, or Done"
 
 [prop.lines]
@@ -1234,6 +1237,7 @@ spacing = "Spacing"
 angle = "Angle"
 made = "Made"
 made_from = "From"
+path = "Path"
 regions_field = "Regions"
 repick = "Pick"
 missing = "missing { id }"
@@ -1258,6 +1262,14 @@ operands = "Operands"
 mirror = "Mirror plane"
 pattern = "Pattern"
 swept_regions = "Regions"
+
+[prop.sweep]
+orient = "Turns"
+minimal = "Least"
+frenet = "With the curve"
+fixed = "Never"
+twist = "Twist"
+scale = "End scale"
 
 [prop.planes]
 xy = "XY plane"
@@ -1348,6 +1360,10 @@ axis_crosses = "turns a region about an axis that crosses it"
 skin_mismatch = "sweeps sections that do not match"
 skin_flips = "sweeps through a mirrored section"
 skin_folds = "sweeps a profile back through itself"
+missing_path = "names a path that is not there"
+path_off_plane = "has a path that does not start on its sketch's plane"
+path_too_short = "has a path too short to sweep along"
+path_straight = "follows the curvature of a path with a straight stretch"
 
 [editor.picker]
 search = "Search"

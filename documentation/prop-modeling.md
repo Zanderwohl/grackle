@@ -397,9 +397,12 @@ this plan; they need stage 4 and adjacency on the result, and get their own.
 - [ ] Footprint rooms on the map stay lines: their tool draws nothing else
 
 ### Sweeps
-- [ ] `Path` slot (a pick joins either end) and the Chain button
-- [ ] Sweep feature: `Minimal`, `Frenet`, `Fixed`; twist and scale
-- [ ] Closed-path sweep spreads the leftover angle
+- [x] `Path` slot (a pick joins either end, `slot::chained` keeps them in order) and the Chain button (`tool::chain`: offered seams and edges, sketch curves, turning less than about 20°)
+- [x] Sweep feature: `Minimal`, `Frenet`, `Fixed`; twist and scale (`path.rs`)
+- [x] Closed-path sweep spreads the leftover angle, evenly by distance
+- [x] A path whose far end is on the plane is turned round; a closed one starts at its first point on it
+- [ ] The path's start on the profile's plane is reported by the evaluator, not checked as it is picked: a path is often picked from its far end
+- [ ] A sharp corner in a path is not mitred: the profile is squared to the bisector there but not stretched, so it pinches; arcs and curves are unaffected
 - [ ] Loft feature: correspondence by entity, resampling, start alignment, picked start points
 - [ ] Loft guide curves
 - [ ] Extrude: direction, `UpTo`, `ThroughAll`, two sides, taper

@@ -37,6 +37,7 @@ When an icon ships, check its box.
 | [x] | `wedge` | Wedge, outline only | Wedge |
 | [x] | `square_arrow` | Vertical square, outline only, with an arrow from its center pointing right | Extrude |
 | [x] | `axis_arrow_around` | Vertical line with a partial circular arrow turning about it | Revolve |
+| [x] | `square_along_path` | A square, a dashed curve leading from it, and a smaller turned square at its end | Sweep, Chain |
 | [x] | `venn_union` | Circle and square overlapping like a Venn diagram, all three parts filled, lines in negative space | Union |
 | [x] | `venn_subtract` | The same Venn diagram, only the square's part outside the circle filled | Subtract |
 | [x] | `venn_intersect` | The same Venn diagram, only the overlap filled | Intersect |
