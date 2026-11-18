@@ -304,6 +304,11 @@ mod tests {
             .collect();
         column.add_chain(&corners, true, timeline.features_map());
         timeline.apply_feature(Box::new(crate::editor::footprint_block::FootprintBlock::from_footprint(column)));
+        timeline.apply_feature(Box::new(
+            crate::editor::stairs::EditorStairs::from_start(PointRef::reference_with_offset(min, 0.5, 0.0, 0.5))
+                .with_style(crate::common::stairs::StairsStyle { steps: false, rise: 0.2, thick: false, thickness: 0.15 })
+                .with_surfaces(crate::tool::room::RoomSurfaces { floor: Some("concrete".into()), ..Default::default() }),
+        ));
         timeline
     }
 

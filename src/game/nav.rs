@@ -294,7 +294,11 @@ pub fn floor_cells(world: &CollisionWorld, faces: &[Face], triggers: &[TriggerVo
                 if !inside_convex(&outline, at) {
                     continue;
                 }
-                let y = (face.plane.w - normal.x * at.x - normal.z * at.y) / normal.y;
+                // Where a box resting on the face has its feet: on a slope its bottom touches by
+                // the uphill edge, above the face under its middle. Nothing on a level floor.
+                let half = Stance::Standing.half_extents();
+                let rest = (normal.x.abs() * half.x + normal.z.abs() * half.z) / normal.y;
+                let y = (face.plane.w - normal.x * at.x - normal.z * at.y) / normal.y + rest;
                 let heights = samples.entry(column).or_default();
                 if heights.iter().all(|h| (h - y).abs() > SAME_FLOOR) {
                     heights.push(y);

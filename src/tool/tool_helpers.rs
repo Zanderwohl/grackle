@@ -386,7 +386,7 @@ pub fn find_nearest_feature_hit_in(
                 }
             }
             // From outside only: a camera inside one would pick it with every click.
-            "trigger" => {
+            "trigger" | "stairs" => {
                 for pick_box in feature.object().pick_boxes() {
                     if let Some(t) = pick_box.ray_distance(ray).filter(|t| *t > 0.0)
                         && t < best_t

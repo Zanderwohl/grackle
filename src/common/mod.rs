@@ -72,6 +72,7 @@ pub mod reorder;
 pub mod toolbar;
 pub mod icons;
 pub mod trigger;
+pub mod stairs;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PointResolutionError {

@@ -13,6 +13,7 @@ use bevy::prelude::*;
 use crate::common::app_mode::AppMode;
 use crate::common::movement_rules::MovementRules;
 use crate::common::round_settings::RoundSettings;
+use crate::common::stairs::{self, Stairs, StairsShape};
 use crate::common::trigger::TriggerVolume;
 use crate::common::world_surface::{Face, Volume};
 use crate::common::weapon::WeaponCatalog;
@@ -59,7 +60,7 @@ pub struct NavBake {
     /// Bumped whenever `graph` is replaced: what the sightlines are a bake of.
     built: u64,
     /// What `graph` was built from, for the sightlines to be cast against.
-    built_from: Vec<Volume>,
+    built_from: Surface,
     /// The snapshot hash `graph` is a bake of, which names its cache file.
     built_hash: Option<u64>,
     /// The last hash looked for in the cache, so a miss is not read again every frame.
@@ -87,7 +88,7 @@ impl Default for NavBake {
             graph: NavGraph::default(),
             generation: 0,
             built: 0,
-            built_from: Vec::new(),
+            built_from: Surface::default(),
             built_hash: None,
             looked_up: None,
             snapshot: None,
@@ -126,13 +127,13 @@ impl NavBake {
     #[cfg(test)]
     pub(crate) fn holding(graph: NavGraph) -> Self {
         let mut bake = NavBake::default();
-        bake.replace(None, (graph, Vec::new()));
+        bake.replace(None, (graph, Surface::default()));
         bake
     }
 
-    fn replace(&mut self, hash: Option<u64>, (graph, volumes): (NavGraph, Vec<Volume>)) {
+    fn replace(&mut self, hash: Option<u64>, (graph, surface): (NavGraph, Surface)) {
         self.graph = graph;
-        self.built_from = volumes;
+        self.built_from = surface;
         self.built_hash = hash;
         self.generation += 1;
         self.built += 1;
@@ -141,7 +142,7 @@ impl NavBake {
     }
 
     /// A bake that just landed, which is also written to the cache.
-    fn landed(&mut self, hash: Option<u64>, built: (NavGraph, Vec<Volume>)) {
+    fn landed(&mut self, hash: Option<u64>, built: (NavGraph, Surface)) {
         if let Some(hash) = hash {
             nav_cache::write(hash, built.0.clone());
         }
@@ -158,7 +159,7 @@ impl NavBake {
         let Some(graph) = nav_cache::read(snapshot.hash) else { return false };
         let sighted = graph.fields().has_sight();
         info!("Read the nav graph from the cache: {} cell(s){}", graph.cells().len(), if sighted { ", with sightlines" } else { "" });
-        self.replace(Some(snapshot.hash), (graph, snapshot.volumes.clone()));
+        self.replace(Some(snapshot.hash), (graph, snapshot.surface()));
         self.bake.adopt(snapshot.hash);
         if sighted {
             self.sight.adopt(self.built);
@@ -202,10 +203,28 @@ pub struct BakeNav;
 #[derive(Message)]
 pub struct ClearNav;
 
+/// What the graph's collision world is built from.
+#[derive(Clone, Default)]
+struct Surface {
+    volumes: Vec<Volume>,
+    stairs: Vec<StairsShape>,
+}
+
+impl Surface {
+    /// The collision world, and the faces floor is sampled from.
+    fn world(&self) -> (CollisionWorld, Vec<Face>) {
+        let mut world = CollisionWorld::default();
+        let mut faces = world.rebuild_volumes(&self.volumes);
+        stairs::add_to_world(&mut world, &mut faces, &self.stairs);
+        (world, faces)
+    }
+}
+
 /// Everything the graph is built from.
 #[derive(Clone)]
 struct Snapshot {
     volumes: Vec<Volume>,
+    stairs: Vec<StairsShape>,
     props: Vec<RoundedBox>,
     triggers: Vec<TriggerVolume>,
     spawns: Vec<Vec3>,
@@ -233,6 +252,10 @@ impl Snapshot {
         }
     }
 
+    fn surface(&self) -> Surface {
+        Surface { volumes: self.volumes.clone(), stairs: self.stairs.clone() }
+    }
+
     fn reaches(&self) -> Vec<Reach> {
         self.pickups.iter().map(|pickup| pickup.reach).collect()
     }
@@ -244,12 +267,14 @@ struct NavInputs<'w, 's> {
     collision: Res<'w, CollisionWorld>,
     rules: Res<'w, MovementRules>,
     triggers: Query<'w, 's, &'static TriggerVolume>,
+    stairs: Query<'w, 's, &'static Stairs>,
     spawns: Query<'w, 's, &'static Transform, With<SpawnPointMarker>>,
-    edited: Query<'w, 's, (), Or<(Changed<Room>, Changed<Block>, Changed<VolumeOrder>, Changed<TriggerVolume>)>>,
+    edited: Query<'w, 's, (), Or<(Changed<Room>, Changed<Block>, Changed<VolumeOrder>, Changed<TriggerVolume>, Changed<Stairs>)>>,
     moved_spawns: Query<'w, 's, (), (With<SpawnPointMarker>, Changed<Transform>)>,
     removed_rooms: RemovedComponents<'w, 's, Room>,
     removed_blocks: RemovedComponents<'w, 's, Block>,
     removed_triggers: RemovedComponents<'w, 's, TriggerVolume>,
+    removed_stairs: RemovedComponents<'w, 's, Stairs>,
     removed_spawns: RemovedComponents<'w, 's, SpawnPointMarker>,
     weapon_pickups: Query<'w, 's, (&'static Transform, &'static WeaponPickupSpec)>,
     prop_pickups: Query<'w, 's, &'static WorldProp, (With<world_prop::Pickup>, Without<GivesWeapon>)>,
@@ -262,6 +287,7 @@ impl NavInputs<'_, '_> {
         let removed = self.removed_rooms.read().count()
             + self.removed_blocks.read().count()
             + self.removed_triggers.read().count()
+            + self.removed_stairs.read().count()
             + self.removed_spawns.read().count();
         removed > 0
             || !self.edited.is_empty()
@@ -314,6 +340,9 @@ impl NavInputs<'_, '_> {
 
     fn snapshot(&self) -> Snapshot {
         let volumes = self.volumes.volumes();
+        let mut stairs: Vec<StairsShape> = self.stairs.iter().map(|flight| flight.0).collect();
+        // Query order follows archetypes; the hash must not.
+        stairs.sort_by(|a, b| format!("{a:?}").cmp(&format!("{b:?}")));
         // Props are rebuilt every tick without change detection, so they are compared instead.
         let props = self.collision.props.clone();
         let triggers: Vec<TriggerVolume> = self.triggers.iter().copied().collect();
@@ -323,8 +352,8 @@ impl NavInputs<'_, '_> {
         let pickups = self.pickups();
         let launcher = self.launcher();
         // Debug writes an `f32` as its shortest exact decimal, so equal inputs hash equal.
-        let hash = nav_cache::stable_hash(&format!("{volumes:?}{props:?}{triggers:?}{spawns:?}{pickups:?}{launcher:?}{rules:?}"));
-        Snapshot { volumes, props, triggers, spawns, pickups, launcher, rules, hash }
+        let hash = nav_cache::stable_hash(&format!("{volumes:?}{stairs:?}{props:?}{triggers:?}{spawns:?}{pickups:?}{launcher:?}{rules:?}"));
+        Snapshot { volumes, stairs, props, triggers, spawns, pickups, launcher, rules, hash }
     }
 
     fn launcher(&self) -> Option<Launcher> {
@@ -368,7 +397,7 @@ struct Job {
 }
 
 impl BakeJob for Job {
-    type Output = (NavGraph, Vec<Volume>);
+    type Output = (NavGraph, Surface);
 
     /// In thousandths, each stage a fixed share filled by its own fraction: how much a stage
     /// has to do is only known once it starts, and counting items let the total grow under a
@@ -413,8 +442,8 @@ impl BakeJob for Job {
             return;
         }
         let Some(world) = &self.world else {
-            let mut world = CollisionWorld::default();
-            self.faces = world.rebuild_volumes(&self.snapshot.volumes);
+            let (mut world, faces) = self.snapshot.surface().world();
+            self.faces = faces;
             world.props = self.snapshot.props.clone();
             self.world = Some(world);
             return;
@@ -456,14 +485,14 @@ impl BakeJob for Job {
         self.graph = Some(graph);
     }
 
-    fn finish(self) -> (NavGraph, Vec<Volume>) {
+    fn finish(self) -> (NavGraph, Surface) {
         let mut graph = self.graph.unwrap_or_default();
         if let Some(fields) = self.fields {
             let fields = fields.finish();
             graph.set_fields(fields);
         }
         info!("Baked the nav graph: {} cell(s)", graph.cells().len());
-        (graph, self.snapshot.volumes)
+        (graph, self.snapshot.surface())
     }
 }
 
@@ -471,7 +500,7 @@ impl BakeJob for Job {
 struct SightJob {
     /// Which graph, as [`NavBake::built`] counts them.
     of: u64,
-    volumes: Vec<Volume>,
+    surface: Surface,
     world: Option<CollisionWorld>,
     graph: NavGraph,
     bake: SightBake,
@@ -480,9 +509,9 @@ struct SightJob {
 }
 
 impl SightJob {
-    fn new(of: u64, volumes: Vec<Volume>, graph: NavGraph) -> Self {
+    fn new(of: u64, surface: Surface, graph: NavGraph) -> Self {
         let bake = SightBake::new(&graph);
-        SightJob { of, volumes, world: None, graph, bake, cast: false }
+        SightJob { of, surface, world: None, graph, bake, cast: false }
     }
 }
 
@@ -501,9 +530,7 @@ impl BakeJob for SightJob {
 
     fn step(&mut self) {
         let Some(world) = &self.world else {
-            let mut world = CollisionWorld::default();
-            world.rebuild_volumes(&self.volumes);
-            self.world = Some(world);
+            self.world = Some(self.surface.world().0);
             return;
         };
         self.cast = self.bake.step(world);
@@ -528,7 +555,7 @@ fn auto_bake_nav(
         return;
     }
     if clears.read().count() > 0 {
-        state.replace(None, (NavGraph::default(), Vec::new()));
+        state.replace(None, (NavGraph::default(), Surface::default()));
         state.bake.forget();
         state.sight.forget();
         info!("Cleared the nav graph");
@@ -618,7 +645,7 @@ mod tests {
     use crate::tool::bakes::{BakePlugin, RoomBake};
 
     fn snapshot_of(volumes: Vec<Volume>) -> Snapshot {
-        Snapshot { volumes, props: Vec::new(), triggers: Vec::new(), spawns: Vec::new(), pickups: Vec::new(), launcher: None, rules: MovementRules::default(), hash: 0 }
+        Snapshot { volumes, stairs: Vec::new(), props: Vec::new(), triggers: Vec::new(), spawns: Vec::new(), pickups: Vec::new(), launcher: None, rules: MovementRules::default(), hash: 0 }
     }
 
     /// Breaks if a bar drawn from this job could run backwards or stop short.
@@ -708,6 +735,7 @@ mod tests {
             .world_mut()
             .run_system_once(|volumes: MapVolumes, triggers: Query<&TriggerVolume>, spawns: Query<&Transform, With<SpawnPointMarker>>, pickups: Query<(&Transform, &WeaponPickupSpec)>| Snapshot {
                 volumes: volumes.volumes(),
+                stairs: Vec::new(),
                 props: Vec::new(),
                 triggers: triggers.iter().copied().collect(),
                 spawns: spawns.iter().map(|placed| placed.translation).collect(),
@@ -736,8 +764,8 @@ mod tests {
             println!("{:>24}: {:.2} s", "in all", whole.elapsed().as_secs_f32());
             output
         }
-        let (mut graph, volumes) = timed(snapshot.job());
-        let (_, sight) = timed(SightJob::new(0, volumes, graph.clone()));
+        let (mut graph, surface) = timed(snapshot.job());
+        let (_, sight) = timed(SightJob::new(0, surface, graph.clone()));
         let mut fields = graph.fields().clone();
         fields.add_sight(sight);
         graph.set_fields(fields);
