@@ -106,7 +106,7 @@ arriving.
   already says is visible.
 - **Fire** only with a clear ray to the target, so a bot does not waste
   rockets into a wall, and only once aim is within the weapon's tolerance.
-- **Weapon** by range and situation: the shotgun close, the laser rifle far,
+- **Weapon** by range and situation: the shotgun close, the sniper rifle far,
   the rocket launcher when splash will reach.
 - **Moving while fighting** is the think layer's goal, plus strafing from the
   fight layer within the route's next link, so a duel is not two statues.

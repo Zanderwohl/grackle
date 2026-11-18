@@ -85,6 +85,7 @@ pub mod spectate;
 pub mod soundtrack;
 pub mod spray;
 pub mod streak;
+pub mod beam;
 pub mod tab_board;
 pub mod class_choice;
 pub mod class_picker;

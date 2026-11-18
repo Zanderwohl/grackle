@@ -30,7 +30,7 @@ health = 150
 armor = 50
 
 [loadouts.mercenary.primary]
-permitted = ["laser_rifle", "shotgun"]
+permitted = ["sniper_rifle", "shotgun"]
 
 [loadouts.mercenary.secondary]
 permitted = ["rocket_launcher", "pistol"]

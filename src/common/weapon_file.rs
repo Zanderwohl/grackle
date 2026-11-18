@@ -448,6 +448,7 @@ mod tests {
                 kill_shove: None,
                 ramp_up: None,
                 falloff: None,
+                trail: crate::common::weapon::HitscanTrail::Streak,
             }),
             WeaponAction::Projectile(crate::common::projectile::ProjectileSpec::ROCKET),
             WeaponAction::Flame(crate::common::flame::FlameSpec::FLAMETHROWER),
@@ -539,7 +540,7 @@ mod tests {
     fn a_default_outside_its_permitted_list_is_rejected() {
         let catalog = the_default_pack();
         let entry = SlotEntry {
-            permitted: vec!["laser_rifle".into()],
+            permitted: vec!["sniper_rifle".into()],
             default: Some("rocket_launcher".into()),
         };
 
@@ -553,14 +554,14 @@ mod tests {
     fn a_permitted_weapon_that_does_not_exist_is_dropped() {
         let catalog = the_default_pack();
         let entry = SlotEntry {
-            permitted: vec!["laser_rifle".into(), "no_such_weapon".into()],
-            default: Some("laser_rifle".into()),
+            permitted: vec!["sniper_rifle".into(), "no_such_weapon".into()],
+            default: Some("sniper_rifle".into()),
         };
 
         let choices =
             slot_choices(&catalog, "mercenary", Slot::Primary, &entry, Path::new("test"))
                 .expect("the slot was dropped for one bad entry");
-        assert_eq!(choices.permitted, vec![WeaponId::of("laser_rifle")]);
+        assert_eq!(choices.permitted, vec![WeaponId::of("sniper_rifle")]);
     }
 
     /// Fails on a hash collision between shipped weapon names.

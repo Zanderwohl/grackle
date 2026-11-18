@@ -471,7 +471,7 @@ mod tests {
         let mut world = a_world(&[open()]);
         let bot = a_bot(&mut world, Vec3::ZERO, 0.0);
         let from = Vec3::new(0.0, 1.5, 12.0);
-        world.write_message(Effect::Tracer { from, to: Vec3::new(5.0, 1.5, 0.0), hit: false, by: Some(PlayerId(2)) });
+        world.write_message(Effect::Tracer { from, to: Vec3::new(5.0, 1.5, 0.0), hit: false, by: Some(PlayerId(2)), trail: crate::common::weapon::HitscanTrail::Streak });
         world.run_system_once(sense).unwrap();
         let senses = world.get::<BotSenses>(bot).unwrap();
         assert_eq!(senses.noises.len(), 1);

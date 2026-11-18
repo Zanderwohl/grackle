@@ -65,6 +65,19 @@ pub struct HitscanSpec {
     /// Less damage far off: full at `near`, falling to `scale` times it at `far`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub falloff: Option<DistanceScale>,
+    /// How the shot is drawn. Required in the file, so every hitscan weapon says.
+    pub trail: HitscanTrail,
+}
+
+/// Drawing only: a [`crate::game::streak`] flown down each pellet's path, or a
+/// [`crate::game::beam`] standing over the whole of it in the shooter's color.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Reflect, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[reflect(Default)]
+pub enum HitscanTrail {
+    #[default]
+    Streak,
+    Beam,
 }
 
 /// What the weapon editor starts a new one from.
@@ -80,6 +93,7 @@ impl Default for HitscanSpec {
             kill_shove: None,
             ramp_up: None,
             falloff: None,
+            trail: HitscanTrail::Streak,
         }
     }
 }

@@ -20,10 +20,12 @@ use crate::common::hitscan::{trace, Hit, HitZone};
 use crate::game::collision::CollisionWorld;
 use crate::game::damage::DamageSystems;
 use crate::game::hitbox::update_hitboxes;
-use crate::game::player::{step_player, Duck, PhysicsBody, Player, Viewed};
+use crate::game::flame_jet::nozzle;
+use crate::game::held::{HeldModel, WeaponInHand};
+use crate::game::player::{step_player, Duck, LocalPlayer, PhysicsBody, Player, ViewMode, Watched};
 use crate::game::viewmodel::ApparentMuzzle;
 use crate::game::ragdoll::{Push, RagdollShove};
-use crate::common::weapon::{HitscanSpec, WeaponAction};
+use crate::common::weapon::{HitscanSpec, HitscanTrail, WeaponAction};
 use crate::game::weapon::WeaponActionFired;
 
 /// How far the debug laser reaches, in meters.
@@ -48,8 +50,9 @@ impl Plugin for HitscanPlugin {
                     .in_set(DamageSystems::Deal),
             )
             .add_message::<ShotPath>()
-            // Ungated: a client fires nothing but has to draw every shot.
-            .add_systems(Update, (mark_tracers, fade_tracers))
+            // Ungated: a client fires nothing but has to draw every shot. After
+            // the clips, so a held muzzle is where this frame's pose put it.
+            .add_systems(Update, (mark_tracers.after(crate::game::held::play_the_clips), fade_tracers))
             .add_systems(
                 PostUpdate,
                 (
@@ -163,6 +166,7 @@ pub fn fire_hitscan(
                 to: hit.map_or(ray.origin + *ray.direction * range, |hit| hit.point),
                 hit: hit.is_some(),
                 by: id.copied(),
+                trail: spec.trail,
             });
 
             let Some(hit) = hit else { continue };
@@ -203,11 +207,13 @@ pub fn fire_hitscan(
     }
 }
 
-/// A shot's path as this machine draws it, with our own starting at the barrel.
+/// A shot's path as this machine draws it, starting at the shooter's barrel.
 #[derive(Message, Debug, Clone, Copy, PartialEq)]
 pub struct ShotPath {
     pub from: Vec3,
     pub to: Vec3,
+    pub by: Option<PlayerId>,
+    pub trail: HitscanTrail,
 }
 
 /// The debug line, spawned only while the hitboxes are shown. An entity rather
@@ -221,27 +227,40 @@ pub struct Tracer {
     remaining: f32,
 }
 
-/// The viewed body's shot starts at the barrel in first person rather than at
-/// the eye, where it is a dot on the crosshair. For its whole life, unlike a
-/// projectile's: it is gone before an ease would show.
+/// A shot is drawn from the viewed body's barrel in first person, since from
+/// the eye it is a dot on the crosshair; otherwise from the held model's
+/// muzzle, else the eye. The start is fixed: the shot is gone before an ease
+/// would show.
+#[allow(clippy::type_complexity)]
 pub(crate) fn mark_tracers(
     mut commands: Commands,
     mut effects: MessageReader<Effect>,
     mut paths: MessageWriter<ShotPath>,
     muzzle: Option<Res<ApparentMuzzle>>,
+    view: Option<Res<ViewMode>>,
     show: Option<Res<crate::game::hitbox::ShowHitboxes>>,
-    us: Query<&PlayerId, (Viewed, With<Player>)>,
+    bodies: Query<(&PlayerId, &Transform, Option<(&HeldModel, &WeaponInHand)>, Has<LocalPlayer>, Has<Watched>), With<Player>>,
 ) {
     let show = show.is_some_and(|show| show.0);
     let barrel = muzzle.and_then(|muzzle| muzzle.0);
-    let us = us.single().ok().copied();
+    let inside = view.is_some_and(|view| !view.shows_own_body());
+    if effects.is_empty() {
+        return;
+    }
+    let shooters: std::collections::HashMap<_, _> =
+        bodies.iter().map(|(id, body, held, ours, watched)| (*id, (body, held, ours, watched))).collect();
     for effect in effects.read() {
-        let Effect::Tracer { from, to, hit, by } = *effect else { continue };
-        let from = match barrel {
-            Some(barrel) if by.is_some() && by == us => barrel,
-            _ => from,
+        let Effect::Tracer { from, to, hit, by, trail } = *effect else { continue };
+        let shooter = by.and_then(|by| shooters.get(&by).copied());
+        let from = match shooter {
+            Some((body, held, ours, watched)) => match barrel {
+                Some(barrel) if ours || watched => barrel,
+                None if (ours || watched) && inside => from,
+                _ => nozzle(body, from, held, false, None),
+            },
+            None => from,
         };
-        paths.write(ShotPath { from, to });
+        paths.write(ShotPath { from, to, by, trail });
         if show {
             commands.spawn((
                 Tracer { from, to, hit, remaining: TRACER_LIFETIME },
@@ -377,6 +396,7 @@ mod tests {
         kill_shove: None,
         ramp_up: None,
         falloff: None,
+        trail: crate::common::weapon::HitscanTrail::Streak,
     };
 
     fn fire(world: &mut World, shooter: Entity) {
@@ -426,25 +446,33 @@ mod tests {
     }
 
     /// Breaks if our shot's path starts at the eye (a dot on the crosshair in
-    /// first person) or if somebody else's is moved to our barrel.
+    /// first person), if somebody else's is moved to our barrel rather than
+    /// their own, or if a shot nobody fired moves at all.
     #[test]
-    fn our_shot_leaves_the_barrel_and_nobody_elses_does() {
+    fn every_shot_leaves_its_own_shooters_barrel() {
         let barrel = Vec3::new(0.3, -0.2, -0.6);
+        let theirs = Vec3::new(10.0, 1.0, 0.0);
         let mut world = World::new();
         world.init_resource::<Messages<Effect>>();
         world.init_resource::<Messages<ShotPath>>();
         world.insert_resource(crate::game::viewmodel::ApparentMuzzle(Some(barrel)));
-        world.spawn((crate::game::player::LocalPlayer, Player::default(), PlayerId(1)));
+        world.spawn((LocalPlayer, Player::default(), PlayerId(1), Transform::default()));
+        world.spawn((
+            Player::default(),
+            PlayerId(2),
+            Transform::from_translation(theirs),
+            HeldModel::with_muzzle(Vec3::new(0.0, 0.0, -0.5)),
+            WeaponInHand(Transform::default()),
+        ));
         for by in [Some(PlayerId(1)), Some(PlayerId(2)), None] {
-            world.write_message(Effect::Tracer { from: Vec3::ZERO, to: Vec3::NEG_Z, hit: false, by });
+            world.write_message(Effect::Tracer { from: Vec3::ZERO, to: Vec3::NEG_Z, hit: false, by, trail: HitscanTrail::Streak });
         }
 
         world.run_system_once(mark_tracers).unwrap();
 
         let messages = world.resource::<Messages<ShotPath>>();
-        let mut starts: Vec<Vec3> = messages.get_cursor().read(messages).map(|path| path.from).collect();
-        starts.sort_by(|a, b| a.x.total_cmp(&b.x));
-        assert_eq!(starts, vec![Vec3::ZERO, Vec3::ZERO, barrel]);
+        let starts: Vec<Vec3> = messages.get_cursor().read(messages).map(|path| path.from).collect();
+        assert_eq!(starts, vec![barrel, theirs + Vec3::new(0.0, 0.0, -0.5), Vec3::ZERO]);
     }
 
     /// Breaks if the debug line is spawned with the hitboxes hidden, or not with them shown.
@@ -455,7 +483,7 @@ mod tests {
             world.init_resource::<Messages<Effect>>();
             world.init_resource::<Messages<ShotPath>>();
             world.insert_resource(crate::game::hitbox::ShowHitboxes(shown));
-            world.write_message(Effect::Tracer { from: Vec3::ZERO, to: Vec3::NEG_Z, hit: false, by: None });
+            world.write_message(Effect::Tracer { from: Vec3::ZERO, to: Vec3::NEG_Z, hit: false, by: None, trail: HitscanTrail::Streak });
 
             world.run_system_once(mark_tracers).unwrap();
 
@@ -564,6 +592,7 @@ mod tests {
         kill_shove: None,
         ramp_up: None,
         falloff: None,
+        trail: crate::common::weapon::HitscanTrail::Streak,
     };
 
     /// Breaks if the pattern stops being a square of the stated width, or
