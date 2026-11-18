@@ -11,20 +11,19 @@ use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::prop::feature::PropFeatureId;
-use crate::prop::profile::{sides, Profile};
-use crate::prop::solid::{is_full_turn, Solid};
+use crate::prop::solid::Solid;
 
 /// One duplication a piece of geometry went through. The original is never
 /// named, so inserting a pattern does not rename what it copies; a mirror's
 /// reflection is copy 1 whether or not the original is kept.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct CopyOf {
     pub by: PropFeatureId,
     pub index: u32,
 }
 
 /// The generator, and its copies in the order they were made.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Source {
     pub feature: PropFeatureId,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -38,7 +37,7 @@ impl Source {
 }
 
 /// An index into the generator's [`Outline`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Element {
     Point(u32),
@@ -47,7 +46,7 @@ pub enum Element {
 }
 
 /// `element` first: TOML needs every scalar before any sub-table.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct GeomRef {
     pub element: Element,
     pub source: Source,
@@ -58,9 +57,10 @@ pub struct GeomRef {
 pub enum Located {
     Point(Vec3),
     Edge(Vec3, Vec3),
-    /// `normal` points out of the body. Generator faces should be flat, but
+    /// Every facet's corners, and the area-weighted normal out of the body.
+    /// A face may be curved — a revolved segment is one face — so
     /// [`Self::is_flat`] checks rather than trusts.
-    Face { points: Vec<Vec3>, normal: Vec3 },
+    Face { facets: Vec<Vec<Vec3>>, normal: Vec3 },
 }
 
 impl Located {
@@ -68,25 +68,32 @@ impl Located {
         match self {
             Located::Point(p) => vec![*p],
             Located::Edge(a, b) => vec![*a, *b],
-            Located::Face { points, .. } => points.clone(),
+            Located::Face { facets, .. } => facets.concat(),
         }
     }
 }
 
-/// `outward` is stored rather than derived from the winding, because the
-/// winding is only fixed afterward by [`Solid::oriented_outward`].
+/// One flat piece of a face. `outward` is stored rather than derived from the
+/// winding, because the winding is only fixed afterward by
+/// [`Solid::oriented_outward`]; it is zero for a facet with no area.
 #[derive(Clone, Debug, PartialEq)]
-pub struct OutlineFace {
+pub struct OutlineFacet {
     pub points: Vec<u32>,
     pub outward: Vec3,
 }
 
-/// A generator's corners, the edges between them, and its faces.
-///
-/// Numbered by formula from the profile *as authored*, not as wound for the
+/// A face as a person would point at it: every facet one segment of a
+/// profile swept along one piece of path.
+#[derive(Clone, Debug, PartialEq)]
+pub struct OutlineFace {
+    pub facets: Vec<OutlineFacet>,
+}
+
+/// A generator's corners, the edges between them, and its faces, numbered by
+/// [`crate::prop::skin`] from the profile *as authored*, not as wound for the
 /// kernel, so dragging a point across the loop does not renumber everything.
 /// Degenerate entries — a revolve's corners on the axis, the zero-length edges
-/// between them — are kept so the formula holds; they are filtered when
+/// between them — are kept so the numbering holds; they are filtered when
 /// picking.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Outline {
@@ -96,148 +103,17 @@ pub struct Outline {
 }
 
 impl Outline {
-    /// Matches [`Solid::extrude`]: points `0..n` on the near cap, `n..2n` on
-    /// the far; edges round the near cap, round the far, then the sides; faces
-    /// the near cap, the far cap, then side `i` from point `i`.
-    pub fn extrude(profile: &Profile, depth: f32, midplane: bool) -> Outline {
-        let loop_ = profile.points();
-        if loop_.len() < 3 || depth.abs() < f32::EPSILON {
-            return Outline::default();
-        }
-        let (near, far) = if midplane { (-depth / 2.0, depth / 2.0) } else { (0.0, depth) };
-        let n = loop_.len() as u32;
-        let points = [near, far]
-            .into_iter()
-            .flat_map(|z| loop_.iter().map(move |p| Vec3::new(p.x, p.y, z)))
-            .collect();
-        let mut edges = Vec::with_capacity(3 * n as usize);
-        for cap in 0..2 {
-            for i in 0..n {
-                edges.push([cap * n + i, cap * n + (i + 1) % n]);
-            }
-        }
-        for i in 0..n {
-            edges.push([i, n + i]);
-        }
-
-        let along = Vec3::Z * depth.signum();
-        let mut faces = vec![
-            OutlineFace { points: (0..n).collect(), outward: -along },
-            OutlineFace { points: (n..2 * n).collect(), outward: along },
-        ];
-        let out = outward_of_profile(&loop_);
-        for i in 0..n {
-            let j = (i + 1) % n;
-            faces.push(OutlineFace { points: vec![i, j, n + j, n + i], outward: out(i as usize).extend(0.0) });
-        }
-        Outline { points, edges, faces }
-    }
-
-    /// Matches [`Solid::revolve`]: ring `k` holds points `k*n..(k+1)*n`.
-    /// Edges round every ring first, then along the sweep. A side face's
-    /// diagonal is a triangulation detail rather than an edge, so is left out.
-    /// Faces are the sides between rings, `k*n + i`, then the two caps of a
-    /// part turn.
-    pub fn revolve(profile: &Profile, degrees: f32, segments: u32) -> Outline {
-        let loop_ = profile.points();
-        if loop_.len() < 3 {
-            return Outline::default();
-        }
-        let full = is_full_turn(degrees);
-        let sweep = if full { std::f32::consts::TAU } else { degrees.to_radians() };
-        let steps = sides(segments);
-        let rings = if full { steps } else { steps + 1 };
-        let n = loop_.len() as u32;
-
-        let points = (0..rings)
-            .flat_map(|k| {
-                let (sin, cos) = (sweep * k as f32 / steps as f32).sin_cos();
-                loop_.iter().map(move |p| Vec3::new(p.x * cos, p.y, -p.x * sin))
-            })
-            .collect();
-        let mut edges = Vec::with_capacity(((rings + steps) * n) as usize);
-        for k in 0..rings {
-            for i in 0..n {
-                edges.push([k * n + i, k * n + (i + 1) % n]);
-            }
-        }
-        for k in 0..steps {
-            let next = (k + 1) % rings;
-            for i in 0..n {
-                edges.push([k * n + i, next * n + i]);
-            }
-        }
-
-        // The profile's outward direction turned to the side's middle angle.
-        let out = outward_of_profile(&loop_);
-        let mut faces = Vec::with_capacity((steps * n + 2) as usize);
-        for k in 0..steps {
-            let next = (k + 1) % rings;
-            let (sin, cos) = (sweep * (k as f32 + 0.5) / steps as f32).sin_cos();
-            for i in 0..n {
-                let j = (i + 1) % n;
-                let flat = out(i as usize);
-                faces.push(OutlineFace {
-                    points: vec![k * n + i, k * n + j, next * n + j, next * n + i],
-                    outward: Vec3::new(flat.x * cos, flat.y, -flat.x * sin),
-                });
-            }
-        }
-        if !full {
-            // A cap faces back along the way its ring was swept.
-            let side = sweep.signum() * loop_.iter().map(|p| p.x).sum::<f32>().signum();
-            let (sin, cos) = sweep.sin_cos();
-            faces.push(OutlineFace { points: (0..n).collect(), outward: Vec3::Z * side });
-            faces.push(OutlineFace {
-                points: (steps * n..(steps + 1) * n).collect(),
-                outward: Vec3::new(-sin, 0.0, -cos) * side,
-            });
-        }
-        Outline { points, edges, faces }
-    }
-
-    /// Matches [`Solid::extrude_region`]: the outer loop as [`Self::extrude`]
-    /// numbers it, then each hole's walls — no caps, since a hole's are not
-    /// there — facing into the hole, which is out of the body.
-    pub fn extrude_region(outer: &[Vec2], holes: &[Vec<Vec2>], depth: f32, midplane: bool) -> Outline {
-        let mut outline = Outline::extrude(&Profile::loop_of(outer), depth, midplane);
-        for hole in holes {
-            let mut walls = Outline::extrude(&Profile::loop_of(hole), depth, midplane);
-            walls.faces.drain(..2.min(walls.faces.len()));
-            for face in &mut walls.faces {
-                face.outward = -face.outward;
-            }
-            outline.append(walls);
-        }
-        outline
-    }
-
-    /// Matches [`Solid::revolve_region`]: the outer loop as [`Self::revolve`]
-    /// numbers it, then each hole's walls facing into the hole.
-    pub fn revolve_region(outer: &[Vec2], holes: &[Vec<Vec2>], degrees: f32, steps: u32) -> Outline {
-        let mut outline = Outline::revolve(&Profile::loop_of(outer), degrees, steps);
-        for hole in holes {
-            let mut walls = Outline::revolve(&Profile::loop_of(hole), degrees, steps);
-            // A part turn's two caps come last; a hole has none.
-            if !is_full_turn(degrees) {
-                walls.faces.truncate(walls.faces.len().saturating_sub(2));
-            }
-            for face in &mut walls.faces {
-                face.outward = -face.outward;
-            }
-            outline.append(walls);
-        }
-        outline
-    }
-
     /// `other`'s elements after this one's, renumbered.
     pub fn append(&mut self, other: Outline) {
         let offset = self.points.len() as u32;
         self.points.extend(other.points);
         self.edges.extend(other.edges.into_iter().map(|[a, b]| [a + offset, b + offset]));
         self.faces.extend(other.faces.into_iter().map(|face| OutlineFace {
-            points: face.points.into_iter().map(|p| p + offset).collect(),
-            outward: face.outward,
+            facets: face
+                .facets
+                .into_iter()
+                .map(|facet| OutlineFacet { points: facet.points.into_iter().map(|p| p + offset).collect(), outward: facet.outward })
+                .collect(),
         }));
     }
 
@@ -245,8 +121,8 @@ impl Outline {
         for point in &mut self.points {
             *point = transform.transform_point(*point);
         }
-        for face in &mut self.faces {
-            face.outward = transform.rotation * face.outward;
+        for facet in self.faces.iter_mut().flat_map(|face| &mut face.facets) {
+            facet.outward = transform.rotation * facet.outward;
         }
         self
     }
@@ -259,8 +135,8 @@ impl Outline {
             *point = origin + offset - 2.0 * offset.dot(normal) * normal;
         }
         // A reflection keeps out as out.
-        for face in &mut self.faces {
-            face.outward -= 2.0 * face.outward.dot(normal) * normal;
+        for facet in self.faces.iter_mut().flat_map(|face| &mut face.facets) {
+            facet.outward -= 2.0 * facet.outward.dot(normal) * normal;
         }
         self
     }
@@ -274,28 +150,25 @@ impl Outline {
             }
             Element::Face(i) => {
                 let face = self.faces.get(i as usize)?;
-                let points: Vec<Vec3> = face.points.iter().map(|&p| self.points[p as usize]).collect();
-                let normal = match newell(&points).try_normalize() {
-                    Some(normal) if normal.dot(face.outward) < 0.0 => -normal,
-                    Some(normal) => normal,
-                    None => face.outward.normalize_or_zero(),
-                };
-                Some(Located::Face { points, normal })
+                let facets: Vec<Vec<Vec3>> = face
+                    .facets
+                    .iter()
+                    .map(|facet| facet.points.iter().map(|&p| self.points[p as usize]).collect())
+                    .collect();
+                // Each facet's area-weighted normal, turned out of the body.
+                let sum = face.facets.iter().zip(&facets).fold(Vec3::ZERO, |sum, (facet, points)| {
+                    let normal = newell(points);
+                    match normal.dot(facet.outward) < 0.0 {
+                        true => sum - normal,
+                        false => sum + normal,
+                    }
+                });
+                let normal = sum
+                    .try_normalize()
+                    .unwrap_or_else(|| face.facets.iter().map(|facet| facet.outward).sum::<Vec3>().normalize_or_zero());
+                Some(Located::Face { facets, normal })
             }
         }
-    }
-}
-
-/// For each edge `i` of a loop, the in-plane direction away from its inside,
-/// whichever way the loop was authored.
-fn outward_of_profile(loop_: &[Vec2]) -> impl Fn(usize) -> Vec2 + '_ {
-    let area_x2: f32 = (0..loop_.len())
-        .map(|i| loop_[i].perp_dot(loop_[(i + 1) % loop_.len()]))
-        .sum();
-    let ccw = area_x2.signum();
-    move |i| {
-        let along = loop_[(i + 1) % loop_.len()] - loop_[i];
-        Vec2::new(along.y, -along.x) * ccw
     }
 }
 
@@ -316,47 +189,15 @@ impl Located {
     /// To within [`ON_SURFACE`].
     pub fn is_flat(&self) -> bool {
         match self {
-            Located::Face { points, normal } => {
-                points.iter().all(|p| (*p - points[0]).dot(*normal).abs() < ON_SURFACE)
+            Located::Face { facets, normal } => {
+                // A curved face's normals can cancel to nothing, which is no
+                // plane however close its points are to one.
+                let Some(first) = facets.iter().flatten().next() else { return false };
+                normal.length() > 0.5 && facets.iter().flatten().all(|p| (*p - *first).dot(*normal).abs() < ON_SURFACE)
             }
             Located::Point(_) | Located::Edge(..) => true,
         }
     }
-
-    /// Whether `point` is inside a face, in its own plane. Even-odd rather than
-    /// a convex test, since a cap can be any loop a profile can.
-    fn face_contains(&self, point: Vec3) -> bool {
-        let Located::Face { points, normal } = self else { return false };
-        if (point - points[0]).dot(*normal).abs() > ON_SURFACE {
-            return false;
-        }
-        let (u, v) = normal.any_orthonormal_pair();
-        let flat = |p: Vec3| Vec2::new(p.dot(u), p.dot(v));
-        let at = flat(point);
-        let mut inside = false;
-        for i in 0..points.len() {
-            let (a, b) = (flat(points[i]), flat(points[(i + 1) % points.len()]));
-            if (a.y > at.y) != (b.y > at.y) && at.x < a.x + (at.y - a.y) / (b.y - a.y) * (b.x - a.x) {
-                inside = !inside;
-            }
-        }
-        inside
-    }
-}
-
-/// The named flat face a click at `hit`, on a polygon facing `facing`, landed
-/// on. Either facing matches, because a hole's wall faces the other way from
-/// the tool face that cut it.
-pub fn face_at(wires: &[Wire], hit: Vec3, facing: Vec3) -> Option<GeomRef> {
-    wires.iter().find_map(|wire| {
-        (0..wire.outline.faces.len() as u32).find_map(|i| {
-            let face = wire.outline.locate(Element::Face(i))?;
-            let Located::Face { normal, .. } = &face else { return None };
-            let square_on = normal.dot(facing).abs() > 1.0 - 1e-3;
-            (square_on && face.is_flat() && face.face_contains(hit))
-                .then(|| GeomRef { element: Element::Face(i), source: wire.source.clone() })
-        })
-    })
 }
 
 /// In the prop's space.
@@ -532,6 +373,18 @@ pub fn segment_under<T: Clone, P: Fn(Vec3) -> Option<Vec2>>(
         .map(|(what, _)| what)
 }
 
+pub fn point_under<T: Clone, P: Fn(Vec3) -> Option<Vec2>>(
+    points: impl IntoIterator<Item = (T, Vec3)>,
+    pointer: &Pointer<P>,
+) -> Option<T> {
+    points
+        .into_iter()
+        .filter_map(|(what, p)| Some((what, pointer.to_point(p)?)))
+        .filter(|(_, pixels)| *pixels <= POINT_PICK_PX)
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(what, _)| what)
+}
+
 /// The point of segment `a`–`b` nearest the line through `origin` along
 /// `direction`.
 fn closest_on_segment(origin: Vec3, direction: Vec3, a: Vec3, b: Vec3) -> Vec3 {
@@ -692,15 +545,19 @@ mod tests {
     /// Fails if a face's normal comes from a winding nothing promises.
     #[test]
     fn every_flat_face_points_out_of_its_body() {
-        let clockwise = Profile::Points { points: vec![[0.0, 0.0], [0.0, 0.1], [0.1, 0.1], [0.1, 0.0]] };
+        use crate::prop::skin::{extrusion, revolution, skin, TaggedLoop};
+        use crate::prop::surface::Surface;
+        let points = |p: &[[f32; 2]]| vec![TaggedLoop::numbered(p.iter().map(|q| Vec2::from_array(*q)).collect())];
+        let swept = |run| skin(&run, Surface::default()).unwrap().outline;
+        let clockwise = [[0.0, 0.0], [0.0, 0.1], [0.1, 0.1], [0.1, 0.0]];
         let outlines = [
             Shape::Box { size: [0.3, 0.4, 0.5] }.outline(),
             Shape::Prism { sides: 6, radius: 0.2, height: 0.6 }.outline(),
             Shape::Wedge { size: [0.3, 0.3, 0.2] }.outline(),
-            Outline::extrude(&clockwise, -0.2, false),
+            swept(extrusion(points(&clockwise), -0.2, false)),
             // Sectors of a cylinder, which are convex up to half a turn.
-            Outline::revolve(&Profile::Points { points: vec![[0.0, -0.1], [0.1, -0.1], [0.1, 0.1], [0.0, 0.1]] }, 90.0, 6),
-            Outline::revolve(&Profile::Points { points: vec![[0.0, -0.1], [0.0, 0.1], [-0.1, 0.1], [-0.1, -0.1]] }, -120.0, 6),
+            swept(revolution(points(&[[0.0, -0.1], [0.1, -0.1], [0.1, 0.1], [0.0, 0.1]]), 90.0, 6)),
+            swept(revolution(points(&[[0.0, -0.1], [0.0, 0.1], [-0.1, 0.1], [-0.1, -0.1]]), -120.0, 6)),
             Shape::Box { size: [0.3, 0.4, 0.5] }.outline().mirrored(Vec3::new(0.1, 0.0, 0.0), Vec3::X),
         ];
         for (n, outline) in outlines.iter().enumerate() {
@@ -708,17 +565,18 @@ mod tests {
             let mut flat = 0;
             for i in 0..outline.faces.len() as u32 {
                 let face = outline.locate(Element::Face(i)).unwrap();
-                let Located::Face { points, normal } = &face else { unreachable!() };
-                // A revolve's side on its own axis has no area to face anywhere.
-                if newell(points).length() < 1e-9 {
+                let Located::Face { normal, .. } = &face else { unreachable!() };
+                // A revolve's side on its own axis has no area to face
+                // anywhere, and its side round the axis is curved.
+                if !face.is_flat() {
                     continue;
                 }
-                assert!(face.is_flat(), "outline {n}, face {i} is not flat");
                 flat += 1;
+                let points = face.points();
                 let center = points.iter().sum::<Vec3>() / points.len() as f32;
                 assert!(normal.dot(center - middle) > 0.0, "outline {n}, face {i} points inwards");
             }
-            assert!(flat >= 4, "outline {n} has only {flat} faces with area");
+            assert!(flat >= 4, "outline {n} has only {flat} flat faces");
         }
     }
 
@@ -731,16 +589,16 @@ mod tests {
         assert!(normal.distance(Vec3::Z) < 1e-6, "{normal}");
     }
 
-    /// A revolve's side is flat (two parallel chords), so a sphere's facet is
-    /// a face even though the kernel splits it into triangles.
+    /// A sphere's band between two rings is one face, curved, and a click on
+    /// any of its facets picks it.
     #[test]
-    fn a_spheres_facet_is_a_face() {
+    fn a_click_on_a_sphere_picks_the_band_it_hit() {
         let ball = primitive(0, Shape::Sphere { sides: 8, rings: 5, radius: 0.2 }, Vec3::ZERO);
         let evaluated = evaluate(&[ball]);
         let (body, face) = evaluated.surface_under(Ray3d::new(Vec3::new(0.05, 0.07, 1.0), Dir3::NEG_Z)).unwrap();
         assert_eq!(body, PropFeatureId(0));
-        let located = evaluated.locate(&face.expect("a face")).unwrap();
-        assert!(located.is_flat() && located.points().len() == 4);
+        let Some(Located::Face { facets, .. }) = evaluated.locate(&face.expect("a face")) else { panic!() };
+        assert_eq!(facets.len(), 8, "one facet per step round the axis");
     }
 
     /// Fails if a hole's wall cannot be picked: it faces the opposite way

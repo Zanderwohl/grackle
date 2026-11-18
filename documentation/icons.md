@@ -38,15 +38,23 @@ When an icon ships, check its box.
 | [x] | `wedge` | Wedge, outline only | Wedge |
 | [x] | `square_arrow` | Vertical square, outline only, with an arrow from its center pointing right | Extrude |
 | [x] | `axis_arrow_around` | Vertical line with a partial circular arrow turning about it | Revolve |
+| [x] | `square_along_path` | A square, a dashed curve leading from it, and a smaller turned square at its end | Sweep, Chain |
+| [x] | `square_joined_to_circle` | A square and a circle up and to its right, joined by two straight lines | Loft |
 | [x] | `venn_union` | Circle and square overlapping like a Venn diagram, all three parts filled, lines in negative space | Union |
 | [x] | `venn_subtract` | The same Venn diagram, only the square's part outside the circle filled | Subtract |
 | [x] | `venn_intersect` | The same Venn diagram, only the overlap filled | Intersect |
 | [x] | `two_squares` | Two squares side by side | Row pattern |
 | [x] | `squares_in_circle` | Four squares in a circle | Circle pattern |
 | [x] | `ground_square` | Flat square on the ground, in isometric view | Plane |
+| [x] | `dashed_line_dots` | Dashed diagonal line with a dot on it near each end | Axis |
+| [x] | `dot_crosshair` | Dot with four short lines pointing at it, a gap round it | Point |
 | [x] | `pencil` | Pencil | Sketch |
 | [x] | `film_camera` | Film camera with a big reel on top | Frame, Frame selected, Spectator Camera |
 | [x] | `check_mark` | Check mark | Done, Finish sketch |
 | [x] | `trash_can` | Trash can, macOS style | Cancel, Delete |
 | [x] | `diagonal_line` | Diagonal line from lower left to top right | Line |
 | [x] | `eraser` | Square rubber eraser | Erase |
+| [x] | `arc_dots` | Quarter arc, a dot at its center and at each end, dashed radii to the ends | Arc (sketch) |
+| [x] | `circle_dot` | Circle with a dot at its center | Circle (sketch) |
+| [x] | `curve_handles` | S-curve with a dashed handle from each end to a dot | Bézier (sketch) |
+| [x] | `curve_hull` | Wavy curve inside a dashed zigzag of control points | NURBS (sketch) |

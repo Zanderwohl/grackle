@@ -805,8 +805,11 @@ and each is a decision rather than a shortcut:
   against a trait object without the kernel answering for every shape anyway —
   the openness would be a costume. Closing the set buys exhaustive matching,
   plain serde, and an evaluator that cannot be handed something it has never
-  heard of. Adding a feature is a variant and an arm in `evaluate`, not seven
-  edits in files that do not reference each other.
+  heard of. Adding a feature is a variant, its arm in `evaluate`, its
+  references listed in `FeatureOp::fields` (and written by `set_field`), and a
+  row in `tool::TOOLS` — `consumes`, `references`, re-picking and the
+  Inspector's Pick rows are all read from `fields`.
+  `every_reference_is_a_field` fails for a reference left out.
 - **Undo is whole-document snapshots**, not before-and-after deltas. A prop is
   a couple of kilobytes, so cloning per edit is free and correct by
   construction: no pair to get the wrong way round, no operation that can
@@ -843,10 +846,10 @@ algorithm written out, and **a solid is a bag of convex polygons that happens
 to be closed**. Nothing checks either property and both matter: a plane cuts a
 convex polygon into exactly two pieces, which is the assumption the splitter
 is written on, and "inside" only means anything for a surface with no gaps.
-That is why every sweep in [`solid.rs`](src/prop/solid.rs) emits triangles or
-planar convex faces, why a revolve's side faces are triangles (the quad
-between two steps is flat, but one with a corner on the axis has two corners
-in one place), and why a cap is **ear-clipped
+That is why the one sweep, [`skin.rs`](src/prop/skin.rs), emits triangles or
+planar convex faces — a quad only where a step just moves the loop, so the
+quad is a parallelogram; two triangles wherever a step turns it, since a quad
+with a corner on a revolve's axis has two corners in one place — and why a cap is **ear-clipped
 rather than fanned** — a fan is right for a rectangle and silently wrong for
 anything with a notch in it.
 
@@ -1043,8 +1046,10 @@ the keyboard are idle, which is what makes typing a name one step rather than
 one per letter.
 
 **The verbs act on the selection**, not on whatever was added last, and **none
-is ever grayed out** ([`tool.rs`](src/prop/tool.rs)). Each tool states what it
-needs as a list of slots — Combine a body then a second body (target, then
+is ever grayed out** ([`tool.rs`](src/prop/tool.rs)). Each tool is a row in
+`TOOLS` stating what it needs as a list of [`Slot`](src/prop/slot.rs)s — a
+`Kind`, a prompt and named checks, such as "the axis lies in the regions'
+plane", that see the other slots' values — Combine a body then a second body (target, then
 tool: the order it is said in), Mirror a body then a plane, Revolve regions
 then an axis — and clicking one fills the slots from the selection in pick
 order, drops whatever fits none, and asks for the rest in the toolbar ("Pick a
@@ -1061,15 +1066,25 @@ wanted, a flat face is offered too, and finishing makes a plane feature through
 it in the same undo step (`PropEditor::add_pair`), so a sketch can go straight
 on a face.
 
-**Lines are picks** — an edge, a sketch's line (pickable from outside the
-sketch) or one of the three origin axes, which are drawn across the origin
-planes for that reason — and all three are one `LineRef`
-([`line.rs`](src/prop/line.rs)): what a revolve turns about and what a pattern
-runs along or turns about. A mirror is about a `PlaneRef`. Neither is a
-dropdown: the inspector shows what it names with a **Pick** button, which is
-the same machinery as a tool with one slot (`Task::Repick`). A re-pick offers
-only what stands before the feature, since that is all it could resolve
-against. A revolve's axis must lie in its sketch's plane, which the hover
+**A reference is typed by what it is, not where it came from**
+([`refs.rs`](src/prop/refs.rs)): a `PointRef` is a corner, a sketch point or a
+datum point; a `CurveRef` an edge, a sketch's line, an origin axis (drawn
+across the origin planes for that reason) or a datum axis; a `DirectionRef` a
+straight curve or a plane's or flat face's normal; `PathRef` curves joined end
+to end; `AnyRef` any of them. Each resolves through `Resolve` against one
+`Scope` — what stands at that point in the list — which `evaluate` builds per
+feature and `Evaluated::scope` for the finished prop. A `Pick` is what a click
+landed on, and says what it stands for through one conversion per kind
+(`as_point`, `as_curve`, `as_direction`, `as_plane_source`, `body`), so a new
+pickable thing is a variant and its arms in one file. A revolve turns about a
+`CurveRef`, a row runs along a `DirectionRef`, a circle turns about a
+`CurveRef`, and a mirror is about a `PlaneRef`. None is a
+dropdown: the Inspector's References section has a **Pick** button per field
+of `FeatureOp::fields` marked `picked`, which is the same machinery as a tool
+with one slot (`Task::Repick { feature, field }`), its checks seeing the
+feature's other fields. Body operands are not picked there, since one this
+feature eats cannot be clicked; they are lists. A re-pick offers only what
+stands before the feature, since that is all it could resolve against. A revolve's axis must lie in its sketch's plane, which the hover
 checks and the evaluator reports.
 
 **The selection is an ordered list of `Pick`s** — bodies, named corners,
@@ -1093,6 +1108,36 @@ not stand in, and a plane is not a body. `Pick::feature` is the looser
 question the feature list, handles and Inspector ask: a body *or plane*,
 eaten or not.
 
+**Every sweep is one function** ([`skin.rs`](src/prop/skin.rs)): Extrude,
+Revolve, Sweep and every primitive produce a `Run` of `Section`s — loops placed by
+frames — and `skin` builds the solid and its `Outline`, so all of them name
+their corners, edges and faces by one rule. A face is one profile segment
+swept along one piece of path (`OutlineFace` holds its facets), so a revolved
+segment is one face, flat or curved, not a ring of facets, and an edge between
+two facets of one face is not listed. `skin` reports sections that do not
+match, a mirrored frame and a profile folding back through itself as
+Problems. A **Sweep** carries regions along a `PathRef` — curves end to end,
+picked into a `Path` slot that takes a curve joining either end, or extended
+by **Chain** along everything that continues without a corner — placing the
+profile at frames from [`path.rs`](src/prop/path.rs): rotation-minimizing by
+double reflection, Frenet, or fixed, with a twist and an end scale by
+distance, a closed path's leftover turn spread along it. Its faces are named
+per path curve and profile entity. A **Loft** joins one region per sketch, in
+pick order, through straight faces ([`loft.rs`](src/prop/loft.rs)): each
+frame is turned to face along the loft, loops are matched entity to entity
+when every profile has as many, and otherwise cut to the largest point count
+with the extra points in the longest segments, so corners stay; each loop
+starts at a picked point or the turn nearest the profile before. Faces are
+named by the first profile's entities and the span. The skin draws a side as
+a quad only between two copies of one loop. An **Extrude** runs along its sketch's normal or a
+picked direction, each side a distance, up to a point, plane or flat face (the
+end stays parallel to the sketch), or through every body's bounds, with an
+optional taper. Extrude, Revolve, Sweep and Loft each carry a `SweepOp` —
+new body, join, cut, intersect — and a `target`, which the feature eats
+through `fields` while it joins, cuts or intersects, so one feature is a cut. Its polygons come out in the order the old extrude and revolve used,
+because the BSP picks splitting planes in polygon order: moving onto it left
+every shipped prop's volume and triangle count unchanged.
+
 **A corner or edge is named by the generator that made it, never by the
 kernel's output** ([`reference.rs`](src/prop/reference.rs)). BSP polygons are
 split anew by every boolean, so nothing in a `Solid` survives an evaluation;
@@ -1105,26 +1150,50 @@ still *resolves*. It is not *offered*: only elements on their body's surface
 are pickable. Two things to keep: an `Outline` is numbered from the profile
 **as authored**, not as wound for the kernel, so dragging a point across the
 loop does not renumber everything; and a primitive's solid and outline both
-come from `Shape::sweep`, so the two cannot drift —
+come from one `skin`, so the two cannot drift —
 `every_primitives_outline_lies_on_its_surface` is what notices if they do.
-The cost is that an edge a boolean *made*, where a bore leaves a face, has no
-name and cannot be picked.
 
-**A face is matched to its generator on the click, not carried through the
-kernel.** `Evaluated::surface_under` finds the polygon hit and `face_at` asks
-which named face lies in that polygon's plane and contains the hit point —
-either facing, because a hole's wall faces the opposite way from the tool face
-that cut it. Each `OutlineFace` stores an `outward` direction rather than
-trusting its winding, which nothing promises before
-`Solid::oriented_outward` measures it; `every_flat_face_points_out_of_its_body`
-is what fails if that is ever derived instead. A revolve's side is flat — its
-two sweep edges are parallel chords — so a sphere's facets are faces too.
+**A face is carried through the kernel.** Every polygon's `Face` holds its
+material and a tag ([`solid.rs`](src/prop/solid.rs)): a sweep's own face
+number until the evaluator turns it into an index into the `FaceTable`
+([`seam.rs`](src/prop/seam.rs)), interned there as the face's `GeomRef` —
+mirror and pattern copies retagged through their `CopyOf` — and kept through
+every split, a subtract's repaint included. A click reads the face off the
+polygon it hit (`Evaluated::surface_of_hit`), so a piece of a cut face, a
+sphere's band and a hole's wall are all their named face.
 
-**A plane is a feature that makes no body** (`FeatureOp::Plane { through }`,
-[`plane.rs`](src/prop/plane.rs)). Accepted: three corners, an edge and a
-corner, two coplanar edges, or one flat face; the frame comes from pick order,
-or from a face's own outward normal, so something sketched on it extrudes
-out of the body. **Its references are resolved as the prop stood when it
+**An edge a boolean made is a seam**, named by the two faces it separates
+(`SeamRef`: both faces sorted, and an index when they meet more than once),
+and a corner where three or more meet is a `JunctionRef`. `seam::find` works
+on the finished solid: boundary segments are filed by the line they lie on
+(under both senses, on a grid moved half a cell so an axis sits mid-cell) and
+matched by overlap, never by shared corners, since the BSP leaves a corner of
+one polygon partway along another's edge; pieces between one pair of faces
+are joined into runs. A seam lying on one offered generator edge is not
+offered, so an edge keeps the name it had first; one lying along several — a
+revolved corner's circle — is offered as one curve in their place. They are found the first
+time something asks (`Evaluated::seams`, a `OnceLock`), since the game bakes
+props through the same `evaluate` and never asks. A `CurveRef::Seam`
+resolves to a polyline (`Curve3::Polyline`); a straight one serves wherever a
+line does. Each facet
+stores an `outward` direction rather than trusting its winding, which nothing
+promises before `Solid::oriented_outward` measures it;
+`every_flat_face_points_out_of_its_body` is what fails if that is ever derived
+instead. A face is flat only if all its facets are (`Located::is_flat`), so a
+revolved segment square to the axis is a flat ring something can be sketched
+on, and a cylinder is not.
+
+**A plane is a feature that makes no body** (`FeatureOp::Plane { def }`,
+[`plane.rs`](src/prop/plane.rs)): through three points, a line and a point,
+two coplanar lines or one flat face, from any source; offset from a plane;
+turned about a line along a plane; or halfway between two planes. Through
+points, the frame comes from pick order, or from a face's own outward normal,
+so something sketched on it extrudes out of the body. **Datum axes and points**
+(`FeatureOp::Axis`, `FeatureOp::Point`, [`datum.rs`](src/prop/datum.rs)) are
+the same kind of feature. What a selection makes with the Plane, Axis and
+Point tools is [`construct.rs`](src/prop/construct.rs)'s one table, and a face
+standing in for a plane there is given a plane feature in the same undo step
+(`PropEditor::add_chain`). **Its references are resolved as the prop stood when it
 runs**, against the bodies live at that point in the list, so a mirror below
 it that takes the original away does not move it. It is drawn as a gray dashed
 square and picked by its border, so one through a body does not stop clicks
@@ -1135,12 +1204,21 @@ be dragged above the cube it was made on.
 
 Sketches — a 2D drawing on a plane that Extrude and Revolve sweep — are
 planned in [documentation/sketches.md](documentation/sketches.md), with the
-decisions behind them and a checklist. Four things about what is built:
+decisions behind them and a checklist. References by kind, named seams, sketch
+curves and one sweep core under Extrude, Revolve, Sweep and Loft are planned in
+[documentation/prop-modeling.md](documentation/prop-modeling.md). Four things
+about what is built:
 
 - **A sketch is a flat set, not a feature list** ([`sketch.rs`](src/prop/sketch.rs)):
-  lines name their ends by id, so a shared corner is one point and "is this
+  lines and curves name their points by id, so a shared corner is one point and "is this
   closed" is about ids, not coordinates. It has no undo of its own; it is part
-  of `PropDoc`.
+  of `PropDoc`. Its entities are lines, arcs (center, start, end; the end kept
+  on the circle), circles, Béziers and NURBS; each resolves to a `Curve2`
+  ([`curve.rs`](src/prop/curve.rs)), cut into straight pieces within
+  `CHORD_TOLERANCE` for the arrangement. Every piece remembers its entity
+  (`Region::outer_entities`), and sweeps tag their loops with it, so an arc
+  sweeps one face however many pieces it was cut into, and a piece count
+  that changes as it is dragged renames nothing.
 - **Regions are derived** ([`region.rs`](src/prop/region.rs)) by cutting every
   line at its crossings and walking the faces of the planar graph, so crossing
   lines split rather than fail. A region is named by the lines round its

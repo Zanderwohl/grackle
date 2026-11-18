@@ -1,8 +1,8 @@
 //! The plane a selection describes, if it describes one, and the plane
 //! features made from them.
 //!
-//! Accepted: three corners, an edge and a corner, two edges, one flat face, or
-//! one plane feature. The frame comes from pick order alone, not bounds or the
+//! Through: three points, a line and a point, two lines, or one flat face. The
+//! frame comes from pick order alone, not bounds or the
 //! longest edge, so nudging one corner cannot turn the plane's `x` through a
 //! right angle: origin at the first point, `x` toward the second (along an
 //! edge if there is one), normal by the right-hand rule. A face's normal points
@@ -16,9 +16,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::common::app_mode::AppMode;
 use crate::get;
+use crate::prop::construct::{Construct, Preview};
 use crate::prop::document::{Pick, PropEditor};
 use crate::prop::feature::{Evaluated, PropFeatureId};
 use crate::prop::reference::{Located, Pointer, EDGE_PICK_PX};
+use crate::prop::refs::{AnyRef, CurveRef, Resolve, Scope};
 use crate::prop::view::PropBuild;
 use crate::tool::tool_helpers::dashed_line;
 
@@ -134,6 +136,119 @@ impl PlaneRef {
     }
 }
 
+/// How a plane feature is made. Scalars first: TOML needs every scalar
+/// before any sub-table.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PlaneDef {
+    /// Through what [`plane_through_located`] accepts.
+    Through { through: Vec<AnyRef> },
+    /// Meters along `from`'s normal.
+    Offset {
+        #[serde(with = "crate::prop::nice_f32::scalar")]
+        distance: f32,
+        from: PlaneRef,
+    },
+    /// `from` turned about a straight curve lying along it.
+    Angle {
+        #[serde(with = "crate::prop::nice_f32::scalar")]
+        degrees: f32,
+        from: PlaneRef,
+        about: CurveRef,
+    },
+    /// Halfway between two planes: between them if they are parallel, else
+    /// through the line they meet in, bisecting the angle.
+    Midplane { a: PlaneRef, b: PlaneRef },
+}
+
+impl PlaneDef {
+    /// What it is made from, in the order it was picked.
+    pub fn refs(&self) -> Vec<AnyRef> {
+        match self {
+            PlaneDef::Through { through } => through.clone(),
+            PlaneDef::Offset { from, .. } => vec![AnyRef::Plane(*from)],
+            PlaneDef::Angle { from, about, .. } => vec![AnyRef::Plane(*from), AnyRef::Curve(about.clone())],
+            PlaneDef::Midplane { a, b } => vec![AnyRef::Plane(*a), AnyRef::Plane(*b)],
+        }
+    }
+
+    /// `None` if what it names does not make a plane.
+    pub fn resolve(&self, id: PropFeatureId, scope: &Scope) -> Option<Datum> {
+        let (plane, corners) = match self {
+            PlaneDef::Through { through } => {
+                let located: Vec<Located> = through.iter().map(|r| r.locate(scope)).collect::<Option<_>>()?;
+                return Datum::through(id, &located);
+            }
+            PlaneDef::Offset { distance, from } => offset(&scope.datum(*from)?, *distance),
+            PlaneDef::Angle { degrees, from, about } => angled(&scope.datum(*from)?, about.resolve(scope)?.line()?, *degrees)?,
+            PlaneDef::Midplane { a, b } => halfway(&scope.datum(*a)?, &scope.datum(*b)?)?,
+        };
+        Some(Datum { id: PlaneRef::Feature(id), plane, corners })
+    }
+}
+
+/// `from` moved `distance` meters along its normal, square and all.
+pub fn offset(from: &Datum, distance: f32) -> (Plane, [Vec3; 4]) {
+    let shift = *from.plane.normal * distance;
+    (Plane { origin: from.plane.origin + shift, ..from.plane }, from.corners.map(|corner| corner + shift))
+}
+
+/// `from` turned about the line `a`–`b`, which must lie along it. Its `x`
+/// runs along the line.
+pub fn angled(from: &Datum, (a, b): (Vec3, Vec3), degrees: f32) -> Option<(Plane, [Vec3; 4])> {
+    let along = Dir3::new(b - a).ok()?;
+    if along.dot(*from.plane.normal).abs() > PARALLEL {
+        return None;
+    }
+    let turn = Quat::from_axis_angle(*along, degrees.to_radians());
+    let plane = Plane { origin: a, x: along, normal: turn * from.plane.normal };
+    let turned: Vec<Vec3> = from.corners.iter().map(|p| a + turn * (*p - a)).chain([a, b]).collect();
+    Some((plane, preview_corners(&plane, &turned)))
+}
+
+pub fn halfway(a: &Datum, b: &Datum) -> Option<(Plane, [Vec3; 4])> {
+    let plane = midplane(&a.plane, &b.plane)?;
+    let points: Vec<Vec3> = a.corners.iter().chain(&b.corners).copied().collect();
+    Some((plane, preview_corners(&plane, &points)))
+}
+
+/// The sine of the largest angle off a plane that still counts as lying
+/// along it.
+const PARALLEL: f32 = 1e-3;
+
+/// Where two planes meet: a point on the line, and its direction. `None` if
+/// they are parallel.
+pub fn intersection(a: &Plane, b: &Plane) -> Option<(Vec3, Dir3)> {
+    let (na, nb) = (*a.normal, *b.normal);
+    let along = Dir3::new(na.cross(nb)).ok()?;
+    if na.cross(nb).length() < PARALLEL {
+        return None;
+    }
+    let (da, db, cos) = (na.dot(a.origin), nb.dot(b.origin), na.dot(nb));
+    let point = ((da - db * cos) * na + (db - da * cos) * nb) / (1.0 - cos * cos);
+    Some((point, along))
+}
+
+/// Halfway between `a` and `b`, facing as `a` does. `None` only if one is
+/// degenerate.
+pub fn midplane(a: &Plane, b: &Plane) -> Option<Plane> {
+    let na = *a.normal;
+    let nb = match b.normal.dot(na) < 0.0 {
+        true => -*b.normal,
+        false => *b.normal,
+    };
+    match intersection(a, b) {
+        None => {
+            let gap = (b.origin - a.origin).dot(na);
+            Some(Plane { origin: a.origin + na * gap / 2.0, ..*a })
+        }
+        Some((point, along)) => {
+            let origin = point + *along * (a.origin - point).dot(*along);
+            Some(Plane { origin, x: along, normal: Dir3::new(na + nb).ok()? })
+        }
+    }
+}
+
 /// Meters. An origin plane's half-width on an empty prop.
 pub(crate) const MIN_ORIGIN_HALF: f32 = 0.05;
 
@@ -163,39 +278,24 @@ impl Datum {
     }
 }
 
-/// The plane through what is picked, if the picks make one.
-pub fn plane_through(picks: &[Pick], evaluated: &Evaluated) -> Option<Plane> {
-    picked_plane(picks, evaluated).map(|(plane, _)| plane)
-}
-
-/// [`plane_through`], with the square to draw it as.
+/// The plane the Plane tool would make from the picks, with the square to
+/// draw it as.
 fn picked_plane(picks: &[Pick], evaluated: &Evaluated) -> Option<(Plane, [Vec3; 4])> {
-    if let [Pick::Plane(id)] = picks {
-        return evaluated.datum(*id).map(|datum| (datum.plane, datum.corners));
+    let scope = evaluated.scope();
+    match Construct::Plane.making(picks, &scope)?.preview(&scope)? {
+        Preview::Plane { plane, corners } => Some((plane, corners)),
+        Preview::Axis { .. } | Preview::Point(_) => None,
     }
-    let located = locate_all(picks, evaluated)?;
-    let plane = plane_through_located(&located)?;
-    Some((plane, preview_corners(&plane, &all_points(&located))))
-}
-
-fn locate_all(picks: &[Pick], evaluated: &Evaluated) -> Option<Vec<Located>> {
-    picks
-        .iter()
-        .map(|pick| match pick {
-            Pick::Body(_) | Pick::Plane(_) | Pick::Region { .. } | Pick::SketchLine { .. } | Pick::Axis(_) => None,
-            Pick::Geom(reference) => evaluated.locate(reference),
-        })
-        .collect()
 }
 
 fn all_points(located: &[Located]) -> Vec<Vec3> {
     located.iter().flat_map(Located::points).collect()
 }
 
-/// [`plane_through`] once the picks are positions.
+/// The plane through points, lines or one flat face, already located.
 pub fn plane_through_located(located: &[Located]) -> Option<Plane> {
     match located {
-        [face @ Located::Face { points, normal }] => face.is_flat().then(|| face_frame(points, *normal)).flatten(),
+        [face @ Located::Face { normal, .. }] => face.is_flat().then(|| face_frame(&face.points(), *normal)).flatten(),
         _ => frame(&framing_points(located)?),
     }
 }
@@ -345,6 +445,7 @@ pub fn draw_square(gizmos: &mut Gizmos, corners: &[Vec3; 4], color: Color) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::prop::refs::{AnyRef, CurveRef};
     use crate::prop::feature::{evaluate, FeatureOp, PropFeature, PropFeatureId};
     use crate::prop::profile::Placement;
     use crate::prop::reference::{Element, GeomRef, Source};
@@ -452,14 +553,16 @@ mod tests {
         let plane = plane_through(&[face(1)], &evaluated).expect("a plane");
         assert!(plane.normal.distance(Vec3::Z) < 1e-6, "{plane:?}");
         assert!((plane.distance(Vec3::ZERO) + 0.1).abs() < 1e-6);
-        assert_eq!(plane_through(&[face(1), face(0)], &evaluated), None, "one face, not two");
+        let between = plane_through(&[face(1), face(0)], &evaluated).expect("two faces make a midplane");
+        assert!(between.normal.dot(Vec3::Z).abs() > 1.0 - 1e-6);
+        assert!(between.distance(Vec3::ZERO).abs() < 1e-6, "halfway between the caps");
     }
 
     /// Fails if a plane feature is resolved against the end of the list: a
     /// mirror below it that takes the original away must not move it.
     #[test]
     fn a_plane_feature_stands_where_its_references_were_when_it_ran() {
-        let plane = PropFeature::new(PropFeatureId(1), FeatureOp::Plane { through: vec![geom_ref(Element::Face(1))] });
+        let plane = PropFeature::new(PropFeatureId(1), through(vec![geom_ref(Element::Face(1))]));
         let mirror = PropFeature::new(
             PropFeatureId(2),
             FeatureOp::Mirror {
@@ -474,7 +577,8 @@ mod tests {
         let datum = evaluated.datum(PlaneRef::Feature(PropFeatureId(1))).expect("a plane");
         assert!(datum.plane.normal.distance(Vec3::Z) < 1e-6);
         assert!((datum.plane.distance(Vec3::ZERO) + 0.1).abs() < 1e-6);
-        assert_eq!(plane_through(&[Pick::Plane(PlaneRef::Feature(PropFeatureId(1)))], &evaluated), Some(datum.plane));
+        let offset = plane_through(&[Pick::Plane(PlaneRef::Feature(PropFeatureId(1)))], &evaluated).unwrap();
+        assert!((offset.distance(datum.plane.origin) + 0.02).abs() < 1e-6, "a lone plane offsets");
         assert!(evaluated.bodies.len() == 1, "a plane is no body");
 
         let before_its_cube = evaluate(&[plane, cube_feature()]);
@@ -489,9 +593,7 @@ mod tests {
         use crate::prop::document::PropDoc;
         let mut doc = PropDoc::new("test");
         let cube = doc.push(cube_feature().op);
-        let plane = doc.push(FeatureOp::Plane {
-            through: vec![GeomRef { element: Element::Face(1), source: Source { feature: cube, copies: vec![] } }],
-        });
+        let plane = doc.push(through(vec![GeomRef { element: Element::Face(1), source: Source { feature: cube, copies: vec![] } }]));
         assert_eq!(doc.dependants(cube), vec![plane]);
         assert!(!doc.move_to(plane, 0));
         assert_eq!(doc.index_of(plane), Some(1));
@@ -502,12 +604,16 @@ mod tests {
         use crate::prop::document::{parse, to_text, PropDoc};
         let mut doc = PropDoc::new("test");
         let cube = doc.push(cube_feature().op);
+        let first = doc.push(through(vec![
+            GeomRef { element: Element::Edge(4), source: Source { feature: cube, copies: vec![] } },
+            GeomRef { element: Element::Point(2), source: Source { feature: cube, copies: vec![] } },
+        ]));
+        let from = PlaneRef::Feature(first);
+        doc.push(FeatureOp::Plane { def: PlaneDef::Offset { distance: 0.05, from } });
         doc.push(FeatureOp::Plane {
-            through: vec![
-                GeomRef { element: Element::Edge(4), source: Source { feature: cube, copies: vec![] } },
-                GeomRef { element: Element::Point(2), source: Source { feature: cube, copies: vec![] } },
-            ],
+            def: PlaneDef::Angle { degrees: 30.0, from, about: CurveRef::Edge { edge: geom_ref(Element::Edge(4)) } },
         });
+        doc.push(FeatureOp::Plane { def: PlaneDef::Midplane { a: from, b: PlaneRef::Origin(OriginPlane::Xy) } });
         let text = to_text(&doc).unwrap();
         assert_eq!(parse(&text).unwrap(), doc, "{text}");
     }
@@ -525,7 +631,7 @@ mod tests {
         for which in OriginPlane::ALL {
             let datum = empty.datum(PlaneRef::Origin(which)).expect("an origin plane");
             assert!(datum.corners.iter().all(|c| datum.plane.distance(*c).abs() < 1e-6));
-            assert_eq!(plane_through(&[Pick::Plane(PlaneRef::Origin(which))], &empty), Some(datum.plane));
+            assert!(plane_through(&[Pick::Plane(PlaneRef::Origin(which))], &empty).is_some());
         }
     }
 
@@ -562,6 +668,35 @@ mod tests {
 
     fn face(index: u32) -> Pick {
         Pick::Geom(geom_ref(Element::Face(index)))
+    }
+
+    /// A plane feature through named geometry.
+    fn through(refs: Vec<GeomRef>) -> FeatureOp {
+        FeatureOp::Plane { def: PlaneDef::Through { through: refs.into_iter().map(AnyRef::of_geom).collect() } }
+    }
+
+    fn plane_through(picks: &[Pick], evaluated: &Evaluated) -> Option<Plane> {
+        picked_plane(picks, evaluated).map(|(plane, _)| plane)
+    }
+
+    #[test]
+    fn offset_angled_and_halfway_planes_follow_what_they_are_made_from() {
+        let cap = PropFeature::new(PropFeatureId(1), through(vec![geom_ref(Element::Face(1))]));
+        let from = PlaneRef::Feature(PropFeatureId(1));
+        let offset = PropFeature::new(PropFeatureId(2), FeatureOp::Plane { def: PlaneDef::Offset { distance: 0.05, from } });
+        // Edge 4 runs along the far cap, so the cap can turn about it.
+        let about = CurveRef::Edge { edge: geom_ref(Element::Edge(4)) };
+        let angled = PropFeature::new(PropFeatureId(3), FeatureOp::Plane { def: PlaneDef::Angle { degrees: 90.0, from, about } });
+        let halfway = PropFeature::new(
+            PropFeatureId(4),
+            FeatureOp::Plane { def: PlaneDef::Midplane { a: from, b: PlaneRef::Origin(OriginPlane::Xy) } },
+        );
+        let evaluated = evaluate(&[cube_feature(), cap, offset, angled, halfway]);
+        assert!(evaluated.problems.is_empty(), "{:?}", evaluated.problems);
+        let plane = |id| evaluated.datum(PlaneRef::Feature(PropFeatureId(id))).unwrap().plane;
+        assert!((plane(2).distance(Vec3::ZERO) + 0.15).abs() < 1e-5, "0.05 past the cap at 0.1");
+        assert!(plane(3).normal.dot(Vec3::Z).abs() < 1e-5, "a quarter turn off the cap");
+        assert!((plane(4).distance(Vec3::ZERO) + 0.05).abs() < 1e-5, "halfway from the cap to XY");
     }
 
     #[test]

@@ -237,15 +237,19 @@ fn frame_on_request(
     frame_all(&mut cameras, &mut saved, &mut pivot, bounds);
 }
 
+/// While a sketch is open the key faces it instead; see `sketch_edit`.
 fn reset_the_hovered_view(
     actions: Res<crate::common::keybind::Actions>,
+    sketching: Option<Res<crate::prop::sketch_edit::SketchSession>>,
     mouse: Res<CurrentMouseInput>,
     build: Res<PropBuild>,
     mut saved: ResMut<MapViewpoints>,
     mut pivot: ResMut<OrbitPivot>,
     mut cameras: Query<(Entity, &mut Transform, &mut Projection, &Camera, &Multicam)>,
 ) {
-    if !actions.just_pressed(crate::common::keybind::Action::ResetView) {
+    if !actions.just_pressed(crate::common::keybind::Action::ResetView)
+        || sketching.is_some_and(|session| session.editing().is_some())
+    {
         return;
     }
     let Some(hovered) = mouse.in_camera else {
