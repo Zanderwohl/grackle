@@ -1461,6 +1461,20 @@ impl PointRef {
         features: &HashMap<FeatureId, Feature>,
         prior_feature_order: &[FeatureId],
         retarget_request: &mut Option<String>,
+        own: Option<OwnBase>,
+    ) -> bool {
+        // Scoped by label: egui's automatic ids count every widget drawn before them, so a
+        // feature's warning appearing above as a value changes would move focus to another field.
+        ui.push_id(("point_ref", label), |ui| self.point_ui(ui, label, features, prior_feature_order, retarget_request, own)).inner
+    }
+
+    fn point_ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        label: &str,
+        features: &HashMap<FeatureId, Feature>,
+        prior_feature_order: &[FeatureId],
+        retarget_request: &mut Option<String>,
         mut own: Option<OwnBase>,
     ) -> bool {
         let mut changed = false;
@@ -1685,7 +1699,8 @@ fn feature_editor_frame<R>(ui: &mut egui::Ui, add_contents: impl FnOnce(&mut egu
 
 fn axis_row(ui: &mut egui::Ui, axis_ref: &mut AxisRef, label: &str, has_ref: bool, base_val: f32) -> bool {
     let mut changed = false;
-    ui.horizontal(|ui| {
+    // Its own id, so the unresolved line above appearing does not move focus between axes.
+    ui.push_id(label, |ui| ui.horizontal(|ui| {
         let mut is_rel = axis_ref.is_relative();
         if ui.add_enabled(has_ref, egui::Checkbox::new(&mut is_rel, "")).changed() {
             if is_rel {
@@ -1702,7 +1717,7 @@ fn axis_row(ui: &mut egui::Ui, axis_ref: &mut AxisRef, label: &str, has_ref: boo
             .clamping(egui::SliderClamping::Never)
             .handle_shape(egui::style::HandleShape::Rect { aspect_ratio: 1.0 })
         ).changed();
-    });
+    }));
     changed
 }
 
