@@ -333,14 +333,8 @@ impl PropDoc {
         let used: Vec<(PropFeatureId, SketchId)> = self
             .features
             .iter()
-            .flat_map(|feature| match &feature.op {
-                FeatureOp::Extrude { sketch, regions, .. }
-                | FeatureOp::Revolve { sketch, regions, .. }
-                | FeatureOp::Sweep { sketch, regions, .. } => {
-                    regions.iter().map(|region| (*sketch, *region)).collect()
-                }
-                _ => vec![],
-            })
+            .flat_map(|feature| feature.op.sketch_regions())
+            .flat_map(|(sketch, regions)| regions.into_iter().map(move |region| (sketch, region)))
             .collect();
         for feature in &mut self.features {
             let id = feature.id;

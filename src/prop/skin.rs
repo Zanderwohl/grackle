@@ -312,6 +312,9 @@ fn shell(
     let s = rings.len();
     let n = rings[0].len();
     let spans = if closed { s } else { s - 1 };
+    // A quad is flat only between two copies of one loop moved apart; a
+    // loft's loops differ.
+    let parallel = |k: usize, next: usize| translates(&frames[k], &frames[next]) && caps[k] == caps[next];
     let mut sides = Vec::new();
     for k in 0..spans {
         // The last ring of a closed run equals the first only to within
@@ -321,7 +324,7 @@ fn shell(
         for i in 0..n {
             let j = (i + 1) % n;
             let face = made(side(k, i));
-            if translates(&frames[k], &frames[next]) {
+            if parallel(k, next) {
                 sides.extend(Polygon::new(vec![head[i], head[j], tail[j], tail[i]], face));
             } else {
                 // A quad with a corner on a revolve's axis has two corners in
@@ -344,7 +347,7 @@ fn shell(
             ends.extend(Polygon::new(vec![first[c], first[b], first[a]], made(start_face)));
         }
     }
-    let all_translate = (0..spans).all(|k| translates(&frames[k], &frames[(k + 1) % s]));
+    let all_translate = (0..spans).all(|k| parallel(k, (k + 1) % s));
     match all_translate {
         true => [ends, sides].concat(),
         false => {

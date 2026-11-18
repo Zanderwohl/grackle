@@ -311,6 +311,13 @@ Each sweep is a way of producing sections:
 - Sections between profiles are interpolated (linearly first; guide curves,
   then a smooth interpolation through the profiles, later). Faces are named by
   the first profile's entities and the span between profiles.
+- As built: `FeatureOp::Loft { closed, profiles: Vec<Profile>, surface }`,
+  each `Profile` a sketch, one region entry and an optional start. Resampling
+  keeps every corner: extra points go one at a time into whichever segment is
+  then longest per piece, rather than evenly by arc length. Holes are matched
+  to the nearest hole on the profile before. `op` and `target` come with
+  stage 8. The skin draws a side as a quad only between two copies of one
+  loop, since a quad between two different loops is not flat.
 
 ## Order of work
 
@@ -403,7 +410,10 @@ this plan; they need stage 4 and adjacency on the result, and get their own.
 - [x] A path whose far end is on the plane is turned round; a closed one starts at its first point on it
 - [ ] The path's start on the profile's plane is reported by the evaluator, not checked as it is picked: a path is often picked from its far end
 - [ ] A sharp corner in a path is not mitred: the profile is squared to the bisector there but not stretched, so it pinches; arcs and curves are unaffected
-- [ ] Loft feature: correspondence by entity, resampling, start alignment, picked start points
+- [x] Loft feature: correspondence by entity, resampling, start alignment, picked start points (`loft.rs`, a `Profiles` slot, a `Point` slot per start)
+- [x] Each profile's frame is turned to face along the loft, so a sketch whose plane faces back lofts the same
+- [ ] A profile is one region; several regions per profile, matched across profiles, are not offered
+- [ ] Sections between profiles are the profiles themselves, so the faces are ruled; a smooth interpolation through three or more profiles is not built
 - [ ] Loft guide curves
 - [ ] Extrude: direction, `UpTo`, `ThroughAll`, two sides, taper
 - [ ] Extrude, Revolve, Sweep and Loft: Join / Cut / Intersect / New body

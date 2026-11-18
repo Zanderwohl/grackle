@@ -20,7 +20,8 @@ use crate::prop::solid::Polygon;
 use crate::prop::datum::{AxisDef, DatumAxis, DatumPoint, PointDef};
 use crate::prop::plane::{Datum, OriginPlane, PlaneDef, PlaneRef, MIN_ORIGIN_HALF};
 use crate::prop::plane::Plane;
-use crate::prop::refs::{AnyRef, CurveRef, DirectionRef, PathRef, Resolve, Scope};
+use crate::prop::loft;
+use crate::prop::refs::{AnyRef, CurveRef, DirectionRef, PathRef, PointRef, Resolve, Scope};
 use crate::prop::slot::{self, Field, Resolved};
 use crate::prop::profile::revolve_steps;
 use crate::prop::region::{arrange, axis_clear, Region};
@@ -144,6 +145,15 @@ pub enum FeatureOp {
         path: PathRef,
         surface: Surface,
     },
+    /// A region of one sketch joined to a region of the next, in order,
+    /// through straight faces.
+    Loft {
+        /// The last profile joins the first, with no caps.
+        #[serde(default)]
+        closed: bool,
+        profiles: Vec<Profile>,
+        surface: Surface,
+    },
     Boolean { op: BooleanOp, target: PropFeatureId, tool: PropFeatureId },
     /// About a plane, as it stood when this runs.
     Mirror {
@@ -174,6 +184,18 @@ pub enum FeatureOp {
     Point { def: PointDef },
     /// A drawing on a plane, which makes no body; see [`crate::prop::sketch`].
     Sketch { on: PlaneRef, sketch: Sketch },
+}
+
+/// One of a loft's profiles.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Profile {
+    pub sketch: PropFeatureId,
+    /// An entry in the sketch's own region list.
+    pub region: SketchId,
+    /// Where the outside loop starts; otherwise it starts lying nearest the
+    /// profile before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start: Option<PointRef>,
 }
 
 /// An enum so that going up to a face or through everything can be added
@@ -261,6 +283,7 @@ impl FeatureOp {
             FeatureOp::Primitive { shape, .. } => shape.name(),
             FeatureOp::Extrude { .. } => get!("prop.features.extrude"),
             FeatureOp::Sweep { .. } => get!("prop.features.sweep"),
+            FeatureOp::Loft { .. } => get!("prop.features.loft"),
             FeatureOp::Revolve { .. } => get!("prop.features.revolve"),
             FeatureOp::Boolean { op, .. } => op.name(),
             FeatureOp::Mirror { .. } => get!("prop.features.mirror"),
@@ -304,6 +327,21 @@ impl FeatureOp {
                 regions(sketch, entries),
                 field("prop.inspector.axis", slot::AXIS, vec![AnyRef::Curve(axis.clone())]),
             ],
+            // The profiles, then each profile's start, drawn beside its
+            // profile rather than as a row of its own.
+            FeatureOp::Loft { profiles, .. } => std::iter::once(field(
+                "prop.inspector.profiles",
+                slot::PROFILES,
+                profiles.iter().map(|p| AnyRef::Regions { sketch: p.sketch, entries: vec![p.region] }).collect(),
+            ))
+            .chain(profiles.iter().map(|p| Field {
+                label: "prop.loft.start",
+                slot: slot::POINT,
+                consumed: false,
+                picked: false,
+                refs: p.start.iter().cloned().map(AnyRef::Point).collect(),
+            }))
+            .collect(),
             FeatureOp::Boolean { target, tool, .. } => vec![
                 body("prop.inspector.target", slot::BODY, target),
                 body("prop.inspector.tool", slot::SECOND_BODY, tool),
@@ -346,6 +384,14 @@ impl FeatureOp {
                 (*sketch, *regions) = (s, entries);
             }
             (FeatureOp::Sweep { path, .. }, 1, Resolved::Path(to)) => *path = to,
+            (FeatureOp::Loft { profiles, .. }, 0, Resolved::Profiles(to)) => {
+                // A profile on a sketch it already had keeps its start.
+                let kept = |sketch| profiles.iter().find(|p| p.sketch == sketch).and_then(|p| p.start.clone());
+                *profiles = to.into_iter().map(|(sketch, region)| Profile { sketch, region, start: kept(sketch) }).collect();
+            }
+            (FeatureOp::Loft { profiles, .. }, at, Resolved::Point(to)) if at >= 1 && at <= profiles.len() => {
+                profiles[at - 1].start = Some(to);
+            }
             (FeatureOp::Revolve { axis, .. }, 1, Resolved::Curve(curve)) => *axis = curve,
             (
                 FeatureOp::Boolean { target, .. }
@@ -409,6 +455,7 @@ impl FeatureOp {
             FeatureOp::Extrude { .. }
             | FeatureOp::Revolve { .. }
             | FeatureOp::Sweep { .. }
+            | FeatureOp::Loft { .. }
             | FeatureOp::Boolean { .. }
             | FeatureOp::Mirror { .. }
             | FeatureOp::Paint { .. }
@@ -417,6 +464,17 @@ impl FeatureOp {
             | FeatureOp::Axis { .. }
             | FeatureOp::Point { .. }
             | FeatureOp::Sketch { .. } => None,
+        }
+    }
+
+    /// Each sketch the feature sweeps regions of, and the entries it names.
+    pub fn sketch_regions(&self) -> Vec<(PropFeatureId, Vec<SketchId>)> {
+        match self {
+            FeatureOp::Extrude { sketch, regions, .. }
+            | FeatureOp::Revolve { sketch, regions, .. }
+            | FeatureOp::Sweep { sketch, regions, .. } => vec![(*sketch, regions.clone())],
+            FeatureOp::Loft { profiles, .. } => profiles.iter().map(|p| (p.sketch, vec![p.region])).collect(),
+            _ => vec![],
         }
     }
 
@@ -759,15 +817,7 @@ fn sweep(
     let mut outline = Outline::default();
     let mut solid: Option<Solid> = None;
     for region in regions {
-        // Tagged by entity, so an arc's many pieces sweep one face.
-        let tagged = |points: &Vec<Vec2>, entities: &Vec<SketchId>| TaggedLoop {
-            points: local(points),
-            tags: entities.iter().map(|entity| entity.0).collect(),
-        };
-        let loops = std::iter::once(tagged(&region.outer, &region.outer_entities))
-            .chain(region.holes.iter().zip(&region.hole_entities).map(|(hole, entities)| tagged(hole, entities)))
-            .collect();
-        let swept = skin(&run_of(loops), surface).map_err(SkinProblem::message)?;
+        let swept = skin(&run_of(tagged_loops(region, &local)), surface).map_err(SkinProblem::message)?;
         let piece = places.iter().fold(swept.solid, |solid, place| solid.transformed(*place));
         solid = Some(match solid {
             Some(joined) => joined.union(&piece),
@@ -779,6 +829,18 @@ fn sweep(
         Some(solid) if !solid.is_empty() => Ok((solid, outline)),
         _ => Err(get!("prop.problems.empty_sweep")),
     }
+}
+
+/// The outside loop then the holes, each segment tagged by its entity so an
+/// arc's many pieces sweep one face.
+fn tagged_loops(region: &Region, local: impl Fn(&[Vec2]) -> Vec<Vec2>) -> Vec<TaggedLoop> {
+    let tagged = |points: &Vec<Vec2>, entities: &Vec<SketchId>| TaggedLoop {
+        points: local(points),
+        tags: entities.iter().map(|entity| entity.0).collect(),
+    };
+    std::iter::once(tagged(&region.outer, &region.outer_entities))
+        .chain(region.holes.iter().zip(&region.hole_entities).map(|(hole, entities)| tagged(hole, entities)))
+        .collect()
 }
 
 /// Every region a sweep names, as the sketch now stands, or a Problem naming
@@ -907,6 +969,41 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
                 };
                 match sweep(&found, run, |points| points.to_vec(), &[], *surface) {
                     Ok((solid, outline)) => live.push(made(solid, outline, &mut faces)),
+                    Err(message) => problems.push(Problem { feature: feature.id, message }),
+                }
+            }
+            FeatureOp::Loft { closed, profiles, surface } => {
+                let mut placed_profiles = Vec::with_capacity(profiles.len());
+                for profile in profiles {
+                    let Some(placed) = sketches.iter().find(|placed: &&PlacedSketch| placed.id == profile.sketch) else {
+                        problems.push(Problem { feature: feature.id, message: get!("prop.problems.missing_sketch") });
+                        break;
+                    };
+                    let Some(found) = resolve_regions(feature.id, placed, &[profile.region], &mut problems) else { break };
+                    // A start that no longer resolves is reported and the
+                    // nearest turn used in its place.
+                    let start = profile.start.as_ref().and_then(|start| {
+                        let at = start.resolve(&scope);
+                        if at.is_none() {
+                            problems.push(Problem { feature: feature.id, message: get!("prop.problems.loft_start_missing") });
+                        }
+                        at
+                    });
+                    placed_profiles.push(loft::Profile {
+                        frame: placed.plane.transform().compute_affine(),
+                        loops: tagged_loops(&found[0], |points| points.to_vec()),
+                        start,
+                    });
+                }
+                if placed_profiles.len() < profiles.len() {
+                    continue;
+                }
+                let swept = loft::run(placed_profiles, *closed)
+                    .map_err(|problem| problem.message())
+                    .and_then(|run| skin(&run, *surface).map_err(SkinProblem::message));
+                match swept {
+                    Ok(swept) if !swept.solid.is_empty() => live.push(made(swept.solid, swept.outline, &mut faces)),
+                    Ok(_) => problems.push(Problem { feature: feature.id, message: get!("prop.problems.empty_sweep") }),
                     Err(message) => problems.push(Problem { feature: feature.id, message }),
                 }
             }
@@ -1131,6 +1228,14 @@ mod tests {
                 axis: CurveRef::Datum { feature: id(102) },
                 surface,
             },
+            FeatureOp::Loft {
+                closed: false,
+                profiles: vec![
+                    Profile { sketch: id(134), region: SketchId(1), start: None },
+                    Profile { sketch: id(135), region: SketchId(2), start: Some(PointRef::Datum { feature: id(136) }) },
+                ],
+                surface,
+            },
             FeatureOp::Boolean { op: BooleanOp::Subtract, target: id(103), tool: id(104) },
             FeatureOp::Mirror { target: id(105), offset: 0.0, keep_original: true, about: PlaneRef::Feature(id(106)) },
             FeatureOp::Paint { target: id(107), surface },
@@ -1201,12 +1306,23 @@ mod tests {
             for (index, field) in op.fields().iter().enumerate() {
                 let value = match (field.slot.kind, &field.refs[..]) {
                     (Kind::Construct(_), _) => Resolved::Op(op.clone()),
+                    (Kind::Profiles, refs) => Resolved::Profiles(
+                        refs.iter()
+                            .map(|r| match r {
+                                AnyRef::Regions { sketch, entries } => (*sketch, entries[0]),
+                                other => panic!("a profile is a region, not {other:?}"),
+                            })
+                            .collect(),
+                    ),
                     (_, [AnyRef::Body { body }]) => Resolved::Body(*body),
                     (_, [AnyRef::Regions { sketch, entries }]) => Resolved::Regions { sketch: *sketch, entries: entries.clone() },
                     (_, [AnyRef::Curve(curve)]) => Resolved::Curve(curve.clone()),
                     (_, [AnyRef::Direction(direction)]) => Resolved::Direction(direction.clone()),
                     (_, [AnyRef::Plane(on)]) => Resolved::Plane(*on),
                     (_, [AnyRef::Path(path)]) => Resolved::Path(path.clone()),
+                    (_, [AnyRef::Point(point)]) => Resolved::Point(point.clone()),
+                    // An unset loft start is not a value to write back.
+                    (Kind::Point, []) => continue,
                     other => panic!("field {index} of {op:?} holds {other:?}"),
                 };
                 let mut written = op.clone();
@@ -2025,6 +2141,192 @@ mod tests {
                 symmetric: true,
                 surface: Surface::default(),
                 regions,
+            });
+            let text = to_text(&doc).unwrap();
+            assert_eq!(parse(&text).unwrap(), doc, "{text}");
+        }
+    }
+
+    mod loft {
+        use super::super::*;
+        use super::extrude::{adopt, every};
+        use crate::prop::document::{parse, to_text, PropDoc};
+        use crate::prop::plane::OriginPlane;
+        use crate::prop::region::arrange;
+        use crate::prop::sketch::Sketch;
+
+        /// Squares centered on the origin, the first the outside and the
+        /// rest inside it.
+        fn squares(widths: &[f32]) -> Sketch {
+            let mut sketch = Sketch::default();
+            for side in widths {
+                let h = side / 2.0;
+                let corners: Vec<SketchId> =
+                    [[-h, -h], [h, -h], [h, h], [-h, h]].iter().map(|at| sketch.add_point(Vec2::from_array(*at))).collect();
+                for i in 0..4 {
+                    sketch.add_line(corners[i], corners[(i + 1) % 4]);
+                }
+            }
+            sketch
+        }
+
+        /// A region of `near` on the XY plane lofted to one of `far` on the
+        /// plane `height` along its normal; `region` chooses which region.
+        fn lofted(near: Sketch, far: Sketch, height: f32, region: impl Fn(&Sketch) -> usize) -> Evaluated {
+            let mut sketches = [near, far];
+            let entries: Vec<SketchId> = sketches
+                .iter_mut()
+                .map(|sketch| {
+                    let names = every(&arrange(sketch).regions);
+                    let at = region(sketch);
+                    adopt(sketch, vec![names[at].clone()])[0]
+                })
+                .collect();
+            let [near, far] = sketches;
+            evaluate(&[
+                PropFeature::new(PropFeatureId(0), FeatureOp::Sketch { on: PlaneRef::Origin(OriginPlane::Xy), sketch: near }),
+                PropFeature::new(
+                    PropFeatureId(1),
+                    FeatureOp::Plane { def: PlaneDef::Offset { distance: height, from: PlaneRef::Origin(OriginPlane::Xy) } },
+                ),
+                PropFeature::new(PropFeatureId(2), FeatureOp::Sketch { on: PlaneRef::Feature(PropFeatureId(1)), sketch: far }),
+                PropFeature::new(
+                    PropFeatureId(3),
+                    FeatureOp::Loft {
+                        closed: false,
+                        profiles: vec![
+                            Profile { sketch: PropFeatureId(0), region: entries[0], start: None },
+                            Profile { sketch: PropFeatureId(2), region: entries[1], start: None },
+                        ],
+                        surface: Surface::default(),
+                    },
+                ),
+            ])
+        }
+
+        fn frustum(a: f32, b: f32, h: f32) -> f32 {
+            h / 3.0 * (a * a + b * b + a * b)
+        }
+
+        #[test]
+        fn two_squares_loft_to_a_frustum() {
+            let evaluated = lofted(squares(&[0.06]), squares(&[0.02]), 0.1, |_| 0);
+            assert!(evaluated.problems.is_empty(), "{:?}", evaluated.problems);
+            let volume = evaluated.bodies[0].1.volume();
+            let expected = frustum(0.06, 0.02, 0.1);
+            assert!((volume - expected).abs() < expected * 1e-4, "{volume} against {expected}");
+            assert_eq!(evaluated.wires[0].1[0].outline.faces.len(), 6, "two caps and a side per line");
+        }
+
+        /// The far plane's normal points back at the first, so its frame is
+        /// turned round before the skin sees it.
+        #[test]
+        fn a_profile_below_the_first_lofts_the_same() {
+            let evaluated = lofted(squares(&[0.06]), squares(&[0.02]), -0.1, |_| 0);
+            assert!(evaluated.problems.is_empty(), "{:?}", evaluated.problems);
+            let volume = evaluated.bodies[0].1.volume();
+            let expected = frustum(0.06, 0.02, 0.1);
+            assert!((volume - expected).abs() < expected * 1e-4, "{volume} against {expected}");
+        }
+
+        #[test]
+        fn a_square_lofts_to_a_circle() {
+            let mut far = Sketch::default();
+            let center = far.add_point(Vec2::ZERO);
+            far.add_circle(center, 0.02);
+            let evaluated = lofted(squares(&[0.06]), far, 0.1, |_| 0);
+            assert!(evaluated.problems.is_empty(), "{:?}", evaluated.problems);
+            let volume = evaluated.bodies[0].1.volume();
+            let (low, high) = (frustum(0.04, 0.04, 0.1), frustum(0.06, 0.04, 0.1));
+            assert!(volume > low && volume < high, "{volume} not within {low}..{high}");
+            assert_eq!(evaluated.wires[0].1[0].outline.faces.len(), 6, "faces are named by the first profile's lines");
+        }
+
+        #[test]
+        fn holes_loft_with_their_profiles() {
+            // The region between the two squares, not the hole's own.
+            let ring = |sketch: &Sketch| {
+                arrange(sketch).regions.iter().position(|region| !region.holes.is_empty()).expect("a region with a hole")
+            };
+            let evaluated = lofted(squares(&[0.06, 0.02]), squares(&[0.04, 0.01]), 0.1, ring);
+            assert!(evaluated.problems.is_empty(), "{:?}", evaluated.problems);
+            let volume = evaluated.bodies[0].1.volume();
+            let expected = frustum(0.06, 0.04, 0.1) - frustum(0.02, 0.01, 0.1);
+            assert!((volume - expected).abs() < expected * 1e-3, "{volume} against {expected}");
+        }
+
+        /// Three squares a third of a turn apart about the Y axis, joined
+        /// round: a ring of three straight pieces with no caps. A plane
+        /// turned about an axis keeps that axis as its own `x`, so the
+        /// squares stand off it along `y`.
+        #[test]
+        fn a_closed_loft_joins_its_last_profile_to_its_first() {
+            let mut features = Vec::new();
+            let mut profiles = Vec::new();
+            for (i, degrees) in [0.0f32, 120.0, 240.0].into_iter().enumerate() {
+                let (plane, sketch) = (PropFeatureId(2 * i as u32), PropFeatureId(2 * i as u32 + 1));
+                features.push(PropFeature::new(
+                    plane,
+                    FeatureOp::Plane {
+                        def: PlaneDef::Angle {
+                            degrees,
+                            from: PlaneRef::Origin(OriginPlane::Xy),
+                            about: CurveRef::Axis { axis: Axis::Y },
+                        },
+                    },
+                ));
+                let mut drawn = Sketch::default();
+                let corners: Vec<SketchId> = [[-0.02, 0.08], [0.02, 0.08], [0.02, 0.12], [-0.02, 0.12]]
+                    .iter()
+                    .map(|at| drawn.add_point(Vec2::from_array(*at)))
+                    .collect();
+                for k in 0..4 {
+                    drawn.add_line(corners[k], corners[(k + 1) % 4]);
+                }
+                let names = every(&arrange(&drawn).regions);
+                let region = adopt(&mut drawn, names)[0];
+                features.push(PropFeature::new(sketch, FeatureOp::Sketch { on: PlaneRef::Feature(plane), sketch: drawn }));
+                profiles.push(Profile { sketch, region, start: None });
+            }
+            features.push(PropFeature::new(PropFeatureId(6), FeatureOp::Loft { closed: true, profiles, surface: Surface::default() }));
+            let evaluated = evaluate(&features);
+            assert!(evaluated.problems.is_empty(), "{:?}", evaluated.problems);
+            assert!(evaluated.bodies[0].1.volume() > 0.0);
+            assert_eq!(evaluated.wires[0].1[0].outline.faces.len(), 12, "four sides on each of three spans");
+        }
+
+        #[test]
+        fn one_profile_is_a_problem() {
+            let mut sketch = squares(&[0.06]);
+            let names = every(&arrange(&sketch).regions);
+            let region = adopt(&mut sketch, names)[0];
+            let evaluated = evaluate(&[
+                PropFeature::new(PropFeatureId(0), FeatureOp::Sketch { on: PlaneRef::Origin(OriginPlane::Xy), sketch }),
+                PropFeature::new(
+                    PropFeatureId(1),
+                    FeatureOp::Loft {
+                        closed: false,
+                        profiles: vec![Profile { sketch: PropFeatureId(0), region, start: None }],
+                        surface: Surface::default(),
+                    },
+                ),
+            ]);
+            assert!(evaluated.bodies.is_empty());
+            assert_eq!(evaluated.problems.len(), 1);
+        }
+
+        #[test]
+        fn a_loft_survives_the_file() {
+            let mut doc = PropDoc::new("test");
+            let near = doc.push(FeatureOp::Sketch { on: PlaneRef::Origin(OriginPlane::Xy), sketch: squares(&[0.06]) });
+            let far = doc.push(FeatureOp::Sketch { on: PlaneRef::Origin(OriginPlane::Xy), sketch: squares(&[0.02]) });
+            doc.push(FeatureOp::Loft {
+                closed: true,
+                profiles: vec![
+                    Profile { sketch: near, region: SketchId(5), start: None },
+                    Profile { sketch: far, region: SketchId(6), start: Some(PointRef::Sketch { sketch: far, point: SketchId(1) }) },
+                ],
+                surface: Surface::default(),
             });
             let text = to_text(&doc).unwrap();
             assert_eq!(parse(&text).unwrap(), doc, "{text}");

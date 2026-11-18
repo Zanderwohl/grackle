@@ -1118,7 +1118,14 @@ by **Chain** along everything that continues without a corner — placing the
 profile at frames from [`path.rs`](src/prop/path.rs): rotation-minimizing by
 double reflection, Frenet, or fixed, with a twist and an end scale by
 distance, a closed path's leftover turn spread along it. Its faces are named
-per path curve and profile entity. Its polygons come out in the order the old extrude and revolve used,
+per path curve and profile entity. A **Loft** joins one region per sketch, in
+pick order, through straight faces ([`loft.rs`](src/prop/loft.rs)): each
+frame is turned to face along the loft, loops are matched entity to entity
+when every profile has as many, and otherwise cut to the largest point count
+with the extra points in the longest segments, so corners stay; each loop
+starts at a picked point or the turn nearest the profile before. Faces are
+named by the first profile's entities and the span. The skin draws a side as
+a quad only between two copies of one loop. Its polygons come out in the order the old extrude and revolve used,
 because the BSP picks splitting planes in polygon order: moving onto it left
 every shipped prop's volume and triangle count unchanged.
 

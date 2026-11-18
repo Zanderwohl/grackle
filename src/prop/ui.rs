@@ -891,7 +891,7 @@ fn toolbar(
             surface: Surface::default(),
         });
     }
-    tool_family(ui, "prop_sweep", &[Tool::Extrude, Tool::Revolve, Tool::Sweep], active, requests);
+    tool_family(ui, "prop_sweep", &[Tool::Extrude, Tool::Revolve, Tool::Sweep, Tool::Loft], active, requests);
 
     ui.separator();
 
@@ -1298,16 +1298,8 @@ fn inspector(
                 .into_iter()
                 .filter_map(|id| {
                     let feature = editor.doc().feature(id)?;
-                    match &feature.op {
-                        FeatureOp::Extrude { sketch: on, regions, .. }
-                        | FeatureOp::Revolve { sketch: on, regions, .. }
-                        | FeatureOp::Sweep { sketch: on, regions, .. }
-                            if *on == sketch =>
-                        {
-                            Some((id, feature.name.clone(), regions.clone()))
-                        }
-                        _ => None,
-                    }
+                    let (_, regions) = feature.op.sketch_regions().into_iter().find(|(on, _)| *on == sketch)?;
+                    Some((id, feature.name.clone(), regions))
                 })
                 .collect();
             let mut action = None;
@@ -1569,9 +1561,36 @@ fn feature_inspector(
     let Some(mut edited) = editor.doc().feature(selected).cloned() else { return };
     // Every field picked in the viewport, labeled before the document is
     // borrowed: its label, what it names now, and its index for a re-pick.
-    let any_label = |reference: &AnyRef| match Pick::of_any(reference) {
-        Some(pick) => pick_label(editor, build, &pick),
-        None => get!("prop.picks.origin"),
+    let region_label = |sketch: PropFeatureId, region: SketchId| {
+        let label = build
+            .evaluated
+            .sketch(sketch)
+            .and_then(|placed| placed.sketch.region(region))
+            .map(|entry| entry.label.clone())
+            .filter(|label| !label.is_empty())
+            .unwrap_or_else(|| get!("prop.sketch.region_label", "id", region));
+        format!("{} {}", pick_label(editor, build, &Pick::Body(sketch)), label)
+    };
+    let any_label = |reference: &AnyRef| match (reference, Pick::of_any(reference)) {
+        (AnyRef::Regions { sketch, entries }, _) => {
+            entries.iter().map(|region| region_label(*sketch, *region)).collect::<Vec<_>>().join(", ")
+        }
+        (_, Some(pick)) => pick_label(editor, build, &pick),
+        (_, None) => get!("prop.picks.origin"),
+    };
+    // Each loft profile's name, and what its start is.
+    let profile_rows: Vec<(String, String)> = match &edited.op {
+        FeatureOp::Loft { profiles, .. } => profiles
+            .iter()
+            .map(|profile| {
+                let start = match &profile.start {
+                    Some(point) => any_label(&AnyRef::Point(point.clone())),
+                    None => get!("prop.loft.nearest"),
+                };
+                (region_label(profile.sketch, profile.region), start)
+            })
+            .collect(),
+        _ => vec![],
     };
     let rows: Vec<(String, String, usize)> = edited
         .op
@@ -1648,6 +1667,24 @@ fn feature_inspector(
                     changed |= drag(ui, get!("prop.sweep.twist"), twist, 1.0, "°");
                     changed |= drag(ui, get!("prop.sweep.scale"), scale, 0.01, "×");
                     *scale = scale.max(0.01);
+                });
+                section(ui, "material", get!("prop.inspector.sections.material"), |ui| {
+                    changed |= surface_ui(ui, surface);
+                });
+            }
+            FeatureOp::Loft { closed, profiles, surface } => {
+                section(ui, "profiles", get!("prop.inspector.sections.profiles"), |ui| {
+                    for (index, ((name, start), profile)) in profile_rows.iter().zip(profiles.iter_mut()).enumerate() {
+                        ui.label(egui::RichText::new(format!("{}. {name}", index + 1)).strong());
+                        ui.indent(("loft_profile", index), |ui| {
+                            reference_row(ui, get!("prop.loft.start"), start.clone(), selected, index + 1, tool, requests);
+                            if profile.start.is_some() && ui.small_button(get!("prop.loft.clear_start")).clicked() {
+                                profile.start = None;
+                                changed = true;
+                            }
+                        });
+                    }
+                    changed |= ui.checkbox(closed, get!("prop.loft.closed")).changed();
                 });
                 section(ui, "material", get!("prop.inspector.sections.material"), |ui| {
                     changed |= surface_ui(ui, surface);

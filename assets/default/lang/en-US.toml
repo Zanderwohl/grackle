@@ -1156,6 +1156,7 @@ sketch = "Sketch"
 extrude = "Extrude"
 revolve = "Revolve"
 sweep = "Sweep"
+loft = "Loft"
 mirror = "Mirror"
 paint = "Repaint"
 pattern = "Pattern"
@@ -1179,6 +1180,9 @@ through = "Pick points, lines, a face or planes"
 axis_from = "Pick two points, two planes, or a plane and a point"
 point_from = "Pick a line, or a line and a plane"
 path = "Pick curves end to end"
+profile = "Pick a region on each of two or more sketches"
+more_profiles = "Pick more profiles, or Done"
+point = "Pick a point"
 more = "Pick more, or Done"
 
 [prop.lines]
@@ -1239,6 +1243,7 @@ made = "Made"
 made_from = "From"
 path = "Path"
 regions_field = "Regions"
+profiles = "Profiles"
 repick = "Pick"
 missing = "missing { id }"
 
@@ -1262,6 +1267,7 @@ operands = "Operands"
 mirror = "Mirror plane"
 pattern = "Pattern"
 swept_regions = "Regions"
+profiles = "Profiles"
 
 [prop.sweep]
 orient = "Turns"
@@ -1270,6 +1276,12 @@ frenet = "With the curve"
 fixed = "Never"
 twist = "Twist"
 scale = "End scale"
+
+[prop.loft]
+start = "Starts at"
+nearest = "Nearest turn"
+clear_start = "Clear"
+closed = "Closed"
 
 [prop.planes]
 xy = "XY plane"
@@ -1364,6 +1376,10 @@ missing_path = "names a path that is not there"
 path_off_plane = "has a path that does not start on its sketch's plane"
 path_too_short = "has a path too short to sweep along"
 path_straight = "follows the curvature of a path with a straight stretch"
+loft_too_few = "lofts fewer profiles than it needs"
+loft_holes = "lofts profiles with different numbers of holes"
+loft_coincident = "lofts two profiles centered on one point"
+loft_start_missing = "starts a profile at a point that is not there"
 
 [editor.picker]
 search = "Search"

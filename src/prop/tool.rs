@@ -12,7 +12,7 @@
 use crate::get;
 use crate::prop::construct::Making;
 use crate::prop::document::{Pick, PropDoc, PropEditor};
-use crate::prop::feature::{BooleanOp, End, Evaluated, FeatureOp, PatternKind, PropFeatureId};
+use crate::prop::feature::{BooleanOp, End, Evaluated, FeatureOp, PatternKind, Profile, PropFeatureId};
 use crate::prop::path::Orient;
 use crate::prop::refs::{Curve3, PathRef, Resolve, JOINS};
 use crate::prop::sketch::Sketch;
@@ -26,6 +26,7 @@ pub enum Tool {
     Extrude,
     Revolve,
     Sweep,
+    Loft,
     Combine(BooleanOp),
     Mirror,
     LinearPattern,
@@ -64,6 +65,7 @@ pub const TOOLS: &[ToolSpec] = &[
         build: revolve,
     },
     ToolSpec { tool: Tool::Sweep, name: "prop.features.sweep", icon: "square_along_path", slots: &[slot::REGIONS, slot::PATH], build: along },
+    ToolSpec { tool: Tool::Loft, name: "prop.features.loft", icon: "square_joined_to_circle", slots: &[slot::PROFILES], build: loft },
     ToolSpec {
         tool: Tool::Combine(BooleanOp::Union),
         name: "prop.boolean.union",
@@ -136,6 +138,12 @@ fn along(values: Vec<Resolved>) -> Option<FeatureOp> {
         path,
         surface: Surface::default(),
     })
+}
+
+fn loft(values: Vec<Resolved>) -> Option<FeatureOp> {
+    let [Resolved::Profiles(profiles)] = <[_; 1]>::try_from(values).ok()? else { return None };
+    let profiles = profiles.into_iter().map(|(sketch, region)| Profile { sketch, region, start: None }).collect();
+    Some(FeatureOp::Loft { closed: false, profiles, surface: Surface::default() })
 }
 
 fn combine(op: BooleanOp, values: Vec<Resolved>) -> Option<FeatureOp> {
@@ -287,6 +295,7 @@ pub fn prompt(task: Task, filled: &Filled, doc: &PropDoc, evaluated: &Evaluated)
     match first {
         Some((slot, _)) => get!(slot.prompt),
         None if matches!(slots.last(), Some(Slot { kind: slot::Kind::Regions, .. })) => get!("prop.tool.pick.more_regions"),
+        None if matches!(slots.last(), Some(Slot { kind: slot::Kind::Profiles, .. })) => get!("prop.tool.pick.more_profiles"),
         None => get!("prop.tool.pick.more"),
     }
 }

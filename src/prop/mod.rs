@@ -54,6 +54,7 @@ pub mod feature;
 pub mod figure;
 pub mod gizmo;
 pub mod hold;
+pub mod loft;
 pub mod nice_f32;
 pub mod picker;
 pub mod plane;
