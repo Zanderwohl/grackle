@@ -197,6 +197,7 @@ actions! {
     Humiliate => "humiliate", Play, false, true;
     Suicide => "suicide", Play, false, true;
     Explode => "explode", Play, false, true;
+    Ignite => "ignite", Play, false, true;
     NavOverlay => "nav_overlay", Play, false, true;
     BotRoutes => "bot_routes", Play, false, true;
     SafeZone => "safe_zone", Play, false, true;

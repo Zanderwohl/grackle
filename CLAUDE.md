@@ -776,7 +776,7 @@ follows, so it should claim `weapon` and leave the arms that hold it unclaimed.
 **Nobody switches weapons while taunting** (`Condition::may_switch_weapons`):
 `select_weapons` drops the request, the selector stays shut, and a weapon
 picked up mid-taunt is carried but not drawn. **`O`** is
-suicide and **`P`** the same death blown apart through the torso (`BlownApart::Torso`) by a rocket-sized blast there, which hurts whoever is near, **`T`** puts your spray on the surface you look at within 2 m, or moves it there (see "Decals"), 1000 damage credited to yourself, a debug key for the death cam; nobody
+suicide and **`P`** the same death blown apart through the torso (`BlownApart::Torso`) by a rocket-sized blast there, which hurts whoever is near, **`T`** puts your spray on the surface you look at within 2 m, or moves it there (see "Decals"), 1000 damage credited to yourself, a debug key for the death cam; **Ignite self**, unbound by default, sets you alight with the flamethrower's afterburn, credited to yourself; nobody
 crouches while taunting; each taunt states what it claims, whether it
 shows the weapon, how far you can move, and how far your body (never the
 camera) can turn, and optionally a `view`: degrees left of the body's facing
@@ -3033,7 +3033,10 @@ viewmodel's in first person). Each flies straight down the cone for three
 quarters of its range, or to a quarter short of a wall, then brakes to a
 stop at the end of the range while it rises and fades. A body `OnFire` has
 an emitter of the same flames rising from inside its hull, drawn in first
-person too, since the glow is faint. Each corpse or gib of a body that died burning is
+person too, since the glow is faint. While the body we see out of is `OnFire`, 2D flames from the same sheet rise
+up the HUD: quick ones in the strips left and right of the safe zone, tallest at the window's
+edges, and bigger, fainter ones along the whole bottom, which the safe zone pushes aside
+([`src/game/hud_fire.rs`](src/game/hud_fire.rs)). Each corpse or gib of a body that died burning is
 marked `DiedBurning` (`raise_ragdolls`, replicated once) and smolders for as
 long as it lies there: half the afterburn's flames, a third the size, rising
 a sixth as fast and lasting twice as long, started in the middle half of the box

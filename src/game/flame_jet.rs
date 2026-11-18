@@ -134,8 +134,12 @@ const FLICKER_RATE: f32 = 14.0;
 /// Shapes a second a flame steps through its sheet.
 const SHAPE_RATE: f32 = 10.0;
 
-const FLAME_GRID: UVec2 = UVec2::new(4, 2);
-const FLAME_TEXELS: u32 = 96;
+pub(crate) const FLAME_GRID: UVec2 = UVec2::new(4, 2);
+pub(crate) const FLAME_TEXELS: u32 = 96;
+
+/// The sheet of [`flame_sheet`] shapes, for anything else drawing flames.
+#[derive(Resource)]
+pub(crate) struct FlameSheet(pub Handle<Image>);
 
 #[derive(Resource)]
 struct FlameLook {
@@ -408,11 +412,13 @@ pub(crate) fn sheet_image_as(rgba: Vec<u8>, width: u32, height: u32, format: bev
 }
 
 fn make_the_look(mut commands: Commands, mut effects: ResMut<Assets<EffectAsset>>, mut images: ResMut<Assets<Image>>) {
+    let sheet = images.add(sheet_image(flame_sheet(FLAME_TEXELS), FLAME_GRID.x * FLAME_TEXELS, FLAME_GRID.y * FLAME_TEXELS));
+    commands.insert_resource(FlameSheet(sheet.clone()));
     commands.insert_resource(FlameLook {
         effect: effects.add(flame_effect("flame_jet", RATE, CAPACITY, RISE_SECONDS)),
         afterburn: effects.add(flame_effect("afterburn", AFTERBURN_RATE, AFTERBURN_CAPACITY, RISE_SECONDS)),
         corpse: effects.add(flame_effect("corpse_fire", CORPSE_RATE, CORPSE_CAPACITY, CORPSE_RISE_SECONDS)),
-        sheet: images.add(sheet_image(flame_sheet(FLAME_TEXELS), FLAME_GRID.x * FLAME_TEXELS, FLAME_GRID.y * FLAME_TEXELS)),
+        sheet,
     });
 }
 
