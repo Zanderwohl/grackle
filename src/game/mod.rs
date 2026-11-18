@@ -88,6 +88,8 @@ pub mod spray;
 pub mod streak;
 pub mod beam;
 pub mod tab_board;
+pub mod class_choice;
+pub mod class_picker;
 pub mod team_choice;
 pub mod team_picker;
 pub mod trigger;
@@ -113,6 +115,7 @@ impl Plugin for GamePlugin {
             .add_plugins(crate::game::rounds::RoundHistoryPlugin)
             .add_plugins(crate::game::telemetry::TelemetryPlugin)
             .add_plugins(crate::game::tab_board::TabBoardPlugin)
+            .add_plugins((crate::game::class_choice::ClassChoicePlugin, crate::game::class_picker::ClassPickerPlugin))
             .add_plugins((crate::game::team_choice::TeamChoicePlugin, crate::game::team_picker::TeamPickerPlugin, crate::game::spectate::SpectatePlugin, crate::game::kill_cam::KillCamPlugin))
             .add_plugins(crate::game::damage_direction::DamageDirectionPlugin)
             .add_plugins(crate::game::name_tag::NameTagPlugin)
@@ -404,6 +407,11 @@ mod tests {
         // Bodies are handed out by `NetBodiesPlugin`.
         app.insert_resource(crate::common::net::NetRole::Solo);
         app.add_plugins(crate::game::net_bodies::NetBodiesPlugin);
+        // One class, so nobody is asked for one before their body.
+        app.insert_resource(crate::common::game_rules::GameRules(crate::common::game_rules::ModeRules {
+            classes: vec![crate::common::class::Class::Mercenary],
+            ..default()
+        }));
         app.world_mut().resource_mut::<Time<Virtual>>().pause();
 
         for room in rooms {
@@ -1292,6 +1300,7 @@ mod tests {
             let mut app = armed(&open);
             app.insert_resource(crate::common::game_rules::GameRules(crate::common::game_rules::ModeRules {
                 self_damage,
+                classes: vec![crate::common::class::Class::Mercenary],
                 ..default()
             }));
             enter(&mut app);
@@ -1745,12 +1754,14 @@ mod tests {
                 id: crate::common::damage::PlayerId(99),
                 seat: crate::game::respawn::Seat::Playing(Some(Team::Red)),
                 color: 1,
+                class: None,
             };
             spawn_player(
                 &mut commands,
                 spawn,
                 &who,
                 who.color(&crate::game::respawn::HueStart(0.0)),
+                crate::common::class::Class::Mercenary,
                 &crate::common::game_rules::ModeRules::default(),
                 &crate::common::weapon::WeaponCatalog::default(),
             );

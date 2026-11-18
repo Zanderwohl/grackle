@@ -8,7 +8,7 @@
 //! Turns are [`Turn`]s about the body's axes: `yaw` positive to the left, `pitch` positive tipping
 //! an upright bone back.
 
-use std::f32::consts::PI;
+use std::f32::consts::{PI, TAU};
 
 use bevy::prelude::*;
 
@@ -22,6 +22,56 @@ use super::state::PoseInputs;
 /// since a taunt's length is read off its humanoid clip.
 pub const TAUNT_SHADOWBOX: &str = "taunt_shadowbox";
 pub const SHADOWBOX_LENGTH: f32 = 2.2;
+
+/// The wave's file name, and its length in seconds. The raptor's wag is as long.
+pub const TAUNT_WAVE: &str = "taunt_wave";
+pub const WAVE_LENGTH: f32 = 2.0;
+
+/// 0 with the hand hanging, 1 with it up by the head: it swings up past where it settles and back,
+/// and comes down after the last sweep.
+const WAVE_RAISE: &[(f32, f32)] = &[(0.0, 0.0), (0.08, 0.0), (0.42, 1.08), (0.58, 1.0), (1.45, 1.0), (1.88, 0.0), (2.0, 0.0)];
+/// How wide the sweeps are, 0 to 1: they open while the arm comes up and close before it comes down.
+const WAVING: &[(f32, f32)] = &[(0.0, 0.0), (0.25, 0.0), (0.55, 1.0), (1.3, 1.0), (1.6, 0.0), (2.0, 0.0)];
+/// Sweeps per second, and the second the first one passes the middle going out.
+const WAVE_RATE: f32 = 2.6;
+const WAVE_START: f32 = 0.3;
+
+/// Where the wrist sweeps between, from between the shoulders in arm-lengths in the chest's axes:
+/// in by the head and out past the shoulder. It dips at either end, as a forearm turning at the
+/// elbow does.
+const WAVE_IN: Vec3 = Vec3::new(0.3, 0.72, -0.1);
+const WAVE_OUT: Vec3 = Vec3::new(0.68, 0.72, -0.1);
+const WAVE_DIP: f32 = 0.06;
+/// Arm-lengths out to the side the hand swings as it comes up, so it rises past the hip rather
+/// than through it.
+const WAVE_RAISE_SWING: f32 = 0.25;
+/// Which way the waving elbow points, in the chest's axes: back while it hangs, out and down while
+/// it waves.
+const HANGING_ELBOW: Vec3 = Vec3::new(0.3, -0.2, 1.0);
+const WAVE_ELBOW: Vec3 = Vec3::new(1.0, -0.3, 0.3);
+/// Radians the hand bends back against the way it is sweeping, so it trails the forearm.
+const WAVE_FLAP: f32 = 0.45;
+
+/// The body leans away from the raised arm, then sways with the sweeps a little behind the hand:
+/// the hips sliding out under the chest one way while the chest leans the other. Radians, and the
+/// hips' slide in hip-heights.
+const LEAN_AWAY: f32 = 0.07;
+const CHEST_SWAY: f32 = 0.16;
+const PELVIS_SWAY: f32 = 0.06;
+const HIP_SLIDE: f32 = 0.035;
+/// Radians the sway runs behind the hand, and the head's tilt behind that.
+const SWAY_LAG: f32 = 0.5;
+const HEAD_LAG: f32 = 1.1;
+/// The head keeps this share of the chest's lean and tilts on its own after the sway. Radians.
+const HEAD_KEEPS: f32 = 0.35;
+const HEAD_TILT: f32 = 0.12;
+/// The waving shoulder rises as the arm comes up. Radians.
+const WAVE_SHRUG: f32 = 0.12;
+/// The knees give a little as the arm comes up and at each end of a sweep, in hip-heights.
+const WAVE_SETTLE: f32 = 0.025;
+const WAVE_BOB: f32 = 0.015;
+/// How far the hanging hand swings after the sway, in arm-lengths.
+const LOOSE_SWING: f32 = 0.08;
 
 /// The hips, in hip-heights: a dip to push off, up through the hop, and further down than the
 /// stance as the landing is taken, then the same back out.
@@ -137,6 +187,7 @@ const PUNCH_ELBOW: Vec3 = Vec3::new(1.0, -0.3, 0.0);
 pub fn named(name: &str, inputs: &PoseInputs) -> Pose {
     match name {
         TAUNT_SHADOWBOX => shadowbox(inputs.seconds, default_humanoid()).0,
+        TAUNT_WAVE => wave(inputs.seconds, default_humanoid()).0,
         _ => Pose::rest(),
     }
 }
@@ -261,6 +312,75 @@ fn shadowbox(seconds: f32, skeleton: &Skeleton) -> (Pose, [Reach; 4]) {
     (pose, reaches)
 }
 
+/// Raises the right hand up beside the head with the body leaning away from it, sweeps it out and
+/// in three times with the hips and chest swaying behind it and the head behind them, and lowers
+/// it. Returns each limb's reach, legs then arms.
+fn wave(seconds: f32, skeleton: &Skeleton) -> (Pose, [Reach; 4]) {
+    let raise = keyed(WAVE_RAISE, seconds);
+    let waving = keyed(WAVING, seconds);
+    let phase = TAU * WAVE_RATE * (seconds - WAVE_START);
+    let sweep = waving * phase.sin();
+    let sway = waving * (phase - SWAY_LAG).sin();
+    let anatomy = skeleton.anatomy();
+    let root = Transform::IDENTITY;
+    let rest = Pose::rest();
+    let rest_of = |name: &str| skeleton.posed_bone(&rest, &root, skeleton.index_of(name).unwrap());
+
+    let mut pose = Pose::rest();
+    let settle = WAVE_SETTLE * raise.clamp(0.0, 1.0) + WAVE_BOB * sweep * sweep;
+    pose.root_offset = Vec3::new(-HIP_SLIDE * sway, -settle, 0.0);
+    // Rolls about the body's axes, positive leaning left: each bone's is what it adds to its parent's.
+    let pelvis = -PELVIS_SWAY * sway;
+    let chest = LEAN_AWAY * raise - CHEST_SWAY * sway;
+    let head = HEAD_KEEPS * chest + HEAD_TILT * waving * (phase - HEAD_LAG).sin();
+    Turn { roll: pelvis, ..default() }.onto(skeleton, &mut pose, bone::PELVIS);
+    Turn { roll: chest - pelvis, ..default() }.onto(skeleton, &mut pose, bone::CHEST);
+    Turn { roll: (head - chest) * NECK_SHARE, ..default() }.onto(skeleton, &mut pose, bone::NECK);
+    Turn { roll: (head - chest) * (1.0 - NECK_SHARE), ..default() }.onto(skeleton, &mut pose, bone::HEAD);
+    Turn { roll: WAVE_SHRUG * raise, ..default() }.onto(skeleton, &mut pose, bone::CLAVICLE_R);
+
+    let mut reaches = [Reach::Impossible; 4];
+    for (index, side) in [LEFT, RIGHT].iter().enumerate() {
+        let foot = rest_of(side.foot);
+        let ankle = rest_of(side.leg.lower).tail;
+        let knee = Vec3::new(0.2 * side.sign, 0.0, -1.0).normalize();
+        reaches[index] = ik::solve(skeleton, &mut pose, &root, &side.leg, ankle, knee);
+        ik::set_world_rotation(skeleton, &mut pose, &root, side.foot, foot.rotation);
+    }
+
+    let chest_bone = skeleton.index_of(bone::CHEST).unwrap();
+    let posed_chest = skeleton.posed_bone(&pose, &root, chest_bone);
+    let torso = posed_chest.rotation * rest_of(bone::CHEST).rotation.inverse();
+    let arm = anatomy.arm;
+    let shoulder_of = |pose: &Pose, side: &Side| skeleton.posed_bone(pose, &root, skeleton.index_of(side.upper_arm).unwrap()).head;
+    let hand_along_forearm = |pose: &mut Pose, side: &Side, bend: Quat| {
+        let forearm = skeleton.posed_bone(pose, &root, skeleton.index_of(side.arm.lower).unwrap()).rotation;
+        ik::set_world_rotation(skeleton, pose, &root, side.hand, bend * forearm);
+    };
+
+    // The left hand hangs under its shoulder, swinging after the sway.
+    let shoulder = shoulder_of(&pose, &LEFT);
+    let swing = Vec3::X * LOOSE_SWING * waving * (phase - HEAD_LAG).sin() * arm;
+    let wrist = shoulder + HANGING * Vec3::new(-1.0, 1.0, 1.0) * arm + swing;
+    let elbow = torso * (HANGING_ELBOW * Vec3::new(-1.0, 1.0, 1.0)).normalize();
+    reaches[2] = ik::solve(skeleton, &mut pose, &root, &LEFT.arm, wrist, elbow);
+    hand_along_forearm(&mut pose, &LEFT, Quat::IDENTITY);
+
+    let shoulder = shoulder_of(&pose, &RIGHT);
+    let hanging = shoulder + torso * HANGING * arm;
+    let middle = (WAVE_IN + WAVE_OUT) * 0.5;
+    let half = (WAVE_OUT - WAVE_IN) * 0.5;
+    let up = posed_chest.tail + torso * (middle + half * sweep - Vec3::Y * WAVE_DIP * sweep * sweep) * arm;
+    let out = torso * Vec3::X * WAVE_RAISE_SWING * arm * (PI * raise.clamp(0.0, 1.0)).sin();
+    let wrist = hanging.lerp(up, raise) + out;
+    let elbow = torso * HANGING_ELBOW.lerp(WAVE_ELBOW, raise.clamp(0.0, 1.0)).normalize();
+    reaches[3] = ik::solve(skeleton, &mut pose, &root, &RIGHT.arm, wrist, elbow);
+    // The sweep's speed is its phase's cosine; the fingers bend toward where the hand has been.
+    let flap = WAVE_FLAP * waving * phase.cos();
+    hand_along_forearm(&mut pose, &RIGHT, Quat::from_axis_angle(torso * Vec3::Z, flap));
+    (pose, reaches)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -318,5 +438,59 @@ mod tests {
             }
         }
     }
-}
 
+    #[test]
+    fn every_limb_reaches_through_the_wave() {
+        let rig = default_humanoid();
+        for step in 0..=400 {
+            let seconds = WAVE_LENGTH * step as f32 / 400.0;
+            let (_, reaches) = wave(seconds, rig);
+            assert!(reaches.iter().all(|reach| *reach == Reach::Reached), "at {seconds:.3} s: {reaches:?}");
+        }
+    }
+
+    /// The feet stay planted while the body sways over them, and the hand is up by the head.
+    #[test]
+    fn the_wave_sways_over_planted_feet() {
+        let rig = default_humanoid();
+        let root = Transform::IDENTITY;
+        let posed = |pose: &Pose, name: &str| rig.posed_bone(pose, &root, rig.index_of(name).unwrap());
+        let mut leans = Vec::new();
+        for step in 0..=40 {
+            let seconds = WAVE_LENGTH * step as f32 / 40.0;
+            let (pose, _) = wave(seconds, rig);
+            for shin in [bone::SHIN_L, bone::SHIN_R] {
+                let apart = posed(&pose, shin).tail.distance(posed(&Pose::rest(), shin).tail);
+                assert!(apart < 1e-3, "at {seconds} s the {shin}'s ankle slid {apart:.4} m");
+            }
+            let chest = posed(&pose, bone::CHEST);
+            leans.push((chest.rotation * Vec3::Y).x);
+        }
+        let (least, most) = leans.iter().fold((f32::MAX, f32::MIN), |(a, b), x| (a.min(*x), b.max(*x)));
+        assert!(least < -0.05 && most > 0.05, "the chest only leaned between {least:.3} and {most:.3}");
+        let (pose, _) = wave(0.9, rig);
+        let wrist = posed(&pose, bone::FOREARM_R).tail;
+        let crown = posed(&pose, bone::HEAD).head;
+        assert!(wrist.y > crown.y - 0.15, "the waving wrist is {:.2} m below the neck", crown.y - wrist.y);
+    }
+
+    /// It starts and ends standing and still, so the taunt blends in from the idle rather than
+    /// snapping the arm up.
+    #[test]
+    fn the_wave_starts_and_ends_standing_still() {
+        let rig = default_humanoid();
+        let root = Transform::IDENTITY;
+        let tail = |pose: &Pose, name: &str| rig.posed_bone(pose, &root, rig.index_of(name).unwrap()).tail;
+        for seconds in [0.0, WAVE_LENGTH] {
+            let (pose, _) = wave(seconds, rig);
+            let (soon, _) = wave(if seconds == 0.0 { 0.05 } else { WAVE_LENGTH - 0.05 }, rig);
+            assert!(pose.root_offset.length() < 1e-4, "at {seconds} s the hips are off by {:?}", pose.root_offset);
+            for name in [bone::PELVIS, bone::CHEST] {
+                let turned = pose.joint(name).angle_between(Quat::IDENTITY);
+                assert!(turned < 1e-3, "at {seconds} s {name} is turned {:.1}°", turned.to_degrees());
+            }
+            let moved = tail(&pose, bone::FOREARM_R).distance(tail(&soon, bone::FOREARM_R));
+            assert!(moved < 0.01, "the wrist moves {moved:.3} m in the 50 ms at {seconds} s");
+        }
+    }
+}

@@ -849,7 +849,7 @@ mod tests {
         use crate::common::damage::PlayerId;
         let mut world = World::new();
         world.insert_resource(RoundSettings { slots: 4, fill_with_bots: true, ..default() });
-        world.insert_resource(OurIdentity(Identity { id: PlayerId(1), seat: Seat::Spectating, color: 0 }));
+        world.insert_resource(OurIdentity(Identity { id: PlayerId(1), seat: Seat::Spectating, color: 0, class: None }));
         world.run_system_once(fill_empty_slots).unwrap();
         world.flush();
         assert_eq!(world.query_filtered::<(), With<BotSeat>>().iter(&world).count(), 4);
@@ -1079,7 +1079,7 @@ mod tests {
         use bevy::ecs::system::RunSystemOnce;
         let mut world = World::new();
         world.insert_resource(RoundSettings { slots: 4, fill_with_bots: true, ..default() });
-        let on = |id, team| Identity { id: PlayerId(id), seat: Seat::Playing(Some(team)), color: 0 };
+        let on = |id, team| Identity { id: PlayerId(id), seat: Seat::Playing(Some(team)), color: 0, class: None };
         world.insert_resource(OurIdentity(on(1, Team::Blue)));
         world.spawn((BotSeat, FillsASlot, on(2, Team::Red)));
         world.spawn((BotSeat, FillsASlot, on(3, Team::Red)));

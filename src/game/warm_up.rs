@@ -5,9 +5,10 @@
 //!
 //! A pipeline is keyed by the view as well as the material, so there is one
 //! camera per kind of view that draws the world: the play camera and the
-//! editor's perspective viewport, the editor's orthographic viewports, and the
-//! scope's forward camera. A view setting added to any of them must be added
-//! here too, or the first draw through it stalls.
+//! editor's perspective viewport, the editor's orthographic viewports, the
+//! scope's forward camera, and the class picker's portraits (orthographic, not
+//! HDR). A view setting added to any of them must be added here too, or the
+//! first draw through it stalls.
 //!
 //! A user spawns its meshes on the layer with [`WarmUp`] and calls [`ensure`].
 
@@ -54,6 +55,7 @@ fn spawn_cameras(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
             Name::new(name),
         ));
     };
+
     let perspective = || Projection::Perspective(PerspectiveProjection::default());
     camera(Tonemapping::TonyMcMapface, DebandDither::Enabled, perspective(), "Warm-up camera (play)");
     camera(
@@ -63,6 +65,16 @@ fn spawn_cameras(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
         "Warm-up camera (orthographic)",
     );
     camera(Tonemapping::None, DebandDither::Disabled, perspective(), "Warm-up camera (forward)");
+    // As `class_picker` sets its portrait cameras up: not HDR, into an sRGB target.
+    let portrait = images.add(Image::new_target_texture(4, 4, TextureFormat::Rgba8UnormSrgb, None));
+    commands.spawn((
+        WarmUp,
+        Camera3d::default(),
+        RenderTarget::Image(portrait.into()),
+        Projection::Orthographic(OrthographicProjection::default_3d()),
+        RenderLayers::layer(render_layers::WARM_UP),
+        Name::new("Warm-up camera (portrait)"),
+    ));
 }
 
 fn end_the_warm_up(mut commands: Commands, mut frames: Local<u32>, drawn: Query<Entity, With<WarmUp>>) {

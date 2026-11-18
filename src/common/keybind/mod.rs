@@ -52,11 +52,21 @@ pub enum Context {
     PropEditor,
     Animation,
     Play,
+    /// While a menu in Play holds the mouse. Play's keys are not read then, so the two contexts
+    /// do not clash: the class picker's choices share the weapon buckets' digits.
+    Menu,
 }
 
 impl Context {
-    pub const ALL: [Context; 6] =
-        [Context::Everywhere, Context::Editing, Context::MapEditor, Context::PropEditor, Context::Animation, Context::Play];
+    pub const ALL: [Context; 7] = [
+        Context::Everywhere,
+        Context::Editing,
+        Context::MapEditor,
+        Context::PropEditor,
+        Context::Animation,
+        Context::Play,
+        Context::Menu,
+    ];
 
     pub fn overlaps(self, other: Context) -> bool {
         use Context::*;
@@ -72,6 +82,7 @@ impl Context {
             Context::PropEditor => "keybind.context.prop_editor",
             Context::Animation => "keybind.context.animation",
             Context::Play => "keybind.context.play",
+            Context::Menu => "keybind.context.menu",
         }
     }
 }
@@ -164,9 +175,21 @@ actions! {
     ToggleView => "toggle_view", Play, false, false;
     Scoreboard => "scoreboard", Play, false, false;
     TeamPicker => "team_picker", Play, false, false;
+    ClassPicker => "class_picker", Play, false, false;
     Taunt => "taunt", Play, false, false;
     Spray => "spray", Play, false, false;
     Pause => "pause", Play, false, false;
+
+    Choice1 => "choice_1", Menu, false, false;
+    Choice2 => "choice_2", Menu, false, false;
+    Choice3 => "choice_3", Menu, false, false;
+    Choice4 => "choice_4", Menu, false, false;
+    Choice5 => "choice_5", Menu, false, false;
+    Choice6 => "choice_6", Menu, false, false;
+    Choice7 => "choice_7", Menu, false, false;
+    Choice8 => "choice_8", Menu, false, false;
+    Choice9 => "choice_9", Menu, false, false;
+    Choice0 => "choice_0", Menu, false, false;
 
     PerfOverlay => "perf_overlay", Everywhere, false, true;
     ShowHitboxes => "show_hitboxes", Everywhere, false, true;
@@ -194,6 +217,20 @@ impl Action {
         Action::Bucket7,
         Action::Bucket8,
         Action::Bucket9,
+    ];
+
+    /// A menu's first ten entries, in order: `1` to `9`, then `0`.
+    pub const CHOICES: [Action; 10] = [
+        Action::Choice1,
+        Action::Choice2,
+        Action::Choice3,
+        Action::Choice4,
+        Action::Choice5,
+        Action::Choice6,
+        Action::Choice7,
+        Action::Choice8,
+        Action::Choice9,
+        Action::Choice0,
     ];
 
     /// Fire over the Settings window, and over a text field from a function key.

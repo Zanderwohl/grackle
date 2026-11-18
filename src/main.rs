@@ -121,7 +121,7 @@ fn main() {
             PropEditorPlugin,
             (AnimPlugin, MaterialEditorPlugin, grackle::weapon_editor::WeaponEditorPlugin, LangEditorPlugin),
             (GamePlugin, grackle::game::match_cycle::MatchCyclePlugin, grackle::game::match_banner::MatchBannerPlugin, grackle::game::soundtrack::SoundtrackPlugin),
-            (WorldPropPlugin, ThumbnailPlugin, ForwardCameraPlugin, SunlitPlugin, DecalPlugin, SprayPlugin, grackle::game::streak::StreakPlugin, grackle::game::beam::BeamPlugin, grackle::game::gib_blood::GibBloodPlugin, grackle::game::flame_jet::FlameJetPlugin, grackle::game::hud_fire::HudFirePlugin, grackle::game::gust_ring::GustRingPlugin, grackle::game::blast_cloud::BlastCloudPlugin, grackle::game::rocket_trail::RocketTrailPlugin),
+            (WorldPropPlugin, ThumbnailPlugin, ForwardCameraPlugin, SunlitPlugin, DecalPlugin, SprayPlugin, grackle::game::streak::StreakPlugin, grackle::game::beam::BeamPlugin, grackle::game::class_picker::PortraitWarmUpPlugin, grackle::game::gib_blood::GibBloodPlugin, grackle::game::flame_jet::FlameJetPlugin, grackle::game::hud_fire::HudFirePlugin, grackle::game::gust_ring::GustRingPlugin, grackle::game::blast_cloud::BlastCloudPlugin, grackle::game::rocket_trail::RocketTrailPlugin),
             SkeletonPlugin,
             (PerfPlugin, grackle::common::screenshot::ScreenshotPlugin, SettingsPlugin, FontsPlugin, grackle::common::music::MusicPlugin, grackle::common::icons::IconsPlugin, UiShapePlugin, grackle::common::player_settings::PlayerSettingsPlugin { profile: editor_params.profile }),
             ))

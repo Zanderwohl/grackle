@@ -17,14 +17,14 @@ use strum::IntoEnumIterator;
 use crate::common::assets::{AssetError, Assets};
 use crate::common::class::Class;
 use crate::common::mode::GameMode;
-use crate::common::weapon::WeaponId;
+use crate::common::weapon::{WeaponCatalog, WeaponId};
 
 const MODES_FILE: &str = "modes.toml";
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ModeRules {
     pub teams: bool,
-    /// Empty allows every class.
+    /// In the class picker's order. Empty allows every class.
     pub classes: Vec<Class>,
     /// `None` is each class's own loadout. Each weapon lands in the slot its
     /// class's loadout permits it in; one it permits nowhere is left out.
@@ -44,10 +44,49 @@ impl Default for ModeRules {
 }
 
 impl ModeRules {
-    /// The class a new body is, until classes can be picked: the first the mode
-    /// allows, else the Mercenary placeholder.
-    pub fn class_to_play(&self) -> Class {
-        self.classes.first().copied().unwrap_or(Class::Mercenary)
+    /// What the class picker offers, in its order.
+    pub fn allowed_classes(&self) -> Vec<Class> {
+        match self.classes.is_empty() {
+            true => Class::iter().collect(),
+            false => self.classes.clone(),
+        }
+    }
+
+    /// The class somebody's next body is: the one they chose if the mode allows it, else the
+    /// mode's only class. `None` asks them to choose first.
+    pub fn class_for(&self, chosen: Option<Class>) -> Option<Class> {
+        let allowed = self.allowed_classes();
+        match chosen.filter(|class| allowed.contains(class)) {
+            Some(class) => Some(class),
+            None if allowed.len() == 1 => allowed.first().copied(),
+            None => None,
+        }
+    }
+
+    /// The allowed classes that start with a weapon under the mode's loadout, or every allowed
+    /// class if none does.
+    pub fn armed_classes(&self, catalog: &WeaponCatalog) -> Vec<Class> {
+        let allowed = self.allowed_classes();
+        let armed: Vec<Class> = allowed
+            .iter()
+            .copied()
+            .filter(|class| !catalog.starting_equipment(*class, self.loadout.as_deref()).0.carried().is_empty())
+            .collect();
+        match armed.is_empty() {
+            true => allowed,
+            false => armed,
+        }
+    }
+
+    /// What a spawn's first weapon is judged against, and a bot's class where its seat has none:
+    /// the first of [`Self::armed_classes`].
+    pub fn class_for_a_bot(&self, catalog: &WeaponCatalog) -> Class {
+        self.armed_classes(catalog).first().copied().unwrap_or(Class::Mercenary)
+    }
+
+    pub fn random_class_for_a_bot(&self, catalog: &WeaponCatalog, rng: &mut impl rand::Rng) -> Class {
+        use rand::seq::IndexedRandom;
+        self.armed_classes(catalog).choose(rng).copied().unwrap_or(Class::Mercenary)
     }
 }
 
@@ -70,8 +109,8 @@ impl Modes {
 #[derive(Resource, Clone, Debug, Default, PartialEq, Deref)]
 pub struct GameRules(pub ModeRules);
 
-/// `--class KEY`: everybody plays as this class, ahead of what the mode allows. A stand-in until a
-/// class can be picked; read only by `publish_game_rules`.
+/// `--class KEY`: the mode allows this class and no other, so nobody is asked. Read only by
+/// `publish_game_rules`.
 #[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PlayAs(pub Option<Class>);
 
@@ -183,10 +222,69 @@ mod tests {
     }
 
     #[test]
-    fn the_shipped_arena_has_no_teams_and_only_the_mercenary() {
+    fn the_shipped_arena_has_no_teams_and_offers_the_mercenary_first() {
         let arena = Modes::shipped().of(GameMode::Arena);
         assert!(!arena.teams);
-        assert_eq!(arena.classes, vec![Class::Mercenary]);
+        assert_eq!(arena.classes, vec![Class::Mercenary, Class::Scout, Class::Raptor]);
+    }
+
+    /// Breaks if a team mode offers a class it is meant to leave out, or more than ten, which is
+    /// more than the picker has digits for.
+    #[test]
+    fn every_other_shipped_mode_leaves_out_the_spy_the_sniper_and_the_raptor() {
+        let modes = Modes::shipped();
+        for mode in GameMode::iter().filter(|mode| *mode != GameMode::Arena) {
+            let allowed = modes.of(mode).allowed_classes();
+            assert!(allowed.len() <= 10, "{mode:?} offers {} classes", allowed.len());
+            for left_out in [Class::Spy, Class::Sniper, Class::Raptor] {
+                assert!(!allowed.contains(&left_out), "{mode:?} offers the {left_out:?}");
+            }
+        }
+    }
+
+    /// Breaks if a choice the mode no longer allows is kept, or a mode of one class asks anyway.
+    #[test]
+    fn a_body_is_the_class_chosen_or_the_only_one() {
+        let rules = |classes: Vec<Class>| ModeRules { classes, ..default() };
+        let two = rules(vec![Class::Scout, Class::Mercenary]);
+        assert_eq!(two.class_for(None), None, "nobody was asked");
+        assert_eq!(two.class_for(Some(Class::Scout)), Some(Class::Scout));
+        assert_eq!(two.class_for(Some(Class::Spy)), None, "a class the mode leaves out was played");
+        assert_eq!(rules(vec![Class::Pyro]).class_for(None), Some(Class::Pyro));
+        assert_eq!(rules(Vec::new()).allowed_classes().len(), Class::iter().count(), "empty allows every class");
+    }
+
+    /// Breaks if a bot is made a class with nothing to fight with when an armed one is allowed.
+    #[test]
+    fn a_bot_plays_a_class_that_starts_armed() {
+        let catalog = default_catalog();
+        let rules = ModeRules { classes: vec![Class::Soldier, Class::Mercenary, Class::Pyro], ..default() };
+        assert_eq!(rules.class_for_a_bot(&catalog), Class::Mercenary);
+        let mut rng = rand::rng();
+        for _ in 0..20 {
+            assert_eq!(rules.random_class_for_a_bot(&catalog, &mut rng), Class::Mercenary);
+        }
+    }
+
+    /// Breaks if bots in the arena stop spreading across its classes.
+    #[test]
+    fn arena_bots_roll_every_class_the_arena_offers() {
+        let catalog = default_catalog();
+        let arena = Modes::shipped().of(GameMode::Arena);
+        let mut rng = rand::rng();
+        let rolled: std::collections::HashSet<Class> = (0..200).map(|_| arena.random_class_for_a_bot(&catalog, &mut rng)).collect();
+        assert_eq!(rolled.len(), 3, "{rolled:?}");
+    }
+
+    /// Breaks if the arena's Scout or Raptor would spawn with nothing in hand.
+    #[test]
+    fn every_arena_class_starts_with_the_pistol() {
+        let catalog = default_catalog();
+        let arena = Modes::shipped().of(GameMode::Arena);
+        for class in arena.allowed_classes() {
+            let (equipped, _) = catalog.starting_equipment(class, arena.loadout.as_deref());
+            assert_eq!(equipped.carried(), &[WeaponId::of("pistol")], "{class:?}");
+        }
     }
 
     /// A misspelled weapon would spawn everybody short of it, silently.

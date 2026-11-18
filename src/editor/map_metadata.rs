@@ -94,7 +94,7 @@ pub fn publish_game_rules(
     if metadata.is_changed() || modes.is_changed() || rules.is_added() {
         let mut mode = modes.of(metadata.game_mode);
         if let Some(class) = play_as {
-            mode.classes.insert(0, class);
+            mode.classes = vec![class];
         }
         rules.set_if_neq(GameRules(mode));
     }
