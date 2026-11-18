@@ -9,6 +9,7 @@ use std::ops::ControlFlow;
 
 use bevy::prelude::*;
 
+use crate::common::stairs::StairsShape;
 use crate::common::world_surface::{self, Face, Fill, Volume};
 use crate::prop::archetype::RoundedBox;
 use crate::tool::room::Room;
@@ -112,6 +113,18 @@ impl CollisionWorld {
         self.set_volumes_only(volumes);
         let faces = world_surface::of_volumes(volumes);
         self.set_surface(&faces);
+        faces
+    }
+
+    /// The map: its surface, then each flight of stairs, which stands in the air without cutting
+    /// it. Returns the surface's faces with the flights' tops, for what samples floor from faces.
+    pub fn rebuild_map(&mut self, volumes: &[Volume], stairs: &[StairsShape]) -> Vec<Face> {
+        let mut faces = self.rebuild_volumes(volumes);
+        let hulls: Vec<Hull> = stairs.iter().flat_map(StairsShape::hulls).collect();
+        faces.extend(stairs.iter().flat_map(StairsShape::collider_faces));
+        if !hulls.is_empty() {
+            self.add_hulls(hulls);
+        }
         faces
     }
 

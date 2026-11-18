@@ -221,6 +221,10 @@ pub trait FeatureTrait: Send + Sync {
     /// own drawing. Two methods rather than a downcast because a typetag
     /// trait object has no `Any`.
     fn footprint(&self) -> Option<&crate::editor::footprint_room::FootprintRoom> { None }
+
+    /// The flight of stairs this feature is, for what builds collision from features rather than
+    /// entities (a headless nav bake).
+    fn stairs(&self) -> Option<crate::common::stairs::StairsShape> { None }
     fn footprint_mut(&mut self) -> Option<&mut crate::editor::footprint_room::FootprintRoom> { None }
 
     /// What this feature stands in the world beyond itself, as features: a Mirror's copies, and

@@ -27,11 +27,13 @@ pub mod selection;
 pub mod bake_progress;
 pub mod point;
 pub mod spawn_point;
+pub mod stairs;
 pub mod point_light;
 pub mod point_drag;
 pub mod animation_display;
 pub mod animation_grid;
 pub mod point_placement;
+pub mod point_picker;
 pub mod mirror;
 pub mod prop;
 pub mod weapon_pickup;
@@ -71,6 +73,7 @@ impl Plugin for ToolPlugin {
             .add_plugins(SelectionPlugin)
             .add_plugins(PointPlugin)
             .add_plugins(SpawnPointPlugin)
+            .add_plugins(stairs::StairsToolPlugin)
             .add_plugins(PointLightPlugin)
             .add_plugins(PointDragPlugin)
             .add_plugins(RotateDragPlugin)
@@ -134,6 +137,7 @@ pub enum Tools {
     Trigger,
     Footprint,
     FootprintBlock,
+    Stairs,
     Mirror,
     Retarget,
     /// A client's: no tool runs under it.
@@ -158,6 +162,7 @@ impl Tools {
             Self::Trigger => get!("tools.trigger"),
             Self::Footprint => get!("tools.footprint"),
             Self::FootprintBlock => get!("tools.footprint_block"),
+            Self::Stairs => get!("tools.stairs"),
             Self::Mirror => get!("tools.mirror"),
             Self::Retarget => "Retarget".into(),
             Self::Spectate => "Spectate".into(),
@@ -182,6 +187,7 @@ impl Tools {
             Self::Trigger => "cube_exclamation",
             Self::Footprint => "double_pennant",
             Self::FootprintBlock => "double_pennant_solid",
+            Self::Stairs => "stairs",
             Self::Mirror => "square_mirrored",
             Self::Retarget => icons::FALLBACK,
             Self::Spectate => icons::FALLBACK,
@@ -242,7 +248,7 @@ const TOOLBAR: &[ToolGroup] = &[
     ToolGroup::One(Tools::Select),
     ToolGroup::Split("points", &[Tools::Point, Tools::PointLight, Tools::SpawnPoint, Tools::SpectatorCamera, Tools::Decal]),
     ToolGroup::Split("props", &[Tools::Prop, Tools::WeaponPickup]),
-    ToolGroup::Cluster(&[Tools::Room, Tools::Block, Tools::Trigger, Tools::Footprint, Tools::FootprintBlock]),
+    ToolGroup::Cluster(&[Tools::Room, Tools::Block, Tools::Trigger, Tools::Footprint, Tools::FootprintBlock, Tools::Stairs]),
     ToolGroup::One(Tools::Mirror),
     ToolGroup::Split("animation", &[Tools::AnimationDisplay, Tools::AnimationGrid]),
 ];

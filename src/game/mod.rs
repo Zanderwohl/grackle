@@ -6,6 +6,8 @@ use crate::common::damage::NextPlayerId;
 use crate::common::movement_rules::MovementRules;
 use crate::common::net::NetRole;
 use crate::common::skeleton::AnimationClock;
+use crate::common::stairs::Stairs;
+use crate::common::world_surface::Volume;
 use crate::editor::multicam::Multicam;
 use crate::game::collision::CollisionWorld;
 use crate::game::ragdoll::RagdollPlugin;
@@ -280,12 +282,13 @@ fn enter_play(
     mut commands: Commands,
     mut collision: ResMut<CollisionWorld>,
     volumes: MapVolumes,
+    stairs: Query<&Stairs>,
     mut editor_cameras: Query<&mut Camera, With<Multicam>>,
 ) {
     // First: `give_bodies_to_whoever_needs_one` asks it where a body can stand
     // on the next Update.
     let volumes = volumes.volumes();
-    collision.rebuild_volumes(&volumes);
+    rebuild_collision(&mut collision, &volumes, &stairs);
 
     // A new match is a new player: dropping the identity makes the next body
     // allocate a fresh id. Dying inside a match keeps it. A new match turns
@@ -344,20 +347,30 @@ pub(crate) fn set_cursor_captured(
     });
 }
 
+#[allow(clippy::type_complexity)]
 pub(crate) fn rebuild_collision_when_rooms_change(
     mut collision: ResMut<CollisionWorld>,
-    changed: Query<(), Or<(Changed<Room>, Changed<Block>, Changed<VolumeOrder>)>>,
+    changed: Query<(), Or<(Changed<Room>, Changed<Block>, Changed<VolumeOrder>, Changed<Stairs>)>>,
     mut removed_rooms: RemovedComponents<Room>,
     mut removed_blocks: RemovedComponents<Block>,
+    mut removed_stairs: RemovedComponents<Stairs>,
     volumes: MapVolumes,
+    stairs: Query<&Stairs>,
 ) {
     // Drained either way, or a removal seen on a frame with a change is seen
     // again next frame.
-    let removed = removed_rooms.read().count() + removed_blocks.read().count() > 0;
+    let removed = removed_rooms.read().count() + removed_blocks.read().count() + removed_stairs.read().count() > 0;
     if changed.is_empty() && !removed {
         return;
     }
-    collision.rebuild_volumes(&volumes.volumes());
+    rebuild_collision(&mut collision, &volumes.volumes(), &stairs);
+}
+
+/// From the features' components rather than the baked meshes, so a flight collides as soon as
+/// it is placed.
+fn rebuild_collision(collision: &mut CollisionWorld, volumes: &[Volume], stairs: &Query<&Stairs>) {
+    let stairs: Vec<_> = stairs.iter().map(|flight| flight.0).collect();
+    collision.rebuild_map(volumes, &stairs);
 }
 
 #[cfg(test)]
@@ -599,6 +612,28 @@ mod tests {
         let end = player_position(&mut app);
         assert!(end.x > start.x + 0.5 && end.y > start.y + 0.2, "from {start} to {end}");
         assert!(on_ground(&mut app), "walking up the slope left the ground");
+    }
+
+    /// Breaks if a flight's collider is not the ramp the body walks: it would catch on the first
+    /// step, or stand nowhere on it.
+    #[test]
+    fn a_body_walks_up_the_ramp_of_a_stairs_feature() {
+        use crate::common::stairs::{StairsShape, StairsStyle};
+        let flight = StairsShape {
+            start: Vec3::new(-3.0, 0.0, -1.0),
+            end: Vec3::new(2.0, 0.0, -1.0),
+            width: Vec3::new(-3.0, 0.0, 1.0),
+            height: Vec3::new(-3.0, 1.5, -1.0),
+            style: StairsStyle::default(),
+        };
+        let mut app = dropped_onto(flight.hulls(), Vec3::new(-4.5, PLAYER_HALF.y + 0.01, 0.0));
+        app.world_mut().resource_mut::<InputLatch>().0.movement = Vec2::new(1.0, 0.0);
+        let mut highest = f32::MIN;
+        for _ in 0..90 {
+            tick(&mut app, 1);
+            highest = highest.max(player_position(&mut app).y);
+        }
+        assert!(highest > PLAYER_HALF.y + 1.2, "climbed only to {highest}");
     }
 
     /// All the way down to the floor at its foot, within the second

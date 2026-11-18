@@ -34,12 +34,15 @@ fn main() {
     let rules = loaded.metadata.movement.clone();
 
     let mut volumes = Vec::new();
+    let mut stairs = Vec::new();
     let mut triggers = Vec::new();
     let mut spawns = Vec::new();
     let mut pickups = Vec::new();
     for (_, feature) in timeline.active_features() {
         let object = feature.object();
         volumes.extend(object.volumes());
+        stairs.extend(object.stairs());
+        stairs.extend(object.standing_copies().iter().filter_map(|copy| copy.object.stairs()));
         let value = serde_json::to_value(object).unwrap_or_default();
         let inner = value.as_object().and_then(|o| o.values().next()).cloned().unwrap_or_default();
         match object.type_key() {
@@ -67,7 +70,7 @@ fn main() {
     }
 
     let mut world = CollisionWorld::default();
-    let faces = world.rebuild_volumes(&volumes);
+    let faces = world.rebuild_map(&volumes, &stairs);
     let mut graph = nav::graph(&world, &faces, &triggers, &rules, &spawns);
     graph.set_fields(nav_field::bake(&world, &graph, &triggers, &rules, pickups.clone(), spawns.clone()));
 

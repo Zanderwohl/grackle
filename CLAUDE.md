@@ -2143,6 +2143,23 @@ archetype order; a volume's place is its `VolumeOrder`, a Mirror copy's being
 its source's. `Block` is never a `Room`: everything asking for `&Room` means
 air.
 
+**Stairs** ([`src/editor/stairs.rs`](src/editor/stairs.rs), geometry in
+[`src/common/stairs.rs`](src/common/stairs.rs)) are four `PointRef`s: start and end give the
+run, the width point's distance off that line the width, the height point's distance off the
+footprint's plane the rise, "up" being toward it. What collides is the ramp from the start edge
+on the base toward the end edge at full height — thick, the solid under it; thin, a slab under
+it as deep as what is drawn. It passes through the middle of every tread, so each step is half
+above it and half below; the first and last risers are half a step, and for steps the collider
+goes flat at the last tread's height halfway along it. A flight is no volume: it cuts nothing, its walls are a `BakedRoomGeometry` of its
+own marked `BakedStairs` (painted, lit and decaled as a room's), baked under the room bake's
+auto-bake switch and settle wait, while its collider joins `CollisionWorld` straight from the
+`Stairs` component, as a room's walls do from `Room`. Collision from the map is
+`CollisionWorld::rebuild_map(volumes, stairs)`, which the game, the nav bake and `map_stats` call. The Stairs tool
+([`src/tool/stairs.rs`](src/tool/stairs.rs)) picks the four points one at a time as the Room tool
+picks corners, previewing the run, the width and then the ramp, and keeps the height point at
+least 0.1 m above the footprint. The steepness
+warning is `WALKABLE`, which every class shares.
+
 A `Room` is a prism — a floor plan, not necessarily convex and possibly with
 holes, between two heights — and a box is the four-corner case. `EditorRoom`
 stands up a box; `FootprintRoom`
@@ -3539,7 +3556,7 @@ machine, and things happen in it.
 The core abstraction is `FeatureTrait` in
 [`src/editor/editable.rs`](src/editor/editable.rs) — a `#[typetag::serde]`
 trait object. Implementors today: `GlobalPoint`, `GracklePointLight`,
-`EditorRoom`, `FootprintRoom`, `FootprintBlock`, `EditorTrigger`, `EditorBlock`, `SpawnPoint`, `SpectatorCamera`, `EditorDecal`, `Prop`, `WeaponPickup`,
+`EditorRoom`, `FootprintRoom`, `FootprintBlock`, `EditorTrigger`, `EditorBlock`, `EditorStairs`, `SpawnPoint`, `SpectatorCamera`, `EditorDecal`, `Prop`, `WeaponPickup`,
 `AnimationDisplay`, `AnimationGrid` and `Mirror`.
 
 A feature does not store bare coordinates. It stores `PointRef`s, which are

@@ -4,6 +4,7 @@ use bevy::diagnostic::FrameCount;
 use bevy::prelude::*;
 
 use crate::common::lightmap;
+use crate::common::stairs::{Stairs, StairsShape};
 use crate::common::world_surface;
 use crate::common::app_mode::AppMode;
 use bevy_egui::egui;
@@ -41,7 +42,7 @@ impl Plugin for BakePlugin {
             .add_message::<LogECS>()
             .add_systems(Update, (Self::post_startup, Self::clear_room_geometry, Self::log_ecs).run_if(in_state(AppMode::Editor)))
             // Ungated: the map can be edited during a round.
-            .add_systems(Update, (Self::bake_room_geometry, Self::auto_bake_rooms, Self::report_rooms).chain())
+            .add_systems(Update, (Self::bake_room_geometry, Self::auto_bake_rooms, Self::auto_bake_stairs, Self::report_rooms).chain())
             .configure_sets(OnEnter(AppMode::Play), BakeSystems::All)
             .add_systems(
                 OnEnter(AppMode::Play),
@@ -84,6 +85,35 @@ pub struct RoomBake {
     /// Queue what changed without waiting for it to settle.
     asked: bool,
     material: Option<Handle<StandardMaterial>>,
+    /// Stairs are baked whole, a handful of faces each, so they skip the queue and the budget.
+    stairs: StairsBake,
+}
+
+/// The stairs' half of [`RoomBake`]: the same auto-bake switch and the same wait for the map to
+/// settle, without the queue.
+#[derive(Default)]
+struct StairsBake {
+    /// What each flight's walls were last baked from.
+    seen: HashMap<Entity, StairsShape>,
+    /// The flights as they stood when one last changed, and when; rewritten on every change.
+    observed: HashMap<Entity, StairsShape>,
+    since: Option<f32>,
+    /// Auto-bake is off and a flight has changed since the last bake.
+    stale: bool,
+    /// Bake what changed without waiting for it to settle.
+    asked: bool,
+    /// Auto-bake has seen the flights since the last clear, so a change is an edit, which waits,
+    /// rather than a load-in, which does not. `seen` is also empty on a map with no flights.
+    primed: bool,
+    /// Bumped whenever `seen` changes, so an idle frame can skip comparing it.
+    version: u64,
+}
+
+impl StairsBake {
+    /// Forget what was seen, keeping the version counting so no cached answer outlives it.
+    fn reset(&mut self) {
+        *self = StairsBake { version: self.version + 1, ..default() };
+    }
 }
 
 impl Default for RoomBake {
@@ -100,6 +130,7 @@ impl Default for RoomBake {
             last_edit: 0.0,
             asked: false,
             material: None,
+            stairs: StairsBake::default(),
         }
     }
 }
@@ -111,7 +142,7 @@ impl RoomBake {
 
     /// Nothing waiting: every room's mesh is of the room as it stands.
     pub fn is_settled(&self) -> bool {
-        self.queue.is_empty() && self.last_stale.is_none()
+        self.queue.is_empty() && self.last_stale.is_none() && self.stairs.since.is_none()
     }
 
     /// When a volume last changed, in real seconds.
@@ -127,6 +158,7 @@ impl RoomBake {
         }
         if !auto {
             self.last_stale = None;
+            self.stairs.since = None;
         }
         self.auto = auto;
     }
@@ -136,9 +168,9 @@ impl RoomBake {
         // The queue only drains with auto-bake on; switched off partway, what is left is stale.
         let state = if self.auto && !self.queue.is_empty() {
             BakeState::Baking
-        } else if self.auto && self.last_stale.is_some() {
+        } else if self.auto && (self.last_stale.is_some() || self.stairs.since.is_some()) {
             BakeState::Waiting
-        } else if self.stale || !self.queue.is_empty() {
+        } else if self.stale || self.stairs.stale || !self.queue.is_empty() {
             BakeState::Stale
         } else {
             BakeState::UpToDate
@@ -250,10 +282,12 @@ impl BakePlugin {
     /// A request for everything at once. With auto-bake on it only skips the
     /// wait for the map to settle: rebuilding everything this frame would stall
     /// the frame the budget exists to protect.
+    #[allow(clippy::too_many_arguments)]
     fn bake_room_geometry(
         mut events: MessageReader<CalculateRoomGeometry>,
         mut bake: ResMut<RoomBake>,
         rooms: MapVolumes,
+        stairs: Query<(Entity, &Stairs)>,
         existing_bakes: Query<Entity, With<BakedRoomGeometry>>,
         mut commands: Commands,
         mut meshes: ResMut<Assets<Mesh>>,
@@ -263,17 +297,18 @@ impl BakePlugin {
         events.clear();
         if bake.auto {
             bake.asked = true;
+            bake.stairs.asked = true;
             return;
         }
 
-        bake_rooms(&mut bake, &rooms, &existing_bakes, &mut commands, &mut meshes, &mut materials);
+        bake_rooms(&mut bake, &rooms, &stairs, &existing_bakes, &mut commands, &mut meshes, &mut materials);
     }
 
     #[allow(clippy::too_many_arguments, clippy::type_complexity)]
     pub(crate) fn auto_bake_rooms(
         mut bake: ResMut<RoomBake>,
         volumes: MapVolumes,
-        bakes: Query<(Entity, &BakedRoomGeometry)>,
+        bakes: Query<(Entity, &BakedRoomGeometry), Without<BakedStairs>>,
         mut commands: Commands,
         mut meshes: ResMut<Assets<Mesh>>,
         mut materials: ResMut<Assets<StandardMaterial>>,
@@ -395,12 +430,99 @@ impl BakePlugin {
     pub(crate) fn bake_everything_for_the_round(
         mut bake: ResMut<RoomBake>,
         rooms: MapVolumes,
+        stairs: Query<(Entity, &Stairs)>,
         existing_bakes: Query<Entity, With<BakedRoomGeometry>>,
         mut commands: Commands,
         mut meshes: ResMut<Assets<Mesh>>,
         mut materials: ResMut<Assets<StandardMaterial>>,
     ) {
-        bake_rooms(&mut bake, &rooms, &existing_bakes, &mut commands, &mut meshes, &mut materials);
+        bake_rooms(&mut bake, &rooms, &stairs, &existing_bakes, &mut commands, &mut meshes, &mut materials);
+    }
+
+    /// Each flight's walls, rebuilt whole once the map has been still for [`SETTLE_SECONDS`], as
+    /// a room's are, and only while auto-bake is on.
+    #[allow(clippy::too_many_arguments)]
+    fn auto_bake_stairs(
+        mut bake: ResMut<RoomBake>,
+        stairs: Query<(Entity, &Stairs)>,
+        bakes: Query<(Entity, &BakedRoomGeometry), With<BakedStairs>>,
+        mut commands: Commands,
+        mut meshes: ResMut<Assets<Mesh>>,
+        mut materials: ResMut<Assets<StandardMaterial>>,
+        time: Res<Time<Real>>,
+        changed: Query<(), Changed<Stairs>>,
+        mut removed: RemovedComponents<Stairs>,
+        // The last answer and the `version` it was against.
+        mut known: Local<Option<(u64, bool)>>,
+    ) {
+        let same = |seen: &HashMap<Entity, StairsShape>| {
+            seen.len() == stairs.iter().len() && stairs.iter().all(|(entity, flight)| seen.get(&entity) == Some(&flight.0))
+        };
+        let touched = removed.read().count() > 0 || !changed.is_empty();
+        let unchanged = match *known {
+            Some((version, unchanged)) if !touched && version == bake.stairs.version => unchanged,
+            _ => {
+                let unchanged = same(&bake.stairs.seen);
+                *known = Some((bake.stairs.version, unchanged));
+                unchanged
+            }
+        };
+        if !bake.auto {
+            if bake.stairs.stale != !unchanged {
+                bake.stairs.stale = !unchanged;
+            }
+            bake.stairs.asked = false;
+            return;
+        }
+        if bake.stairs.stale {
+            bake.stairs.stale = false;
+        }
+        if unchanged {
+            // Primed only once the rooms have loaded, since the map's flights spawn with them: a
+            // frame before that sees no flights.
+            let loaded = !bake.seen.is_empty();
+            if bake.stairs.since.is_some() || bake.stairs.asked || (!bake.stairs.primed && loaded) {
+                bake.stairs.since = None;
+                bake.stairs.asked = false;
+                bake.stairs.primed |= loaded;
+                bake.stairs.observed.clear();
+            }
+            return;
+        }
+
+        // A deleted flight's walls go at once, as a room's do.
+        for (entity, baked) in &bakes {
+            if !stairs.contains(baked.room) {
+                commands.entity(entity).despawn();
+                bake.stairs.seen.remove(&baked.room);
+                bake.stairs.version += 1;
+            }
+        }
+        let now = time.elapsed_secs();
+        if bake.stairs.since.is_none() || (touched && !same(&bake.stairs.observed)) {
+            bake.stairs.since = Some(now);
+            bake.stairs.observed = stairs.iter().map(|(entity, flight)| (entity, flight.0)).collect();
+        }
+        let settled = bake.stairs.since.is_some_and(|since| now - since >= SETTLE_SECONDS);
+        if !(!bake.stairs.primed || bake.stairs.asked || settled) {
+            return;
+        }
+        bake.stairs.since = None;
+        bake.stairs.asked = false;
+        bake.stairs.primed = true;
+        bake.stairs.observed.clear();
+
+        let material = bake.material(&mut materials);
+        let existing: HashMap<Entity, Entity> = bakes.iter().map(|(entity, baked)| (baked.room, entity)).collect();
+        for (entity, flight) in &stairs {
+            if bake.stairs.seen.get(&entity) == Some(&flight.0) {
+                continue;
+            }
+            bake_flight(entity, &flight.0, existing.get(&entity).copied(), &material, &mut commands, &mut meshes);
+            bake.stairs.seen.insert(entity, flight.0);
+        }
+        bake.stairs.seen.retain(|entity, _| stairs.contains(*entity));
+        bake.stairs.version += 1;
     }
 
     fn report_rooms(bake: Res<RoomBake>, labels: VolumeLabels, mut progress: ResMut<BakeProgress>) {
@@ -423,6 +545,7 @@ impl BakePlugin {
         bake.last_stale = None;
         bake.seen.clear();
         bake.seen_version += 1;
+        bake.stairs.reset();
         let count = existing_bakes.iter().count();
         for entity in &existing_bakes {
             commands.entity(entity).despawn();
@@ -463,6 +586,7 @@ impl BakePlugin {
 fn bake_rooms(
     bake: &mut RoomBake,
     volumes: &MapVolumes,
+    stairs: &Query<(Entity, &Stairs)>,
     existing_bakes: &Query<Entity, With<BakedRoomGeometry>>,
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
@@ -486,8 +610,40 @@ fn bake_rooms(
     for index in 0..entities.len() {
         bake_one(index, &entities, &volumes, None, &material, commands, meshes);
     }
-    info!("Baked geometry for {} volume(s)", entities.len());
+    bake.stairs.reset();
+    bake.stairs.primed = true;
+    for (entity, flight) in stairs {
+        bake_flight(entity, &flight.0, None, &material, commands, meshes);
+        bake.stairs.seen.insert(entity, flight.0);
+    }
+    info!("Baked geometry for {} volume(s) and {} flight(s) of stairs", entities.len(), bake.stairs.seen.len());
 }
+
+/// One flight's walls, rebuilt on `existing` if it already has a bake. They cut nothing and
+/// nothing cuts them: a flight stands in a room's air and the faces it hides are hidden by depth.
+fn bake_flight(
+    entity: Entity,
+    flight: &StairsShape,
+    existing: Option<Entity>,
+    material: &Handle<StandardMaterial>,
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+) {
+    let faces = flight.faces();
+    if faces.is_empty() {
+        if let Some(existing) = existing {
+            commands.entity(existing).despawn();
+        }
+        return;
+    }
+    let baked = stand_up_bake(entity, faces, None, existing, material, commands, meshes);
+    commands.entity(baked).insert(BakedStairs);
+}
+
+/// Marks a [`BakedRoomGeometry`] made from a flight of stairs rather than a room or block, which
+/// the room bake's own bookkeeping leaves alone.
+#[derive(Component)]
+pub struct BakedStairs;
 
 /// `volumes[index]`'s share against every other volume, in order, rebuilt on
 /// `existing` if it already has a bake.
@@ -502,11 +658,24 @@ fn bake_one(
 ) {
     let entity = entities[index];
     let faces = world_surface::share(volumes, index);
-    let slots = world_surface::slot_meshes(&faces);
     let volume = &volumes[index];
     let air = (volume.fill == world_surface::Fill::Air).then(|| volume.shape.bounds());
+    stand_up_bake(entity, faces, air, existing, material, commands, meshes);
+}
+
+/// `room`'s walls from `faces`, a mesh per slot, rebuilt on `existing` if it already has a bake.
+fn stand_up_bake(
+    room: Entity,
+    faces: Vec<world_surface::Face>,
+    air: Option<(Vec3, Vec3)>,
+    existing: Option<Entity>,
+    material: &Handle<StandardMaterial>,
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+) -> Entity {
+    let slots = world_surface::slot_meshes(&faces);
     let bounds = crate::common::decal::bounds_of(&faces);
-    let geometry = BakedRoomGeometry { room: entity, faces_hash: lightmap::faces_hash(&faces), faces, bounds, air };
+    let geometry = BakedRoomGeometry { room, faces_hash: lightmap::faces_hash(&faces), faces, bounds, air };
     let mut baked = match existing {
         Some(baked) => {
             let mut baked = commands.entity(baked);
@@ -518,9 +687,10 @@ fn bake_one(
     baked.with_children(|parts| {
         for (slot, mesh) in slots {
             // The default until `paint_rooms` finds the slot's own material.
-            parts.spawn((RoomSlotMesh { room: entity, slot }, Mesh3d(meshes.add(mesh)), MeshMaterial3d(material.clone())));
+            parts.spawn((RoomSlotMesh { room, slot }, Mesh3d(meshes.add(mesh)), MeshMaterial3d(material.clone())));
         }
     });
+    baked.id()
 }
 
 /// One room's or block's walls, rebuilt in place when it is rebaked. Its children are a
@@ -811,6 +981,58 @@ mod tests {
         app.world_mut().write_message(CalculateRoomGeometry);
         app.update();
         assert_ne!(meshes(&mut app)[&moved], before, "a bake asked for waited for the map to settle");
+    }
+
+    fn a_flight() -> crate::common::stairs::Stairs {
+        use crate::common::stairs::{Stairs, StairsShape, StairsStyle};
+        Stairs(StairsShape {
+            start: Vec3::ZERO,
+            end: Vec3::new(4.0, 0.0, 0.0),
+            width: Vec3::new(0.0, 0.0, 2.0),
+            height: Vec3::new(0.0, 2.0, 0.0),
+            style: StairsStyle::default(),
+        })
+    }
+
+    fn baked_flights(app: &mut App) -> Vec<Entity> {
+        app.world_mut().query_filtered::<&BakedRoomGeometry, With<BakedStairs>>().iter(app.world()).map(|baked| baked.room).collect()
+    }
+
+    #[test]
+    fn with_auto_bake_off_a_flight_waits_for_a_bake() {
+        let mut app = headless_with_a_room();
+        let flight = app.world_mut().spawn(a_flight()).id();
+        app.update();
+        assert!(baked_flights(&mut app).is_empty(), "baked with auto-bake off");
+        assert_eq!(rooms_status(&app).state, BakeState::Stale);
+        app.world_mut().write_message(CalculateRoomGeometry);
+        app.update();
+        assert_eq!(baked_flights(&mut app), vec![flight]);
+        assert_eq!(rooms_status(&app).state, BakeState::UpToDate);
+    }
+
+    /// Breaks if the room bake's own bookkeeping takes a flight's walls for a deleted room's.
+    #[test]
+    fn with_auto_bake_on_a_flight_is_baked_once_still_and_dropped_when_deleted() {
+        let mut app = headless();
+        app.world_mut().spawn(cube_at(0.0));
+        let flight = app.world_mut().spawn(a_flight()).id();
+        settle(&mut app);
+        assert_eq!(baked_flights(&mut app), vec![flight]);
+        let before = app.world_mut().query_filtered::<&BakedRoomGeometry, With<BakedStairs>>().single(app.world()).unwrap().faces_hash;
+
+        let mut moved = a_flight();
+        moved.0.style.steps = false;
+        *app.world_mut().get_mut::<crate::common::stairs::Stairs>(flight).unwrap() = moved;
+        app.update();
+        assert_eq!(rooms_status(&app).state, BakeState::Waiting);
+        settle(&mut app);
+        let after = app.world_mut().query_filtered::<&BakedRoomGeometry, With<BakedStairs>>().single(app.world()).unwrap().faces_hash;
+        assert_ne!(before, after, "the ramp was never baked");
+
+        app.world_mut().despawn(flight);
+        app.update();
+        assert!(baked_flights(&mut app).is_empty(), "a deleted flight's walls are still standing");
     }
 
     #[test]

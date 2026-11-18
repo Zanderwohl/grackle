@@ -65,6 +65,7 @@ trigger = "Trigger"
 block = "Block"
 footprint = "Footprint"
 footprint_block = "Footprint Block"
+stairs = "Stairs"
 mirror = "Mirror"
 retarget = "Retarget"
 
@@ -186,6 +187,7 @@ gizmos_animation_grids = "Animation Grids"
 gizmos_mirrors = "Mirrors"
 gizmos_triggers = "Triggers"
 gizmos_blocks = "Blocks"
+gizmos_stairs = "Stairs"
 
 [room.messages]
 ghost = "Room { me } is fully inside { other } and will not appear!"
@@ -287,6 +289,34 @@ ceiling = "Ceiling"
 
 [editor.features.block]
 title = "Block"
+
+[editor.features.stairs]
+title = "Stairs"
+start = "Start"
+end = "End"
+width = "Width"
+height = "Height"
+steps = "Steps"
+ramp = "Ramp"
+thick = "Thick"
+thin = "Thin"
+step_height = "Step height"
+thickness = "Thickness"
+meters = " m"
+step_count = "{ count } steps, { rise } m high, { depth } m deep"
+size = "Run { run } m, width { width } m, height { height } m, slope { slope }°"
+too_steep = "Too steep to walk up"
+no_run = "Start and End are the same point"
+no_width = "Width lies on the line from Start to End"
+no_height = "Height lies in the footprint's plane"
+
+[editor.features.stairs.points]
+center = "Center"
+start_far = "Start Far"
+end_far = "End Far"
+top_near = "Top Near"
+top_far = "Top Far"
+top = "Top"
 
 [editor.features.trigger]
 title = "Trigger"

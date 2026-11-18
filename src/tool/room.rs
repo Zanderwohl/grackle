@@ -1,5 +1,5 @@
 use bevy::app::App;
-use crate::common::keybind::{Action, Actions};
+use crate::common::keybind::Actions;
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use crate::common::world_surface::{self, Fill, Volume};
@@ -12,6 +12,7 @@ use crate::editor::trigger::EditorTrigger;
 use crate::editor::block::EditorBlock;
 use crate::editor::input::CurrentMouseInput;
 use crate::editor::multicam::{on_top, HandleMaterial, Multicam};
+use crate::tool::point_picker::{Picked, PointPicker};
 use crate::tool::tool_helpers::*;
 use crate::tool::Tools;
 
@@ -48,41 +49,22 @@ fn drawing_a_box(tool: Res<State<Tools>>) -> bool {
     matches!(tool.get(), Tools::Room | Tools::Trigger | Tools::Block)
 }
 
-#[derive(Clone)]
-enum RoomCornerMode {
-    Normal,
-    Picking,
-    RelativeSelected {
-        reference_feature: FeatureId,
-        reference_key: String,
-        reference_resolved: Vec3,
-    },
-}
-
 enum FarCorner {
     FromMin(Vec3),
     Point(PointRef),
 }
 
-enum RoomToolMode {
-    PlacingMin(RoomCornerMode),
-    PlacingMax(RoomCornerMode),
-}
-
 #[derive(Resource)]
 struct RoomTool {
-    mode: RoomToolMode,
+    picker: PointPicker,
     last_min: Vec3,
     /// The last room's far corner from its first, so the next is suggested at
     /// that size from wherever its own first corner went.
     last_size: Vec3,
     cursor: Option<Vec3>,
-    hovered_point: Option<(FeatureId, String, Vec3)>,
+    /// The first corner, once picked; the next pick is the far one.
     min_point: Option<PointRef>,
     min_resolved: Option<Vec3>,
-    /// What Shift interrupted, put back if the Shift was held to fly faster.
-    before_picking: Option<RoomCornerMode>,
-    flew: bool,
     snap: bool,
     snap_granularity: f32,
 }
@@ -90,15 +72,12 @@ struct RoomTool {
 impl Default for RoomTool {
     fn default() -> Self {
         Self {
-            mode: RoomToolMode::PlacingMin(RoomCornerMode::Normal),
+            picker: PointPicker::default(),
             last_min: Vec3::new(-1.0, 0.0, -1.0),
             last_size: Vec3::new(2.0, 2.0, 2.0),
             cursor: None,
-            hovered_point: None,
             min_point: None,
             min_resolved: None,
-            before_picking: None,
-            flew: false,
             snap: true,
             snap_granularity: DEFAULT_SNAP_GRANULARITY,
         }
@@ -107,18 +86,16 @@ impl Default for RoomTool {
 
 impl RoomTool {
     fn on_exit(mut tool: ResMut<Self>) {
-        tool.mode = RoomToolMode::PlacingMin(RoomCornerMode::Normal);
+        tool.picker.reset();
         tool.cursor = None;
-        tool.hovered_point = None;
         tool.min_point = None;
         tool.min_resolved = None;
-        tool.before_picking = None;
     }
 
     fn suggestion(&self) -> Vec3 {
-        match &self.mode {
-            RoomToolMode::PlacingMin(_) => self.last_min,
-            RoomToolMode::PlacingMax(_) => self.min_resolved.unwrap_or(self.last_min) + self.last_size,
+        match self.min_resolved {
+            None => self.last_min,
+            Some(min) => min + self.last_size,
         }
     }
 
@@ -133,125 +110,37 @@ impl RoomTool {
         current_tool: Res<State<Tools>>,
     ) {
         let drawing = current_tool.get().clone();
-        let shift_held = actions.pressed(Action::Modify);
-        let shift_just_pressed = actions.just_pressed(Action::Modify);
-
         let suggestion = tool.suggestion();
-
         tool.cursor = compute_cursor(
             &mouse_input, &cameras, suggestion,
             tool.snap, tool.snap_granularity, &rooms,
         );
-
-        // Escape while placing max discards the min, unless placing relatively, where it means zero offset.
-        if matches!(tool.mode, RoomToolMode::PlacingMax(ref cm) if !matches!(cm, RoomCornerMode::RelativeSelected { .. }))
-            && actions.just_pressed(Action::Cancel)
-        {
-            tool.mode = RoomToolMode::PlacingMin(RoomCornerMode::Normal);
-            tool.min_point = None;
-            tool.min_resolved = None;
-            tool.hovered_point = None;
-            return;
-        }
-
-        // Cloned to avoid holding a borrow on tool.mode.
-        let is_placing_min = matches!(tool.mode, RoomToolMode::PlacingMin(_));
-        let corner_mode = match &tool.mode {
-            RoomToolMode::PlacingMin(cm) | RoomToolMode::PlacingMax(cm) => cm.clone(),
+        let snap = tool.snap.then_some(tool.snap_granularity);
+        let cursor = tool.cursor;
+        let picked = tool.picker.update(&mouse_input, &actions, &features, cursor, snap, Some);
+        let (point, at) = match (picked, tool.min_resolved) {
+            (Picked::Nothing, _) => return,
+            // Escape while placing the far corner discards the first.
+            (Picked::Canceled, _) => {
+                tool.min_point = None;
+                tool.min_resolved = None;
+                return;
+            }
+            // The far corner is a size, measured from the first.
+            (Picked::Absolute(at), Some(min)) => {
+                Self::create_room(&mut tool, &mut features, &mut next_tool, &drawing, FarCorner::FromMin(at - min), at);
+                return;
+            }
+            (Picked::Absolute(at), None) => (PointRef::absolute(at.x, at.y, at.z), at),
+            (Picked::Relative(point, at), Some(_)) => {
+                Self::create_room(&mut tool, &mut features, &mut next_tool, &drawing, FarCorner::Point(point), at);
+                return;
+            }
+            (Picked::Relative(point, at), None) => (point, at),
         };
-
-        fn set_mode(tool: &mut RoomTool, is_min: bool, cm: RoomCornerMode) {
-            tool.mode = if is_min {
-                RoomToolMode::PlacingMin(cm)
-            } else {
-                RoomToolMode::PlacingMax(cm)
-            };
-        }
-
-        match corner_mode {
-            RoomCornerMode::Normal => {
-                if shift_held {
-                    set_mode(&mut tool, is_placing_min, RoomCornerMode::Picking);
-                    tool.hovered_point = None;
-                    tool.before_picking = None;
-                    tool.flew = false;
-                } else if is_placing_min {
-                    if let Some(cursor) = tool.cursor
-                        && commit_at_cursor(&mouse_input, &actions)
-                    {
-                        tool.min_point = Some(PointRef::absolute(cursor.x, cursor.y, cursor.z));
-                        tool.min_resolved = Some(cursor);
-                        tool.last_min = cursor;
-                        tool.mode = RoomToolMode::PlacingMax(RoomCornerMode::Normal);
-                        tool.hovered_point = None;
-                    }
-                } else if let (Some(cursor), Some(min)) = (tool.cursor, tool.min_resolved) {
-                    // The far corner is a size, measured from the first.
-                    if commit_at_cursor(&mouse_input, &actions) {
-                        Self::create_room(&mut tool, &mut features, &mut next_tool, &drawing, FarCorner::FromMin(cursor - min), cursor);
-                    }
-                }
-            }
-            RoomCornerMode::Picking => {
-                tool.flew |= camera_dragging(&mouse_input);
-                if !shift_held {
-                    let back = tool.before_picking.take().filter(|_| tool.flew);
-                    set_mode(&mut tool, is_placing_min, back.unwrap_or(RoomCornerMode::Normal));
-                    tool.hovered_point = None;
-                    return;
-                }
-
-                tool.hovered_point = mouse_input.world_pos
-                    .and_then(|ray| find_hovered_point(&ray, &features, PICK_RADIUS))
-                    .map(|(fid, key, pos)| {
-                        let pos = if tool.snap {
-                            snap_vec3(pos, tool.snap_granularity)
-                        } else {
-                            pos
-                        };
-                        (fid, key, pos)
-                    });
-
-                if mouse_input.released == Some(MouseButton::Left) {
-                    if let Some((feature_id, key, resolved)) = tool.hovered_point.take() {
-                        set_mode(&mut tool, is_placing_min, RoomCornerMode::RelativeSelected {
-                            reference_feature: feature_id,
-                            reference_key: key,
-                            reference_resolved: resolved,
-                        });
-                    }
-                }
-            }
-            RoomCornerMode::RelativeSelected { reference_feature, reference_key, reference_resolved } => {
-                // Kept until Shift comes up, in case it was held to fly faster.
-                if shift_just_pressed {
-                    tool.before_picking = Some(RoomCornerMode::RelativeSelected {
-                        reference_feature,
-                        reference_key: reference_key.clone(),
-                        reference_resolved,
-                    });
-                    tool.flew = false;
-                    tool.hovered_point = None;
-                    set_mode(&mut tool, is_placing_min, RoomCornerMode::Picking);
-                    return;
-                }
-                if let Some(cursor) = relative_commit(&mouse_input, &actions, tool.cursor, reference_resolved) {
-                    let d = cursor - reference_resolved;
-                    let mut pr = PointRef::reference_with_offset(reference_feature, d.x, d.y, d.z);
-                    if !reference_key.is_empty() {
-                        pr.point_key = reference_key.clone();
-                    }
-                    if is_placing_min {
-                        tool.min_point = Some(pr);
-                        tool.min_resolved = Some(cursor);
-                        tool.last_min = cursor;
-                        tool.mode = RoomToolMode::PlacingMax(RoomCornerMode::Normal);
-                    } else {
-                        Self::create_room(&mut tool, &mut features, &mut next_tool, &drawing, FarCorner::Point(pr), cursor);
-                    }
-                }
-            }
-        }
+        tool.min_point = Some(point);
+        tool.min_resolved = Some(at);
+        tool.last_min = at;
     }
 
     fn create_room(
@@ -278,7 +167,6 @@ impl RoomTool {
                 tool.last_size = max_resolved - min;
             }
             tool.min_resolved = None;
-            tool.mode = RoomToolMode::PlacingMin(RoomCornerMode::Normal);
             next_tool.set(Tools::Select);
         }
     }
@@ -289,11 +177,8 @@ impl RoomTool {
         mouse_input: Res<CurrentMouseInput>,
         mut gizmos: Gizmos,
     ) {
-        let corner_mode = match &tool.mode {
-            RoomToolMode::PlacingMin(cm) | RoomToolMode::PlacingMax(cm) => cm,
-        };
-        let from_min = matches!((&tool.mode, corner_mode), (RoomToolMode::PlacingMax(_), RoomCornerMode::Normal));
-        let is_relative = from_min || matches!(corner_mode, RoomCornerMode::RelativeSelected { .. });
+        let from_min = tool.min_resolved.filter(|_| tool.picker.reference().is_none() && !tool.picker.is_picking());
+        let is_relative = from_min.is_some() || tool.picker.reference().is_some();
 
         if let Some(cursor) = tool.cursor {
             let color = if is_relative {
@@ -303,26 +188,17 @@ impl RoomTool {
             };
             gizmos.sphere(Isometry3d::from_translation(cursor), 0.15, color);
 
-            // When placing max, draw the min point and a bounds preview
-            if let (RoomToolMode::PlacingMax(_), Some(min_resolved)) = (&tool.mode, tool.min_resolved) {
+            if let Some(min_resolved) = tool.min_resolved {
                 let min_color = Color::srgb_u8(100, 255, 100);
                 gizmos.sphere(Isometry3d::from_translation(min_resolved), 0.15, min_color);
                 let preview_color = Color::srgb_u8(40, 40, 200);
                 bounds_gizmo(&mut gizmos, min_resolved, cursor, preview_color);
             }
-
-            if let RoomCornerMode::RelativeSelected { reference_resolved, .. } = corner_mode {
-                draw_taxicab_path(&mut gizmos, *reference_resolved, cursor);
-            } else if let (true, Some(min)) = (from_min, tool.min_resolved) {
+            if let Some(min) = from_min {
                 draw_taxicab_path(&mut gizmos, min, cursor);
             }
         }
-
-        if matches!(corner_mode, RoomCornerMode::Picking) {
-            if let Some(ray) = mouse_input.world_pos {
-                draw_picking_gizmos(&mut gizmos, &ray, &features, &tool.hovered_point);
-            }
-        }
+        tool.picker.draw(&mut gizmos, &mouse_input, &features, tool.cursor);
     }
 
     fn draw_room_bounds(
