@@ -17,7 +17,7 @@ use crate::common::skeleton::clip::{
     Channel, Clip, Clock, Combine, Key, Space, StateAnimation, Track, Unit, Variant,
 };
 use crate::common::skeleton::state::{AnimationState, PoseInputs, AIRBORNE_PERIOD, IDLE_PERIOD};
-use crate::common::skeleton::humanoid_seed::{SHADOWBOX_LENGTH, TAUNT_SHADOWBOX};
+use crate::common::skeleton::humanoid_seed::{SHADOWBOX_LENGTH, TAUNT_SHADOWBOX, TAUNT_WAVE, WAVE_LENGTH};
 use crate::common::skeleton::raptor_seed::{IDLE_LENGTH, LUNGE_LENGTH, TAUNT_LENGTH, TAUNT_LUNGE, TAUNT_WAG};
 use crate::common::skeleton::rig::{Skeleton, HUMANOID};
 use crate::common::skeleton::{default_humanoid, Interpolation, Pose};
@@ -232,6 +232,21 @@ pub const SEEDS: &[Seed] = &[
                left, a right and two quick lefts, the hips, chest and shoulder driving in behind \
                each and the rear heel pivoting on the right; and a hop back out. The feet are solved onto \
                the floor and the fists onto a point ahead of the chin, so retune it there.",
+    },
+    Seed {
+        rig: HUMANOID,
+        name: Some(TAUNT_WAVE),
+        state: AnimationState::Idle,
+        length: WAVE_LENGTH,
+        clock: Clock::Seconds,
+        looping: false,
+        headings: &[],
+        note: "Sampled from `humanoid_seed::wave` on the reference build: the right hand swings up \
+               the side to beside the head, overshooting a little, with the body leaning away from \
+               it; three sweeps out and in, the hand trailing the forearm, the hips sliding under a \
+               chest that sways after the hand and the head tilting after that; then the arm comes \
+               down and the body settles. The feet are solved onto the floor and the wrist onto \
+               points from between the shoulders, so retune it there.",
     },
     raptor(AnimationState::Idle, IDLE_LENGTH, Clock::Shared, RAPTOR_IDLE_NOTE),
     raptor(AnimationState::Crouch, IDLE_LENGTH, Clock::Shared, RAPTOR_CROUCH_NOTE),

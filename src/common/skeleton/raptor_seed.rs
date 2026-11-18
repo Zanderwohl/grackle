@@ -88,7 +88,7 @@ const CROUCH_TAIL_LIFT: [f32; 3] = [-0.15, 0.0, 0.05];
 /// The taunt: its file name under the raptor's clips, and its length in seconds, the humanoid
 /// wave's.
 pub const TAUNT_WAG: &str = "taunt_wag";
-pub const TAUNT_LENGTH: f32 = 1.2;
+pub const TAUNT_LENGTH: f32 = super::humanoid_seed::WAVE_LENGTH;
 /// Seconds the tail takes to curl up, and to come back down at the end.
 const TAUNT_RAISE: f32 = 0.25;
 /// How far each tail bone curls up, radians, root first: together past straight up at the tip.
