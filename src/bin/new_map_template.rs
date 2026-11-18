@@ -664,7 +664,7 @@ fn cloister() -> (FeatureTimeline, MapMetadata) {
         }
     }
     let weapons = [
-        ("laser_rifle", v(19.5, GALLERY_M, 6.0), 0.0),
+        ("sniper_rifle", v(19.5, GALLERY_M, 6.0), 0.0),
         ("rocket_launcher", v(8.0, TUNNEL_M, 0.0), FRAC_PI_2),
         ("shotgun", v(0.0, 0.0, 12.0), FRAC_PI_2),
         ("flamethrower", v(23.0, 0.0, 12.5), FRAC_PI_2),
@@ -1009,7 +1009,7 @@ fn waterworks() -> (FeatureTimeline, MapMetadata) {
         ("shotgun", v(7.5, 0.0, -29.0)),
         ("shotgun", v(10.5, 0.0, 22.0)),
         ("rpg", v(-4.0, LOW_M, -4.0)),
-        ("laser_rifle", v(19.0, TOWER_M, 27.0)),
+        ("sniper_rifle", v(19.0, TOWER_M, 27.0)),
     ] {
         b.weapon(weapon, feet, 0.0);
     }

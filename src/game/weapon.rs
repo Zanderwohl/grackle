@@ -413,6 +413,7 @@ mod tests {
         kill_shove: None,
         ramp_up: None,
         falloff: None,
+        trail: crate::common::weapon::HitscanTrail::Streak,
     };
 
     fn a_world(catalog: WeaponCatalog) -> World {

@@ -386,7 +386,7 @@ tuned against bot rounds: the first version ran every route through the halls (3
 floor against about 1,450) and not symmetric: an outdoor plaza round a water tower and the armor,
 a sunken canal open to the sky that bends twice and is cut by sluices, a warehouse with a
 mezzanine, a hedged garden, a pillared cistern under the plaza reached by a stairwell cut into
-the plaza's floor, a market street walled into a slalom, a yard with a tower holding the laser
+the plaza's floor, a market street walled into a slalom, a yard with a tower holding the sniper
 rifle, and narrow tunnels and dog-legs between them. The plaza and the canal are footprint rooms.
 Its eight spawns stand round a corner in nooks off quiet rooms, away from every pickup. It was
 tuned against 4- and 8-bot rounds and `map_stats`: against Cloister on the same settings, a spawn
@@ -3353,6 +3353,12 @@ Two things about tracers specifically:
   the `Tracer` that draws the line and ball only while the hitboxes are shown
   (`F4`). `StreakPlugin` is added in `main.rs`, since it builds a mesh and a
   material, and joins the shared warm-up as the decals do.
+- **A hitscan action names its `trail`** in `weapons.toml`, required on every
+  one: `"streak"` above, or `"beam"` ([`src/game/beam.rs`](src/game/beam.rs),
+  the sniper rifle's): a line over the whole path in the shooter's swatch, both
+  ends fixed as it arrives, fading in over 0.25 s and out over the next 1 s.
+  Every shot's path starts at its shooter's barrel: the viewmodel's for the
+  viewed body in first person, else the held model's muzzle, else the eye.
 
 ### Projectiles are replicated, not re-simulated
 

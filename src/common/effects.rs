@@ -20,6 +20,7 @@ pub enum Effect {
         hit: bool,
         /// So the shooter's own machine can draw it from the barrel.
         by: Option<PlayerId>,
+        trail: crate::common::weapon::HitscanTrail,
     },
     Blast { at: Vec3, radius: f32 },
     /// An airblast's cone, from the eye along `toward` for `range` meters.

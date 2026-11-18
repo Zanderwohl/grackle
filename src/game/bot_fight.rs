@@ -674,7 +674,7 @@ mod tests {
         clear.rebuild_volumes(&[Volume::air(open)]);
         let (eye, point) = (Vec3::new(0.0, 1.6, 0.0), Vec3::new(0.0, 1.0, -10.0));
         let aim = aim_at(eye, point);
-        let rifle = WeaponAction::Hitscan(HitscanSpec { range_m: 100.0, damage: 10, headshot_multiplier: 1, shove_per_damage: 0.0, shove_radius_m: 0.0, pellets: None, kill_shove: None, ramp_up: None, falloff: None });
+        let rifle = WeaponAction::Hitscan(HitscanSpec { range_m: 100.0, damage: 10, headshot_multiplier: 1, shove_per_damage: 0.0, shove_radius_m: 0.0, pellets: None, kill_shove: None, ramp_up: None, falloff: None, trail: crate::common::weapon::HitscanTrail::Streak });
         let tolerance = tolerance(&rifle, 10.0);
         assert!(!would_land(&walled, eye, aim, point, tolerance, 0.0), "fired into the pillar");
         assert!(would_land(&clear, eye, aim, point, tolerance, 0.0));
@@ -697,16 +697,16 @@ mod tests {
             let error = skill.error * (-tracked / skill.settle).exp();
             current = skill.ease_toward(current, (wanted.0 + error * lean.cos(), wanted.1 + error * lean.sin()), dt);
         }
-        let rifle = WeaponAction::Hitscan(HitscanSpec { range_m: 100.0, damage: 10, headshot_multiplier: 1, shove_per_damage: 0.0, shove_radius_m: 0.0, pellets: None, kill_shove: None, ramp_up: None, falloff: None });
+        let rifle = WeaponAction::Hitscan(HitscanSpec { range_m: 100.0, damage: 10, headshot_multiplier: 1, shove_per_damage: 0.0, shove_radius_m: 0.0, pellets: None, kill_shove: None, ramp_up: None, falloff: None, trail: crate::common::weapon::HitscanTrail::Streak });
         assert!(angle_between(current, wanted) <= tolerance(&rifle, eye.distance(point)), "still off by {}", angle_between(current, wanted));
     }
 
-    /// Breaks if weapon choice ignores range: the shotgun close, the laser rifle far, and the
+    /// Breaks if weapon choice ignores range: the shotgun close, the sniper rifle far, and the
     /// rocket launcher between but never inside its own blast.
     #[test]
     fn a_bot_picks_its_weapon_by_range() {
         let catalog = catalog();
-        let (shotgun, rifle, rockets) = (key(&catalog, "shotgun"), key(&catalog, "laser_rifle"), key(&catalog, "rocket_launcher"));
+        let (shotgun, rifle, rockets) = (key(&catalog, "shotgun"), key(&catalog, "sniper_rifle"), key(&catalog, "rocket_launcher"));
         let carried = [shotgun, rifle, rockets];
         let ammo = full(&catalog, &carried);
         let pick = |distance| best_weapon(&carried, &ammo, &catalog, distance).unwrap().0;
@@ -760,7 +760,7 @@ mod tests {
         world.insert_resource(collision);
         world.init_resource::<Time>();
         let catalog = catalog();
-        let rifle = key(&catalog, "laser_rifle");
+        let rifle = key(&catalog, "sniper_rifle");
         let ammo = full(&catalog, &[rifle]);
         world.insert_resource(catalog);
         let body = |at: Vec3| {
