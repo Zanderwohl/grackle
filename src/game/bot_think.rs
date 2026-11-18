@@ -518,7 +518,7 @@ pub fn think(
         };
         let unarmed = match (catalog, game_rules.as_deref()) {
             (Some(catalog), Some(rules)) => {
-                let class = class.copied().unwrap_or_else(|| rules.class_to_play());
+                let class = class.copied().unwrap_or_else(|| rules.class_for_a_bot(catalog));
                 let (starting, _) = catalog.starting_equipment(class, rules.loadout.as_deref());
                 carried.iter().all(|weapon| starting.carried().contains(weapon))
             }

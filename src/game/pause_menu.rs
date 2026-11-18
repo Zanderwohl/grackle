@@ -28,13 +28,15 @@ pub struct MouseHeld {
     pub pause: bool,
     /// Written only by [`crate::game::team_picker`].
     pub team_picker: bool,
+    /// Written only by [`crate::game::class_picker`].
+    pub class_picker: bool,
     /// The Settings window, which the pause menu opens in Play.
     pub settings: bool,
 }
 
 impl MouseHeld {
     pub fn any(&self) -> bool {
-        self.pause || self.team_picker || self.settings
+        self.pause || self.team_picker || self.class_picker || self.settings
     }
 }
 

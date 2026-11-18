@@ -428,7 +428,7 @@ mod tests {
         let settings = RoundSettings { pre_game_length: 6.0, fill_with_bots: true, bot_only_matches: true, frag_limit: None, ..default() };
         let mut app = match_app(settings);
         app.world_mut().spawn(crate::game::bot::BotSeat);
-        app.world_mut().insert_resource(OurIdentity(Identity { id: PlayerId(1), seat: Seat::Spectating, color: 0 }));
+        app.world_mut().insert_resource(OurIdentity(Identity { id: PlayerId(1), seat: Seat::Spectating, color: 0, class: None }));
         run(&mut app, 8.0);
         assert_eq!(*app.world().resource::<State<MatchPhase>>().get(), MatchPhase::Live);
         assert!(app.world().resource::<Heard>().0.is_empty(), "bots and a spectator heard music");
@@ -445,7 +445,7 @@ mod tests {
     #[test]
     fn a_pre_game_of_no_length_is_still_opened() {
         let mut app = match_app(RoundSettings { pre_game_length: 0.0, ..default() });
-        app.world_mut().insert_resource(OurIdentity(Identity { id: PlayerId(1), seat: crate::game::respawn::Seat::Playing(None), color: 0 }));
+        app.world_mut().insert_resource(OurIdentity(Identity { id: PlayerId(1), seat: crate::game::respawn::Seat::Playing(None), color: 0, class: None }));
         run(&mut app, 1.0);
         assert_eq!(*app.world().resource::<State<MatchPhase>>().get(), MatchPhase::Live);
         assert_eq!(app.world().resource::<Heard>().0.len(), 1);
@@ -456,7 +456,7 @@ mod tests {
     fn tracks_added_late_in_the_pre_game_still_open_it() {
         let mut app = match_app(RoundSettings { pre_game_length: 6.0, ..default() });
         app.world_mut().resource_mut::<MapMetadata>().music.clear();
-        app.world_mut().insert_resource(OurIdentity(Identity { id: PlayerId(1), seat: crate::game::respawn::Seat::Playing(None), color: 0 }));
+        app.world_mut().insert_resource(OurIdentity(Identity { id: PlayerId(1), seat: crate::game::respawn::Seat::Playing(None), color: 0, class: None }));
         run(&mut app, 2.0);
         assert!(app.world().resource::<Heard>().0.is_empty());
         app.world_mut().resource_mut::<MapMetadata>().music = tracks(&["music/a.ogg"]);

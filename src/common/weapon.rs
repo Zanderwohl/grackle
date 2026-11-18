@@ -636,7 +636,13 @@ pub struct Loadout {
     /// The most armor a body holds; `None` is [`DEFAULT_MAX_ARMOR`](crate::common::damage::DEFAULT_MAX_ARMOR).
     #[serde(default)]
     pub armor: Option<u32>,
+    /// The taunt, by its key in `taunts.toml`, a class's portrait plays in the class picker while
+    /// the pointer is over it; `None` is [`DEFAULT_PICKER_TAUNT`].
+    #[serde(default)]
+    pub picker_taunt: Option<String>,
 }
+
+pub const DEFAULT_PICKER_TAUNT: &str = "wave";
 
 impl Loadout {
     pub fn at(&self, slot: Slot) -> Option<&SlotChoices> {

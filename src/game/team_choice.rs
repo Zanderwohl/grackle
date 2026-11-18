@@ -175,7 +175,7 @@ impl Plugin for TeamChoicePlugin {
 
 /// This machine's player, or a client's link.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Chair {
+pub(crate) enum Chair {
     Ours,
     Link(Entity),
 }
@@ -414,8 +414,8 @@ mod tests {
     /// Breaks if bots are left out of the count, so a person joins the team the bots already fill.
     #[test]
     fn bots_are_counted_when_choosing() {
-        let me = Identity { id: PlayerId(1), seat: Seat::Choosing, color: 0 };
-        let bot = Identity { id: PlayerId(2), seat: Seat::Playing(Some(Team::Red)), color: 1 };
+        let me = Identity { id: PlayerId(1), seat: Seat::Choosing, color: 0, class: None };
+        let bot = Identity { id: PlayerId(2), seat: Seat::Playing(Some(Team::Red)), color: 1, class: None };
         let here = [(Chair::Ours, me)];
         let counts = tallies_without(&[Team::Red, Team::Blue], &here, &[bot], me.id, &HashMap::new());
         assert_eq!(counts.iter().find(|tally| tally.team == Team::Red).unwrap().players, 1);
@@ -425,8 +425,8 @@ mod tests {
     /// Breaks if leaving your own team is not counted before joining another.
     #[test]
     fn whoever_is_choosing_is_not_counted() {
-        let me = Identity { id: PlayerId(1), seat: Seat::Playing(Some(Team::Blue)), color: 0 };
-        let red = |id| Identity { id: PlayerId(id), seat: Seat::Playing(Some(Team::Red)), color: 0 };
+        let me = Identity { id: PlayerId(1), seat: Seat::Playing(Some(Team::Blue)), color: 0, class: None };
+        let red = |id| Identity { id: PlayerId(id), seat: Seat::Playing(Some(Team::Red)), color: 0, class: None };
         let here = [(Chair::Ours, me), (Chair::Link(Entity::PLACEHOLDER), red(2)), (Chair::Link(Entity::PLACEHOLDER), red(3))];
         let counts = tallies_without(&[Team::Red, Team::Blue], &here, &[], me.id, &HashMap::new());
         assert_eq!(counts, tallies(&[(Team::Red, 2, 0), (Team::Blue, 0, 0)]));
@@ -482,8 +482,8 @@ mod tests {
         let offer = options(Seat::Playing(Some(Team::Red)), true, &counts);
         assert_eq!(decide(TeamChoice::Spectate, &offer, &counts, &mut rng), Ok(Seat::Spectating));
 
-        let me = Identity { id: PlayerId(1), seat: Seat::Choosing, color: 0 };
-        let watcher = Identity { id: PlayerId(2), seat: Seat::Spectating, color: 1 };
+        let me = Identity { id: PlayerId(1), seat: Seat::Choosing, color: 0, class: None };
+        let watcher = Identity { id: PlayerId(2), seat: Seat::Spectating, color: 1, class: None };
         let here = [(Chair::Ours, me), (Chair::Link(Entity::PLACEHOLDER), watcher)];
         let counts = tallies_without(&[Team::Red, Team::Blue], &here, &[], me.id, &HashMap::new());
         assert_eq!(counts, tallies(&[(Team::Red, 0, 0), (Team::Blue, 0, 0)]));
@@ -508,7 +508,7 @@ mod tests {
             world.init_resource::<TeamOptions>();
             world.init_resource::<Messages<ChooseTeam>>();
             world.init_resource::<Messages<Kill>>();
-            world.insert_resource(OurIdentity(Identity { id: PlayerId(1), seat, color: 0 }));
+            world.insert_resource(OurIdentity(Identity { id: PlayerId(1), seat, color: 0, class: None }));
             world
         }
 

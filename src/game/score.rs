@@ -717,7 +717,7 @@ mod tests {
     fn every_player_gets_one_standing_and_a_leaver_loses_theirs() {
         let mut world = World::new();
         world.insert_resource(HueStart(0.0));
-        let who = |id: u64, color: usize| Identity { id: PlayerId(id), seat: crate::game::respawn::Seat::Playing(None), color };
+        let who = |id: u64, color: usize| Identity { id: PlayerId(id), seat: crate::game::respawn::Seat::Playing(None), color, class: None };
         world.insert_resource(OurIdentity(who(0, 0)));
         let client = world.spawn(who(1, 1)).id();
 
@@ -743,7 +743,7 @@ mod tests {
         let mut world = World::new();
         world.insert_resource(HueStart(0.0));
         world.insert_resource(BotNames::from_files(["Salad"], &mut rand::rng()));
-        world.spawn(Identity { id: PlayerId(4), seat: crate::game::respawn::Seat::Playing(None), color: 0 });
+        world.spawn(Identity { id: PlayerId(4), seat: crate::game::respawn::Seat::Playing(None), color: 0, class: None });
 
         world.run_system_once(keep_standings).unwrap();
         world.flush();

@@ -195,11 +195,12 @@ fn build_body_meshes(
             Option<&OnFire>,
             Option<&BodyMesh>,
             Option<&Ragdoll>,
+            Option<&RenderLayers>,
         ),
         Or<(Changed<Skeleton>, Changed<Team>, Changed<PlayerColor>, Changed<BodyTint>)>,
     >,
 ) {
-    for (body, skeleton, team, player, tint, burning, existing, corpse) in &bodies {
+    for (body, skeleton, team, player, tint, burning, existing, corpse, layers) in &bodies {
         if let Some(existing) = existing {
             for part in &existing.parts {
                 commands.entity(*part).despawn();
@@ -213,8 +214,7 @@ fn build_body_meshes(
         let mut parts = Vec::with_capacity(handles.len());
         commands.entity(body).with_children(|body| {
             for (index, handle) in handles.iter().enumerate() {
-                parts.push(
-                    body.spawn((
+                let mut part = body.spawn((
                         BoneMesh(index),
                         FirstPersonHidden,
                         Mesh3d(handle.clone()),
@@ -228,9 +228,12 @@ fn build_body_meshes(
                         Transform::from_translation(
                             skeleton.bones()[index].head,
                         ),
-                    ))
-                    .id(),
-                );
+                    ));
+                // From the first frame, or the kill cam's replay records them on the world.
+                if let Some(layers) = layers {
+                    part.insert(layers.clone());
+                }
+                parts.push(part.id());
             }
         });
 

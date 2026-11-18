@@ -48,14 +48,14 @@ const SEEN_FROM: Vec3 = Vec3::new(1.0, 0.45, -0.45);
 
 /// Toward each light, in the camera's frame: `+X` right, `+Y` up, `+Z` back
 /// toward the camera.
-const KEY_FROM: Vec3 = Vec3::new(-0.7, 0.8, 0.9);
-const FILL_FROM: Vec3 = Vec3::new(0.9, -0.1, 0.6);
-const BACK_FROM: Vec3 = Vec3::new(0.3, 0.7, -1.0);
+pub(crate) const KEY_FROM: Vec3 = Vec3::new(-0.7, 0.8, 0.9);
+pub(crate) const FILL_FROM: Vec3 = Vec3::new(0.9, -0.1, 0.6);
+pub(crate) const BACK_FROM: Vec3 = Vec3::new(0.3, 0.7, -1.0);
 
-const KEY_LUX: f32 = 7_000.0;
-const FILL_LUX: f32 = 2_000.0;
-const BACK_LUX: f32 = 6_000.0;
-const AMBIENT: f32 = 150.0;
+pub(crate) const KEY_LUX: f32 = 7_000.0;
+pub(crate) const FILL_LUX: f32 = 2_000.0;
+pub(crate) const BACK_LUX: f32 = 6_000.0;
+pub(crate) const AMBIENT: f32 = 150.0;
 
 /// Frames between standing the studio up and taking the picture: meshes and
 /// the target have to reach the render world first.

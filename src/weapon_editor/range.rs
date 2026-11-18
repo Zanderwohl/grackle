@@ -604,11 +604,11 @@ fn stand_up(
             Role::Enemy => Team::Blue,
             _ => Team::Red,
         };
-        let who = Identity { id: PlayerId(FIRST_PUPPET_ID + count), seat: Seat::Playing(Some(team)), color: count as usize };
+        let who = Identity { id: PlayerId(FIRST_PUPPET_ID + count), seat: Seat::Playing(Some(team)), color: count as usize, class: None };
         // The shooter looks down -Z; the others face it.
         let yaw = if role == Role::Shooter { 0.0 } else { std::f32::consts::PI };
         let spawn = Spawn { feet: RANGE_ORIGIN + Vec3::new(0.0, 0.0, -ahead), yaw, side: Some(team) };
-        let body = spawn_player(commands, spawn, &who, PlayerColor::nth(0.0, count as usize), &ModeRules::default(), catalog);
+        let body = spawn_player(commands, spawn, &who, PlayerColor::nth(0.0, count as usize), crate::common::class::Class::Mercenary, &ModeRules::default(), catalog);
         let mut ammo = Ammo::default();
         for id in &carried {
             if let Some(weapon) = catalog.get(*id) {

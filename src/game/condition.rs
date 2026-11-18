@@ -239,6 +239,18 @@ pub struct ConditionClips {
     taunts: BTreeMap<String, Option<Handle<Clip>>>,
 }
 
+impl ConditionClips {
+    /// A taunt's clip by its name, as [`Taunt::clip_for`](crate::common::taunt::Taunt::clip_for) gives it.
+    pub fn taunt(&self, name: &str) -> Option<&Handle<Clip>> {
+        self.taunts.get(name)?.as_ref()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_taunts(taunts: impl IntoIterator<Item = (String, Handle<Clip>)>) -> Self {
+        Self { humiliated: None, taunts: taunts.into_iter().map(|(name, clip)| (name, Some(clip))).collect() }
+    }
+}
+
 pub fn load_condition_clips(
     mut commands: Commands,
     packs: Res<PackAssets>,

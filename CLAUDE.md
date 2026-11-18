@@ -291,8 +291,8 @@ and only a three-bone leg's last (knee forward, hock back) is accepted: it is
 solved exactly by `ik::digitigrade`, the metatarsus keeping its rest angle to
 the thigh, within the knee's and hock's own hinge `stops`. A
 taunt names another rig's clip in its `rigs`, and a body is offered only the
-taunts it has a clip for. `--class KEY` plays every body as that class until
-a class can be picked (`PlayAs`, read by `publish_game_rules`). The humanoid's
+taunts it has a clip for. `--class KEY` makes it the mode's only class, so
+nobody is asked (`PlayAs`, read by `publish_game_rules`). The humanoid's
 own tests loop over `ClassBuilds::humanoids()`.
 
 **Legs turn toward where a body is going; the body above takes it back.**
@@ -737,7 +737,7 @@ Every key named in this file is a default binding; Settings → Shortcuts
 rebinds it. Debug views and cheats (`Action::is_debug`) are listed in a
 section of their own there, but clash by their context like any action.
 
-Four more keys while playing: **`.`** brings the team picker back (see "Teams"), **`F`** swaps between first and third person
+Five more keys while playing: **`.`** brings the team picker back and **`,`** the class picker (see "Teams"), **`F`** swaps between first and third person
 (`ViewPreference` in [`src/game/player.rs`](src/game/player.rs), which a
 condition can override; `ViewMode` is what is drawn, and the camera swings
 between the two over `CAMERA_PULL_SECONDS` rather than cutting — your own body and
@@ -2394,6 +2394,51 @@ and Blue on a map with fewer than two.
   the view looks out of the first spectator camera the seat may use, else
   from behind a spawn point (`overlook_while_choosing`, a `DeathCam` of
   nobody's), which is why `spawn_the_view` no longer waits for a body.
+
+**Classes are chosen after a seat**
+([`src/game/class_choice.rs`](src/game/class_choice.rs),
+[`src/game/class_picker.rs`](src/game/class_picker.rs)). A mode lists the
+classes it allows in `modes.toml`, in the picker's order (`ModeRules::classes`;
+empty allows all): Arena the Mercenary, the Scout and the Raptor, every other
+mode all but the Spy, the Sniper and the Raptor. The choice is
+`Identity::class`, and a person is owed a body only once
+`ModeRules::class_for` answers: the class chosen, if the mode allows it, else
+the mode's only class, so a mode of one never asks. Choices are forgotten at
+each match's pre-game. A living body keeps its `Class`: a choice made while
+alive is the next body's, one made while dead the coming one's, and nothing is
+killed for it. A bot has no picker: its seat rolls a class at random among the
+allowed ones that start with a weapon (`ModeRules::random_class_for_a_bot`) as
+its first body of the match is stood up, and keeps it on its `Identity` until
+the next match's pre-game. A client is told its choices and what
+it chose (`ClassOptions`) on the team picker's channel.
+
+- **The picker** is a plate with a button per class: its key, a portrait and
+  its name. Up while a seated person owes a class (`ClassPicker::bars_the_way`),
+  else on `,`; never over the team picker, and it holds the mouse as
+  `MouseHeld::class_picker`. The first ten are chosen at once by
+  `Action::CHOICES`, in the **`Menu`** context — `1`–`9`, `0` by default, the
+  weapon buckets' digits, read only while a menu holds the mouse — or by a
+  click; the button shows the key bound. Buttons are one width; the row's
+  names share one size, the largest its longest name fits at (`fit_the_names`),
+  centered on a full-size name's line, and the number row keeps its height with
+  no key bound, so every row lines up across the buttons. The plate is scaled
+  down, as a `UiTransform` after layout, to stay inside the window safe zone
+  (`fit_the_panel`); `follow_the_lean` divides by a plate's scale so a scaled
+  plate's lines lean as an unscaled one's do.
+- **A portrait is drawn live**: per class an idling body (`PortraitBody`, rigged
+  where it is stood up, with no hitboxes) far under the map, its parts on its
+  own layer from their first frame (`build_body_meshes` copies a body's
+  `RenderLayers` onto its parts), an
+  orthographic camera on `render_layers::PORTRAIT` and an image the button
+  shows. The bodies stand `SPACING` apart, so no camera's box reaches another's
+  body. They stand only while the picker is up. A body wears the viewer's team
+  color, else their own (`ClassOptions::color`), and loops its class's
+  `picker_taunt` (in `loadouts.toml`, beside `hat`; absent is the wave) while the
+  pointer is over its button, put straight on its `ClipStack` and taken off with
+  no fade when the pointer leaves (`taunt_while_hovered`).
+- The Mercenary, the Scout and the Raptor start with the pistol; every other
+  class has no loadout yet and spawns carrying nothing, so no bot rolls one
+  while an armed class is allowed.
 
 **Spectating is a seat**, `Seat::Spectating`
 ([`src/game/spectate.rs`](src/game/spectate.rs)): on no team, owed no body,
