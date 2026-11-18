@@ -22,6 +22,7 @@ use crate::prop::feature::{FeatureOp, PropFeatureId};
 use crate::prop::gizmo::HoveredPick;
 use crate::prop::reference::{Located, Pickable, Pointer, EDGE_PICK_PX, POINT_PICK_PX};
 use crate::prop::region::{arrange, crossing, Arrangement};
+use crate::prop::curve::{clamped_knots, Curve2};
 use crate::prop::sketch::{PlacedSketch, Sketch, SketchId};
 use crate::prop::view::PropBuild;
 use crate::tool::tool_helpers::dashed_line;
@@ -47,7 +48,8 @@ pub enum SketchTool {
     #[default]
     Select,
     Line,
-    /// Center, start, end; counter-clockwise from start to end.
+    /// Center, start, end; from start the way the pointer went round, up to
+    /// a whole turn.
     Arc,
     /// Center, then any point on the rim.
     Circle,
@@ -114,6 +116,14 @@ pub struct SketchSession {
     chain: Option<SketchId>,
     /// The points a curve tool has been given so far.
     pending: Vec<SketchId>,
+    /// Radians the arc tool's pointer has gone round its center since the
+    /// start was placed, positive counter-clockwise, within a whole turn
+    /// either way; and the direction it was last seen in.
+    arc_sweep: f32,
+    arc_seen: Option<Vec2>,
+    /// The pointer was off the plane or over the center since `arc_seen`, so
+    /// how it went round in between is not known.
+    arc_lost: bool,
     /// Oldest first, like the model's picks.
     pub picks: Vec<SketchPick>,
     hovered: Option<SketchPick>,
@@ -135,6 +145,54 @@ pub struct SketchSession {
     /// The perspective camera and pivot as they were before the view was
     /// turned onto the sketch.
     saved: Option<(Entity, Transform, Projection, Vec3)>,
+    turn: Option<Turn>,
+}
+
+/// The perspective view on its way to facing the sketch.
+#[derive(Clone, Copy, Debug)]
+struct Turn {
+    camera: Entity,
+    from: Viewpoint,
+    to: Viewpoint,
+    elapsed: f32,
+    seconds: f32,
+}
+
+/// A camera as the pivot it orbits, its rotation, and where it stands in its
+/// own frame from the pivot. Blending these keeps the pivot on screen through
+/// a turn, where blending positions would cut the corner.
+#[derive(Clone, Copy, Debug)]
+struct Viewpoint {
+    pivot: Vec3,
+    rotation: Quat,
+    offset: Vec3,
+}
+
+impl Viewpoint {
+    fn of(transform: &Transform, pivot: Vec3) -> Viewpoint {
+        Viewpoint { pivot, rotation: transform.rotation, offset: transform.rotation.inverse() * (transform.translation - pivot) }
+    }
+
+    /// `t` from 0 to 1, already eased.
+    fn toward(self, to: Viewpoint, t: f32) -> (Transform, Vec3) {
+        let pivot = self.pivot.lerp(to.pivot, t);
+        let rotation = self.rotation.slerp(to.rotation, t);
+        let offset = self.offset.lerp(to.offset, t);
+        (Transform::from_translation(pivot + rotation * offset).with_rotation(rotation), pivot)
+    }
+}
+
+/// Radians a turn onto the sketch covers per second, on average.
+const TURN_RATE: f32 = std::f32::consts::FRAC_PI_2;
+
+/// Constant acceleration to halfway and constant deceleration after: a
+/// second-order polynomial each half.
+fn ease(t: f32) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    match t < 0.5 {
+        true => 2.0 * t * t,
+        false => 1.0 - 2.0 * (1.0 - t) * (1.0 - t),
+    }
 }
 
 impl SketchSession {
@@ -299,9 +357,27 @@ fn aim_the_view(
     mut session: ResMut<SketchSession>,
     editor: Res<PropEditor>,
     build: Res<PropBuild>,
+    time: Res<Time>,
+    mouse: Res<CurrentMouseInput>,
+    mut scrolls: MessageReader<bevy::input::mouse::MouseWheel>,
     mut pivot: ResMut<OrbitPivot>,
     mut cameras: Query<(Entity, &mut Transform, &mut Projection, &Multicam)>,
 ) {
+    // Orbiting, panning or zooming takes the view back from a turn.
+    let navigating = matches!(mouse.pressed, Some(MouseButton::Right | MouseButton::Middle)) | (scrolls.read().count() > 0);
+    if navigating {
+        session.turn = None;
+    }
+    if let Some(mut turn) = session.turn {
+        turn.elapsed += time.delta_secs();
+        let done = turn.elapsed >= turn.seconds;
+        if let Ok((_, mut transform, ..)) = cameras.get_mut(turn.camera) {
+            let (now, center) = turn.from.toward(turn.to, ease(turn.elapsed / turn.seconds));
+            *transform = now;
+            pivot.0 = center;
+        }
+        session.turn = (!done).then_some(turn);
+    }
     match session.view {
         ViewChange::None => {}
         ViewChange::Restore => {
@@ -318,17 +394,19 @@ fn aim_the_view(
             let Some(placed) = live(&session, &editor, &build) else { return };
             let (center, radius) = extent(&placed.sketch);
             let center = placed.plane.lift(center);
-            for (entity, mut transform, projection, multicam) in &mut cameras {
+            let facing = Transform::from_translation(center + *placed.plane.normal * radius * 3.2)
+                .looking_at(center, *placed.plane.y());
+            for (entity, transform, projection, multicam) in &mut cameras {
                 if multicam.axis != CameraAxis::None {
                     continue;
                 }
                 if session.saved.is_none() {
                     session.saved = Some((entity, *transform, projection.clone(), pivot.0));
                 }
-                *transform = Transform::from_translation(center + *placed.plane.normal * radius * 3.2)
-                    .looking_at(center, *placed.plane.y());
+                let (from, to) = (Viewpoint::of(&transform, pivot.0), Viewpoint::of(&facing, center));
+                let seconds = from.rotation.angle_between(to.rotation) / TURN_RATE;
+                session.turn = Some(Turn { camera: entity, from, to, elapsed: 0.0, seconds: seconds.max(f32::EPSILON) });
             }
-            pivot.0 = center;
             session.view = ViewChange::None;
         }
     }
@@ -390,6 +468,9 @@ fn edit_the_sketch(
     if actions.just_pressed(Action::Confirm) {
         session.finish_curve(&mut editor);
     }
+    if actions.just_pressed(Action::ResetView) {
+        session.view = ViewChange::Aim;
+    }
     // Not mid-press, which would strand an eraser stroke or a drag. Onto the
     // tool already up it drops the line in progress, as the button does.
     let chosen = [(Action::SketchLine, SketchTool::Line), (Action::SketchErase, SketchTool::Erase)]
@@ -433,6 +514,7 @@ fn edit_the_sketch(
         .hit(ray)
         .map(|hit| snap(placed.plane.flatten(hit), &placed, &pointer, &build.evaluated.pickables, dragged));
     session.cursor = cursor;
+    wind_the_arc(&mut session, &placed.sketch);
     session.on_plane = placed.plane.hit(ray).map(|hit| placed.plane.flatten(hit));
     session.hovered = match (session.tool, session.press) {
         (SketchTool::Select, None) => under(&placed, &pointer),
@@ -457,7 +539,7 @@ fn edit_the_sketch(
                     session.finish_curve(&mut editor);
                     return;
                 }
-                let (tool, mut pending) = (session.tool, std::mem::take(&mut session.pending));
+                let (tool, mut pending, sweep) = (session.tool, std::mem::take(&mut session.pending), session.arc_sweep);
                 editor.edit(|doc| {
                     let Some(sketch) = sketch_of_mut(doc, id) else { return };
                     if let (SketchTool::Circle, Some(&center)) = (tool, pending.first()) {
@@ -468,11 +550,12 @@ fn edit_the_sketch(
                         pending.clear();
                         return;
                     }
-                    pending.push(target.point.unwrap_or_else(|| sketch.add_point(target.at)));
-                    if let (SketchTool::Arc, [center, start, end]) = (tool, &pending[..]) {
-                        sketch.add_arc(*center, *start, *end, false);
+                    if let (SketchTool::Arc, &[center, start]) = (tool, &pending[..]) {
+                        place_arc(sketch, center, start, target.point, sweep);
                         pending.clear();
+                        return;
                     }
+                    pending.push(target.point.unwrap_or_else(|| sketch.add_point(target.at)));
                 });
                 session.pending = pending;
             }
@@ -743,16 +826,44 @@ fn draw_the_session(
             }
         }
     }
-    // What a curve tool has so far, joined up to the cursor.
+    // What a curve tool would place with the pointer as its next point.
     if !session.pending.is_empty() {
         let mut points: Vec<Vec2> = session.pending.iter().filter_map(|point| placed.sketch.point(*point)).collect();
         points.extend(session.cursor.map(|cursor| cursor.at));
-        for step in points.windows(2) {
-            dashed_line(&mut gizmos, placed.world(step[0]), placed.world(step[1]), HOVERED, marker, marker);
-        }
-        if let (SketchTool::Circle, [center, rim]) = (session.tool, &points[..]) {
-            let facing = Quat::from_rotation_arc(Vec3::Z, *placed.plane.normal);
-            gizmos.circle(Isometry3d::new(placed.world(*center), facing), center.distance(*rim), HOVERED);
+        let solid = |gizmos: &mut Gizmos, curve: &Curve2| {
+            for facet in curve.facets().windows(2) {
+                gizmos.line(placed.world(facet[0]), placed.world(facet[1]), HOVERED);
+            }
+        };
+        match (session.tool, &points[..]) {
+            (SketchTool::Circle, [center, rim]) => solid(&mut gizmos, &Curve2::Circle { center: *center, radius: center.distance(*rim) }),
+            // The radius as a dashed circle until the start is down, then the
+            // arc it would make.
+            (SketchTool::Arc, [center, rim]) => {
+                let circle = Curve2::Circle { center: *center, radius: center.distance(*rim) };
+                for facet in circle.facets().windows(2) {
+                    dashed_line(&mut gizmos, placed.world(facet[0]), placed.world(facet[1]), HOVERED, marker, marker);
+                }
+            }
+            (SketchTool::Arc, [center, start, _]) if session.arc_sweep != 0.0 => {
+                solid(&mut gizmos, &arc_by(*center, *start, session.arc_sweep));
+            }
+            (SketchTool::Bezier, points) if points.len() >= 2 => {
+                hull(&mut gizmos, &placed, points, marker);
+                solid(&mut gizmos, &Curve2::Bezier { points: points.to_vec() });
+            }
+            (SketchTool::Nurbs, points) if points.len() >= 2 => {
+                hull(&mut gizmos, &placed, points, marker);
+                let degree = (points.len() - 1).min(3);
+                let nurbs = Curve2::Nurbs {
+                    degree,
+                    points: points.to_vec(),
+                    weights: vec![1.0; points.len()],
+                    knots: clamped_knots(points.len(), degree),
+                };
+                solid(&mut gizmos, &nurbs);
+            }
+            _ => {}
         }
     }
 
@@ -779,6 +890,90 @@ fn draw_the_session(
             gizmos.line(placed.world(from), at, HOVERED);
         }
     }
+}
+
+/// A curve tool's control points so far, joined by dashes.
+fn hull(gizmos: &mut Gizmos, placed: &PlacedSketch, points: &[Vec2], marker: f32) {
+    for step in points.windows(2) {
+        dashed_line(gizmos, placed.world(step[0]), placed.world(step[1]), HOVERED, marker, marker);
+    }
+}
+
+/// A sweep this close to a whole turn closes the arc on its start.
+const WHOLE_TURN: f32 = std::f32::consts::TAU - 1e-4;
+
+/// Follows the pointer round the arc's center while the start is down, so an
+/// arc can go past a half turn; anything else forgets it.
+fn wind_the_arc(session: &mut SketchSession, sketch: &Sketch) {
+    let center_and_start = match (session.tool, &session.pending[..]) {
+        (SketchTool::Arc, [center, start]) => sketch.point(*center).zip(sketch.point(*start)),
+        _ => None,
+    };
+    let Some((center, start)) = center_and_start else {
+        (session.arc_sweep, session.arc_seen, session.arc_lost) = (0.0, None, false);
+        return;
+    };
+    let seen = session.arc_seen.unwrap_or(start - center);
+    // Near the center a pixel is a large turn, so the direction is not
+    // trusted there.
+    let near = start.distance(center) * NEAR_CENTER;
+    let Some(now) = session.cursor.map(|cursor| cursor.at - center).filter(|now| now.length() > near) else {
+        session.arc_lost = true;
+        return;
+    };
+    session.arc_sweep = wound(session.arc_sweep, seen, now, session.arc_lost);
+    (session.arc_seen, session.arc_lost) = (Some(now), false);
+}
+
+/// Of the start's distance from the center, how near the pointer may come
+/// before its direction stops counting.
+const NEAR_CENTER: f32 = 0.15;
+/// A turn this close to a half turn could have gone either way.
+const AMBIGUOUS: f32 = 0.9 * std::f32::consts::PI;
+
+/// `sweep` carried on by the turn from `seen` to `now`, held within a whole
+/// turn either side. The shorter way, unless that is a guess — nearly a half
+/// turn, or past a quarter turn since the pointer was `lost` — in which case
+/// the way the arc is already going.
+pub fn wound(sweep: f32, seen: Vec2, now: Vec2, lost: bool) -> f32 {
+    let mut turn = seen.angle_to(now);
+    let guess = turn.abs() > AMBIGUOUS || (lost && turn.abs() > std::f32::consts::FRAC_PI_2);
+    if guess && sweep != 0.0 && turn.signum() != sweep.signum() {
+        turn += std::f32::consts::TAU * sweep.signum();
+    }
+    (sweep + turn).clamp(-std::f32::consts::TAU, std::f32::consts::TAU)
+}
+
+/// Below this an arc is too short to place: radians.
+const LEAST_SWEEP: f32 = 1e-2;
+
+/// The arc round `center` from `start` by `sweep`, ending on `snapped` if the
+/// click landed on another point. A whole turn closes on its own start, as a
+/// circle does; a snap onto the start short of that is ignored, since it
+/// would read as a whole turn.
+fn place_arc(sketch: &mut Sketch, center: SketchId, start: SketchId, snapped: Option<SketchId>, sweep: f32) {
+    if sweep.abs() < LEAST_SWEEP {
+        return;
+    }
+    let end = match sweep.abs() >= WHOLE_TURN {
+        true => start,
+        false => match snapped.filter(|point| *point != start) {
+            Some(point) => point,
+            None => {
+                let (Some(c), Some(s)) = (sketch.point(center), sketch.point(start)) else { return };
+                let Curve2::Arc { end, .. } = arc_by(c, s, sweep) else { return };
+                sketch.add_point(end)
+            }
+        },
+    };
+    sketch.add_arc(center, start, end, sweep < 0.0);
+}
+
+/// The arc round `center` from `start` by `sweep` radians, positive
+/// counter-clockwise.
+pub fn arc_by(center: Vec2, start: Vec2, sweep: f32) -> Curve2 {
+    let end = center + Vec2::from_angle(sweep).rotate(start - center);
+    Curve2::Arc { center, start, end, sweep }
 }
 
 /// Diagonal lines `spacing` apart. Even-odd along each line, so holes come
@@ -820,6 +1015,121 @@ mod tests {
 
     fn snapped(at: Vec2, point: Option<SketchId>) -> Snapped {
         Snapped { at, point }
+    }
+
+    #[test]
+    fn a_turn_eases_in_and_out_and_lands_on_its_target() {
+        assert_eq!(ease(0.0), 0.0);
+        assert_eq!(ease(0.5), 0.5);
+        assert_eq!(ease(1.0), 1.0);
+        // Slow at both ends: the first and last tenth cover 2% each.
+        assert!((ease(0.1) - 0.02).abs() < 1e-6);
+        assert!((1.0 - ease(0.9) - 0.02).abs() < 1e-6);
+        let pivot = Vec3::new(0.1, 0.0, 0.0);
+        let start = Transform::from_xyz(1.0, 1.0, 1.0).looking_at(Vec3::ZERO, Vec3::Y);
+        let end = Transform::from_xyz(0.1, 0.0, 0.5).looking_at(pivot, Vec3::Y);
+        let (from, to) = (Viewpoint::of(&start, Vec3::ZERO), Viewpoint::of(&end, pivot));
+        let (at_start, _) = from.toward(to, 0.0);
+        let (at_end, center) = from.toward(to, 1.0);
+        assert!(at_start.translation.distance(start.translation) < 1e-5);
+        assert!(at_end.translation.distance(end.translation) < 1e-5);
+        assert!(at_end.rotation.angle_between(end.rotation) < 1e-4);
+        assert_eq!(center, pivot);
+    }
+
+    /// Going round in steps of a sixth of a turn reaches 300 degrees, and
+    /// going on stops at a whole turn.
+    #[test]
+    fn an_arc_winds_past_a_half_turn_and_stops_at_a_whole_one() {
+        let step = std::f32::consts::TAU / 6.0;
+        let mut sweep = 0.0;
+        let mut seen = Vec2::X;
+        for k in 1..=5 {
+            let now = Vec2::from_angle(step * k as f32);
+            sweep = wound(sweep, seen, now, false);
+            seen = now;
+        }
+        assert!((sweep - 300f32.to_radians()).abs() < 1e-4, "{}", sweep.to_degrees());
+        for k in 6..=9 {
+            let now = Vec2::from_angle(step * k as f32);
+            sweep = wound(sweep, seen, now, false);
+            seen = now;
+        }
+        assert_eq!(sweep, std::f32::consts::TAU);
+        // Coming back unwinds from the cap.
+        sweep = wound(sweep, seen, Vec2::from_angle(step * 8.0), false);
+        assert!(sweep < std::f32::consts::TAU);
+    }
+
+    /// Through the center the direction flips by a half turn; the arc keeps
+    /// going the way it was, and so it does after the pointer was away.
+    #[test]
+    fn an_ambiguous_turn_keeps_the_arcs_direction() {
+        let sweep = 100f32.to_radians();
+        let across = wound(sweep, Vec2::from_angle(sweep), Vec2::from_angle(sweep + std::f32::consts::PI), false);
+        assert!((across - (sweep + std::f32::consts::PI)).abs() < 1e-4, "{}", across.to_degrees());
+        let short = 30f32.to_radians();
+        let back = wound(short, Vec2::from_angle(short), Vec2::from_angle(short - 2.0), true);
+        assert!((back - (short + std::f32::consts::TAU - 2.0)).abs() < 1e-4, "{}", back.to_degrees());
+        // A little behind where it left is taken as a step back.
+        let nudge = wound(short, Vec2::from_angle(short), Vec2::from_angle(short - 0.1), true);
+        assert!((nudge - (short - 0.1)).abs() < 1e-4, "{}", nudge.to_degrees());
+    }
+
+    /// The session winds as the pointer moves and the click places that
+    /// sweep: a whole turn closes on the start, a snap onto the start short of
+    /// one is ignored, and a click without moving places nothing.
+    #[test]
+    fn the_arc_tool_places_what_it_wound() {
+        let mut sketch = Sketch::default();
+        let center = sketch.add_point(Vec2::ZERO);
+        let start = sketch.add_point(Vec2::new(0.02, 0.0));
+        let mut session = SketchSession { tool: SketchTool::Arc, pending: vec![center, start], ..default() };
+        for degrees in (30..=270).step_by(30) {
+            session.cursor = Some(snapped(Vec2::from_angle((degrees as f32).to_radians()) * 0.02, None));
+            wind_the_arc(&mut session, &sketch);
+        }
+        assert!((session.arc_sweep - 270f32.to_radians()).abs() < 1e-4);
+        // Across the center: ignored while near it.
+        session.cursor = Some(snapped(Vec2::ZERO, None));
+        wind_the_arc(&mut session, &sketch);
+        assert!(session.arc_lost);
+
+        place_arc(&mut sketch, center, start, None, 270f32.to_radians());
+        place_arc(&mut sketch, center, start, Some(start), std::f32::consts::TAU);
+        place_arc(&mut sketch, center, start, Some(start), 10f32.to_radians());
+        place_arc(&mut sketch, center, start, None, 1e-4);
+        let sweeps: Vec<f32> = sketch.curves().into_iter().filter_map(|(_, curve, _)| match curve {
+            Curve2::Arc { sweep, .. } => Some(sweep.to_degrees()),
+            _ => None,
+        }).collect();
+        assert_eq!(sweeps.len(), 3, "{sweeps:?}");
+        for (got, want) in sweeps.iter().zip([270.0, 360.0, 10.0]) {
+            assert!((got - want).abs() < 0.01, "{sweeps:?}");
+        }
+    }
+
+    /// The placed arc is the one previewed: 300 degrees clockwise stays
+    /// 300 degrees, and a whole turn closes on its start.
+    #[test]
+    fn a_placed_arc_keeps_its_wound_sweep() {
+        let mut sketch = Sketch::default();
+        let center = sketch.add_point(Vec2::ZERO);
+        let start = sketch.add_point(Vec2::new(0.02, 0.0));
+        let Curve2::Arc { end, .. } = arc_by(Vec2::ZERO, Vec2::new(0.02, 0.0), -300f32.to_radians()) else { panic!() };
+        let end = sketch.add_point(end);
+        let arc = sketch.add_arc(center, start, end, true);
+        let Some(Curve2::Arc { sweep, .. }) = sketch.curve(arc) else { panic!() };
+        assert!((sweep + 300f32.to_radians()).abs() < 1e-4, "{}", sweep.to_degrees());
+
+        let whole = sketch.add_arc(center, start, start, false);
+        let Some(Curve2::Arc { sweep, .. }) = sketch.curve(whole) else { panic!() };
+        assert!((sweep - std::f32::consts::TAU).abs() < 1e-4, "{}", sweep.to_degrees());
+
+        let mut ring = Sketch::default();
+        let (center, start) = (ring.add_point(Vec2::ZERO), ring.add_point(Vec2::new(0.02, 0.0)));
+        ring.add_arc(center, start, start, false);
+        assert_eq!(arrange(&ring).regions.len(), 1, "a whole turn encloses a region as a circle does");
     }
 
     /// Fails if the chain rule changes: every click continues from where it
