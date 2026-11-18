@@ -70,6 +70,7 @@ impl Plugin for NetTransportPlugin {
             .add_plugins(crate::common::match_phase::MatchPhaseSyncPlugin)
             .add_plugins(crate::common::player_settings::PlayerSettingsSyncPlugin)
             .add_plugins(crate::game::team_choice::TeamChoiceSyncPlugin)
+            .add_plugins(crate::game::class_choice::ClassChoiceSyncPlugin)
             .add_plugins(crate::common::map_sync::MapSyncPlugin)
             .add_plugins(crate::common::pack_sync::PackSyncPlugin)
             // A client told about a weapon but not its model draws empty hands.

@@ -16,6 +16,8 @@ happen mid-match.
 | Somebody left, with their name | Host | Nothing | [`net_transport.rs`](../src/common/net_transport.rs) `report_status` |
 | Joined a server, with its address | Client | `NetStatus::Connected`, a line inside the Multiplayer menu | [`net_transport.rs`](../src/common/net_transport.rs) `report_status` |
 | Left a server (Disconnect) | Client | Nothing | [`pause_menu.rs`](../src/game/pause_menu.rs), [`net_menu.rs`](../src/editor/net_menu.rs) |
+| A class was chosen while alive: the switch waits for the next spawn, with the class | The person who chose | `info!` line on the authority, and on the choosing machine once the authority has taken it | [`class_picker.rs`](../src/game/class_picker.rs) `report_the_choice`, [`class_choice.rs`](../src/game/class_choice.rs) `seat_whoever_chose_a_class` |
+| A class was chosen while dead or waiting: the next body is that class | The person who chose | `info!` line on the authority, and on the choosing machine once the authority has taken it | [`class_picker.rs`](../src/game/class_picker.rs) `report_the_choice`, [`class_choice.rs`](../src/game/class_choice.rs) `seat_whoever_chose_a_class` |
 | The server went away, or a connection attempt timed out, with the reason | Client | `NetStatus::Failed` in the Multiplayer menu; `drop_a_failed_link` goes solo | [`net_transport.rs`](../src/common/net_transport.rs) `drop_a_failed_link` |
 
 Other players joining and leaving a server should probably reach clients too. That needs a

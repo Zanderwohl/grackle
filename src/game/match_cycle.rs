@@ -400,7 +400,7 @@ mod tests {
     }
 
     fn person(app: &mut App, seat: Seat) {
-        app.world_mut().insert_resource(OurIdentity(Identity { id: PlayerId(1), seat, color: 0 }));
+        app.world_mut().insert_resource(OurIdentity(Identity { id: PlayerId(1), seat, color: 0, class: None }));
     }
 
     /// Breaks if the countdown runs for nobody, or bots play alone when they may not.

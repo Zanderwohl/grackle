@@ -19,7 +19,7 @@ use crate::common::team::Team;
 use crate::common::player_color::PlayerColor;
 use crate::game::respawn::Identity;
 use crate::common::class::{
-    body_center_from_feet, Stance, CLASS_HALF_EXTENTS, CROUCH_EYE_HEIGHT, TALLEST_CLASS_EYE_HEIGHT,
+    body_center_from_feet, Class, Stance, CLASS_HALF_EXTENTS, CROUCH_EYE_HEIGHT, TALLEST_CLASS_EYE_HEIGHT,
 };
 use crate::game::collision::{CollisionWorld, Touched};
 use crate::common::weapon::{Ammo, Equipped, WeaponCatalog, WeaponId};
@@ -461,6 +461,7 @@ pub fn spawn_player(
     spawn: Spawn,
     who: &Identity,
     color: PlayerColor,
+    class: Class,
     rules: &ModeRules,
     catalog: &WeaponCatalog,
 ) -> Entity {
@@ -468,7 +469,6 @@ pub fn spawn_player(
 
     // This decides what the body carries; a corpse's build is still read off
     // the rig.
-    let class = rules.class_to_play();
     let (equipped, ammo) = catalog.starting_equipment(class, rules.loadout.as_deref());
     let loadout = catalog.loadout(class);
     let health = loadout.and_then(|loadout| loadout.health).unwrap_or(DEFAULT_HEALTH);

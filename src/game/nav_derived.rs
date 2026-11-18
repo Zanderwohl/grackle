@@ -197,9 +197,17 @@ impl Bounded {
     }
 }
 
-/// What a body of the mode's class starts with: the mode's loadout, else the class's defaults.
+/// What every class a bot may roll starts with, so a pickup any of them lacks counts as a first
+/// weapon: the mode's loadout, else each class's defaults.
 pub fn starting_weapons(catalog: &WeaponCatalog, rules: &ModeRules) -> Vec<WeaponId> {
-    catalog.starting_equipment(rules.class_to_play(), rules.loadout.as_deref()).0.carried().to_vec()
+    let carried = |class| catalog.starting_equipment(class, rules.loadout.as_deref()).0.carried().to_vec();
+    let mut classes = rules.armed_classes(catalog).into_iter();
+    let Some(first) = classes.next() else { return Vec::new() };
+    classes.fold(carried(first), |mut shared, class| {
+        let theirs = carried(class);
+        shared.retain(|weapon| theirs.contains(weapon));
+        shared
+    })
 }
 
 /// From one spawn to the nearest weapon pickup it does not start with.

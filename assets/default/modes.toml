@@ -3,8 +3,9 @@
 # by the defaults: teams, every class, each class's own loadout.
 #
 # `teams`    false puts nobody on a side; everybody is hostile to everybody.
-# `classes`  which classes may be played, by the names `classes.toml` uses.
-#            Empty or absent allows all of them.
+# `classes`  which classes may be played, by the names `classes.toml` uses, in
+#            the order the class picker shows them. Empty or absent allows all
+#            of them. With only one, nobody is asked.
 # `loadout`  what a body starts with, by the names `weapons.toml` uses. Each
 #            lands in the slot its class's loadout permits it in. Absent is the
 #            class's own loadout.
@@ -16,7 +17,25 @@
 
 [arena]
 teams = false
-classes = ["mercenary"]
+classes = ["mercenary", "scout", "raptor"]
 loadout = ["pistol"]
 frag_limit = 20
 self_damage = 0.5
+
+[ctf]
+classes = ["scout", "soldier", "pyro", "demoman", "heavy", "engineer", "medic", "civilian", "mercenary"]
+
+[pl]
+classes = ["scout", "soldier", "pyro", "demoman", "heavy", "engineer", "medic", "civilian", "mercenary"]
+
+[plr]
+classes = ["scout", "soldier", "pyro", "demoman", "heavy", "engineer", "medic", "civilian", "mercenary"]
+
+[koth]
+classes = ["scout", "soldier", "pyro", "demoman", "heavy", "engineer", "medic", "civilian", "mercenary"]
+
+[cp]
+classes = ["scout", "soldier", "pyro", "demoman", "heavy", "engineer", "medic", "civilian", "mercenary"]
+
+[sd]
+classes = ["scout", "soldier", "pyro", "demoman", "heavy", "engineer", "medic", "civilian", "mercenary"]

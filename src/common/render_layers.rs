@@ -35,6 +35,10 @@ pub const WARM_UP: usize = 5;
 /// it and the weapon editor's stage camera draws it; `Visibility::Hidden` would hide it from both.
 pub const INSIDE_HEAD: usize = 6;
 
+/// The class picker's portraits: each class's body, its camera and the lights they share. See
+/// [`crate::game::class_picker`].
+pub const PORTRAIT: usize = 7;
+
 /// The editor's 2D shape painter and the egui camera.
 pub const PAINTER: usize = 31;
 
@@ -49,7 +53,7 @@ mod tests {
 
     #[test]
     fn no_two_features_share_a_layer() {
-        let all = [WORLD, VIEWMODEL, EDITOR_ONLY, THUMBNAIL, GIZMOS, WARM_UP, INSIDE_HEAD, PAINTER];
+        let all = [WORLD, VIEWMODEL, EDITOR_ONLY, THUMBNAIL, GIZMOS, WARM_UP, INSIDE_HEAD, PORTRAIT, PAINTER];
         for (i, a) in all.iter().enumerate() {
             for b in &all[i + 1..] {
                 assert_ne!(a, b, "two features claim layer {a}");

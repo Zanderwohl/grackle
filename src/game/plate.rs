@@ -166,10 +166,13 @@ fn follow_the_lean(
 ) {
     for (plate, plate_at, computed, children) in &plates {
         let lean = if plate.leans_right { -LEAN } else { LEAN };
+        // Measured on screen but applied inside the plate, so a plate scaled down (the class
+        // picker's) would otherwise lean its lines by its scale twice over.
+        let scale = plate_at.to_scale_angle_translation().0.y.abs().max(f32::EPSILON);
         for &child in children {
             let Ok((child_at, mut transform)) = followers.get_mut(child) else { continue };
             // Physical pixels, and y grows downward.
-            let below = (child_at.translation.y - plate_at.translation.y) * computed.inverse_scale_factor();
+            let below = (child_at.translation.y - plate_at.translation.y) * computed.inverse_scale_factor() / scale;
             let x = Val::Px((lean * below).round());
             if transform.translation.x != x {
                 transform.translation.x = x;

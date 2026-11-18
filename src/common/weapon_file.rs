@@ -96,6 +96,9 @@ struct LoadoutEntry {
     health: Option<u32>,
     #[serde(default)]
     armor: Option<u32>,
+    /// Not checked here: a taunt with no clip plays nothing.
+    #[serde(default)]
+    picker_taunt: Option<String>,
     #[serde(flatten)]
     slots: BTreeMap<Slot, SlotEntry>,
 }
@@ -322,6 +325,7 @@ fn apply_loadouts(pack: &Path, file: &LoadoutFile, catalog: &mut WeaponCatalog) 
             hat: entry.hat.clone(),
             health: entry.health.filter(|health| *health > 0),
             armor: entry.armor,
+            picker_taunt: entry.picker_taunt.clone(),
             ..default()
         };
         for (slot, entry) in &entry.slots {

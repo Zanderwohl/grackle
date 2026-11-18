@@ -21,7 +21,9 @@
 # its `bucket` in weapons.toml. Only each slot's default is carried at spawn.
 # `hat` names a prop under `props/`, worn on the head. A class's until there
 # are items to own one by. `health` is what a fresh body has; absent is 100.
-# `armor` is the most armor it can hold; absent is 50.
+# `armor` is the most armor it can hold; absent is 50. `picker_taunt` is the
+# taunt, by its key in taunts.toml, the class's portrait plays in the class
+# picker while the pointer is over it; absent is "wave".
 [loadouts.mercenary]
 hat = "top_hat"
 health = 150
@@ -52,7 +54,15 @@ default = "rpg"
 # Built on the raptor rig, whose short arms grip a weapon as a humanoid's do.
 [loadouts.raptor]
 health = 125
+picker_taunt = "spar"
 
 [loadouts.raptor.secondary]
 permitted = ["pistol", "rocket_launcher"]
+default = "pistol"
+
+[loadouts.scout]
+picker_taunt = "spar"
+
+[loadouts.scout.secondary]
+permitted = ["pistol"]
 default = "pistol"

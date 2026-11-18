@@ -7,6 +7,7 @@ use bevy::prelude::*;
 use rand::seq::IndexedRandom;
 use serde::{Deserialize, Serialize};
 
+use crate::common::class::Class;
 use crate::common::damage::PlayerId;
 use crate::common::player_color::PlayerColor;
 use crate::common::team::{Side, Team};
@@ -24,6 +25,9 @@ pub struct Identity {
     /// Which hue on the wheel, for [`PlayerColor::nth`]. An index rather than
     /// the hue, so a new match's [`HueStart`] turns everybody's together.
     pub color: usize,
+    /// What their next body is. A living body keeps its own [`Class`], so a choice made while
+    /// alive waits for the next spawn. Forgotten at each match's start.
+    pub class: Option<Class>,
 }
 
 impl Identity {

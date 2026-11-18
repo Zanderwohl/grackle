@@ -32,7 +32,7 @@ rest are unchanged by any of this.
 ```toml
 [arena]
 teams = false
-classes = ["mercenary"]
+classes = ["mercenary", "scout", "raptor"]
 # Each lands in the slot the class's loadout permits it in, until weapons
 # state their own slot.
 loadout = ["pistol"]
@@ -57,9 +57,9 @@ a switch from CTF to Arena takes effect for everybody at the next round.
 
 The default template's mode is `arena`, so a new map plays free-for-all.
 
-`classes` is trivially satisfied today: everybody is a Mercenary because there
-is no class picker. It is stated anyway so the picker, when it comes, has
-something to read rather than something to rediscover.
+`classes` is what the class picker offers, in its order; see "Classes" under
+"Teams" in CLAUDE.md. Every other shipped mode lists every class but the Spy,
+the Sniper and the Raptor.
 
 ## No teams
 

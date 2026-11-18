@@ -115,12 +115,12 @@ fn forget_client_identities(mut commands: Commands, links: Query<Entity, With<Id
 fn spawn_body_for(
     commands: &mut Commands,
     spawn: Spawn,
-    (who, start): (Identity, HueStart),
+    (who, start, class): (Identity, HueStart, crate::common::class::Class),
     (link, peer): (Entity, PeerId),
     rules: &ModeRules,
     catalog: &WeaponCatalog,
 ) {
-    let body = spawn_player(commands, spawn, &who, who.color(&start), rules, catalog);
+    let body = spawn_player(commands, spawn, &who, who.color(&start), class, rules, catalog);
     commands.entity(body).insert((
         Replicate::to_clients(NetworkTarget::All),
         PredictionTarget::to_clients(NetworkTarget::Single(peer)),
@@ -133,7 +133,8 @@ fn spawn_body_for(
 ///
 /// Keyed on absence, so joining, round start and death are one case with no
 /// queue. A player who died is not owed one until their [`RespawnTimers`]
-/// entry runs out, and one still choosing a team is owed none at all.
+/// entry runs out, and one still choosing a team, or a class where the mode
+/// offers more than one, is owed none at all.
 pub(crate) fn give_bodies_to_whoever_needs_one(
     mut commands: Commands,
     role: Option<Res<NetRole>>,
@@ -187,7 +188,7 @@ pub(crate) fn give_bodies_to_whoever_needs_one(
     };
     let mut meet = |ids: &mut NextPlayerId| {
         let hues = hues.get_or_insert_with(|| identities.iter().copied().chain(our_identity).map(|who| who.color).collect());
-        let who = Identity { id: ids.allocate(), seat: Seat::Choosing, color: lowest_free(hues.iter().copied()) };
+        let who = Identity { id: ids.allocate(), seat: Seat::Choosing, color: lowest_free(hues.iter().copied()), class: None };
         hues.push(who.color);
         who
     };
@@ -203,10 +204,12 @@ pub(crate) fn give_bodies_to_whoever_needs_one(
                 who
             }
         };
-        if !waiting(who) && who.seat.is_playing() {
+        if !waiting(who) && who.seat.is_playing()
+            && let Some(class) = rules.class_for(who.class)
+        {
             let spawn = choose_spawn(placed(), who.team(), &collision);
             info!("Standing our own body up as {} on {}", who.id, team_name(who.team()));
-            let body = spawn_player(&mut commands, spawn, &who, who.color(&start), &rules, &catalog);
+            let body = spawn_player(&mut commands, spawn, &who, who.color(&start), class, &rules, &catalog);
             commands.entity(body).insert(LocalPlayer);
             if hosting {
                 commands.entity(body).insert(Replicate::to_clients(NetworkTarget::All));
@@ -235,9 +238,10 @@ pub(crate) fn give_bodies_to_whoever_needs_one(
         if waiting(who) || !who.seat.is_playing() {
             continue;
         }
+        let Some(class) = rules.class_for(who.class) else { continue };
         let spawn = choose_spawn(placed(), who.team(), &collision);
         info!("Standing a client's body up as {} on {}", who.id, team_name(who.team()));
-        spawn_body_for(&mut commands, spawn, (who, start), (link, peer.0), &rules, &catalog);
+        spawn_body_for(&mut commands, spawn, (who, start, class), (link, peer.0), &rules, &catalog);
     }
 
     // Everybody seated, the points and the teams in play, worked out only once a bot needs a seat.
@@ -286,9 +290,19 @@ pub(crate) fn give_bodies_to_whoever_needs_one(
         if waiting(who) || who.seat == Seat::Choosing {
             continue;
         }
+        // Rolled once and kept on the seat, so a bot is one class for the whole match.
+        let class = match who.class.filter(|class| rules.allowed_classes().contains(class)) {
+            Some(class) => class,
+            None => {
+                let class = rules.random_class_for_a_bot(&catalog, &mut rand::rng());
+                who.class = Some(class);
+                commands.entity(seat).insert(who);
+                class
+            }
+        };
         let spawn = choose_spawn(placed(), who.team(), &collision);
-        info!("Standing a bot's body up as {} on {}", who.id, team_name(who.team()));
-        let body = spawn_player(&mut commands, spawn, &who, who.color(&start), &rules, &catalog);
+        info!("Standing a bot's body up as {} on {} as the {:?}", who.id, team_name(who.team()), class);
+        let body = spawn_player(&mut commands, spawn, &who, who.color(&start), class, &rules, &catalog);
         commands.entity(body).insert((BotOf(seat), BotIntent::default(), BotRoute::default(), BotStride::default(), costs, mind, BotSenses::default(), BotThought::default(), BotAim::default(), Name::new("Bot")));
         if hosting {
             commands.entity(body).insert(Replicate::to_clients(NetworkTarget::All));
@@ -355,7 +369,8 @@ mod tests {
         world.init_resource::<NextPlayerId>();
         // The real catalog, so test bodies are armed as in a round.
         world.insert_resource(crate::common::weapon_file::default_catalog());
-        world.init_resource::<GameRules>();
+        // One class, so nobody is asked for one before their body.
+        world.insert_resource(GameRules(ModeRules { classes: vec![crate::common::class::Class::Mercenary], ..default() }));
         world.spawn(room);
         world.spawn((Transform::from_xyz(2.0, 0.0, -3.0), SpawnPointMarker));
     }
@@ -376,7 +391,7 @@ mod tests {
     #[test]
     fn a_new_match_forgets_every_clients_identity() {
         let mut world = World::new();
-        let who = Identity { id: PlayerId(4), seat: Seat::Playing(None), color: 2 };
+        let who = Identity { id: PlayerId(4), seat: Seat::Playing(None), color: 2, class: None };
         let link = world.spawn(who).id();
 
         world.run_system_once(forget_client_identities).unwrap();
@@ -449,12 +464,33 @@ mod tests {
         assert_eq!(crate::game::bot::RouteCosts { beliefs: 0, ..reborn }, crate::game::bot::RouteCosts { beliefs: 0, ..temperament.unwrap() }, "a bot came back with a different temperament");
     }
 
+    /// Breaks if a bot rolls a new class on each life rather than once for the match.
+    #[test]
+    fn a_bot_keeps_the_class_it_rolled_across_lives() {
+        use crate::common::class::Class;
+        use crate::game::bot::{BotOf, BotSeat};
+        let mut world = World::new();
+        a_map(&mut world);
+        // Two armed classes, so a roll per life would change it about half the time.
+        world.insert_resource(GameRules(ModeRules { classes: vec![Class::Mercenary, Class::Scout], ..default() }));
+        let seat = world.spawn(BotSeat).id();
+        let mut classes = Vec::new();
+        for _ in 0..12 {
+            a_turn(&mut world);
+            let (body, class) = world.query_filtered::<(Entity, &Class), With<BotOf>>().single(&world).unwrap();
+            classes.push(*class);
+            world.despawn(body);
+        }
+        assert_eq!(world.get::<Identity>(seat).unwrap().class, Some(classes[0]), "the seat does not hold the class");
+        assert!(classes.iter().all(|class| *class == classes[0]), "the bot changed class between lives: {classes:?}");
+    }
+
     /// Dead, nobody is owed a body until the timer runs out.
     #[test]
     fn the_dead_wait_out_their_respawn_timer() {
         let mut world = World::new();
         a_map(&mut world);
-        let us = Identity { id: PlayerId(7), seat: Seat::Playing(Some(Team::Red)), color: 0 };
+        let us = Identity { id: PlayerId(7), seat: Seat::Playing(Some(Team::Red)), color: 0, class: None };
         world.insert_resource(OurIdentity(us));
         world.init_resource::<RespawnTimers>();
         world.resource_mut::<RespawnTimers>().0.insert(us.id, RESPAWN_SECONDS);
@@ -524,7 +560,7 @@ mod tests {
         let mut world = World::new();
         a_map(&mut world);
         let wrench = crate::common::weapon::WeaponId::of("medi_wrench");
-        world.insert_resource(GameRules(ModeRules { teams: false, loadout: Some(vec![wrench]), ..default() }));
+        world.insert_resource(GameRules(ModeRules { teams: false, classes: vec![crate::common::class::Class::Mercenary], loadout: Some(vec![wrench]), ..default() }));
         sit_down(&mut world, Seat::Playing(None));
 
         a_turn(&mut world);
