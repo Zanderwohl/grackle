@@ -217,7 +217,8 @@ impl FeatureTrait for EditorStairs {
             }
         }
         ui.separator();
-        let mut changed = self.style_ui(ui);
+        // Scoped so the size and steepness lines above coming and going do not move focus.
+        let mut changed = ui.push_id("stairs_style", |ui| self.style_ui(ui)).inner;
         for index in 0..KEYS.len() {
             ui.separator();
             let label = Self::label(index);
