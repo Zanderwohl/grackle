@@ -101,6 +101,7 @@ fn defaults(action: Action) -> Vec<Chord> {
         Action::Humiliate => vec![key(K::KeyH)],
         Action::Suicide => vec![key(K::KeyO)],
         Action::Explode => vec![key(K::KeyP)],
+        Action::Ignite => vec![],
         Action::NavOverlay => vec![key(K::F7)],
         Action::BotRoutes => vec![key(K::F8)],
         Action::SafeZone => vec![key(K::F9)],

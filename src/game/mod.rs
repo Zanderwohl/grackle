@@ -37,6 +37,7 @@ pub mod damage_direction;
 pub mod death;
 pub mod decal;
 pub mod flame_jet;
+pub mod hud_fire;
 pub mod gib_blood;
 pub mod gust_ring;
 pub mod blast_cloud;

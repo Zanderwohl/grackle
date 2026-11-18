@@ -20,6 +20,9 @@ const SUICIDE_DAMAGE: u32 = 1000;
 /// The weapon whose primary projectile's blast the explode key sets off.
 const EXPLODES_AS: crate::common::weapon::WeaponId = crate::common::weapon::WeaponId::of("rocket_launcher");
 
+/// The weapon the ignite key's afterburn is recorded as.
+const IGNITES_AS: crate::common::weapon::WeaponId = crate::common::weapon::WeaponId::of("flamethrower");
+
 /// Credited to yourself, which the team rule always lets through.
 pub fn suicide(
     bodies: Query<(Entity, &Inputs, &PlayerId, &GlobalTransform), Without<Dying>>,
@@ -36,6 +39,30 @@ pub fn suicide(
                 kill_shove: None,
                 cause: Cause::of(None, How::Kill),
             });
+        }
+    }
+}
+
+/// Credited to yourself, which the team rule always lets through. Burning
+/// already, the afterburn starts over, still credited to whoever lit it.
+pub fn ignite_yourself(
+    mut commands: Commands,
+    mut bodies: Query<(Entity, &Inputs, &PlayerId, Option<&mut crate::common::flame::Burning>), Without<Dying>>,
+) {
+    use crate::common::flame::{Burning, FlameSpec};
+    for (body, input, id, burning) in &mut bodies {
+        if !input.ignite {
+            continue;
+        }
+        let source = DamageSource::Player(*id);
+        match burning {
+            Some(mut burning) => {
+                let lit_by = burning.source;
+                burning.relight(&FlameSpec::FLAMETHROWER, lit_by);
+            }
+            None => {
+                commands.entity(body).try_insert(Burning { weapon: Some(IGNITES_AS), ..Burning::lit(&FlameSpec::FLAMETHROWER, source) });
+            }
         }
     }
 }
@@ -326,6 +353,27 @@ mod tests {
         assert_eq!(written[0].target, us);
         assert_eq!(written[0].source, DamageSource::Player(PlayerId(3)));
         assert!(written[0].amount >= 1000);
+    }
+
+    /// Fails if the ignite key lights anybody but the body that pressed it, or
+    /// credits the afterburn to anybody else.
+    #[test]
+    fn igniting_sets_only_yourself_alight() {
+        let mut world = a_world();
+        let us = world
+            .spawn((
+                lightyear::prelude::input::native::ActionState(crate::game::player::PlayerInput { ignite: true, ..default() }),
+                PlayerId(3),
+            ))
+            .id();
+        let them = world.spawn((Inputs::default(), PlayerId(4))).id();
+
+        world.run_system_once(ignite_yourself).unwrap();
+
+        let burning = world.get::<crate::common::flame::Burning>(us).expect("not alight");
+        assert_eq!(burning.source, DamageSource::Player(PlayerId(3)));
+        assert!(burning.remaining_s > 0.0 && burning.damage > 0);
+        assert!(world.get::<crate::common::flame::Burning>(them).is_none());
     }
 
     #[test]

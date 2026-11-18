@@ -16,7 +16,7 @@ use crate::common::net::has_authority;
 use crate::common::damage::{Armor, Cause, Damage, DamageDealt, Damageable, Died, How, Kill};
 use crate::common::game_rules::GameRules;
 use crate::common::team::Allegiances;
-use crate::game::death::{announce_deaths, announce_the_dead, explode_yourself, reap_the_dead, record_damage, suicide};
+use crate::game::death::{announce_deaths, announce_the_dead, explode_yourself, ignite_yourself, reap_the_dead, record_damage, suicide};
 use crate::common::damage::{DamageSource, PlayerId};
 use crate::game::player::{LocalPlayer, PlayerCamera};
 use crate::game::ragdoll::{BlownApart, Push, RagdollShove};
@@ -84,7 +84,7 @@ impl Plugin for DamagePlugin {
             .add_systems(FixedUpdate, apply_damage.in_set(DamageSystems::Apply))
             .add_systems(
                 FixedUpdate,
-                (suicide, explode_yourself.before(crate::game::explosion::explode)).in_set(DamageSystems::Deal),
+                (suicide, ignite_yourself, explode_yourself.before(crate::game::explosion::explode)).in_set(DamageSystems::Deal),
             )
             .add_systems(
                 FixedUpdate,
