@@ -82,6 +82,9 @@ impl Plugin for ProtocolPlugin {
         // replication is change-detected per component.
         app.component::<crate::common::weapon::Ammo>().replicate();
 
+        // Predicted: never refused, so a client works its own from its presses.
+        app.component::<crate::game::sights::Sights>().replicate().predict();
+
         // Placed props: the model and where, and whether a pickup is there to
         // take. A breakable's health is its `Damageable`, above.
         app.component::<crate::game::world_prop::WorldProp>().replicate();

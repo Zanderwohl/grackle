@@ -1212,6 +1212,7 @@ mod tests {
             deploy: 0.0,
             primary: Mounted::EMPTY,
             secondary: Mounted::EMPTY,
+            scoped_primary: None,
             magazine: Magazine { clip: Some(10), reserve: 40, reload: 1.0, reload_one_at_a_time: false, first_reload: None },
         });
         let rifle = WeaponId::of("rifle");
@@ -1230,6 +1231,7 @@ mod tests {
             deploy: 0.0,
             primary: Mounted::EMPTY,
             secondary: Mounted::EMPTY,
+            scoped_primary: None,
             magazine: Magazine { clip: Some(4), reserve: 20, reload: 1.0, reload_one_at_a_time: true, first_reload: None },
         });
         id

@@ -41,11 +41,13 @@ impl Plugin for RecoilPlugin {
                     .run_if(crate::common::app_mode::simulating)
                     .run_if(has_authority),
             )
+            .init_resource::<crate::game::sights::Rechamber>()
             .add_systems(
                 Update,
                 (
                     (see_shots, guess_our_shots.run_if(is_remote_client)),
                     start_recoil,
+                    crate::game::sights::time_the_rechamber,
                 )
                     .chain()
                     .before(perform_weapon_clips)
@@ -91,7 +93,7 @@ fn guess_our_shots(
     paused: Option<Res<crate::game::pause_menu::MouseHeld>>,
     selection: Option<Res<crate::game::weapon_select::WeaponSelection>>,
     catalog: Res<WeaponCatalog>,
-    ours: Option<Single<(Entity, &Equipped, &Ammo, &Condition), With<LocalPlayer>>>,
+    ours: Option<Single<(Entity, &Equipped, &Ammo, &Condition, Option<&crate::game::sights::Sights>), With<LocalPlayer>>>,
     mut cooldown: Local<[f32; 2]>,
     // The replicated state last guessed from, and what our guesses left of it.
     mut guessed: Local<Option<(WeaponId, AmmoState, AmmoState)>>,
@@ -105,7 +107,7 @@ fn guess_our_shots(
     }
     drawing.1 = (drawing.1 - time.delta_secs()).max(0.0);
     let Some(ours) = ours else { return };
-    let (body, equipped, ammo, condition) = ours.into_inner();
+    let (body, equipped, ammo, condition, sights) = ours.into_inner();
     if paused.is_some_and(|held| held.any())
         || selection.is_some_and(|selection| selection.holds_the_buttons())
         || !condition.may_fire()
@@ -131,8 +133,9 @@ fn guess_our_shots(
     };
 
     for (button, mouse) in [(Button::Primary, crate::common::keybind::Action::Fire), (Button::Secondary, crate::common::keybind::Action::AltFire)] {
-        let mounted = button.of(weapon);
-        if matches!(mounted.action, WeaponAction::None) {
+        // Predicted, so current.
+        let mounted = sights.map_or_else(|| button.of(weapon), |sights| sights.mounted(weapon, button));
+        if matches!(mounted.action, WeaponAction::None | WeaponAction::Scope(_)) {
             continue;
         }
         let index = button as usize;
@@ -202,6 +205,7 @@ mod tests {
                 cost: Cost::Ammo { rounds: 1 },
             },
             secondary: Mounted::EMPTY,
+            scoped_primary: None,
             magazine: Magazine { clip: Some(4), reserve: 8, reload: 1.0, reload_one_at_a_time: false, first_reload: None },
         });
         let mut loadout = Loadout::default();

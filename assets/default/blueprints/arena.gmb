@@ -17,6 +17,12 @@ Blueprint(
             altitude: 50.0,
             azimuth: 135.0,
         ),
+        brightness: Brightness(
+            ambient: 100.0,
+            sun: 1500.0,
+            sky: 600.0,
+        ),
+        music: [],
     ),
     next_id: 101,
     features: [

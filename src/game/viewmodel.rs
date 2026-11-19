@@ -31,6 +31,7 @@ use crate::common::skeleton::clip::Clip;
 use crate::common::skeleton::play::{apply_stack, grip_offsets, ClipStack, Frames};
 use crate::prop::rig::{place_part, OnPropBone};
 use crate::game::held::{perform, HeldModel, HeldPart, Performance, SharedWeaponClips};
+use crate::game::sights::{shown, Rechamber, Sights};
 use crate::game::player::{place_camera, PlayerCamera, ViewMode, Viewed, PLAY_CAMERA_ORDER};
 use crate::common::skeleton::anatomy::EYE_UP_THE_HEAD;
 use crate::prop::hold::{grip_hands, HoldSpec};
@@ -104,6 +105,10 @@ struct ArmsKey {
     grips: [[u32; 3]; 2],
 }
 
+/// Everything that places the viewmodel, for whatever draws over it.
+#[derive(SystemSet, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ViewmodelSystems;
+
 fn bits(transform: &Transform) -> [u32; 7] {
     let (t, r) = (transform.translation, transform.rotation);
     [t.x, t.y, t.z, r.x, r.y, r.z, r.w].map(f32::to_bits)
@@ -145,6 +150,9 @@ impl Plugin for ViewmodelPlugin {
                 show_it_only_in_first_person,
             )
                 .chain()
+                .in_set(ViewmodelSystems)
+                // After the shots of this frame are seen.
+                .after(crate::game::sights::time_the_rechamber)
                 .run_if(crate::common::app_mode::simulating),
         );
     }
@@ -264,17 +272,23 @@ fn perform_viewmodel_clips(
 }
 
 /// Every frame: the placement is a fraction of the frustum, so it changes with
-/// the window's aspect. Then the viewmodel's clips move it, in eye space:
+/// the window's aspect, and toward the sighted framing as far as the sights are
+/// shown up. Then the viewmodel's clips move it, in eye space:
 /// `Space::Carry` is the framed weapon and `Space::Eye` the camera.
 fn place_the_viewmodel(
     clips: Res<Assets<Clip>>,
-    held: Query<(&HeldModel, &Skeleton), Viewed>,
+    catalog: Option<Res<WeaponCatalog>>,
+    rechamber: Option<Res<Rechamber>>,
+    held: Query<(Entity, &HeldModel, &Skeleton, Option<(&Sights, &crate::common::weapon::Equipped)>), Viewed>,
     mut views: Query<(&mut Viewmodel, &ClipStack)>,
     cameras: Query<(&Camera, &Projection, &Children, &ChildOf), With<ViewmodelCamera>>,
     mut parts: Query<(&mut Transform, Option<&OnPropBone>), With<ViewmodelPart>>,
 ) {
-    let Ok((held, skeleton)) = held.single() else { return };
+    let Ok((body, held, skeleton, sights)) = held.single() else { return };
     let spec = held.viewmodel();
+    let raised = sights.zip(catalog.as_deref()).map_or(0.0, |((sights, equipped), catalog)| {
+        shown(body, sights, equipped, catalog, rechamber.as_deref()).raised
+    });
 
     for (camera, projection, children, view) in &cameras {
         let Projection::Perspective(perspective) = projection else { continue };
@@ -283,7 +297,7 @@ fn place_the_viewmodel(
         };
         let Ok((mut viewmodel, stack)) = views.get_mut(view.parent()) else { continue };
 
-        let framed = spec.transform(perspective.fov, size.x / size.y);
+        let framed = spec.transform_raised(perspective.fov, size.x / size.y, raised);
         let placed = played(framed, stack, skeleton, &clips);
         if viewmodel.weapon != Some(placed) {
             viewmodel.weapon = Some(placed);
@@ -753,6 +767,7 @@ mod tests {
             across: [0.6, -0.5],
             depth: 0.4,
             rotation: [0.1, 0.3, 0.0],
+            sighted: None,
         };
         let muzzle = Vec3::new(0.0, 0.05, -0.5);
         let play_fov = std::f32::consts::FRAC_PI_2;

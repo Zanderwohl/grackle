@@ -545,6 +545,19 @@ impl Tabs<'_, '_, '_> {
                 drawings(ui, mounted);
             });
         }
+        let entry = &mut weapon.entry;
+        egui::CollapsingHeader::new(get!("weapon_editor.scoped_primary")).default_open(false).show(ui, |ui| {
+            let mut has = entry.scoped_primary.is_some();
+            if ui.checkbox(&mut has, get!("weapon_editor.has_scoped_primary")).changed() {
+                // Starts as the primary, so turning it on changes nothing until edited.
+                entry.scoped_primary = has.then_some(entry.primary);
+                changed = true;
+            }
+            if let Some(mounted) = entry.scoped_primary.as_mut() {
+                changed |= edit_struct(ui, mounted, &format!("{root}.scoped_primary"), form);
+                drawings(ui, mounted);
+            }
+        });
         self.changed |= changed;
     }
 

@@ -128,8 +128,8 @@ fn show_or_hide(
         true => get!("pause.back_to_editor"),
         false => get!("pause.disconnect"),
     };
-    // A mode without teams offers only Free for All and Spectate.
-    let change_teams = match offer.as_deref().is_none_or(|offer| offer.teams) {
+    // Without teams, somebody already playing changes rather than joins.
+    let change_teams = match offer.as_deref().is_none_or(|offer| offer.teams || offer.seat.is_playing()) {
         true => get!("pause.change_teams"),
         false => get!("pause.join_or_spectate"),
     };
@@ -409,14 +409,21 @@ mod tests {
         assert!(!showing(&mut app), "Change Teams left the menu up");
     }
 
-    /// Breaks if the label names teams in a mode that has none.
+    /// Breaks if a mode without teams offers a join to somebody already playing, or a change to
+    /// somebody not yet in it.
     #[test]
-    fn change_teams_is_named_for_the_mode() {
-        let mut app = app();
-        app.insert_resource(TeamOptions { teams: false, ..default() });
-        press_escape(&mut app);
-        let shown = labels(&mut app);
+    fn change_teams_is_named_for_the_mode_and_the_seat() {
+        let mut choosing = app();
+        choosing.insert_resource(TeamOptions { teams: false, ..default() });
+        press_escape(&mut choosing);
+        let shown = labels(&mut choosing);
         assert!(shown.contains(&get!("pause.join_or_spectate")) && !shown.contains(&get!("pause.change_teams")), "{shown:?}");
+
+        let mut playing = app();
+        playing.insert_resource(TeamOptions { teams: false, seat: crate::game::respawn::Seat::Playing(None), ..default() });
+        press_escape(&mut playing);
+        let shown = labels(&mut playing);
+        assert!(shown.contains(&get!("pause.change_teams")) && !shown.contains(&get!("pause.join_or_spectate")), "{shown:?}");
     }
 
     /// Breaks if an overlay that took Escape does not keep the menu shut.

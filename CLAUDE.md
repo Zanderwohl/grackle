@@ -590,7 +590,7 @@ window you have to kill the process to leave. Plain Bevy UI, not `egui`: the
 panels are egui because they are editor tools, and this is part of the game, so
 it has to exist in a build with no editor and on a browser tab where the egui
 layer is one more thing to have gone wrong. It offers **Resume**, **Settings**
-(closes the menu and opens the Settings window), **Change Teams** ("Join or Spectate" in a mode without teams; closes the menu and brings up the team picker, as `.` does) and **Back to Editor** — on the
+(closes the menu and opens the Settings window), **Change Teams** ("Join or Spectate" in a mode without teams to somebody not yet playing; closes the menu and brings up the team picker, as `.` does) and **Back to Editor** — on the
 authority, ending the round for everybody, who stay connected — or, on a
 client, **Disconnect**, which also leaves Play in the same frame. A client that
 stops being one drops every entity the server sent (lightyear's `Remote`) and,
@@ -2903,6 +2903,43 @@ thumbnail on the HUD's panel shapes. It only draws `WeaponSelection`.
 `bake_what_we_carry` bakes every carried model rather than only the one in
 hand, because a prop is photographed when it is baked.
 
+### Raising the sights
+
+A `scope` action ([`src/game/sights.rs`](src/game/sights.rs)) toggles a body's
+`Sights` on each press: the weapon comes up to its prop's sighted pose
+(`ViewmodelSpec::sighted`, the Fit workspace's Hold panel) over the scope's
+`raise` seconds and back down over `lower`, the viewmodel moving between the
+two framings. Only once it is all the way up does the view narrow to the
+scope's `fov` (`widen_the_view`, first person only), the mouse turn at
+`look_speed` (`gather_aim`), and the primary fire the weapon's
+`scoped_primary` in place of `primary` (`Sights::mounted`, read by
+`pull_trigger`); lowering drops all three at once. A switch, or a condition
+that forbids firing, puts the sights down. **`Sights` is predicted**: scoping is
+never refused, so `work_the_sights` runs on every `Simulated` body, a client's
+own included, reading the press straight from `Inputs` rather than from a
+fired action, and Lightyear rolls it back where the server disagrees (a switch
+or a condition the client heard of late). `pull_trigger` skips a scope, so a
+press writes no `WeaponActionFired` or `Effect::Fired`: nothing kicks and no
+bot hears it. A press toggles only as the button goes down (`Sights::button_down`),
+so a server repeating a late tick's input sees one press, not up and back down.
+`scoped_primary` needs the scope on the secondary; the loader leaves out a
+weapon with one and no scope there.
+
+As the sights rise, black closes in from the screen's edges until only the
+weapon is left and the scope's lens is the one view out
+([`src/game/scope_vignette.rs`](src/game/scope_vignette.rs)): a quad on the
+viewmodel layer behind the weapon, so it hides the world and depth hides it
+behind the weapon, darkened by `Sights::raised` both ways and joined to the
+shared warm-up. The narrower view lands once it is black, so the swap is never
+seen. A scope's `rechamber` (0.5 s on the sniper rifle) brings the weapon
+down that long after a sighted shot, as if working its bolt, and back up to land
+in the scope as the cooldown ends, so its arrival says the next shot is ready
+(`Rechamber`, timed on each machine from the viewed body's `ShotSeen` and the
+interval of what fired). It is drawing only: `Sights` stays up, so the next
+shot is the scoped one, but everything that draws or aims asks `sights::shown`,
+which lowers the weapon, opens the vignette, and gives back the player's own
+field of view and mouse speed while it is down.
+
 ### Pulling a trigger, and paying for it
 
 Every firing system reads `WeaponActionFired`, which `pull_trigger` writes
@@ -3249,14 +3286,15 @@ Four things about that are load-bearing:
 tick it outlives itself by (`hide_the_dying`, which runs everywhere) — without
 it the body stands upright inside its own corpse until the despawn lands.
 
-### One rule: the server decides, and a client guesses only its own movement
+### One rule: the server decides, and a client guesses only its own movement and sights
 
-**The server simulates. Every other machine draws what it is told** — with one
-exception, and it is deliberately only one. A client runs `step_player` on the
-body it controls, so moving feels immediate, and Lightyear rewinds and replays
-when the server disagrees. It fires no weapon, resolves no damage and describes
-no animation; those are not predicted, because guessing a kill and being wrong
-is a body that falls over and stands back up.
+**The server simulates. Every other machine draws what it is told** — with two
+exceptions, both things the server never refuses. A client runs `step_player`
+on the body it controls, so moving feels immediate, and `work_the_sights`, so a
+scope comes up on the press; Lightyear rewinds and replays when the server
+disagrees. It fires no weapon, resolves no damage and describes no animation;
+those are not predicted, because guessing a kill and being wrong is a body that
+falls over and stands back up.
 
 What holds it together is **one writer per value**. Almost every bug in this
 area was two writers for one thing — a body turned by the mouse locally and by
@@ -3274,7 +3312,7 @@ Three markers, and they are not synonyms:
 | `LocalPlayer` | **this machine's view follows it** | exactly one body, or none |
 | `Simulated` | **this process steps it** | every body on a server; the predicted one on a client |
 
-`Simulated` is read by **`step_player` and nothing else**, which is the whole
+`Simulated` is read by **`step_player` and `work_the_sights` and nothing else**, which is the whole
 difference between it and the version that got deleted: it was once a decision
 five systems each had to make correctly, none of which errored on getting it
 wrong. `spawn_player` adds it, because whoever stands a body up steps it, and

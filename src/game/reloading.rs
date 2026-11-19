@@ -118,6 +118,7 @@ mod tests {
             deploy: 0.0,
             primary: Mounted::EMPTY,
             secondary: Mounted::EMPTY,
+            scoped_primary: None,
             magazine: Magazine { clip: Some(4), reserve: 8, reload: RELOAD_SECONDS, reload_one_at_a_time: false, first_reload: None },
         });
         let mut loadout = Loadout::default();

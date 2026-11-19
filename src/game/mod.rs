@@ -58,6 +58,8 @@ pub mod nav_rating;
 pub mod projectile;
 pub mod recoil;
 pub mod reloading;
+pub mod sights;
+pub mod scope_vignette;
 pub mod reset;
 pub mod respawn;
 pub mod kill_cam;

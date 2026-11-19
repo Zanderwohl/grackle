@@ -256,6 +256,18 @@ rotation = [
     0.0,
 ]
 
+[viewmodel.sighted]
+across = [
+    0.0,
+    -0.182,
+]
+depth = 0.55
+rotation = [
+    0.0,
+    0.0,
+    0.0,
+]
+
 [muzzle]
 at = [
     0.0,

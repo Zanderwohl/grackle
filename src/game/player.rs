@@ -9,7 +9,7 @@ use bevy::time::Fixed;
 use lightyear::prelude::input::native::ActionState;
 
 use crate::common::render_layers;
-use crate::common::damage::{Armor, Damageable, Died, PlayerId, DEFAULT_HEALTH, DEFAULT_MAX_ARMOR};
+use crate::common::damage::{Armor, Damageable, Died, PlayerId, DEFAULT_MAX_ARMOR};
 use crate::game::death::Dying;
 use crate::common::hitbox::Hitboxes;
 use crate::common::movement_rules::MovementRules;
@@ -97,7 +97,7 @@ const PITCH_LIMIT: f32 = std::f32::consts::FRAC_PI_2 - 0.01;
 // `Transform` and `Visibility` because a replicated body is built by
 // inserting components rather than through `spawn_player`, and without them
 // its children have nothing to inherit.
-#[require(Hitboxes, Damageable, Armor, Equipped, Ammo, Trigger, AutoReload, Inputs, Condition, Impulse, Transform, Visibility)]
+#[require(Hitboxes, Damageable, Armor, Equipped, Ammo, Trigger, crate::game::sights::Sights, AutoReload, Inputs, Condition, Impulse, Transform, Visibility)]
 pub struct Player {
     pub velocity: Vec3,
     pub yaw: f32,
@@ -283,8 +283,8 @@ pub type Inputs = ActionState<PlayerInput>;
 
 /// A body this process steps forward itself.
 ///
-/// Read only by `step_player`. Everything else that is not predicted asks
-/// `has_authority`. Added by `spawn_player` (whoever spawns a body steps it)
+/// Read only by `step_player` and `work_the_sights`, the two predicted systems.
+/// Everything else asks `has_authority`. Added by `spawn_player` (whoever spawns a body steps it)
 /// and by `claim_our_own_body` on a client.
 #[derive(Component, Default, Debug)]
 pub struct Simulated;
@@ -473,7 +473,7 @@ pub fn spawn_player(
     // the rig.
     let (equipped, ammo) = catalog.starting_equipment(class, rules.loadout.as_deref());
     let loadout = catalog.loadout(class);
-    let health = loadout.and_then(|loadout| loadout.health).unwrap_or(DEFAULT_HEALTH);
+    let health = catalog.health_of(class);
     let armor = loadout.and_then(|loadout| loadout.armor).unwrap_or(DEFAULT_MAX_ARMOR);
 
     let mut body = commands.spawn((
@@ -598,6 +598,9 @@ pub fn gather_input(actions: Res<Actions>, mut latch: ResMut<InputLatch>) {
 pub fn gather_aim(
     mut motion: MessageReader<MouseMotion>,
     paused: Option<Res<crate::game::pause_menu::MouseHeld>>,
+    catalog: Option<Res<crate::common::weapon::WeaponCatalog>>,
+    rechamber: Option<Res<crate::game::sights::Rechamber>>,
+    ours: Option<Single<(Entity, &crate::game::sights::Sights, &crate::common::weapon::Equipped), With<LocalPlayer>>>,
     mut latch: ResMut<InputLatch>,
 ) {
     // Drained first, so motion during a pause is discarded.
@@ -605,9 +608,14 @@ pub fn gather_aim(
     if paused.is_some_and(|held| held.any()) || delta == Vec2::ZERO {
         return;
     }
+    let scope = ours.zip(catalog).and_then(|(ours, catalog)| {
+        let (body, sights, equipped) = *ours;
+        crate::game::sights::shown(body, sights, equipped, &catalog, rechamber.as_deref()).scope
+    });
+    let sensitivity = MOUSE_SENSITIVITY * scope.map_or(1.0, |scope| scope.look_speed);
     let input = &mut latch.0;
-    input.yaw -= delta.x * MOUSE_SENSITIVITY;
-    input.pitch = (input.pitch - delta.y * MOUSE_SENSITIVITY).clamp(-PITCH_LIMIT, PITCH_LIMIT);
+    input.yaw -= delta.x * sensitivity;
+    input.pitch = (input.pitch - delta.y * sensitivity).clamp(-PITCH_LIMIT, PITCH_LIMIT);
 }
 
 /// Empty the frame-rate latch into the local body's input for this tick.
@@ -794,12 +802,28 @@ pub fn our_field_of_view(settings: Option<&crate::common::player_settings::Playe
 
 /// The one writer of the view's field of view. Derived every frame, so nothing
 /// has to restore a width afterward.
+///
+/// A spectator camera's, else the viewed body's scope in first person, else the player's own.
 pub fn widen_the_view(
     settings: Option<Res<crate::common::player_settings::PlayerSettings>>,
     through: Option<Res<ThroughCamera>>,
+    view: Option<Res<ViewMode>>,
+    catalog: Option<Res<crate::common::weapon::WeaponCatalog>>,
+    rechamber: Option<Res<crate::game::sights::Rechamber>>,
+    viewed: Query<(Entity, &crate::game::sights::Sights, &crate::common::weapon::Equipped), Viewed>,
     mut projections: Query<&mut Projection, With<PlayerCamera>>,
 ) {
-    let fov = through.map_or_else(|| our_field_of_view(settings.as_deref()), |through| through.fov);
+    let scoped = || {
+        if view.as_deref().is_none_or(|view| view.shows_own_body()) {
+            return None;
+        }
+        let (body, sights, equipped) = viewed.single().ok()?;
+        crate::game::sights::shown(body, sights, equipped, catalog.as_deref()?, rechamber.as_deref()).scope.map(|scope| scope.fov)
+    };
+    let fov = through
+        .map(|through| through.fov)
+        .or_else(scoped)
+        .unwrap_or_else(|| our_field_of_view(settings.as_deref()));
     for mut projection in &mut projections {
         if let Projection::Perspective(perspective) = projection.as_ref()
             && perspective.fov != fov
