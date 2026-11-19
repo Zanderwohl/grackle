@@ -3168,6 +3168,20 @@ at a wall, since the drawn position lags the simulated one, and stops; it is des
 clouds fade. It cuts across a
 bounce, so nothing that bounces has one (`only_projectiles_that_never_bounce_trail`).
 
+**A shot flashes at the muzzle** ([`src/game/muzzle_flash.rs`](src/game/muzzle_flash.rs)) when
+its prop turns one on: `[muzzle.flash]` (the Fit workspace's Hold panel, under the muzzle) sizes a
+truncated cone along the weapon's `-Z`, from a ring at the muzzle to a crown of points. It is four
+nested crowns, red outside to cream in the middle, in one mesh with the outer layer first in the
+index buffer, drawn blended with no depth write and no culling, so each inner layer lands on the
+one outside it from any angle while the world's depth still hides it. The shader reads progress
+from the `MeshTag`: the points grow out to the crown, then an eraser of the same shape follows from
+the muzzle, every layer on one
+schedule, so the erase edges move as one shrunken copy of the flash. Lit by `ShotSeen` like recoil, so nothing is sent: one under the
+body's held weapon, one under the viewmodel while that body is viewed in first person, each placed
+every frame from where the weapon is drawn and moved by the prop bone `[muzzle]` names in `bone`,
+if any, as the parts on that bone are (renaming or removing the bone carries to it). Fit previews it at the muzzle when asked
+(`FlashPreview`, view state): continuous, with a pause, or still at a time picked on a slider.
+
 `ProjectileEmitter` fires a spec along its own forward on an interval.
 Nothing places one: the player's key for it is gone, and it is meant to come
 back as a map feature.

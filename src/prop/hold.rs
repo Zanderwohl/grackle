@@ -148,15 +148,55 @@ impl ViewmodelSpec {
 
 /// Where shots appear to leave the weapon, in its own space. Drawing only: the
 /// shot itself always leaves the eye.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MuzzleSpec {
+    /// At rest, in the prop's own space.
     #[serde(with = "crate::prop::nice_f32::array")]
     pub at: [f32; 3],
+    /// The prop bone the muzzle rides on, by name; absent is the prop itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bone: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flash: Option<MuzzleFlashSpec>,
+}
+
+/// See [`crate::game::muzzle_flash`].
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MuzzleFlashSpec {
+    /// A flag rather than dropping the section, so turning it off and on keeps
+    /// the sizes.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Meters from the muzzle to the tips of the crown.
+    #[serde(with = "crate::prop::nice_f32::scalar")]
+    pub length: f32,
+    /// Meters from the barrel's axis to the tips of the crown.
+    #[serde(with = "crate::prop::nice_f32::scalar")]
+    pub radius: f32,
+    /// Meters, the ring at the muzzle.
+    #[serde(with = "crate::prop::nice_f32::scalar")]
+    pub base: f32,
+    #[serde(with = "crate::prop::nice_f32::scalar")]
+    pub seconds: f32,
+}
+
+impl Default for MuzzleFlashSpec {
+    fn default() -> Self {
+        Self { enabled: true, length: 0.3, radius: 0.14, base: 0.025, seconds: 0.1 }
+    }
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl MuzzleSpec {
     pub fn point(&self) -> Vec3 {
         Vec3::from_array(self.at)
+    }
+
+    pub fn flash(&self) -> Option<MuzzleFlashSpec> {
+        self.flash.filter(|flash| flash.enabled)
     }
 }
 

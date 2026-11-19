@@ -499,8 +499,8 @@ fn drag_the_hold(
             points.push((Handle::Grip { support: true, axis }, support));
         }
     }
-    let muzzle = editor.doc().muzzle;
-    if let Some(muzzle) = muzzle {
+    let muzzle = editor.doc().muzzle.clone();
+    if let Some(muzzle) = &muzzle {
         for axis in 0..3 {
             points.push((Handle::Muzzle(axis), muzzle.point()));
         }
@@ -561,7 +561,7 @@ fn drag_the_hold(
         if let Some(on_axis) = closest_param_on_axis(ray, Vec3::ZERO, Vec3::AXES[axis]) {
             let at = on_axis - offset;
             let mut edited = hold.clone();
-            let mut moved_muzzle = muzzle;
+            let mut moved_muzzle = muzzle.clone();
             match handle {
                 Handle::Grip { support: false, axis } => edited.grip[axis] = at,
                 Handle::Grip { support: true, axis } => edited.support[axis] = at,

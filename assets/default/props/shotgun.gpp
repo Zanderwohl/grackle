@@ -499,6 +499,13 @@ at = [
     -0.45,
 ]
 
+[muzzle.flash]
+enabled = true
+length = 0.4
+radius = 0.2
+base = 0.03
+seconds = 0.1
+
 [animations.clips.deploy]
 name_key = "anim.clips.deploy"
 length = 0.5

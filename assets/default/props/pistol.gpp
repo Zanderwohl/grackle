@@ -434,6 +434,13 @@ at = [
     -0.195,
 ]
 
+[muzzle.flash]
+enabled = true
+length = 0.22
+radius = 0.1
+base = 0.015
+seconds = 0.08
+
 [[bones]]
 name = "slide"
 pivot = [
