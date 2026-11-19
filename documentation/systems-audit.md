@@ -116,7 +116,7 @@ replicated components, and wakes anything keyed on `Changed`/`is_changed`.
 
 - [ ] **Corpses are not deterministic across build profiles.** The ragdoll
   solver reaches different bits in a release build than a debug one, on the
-  same code (`the_solver_reaches_the_same_bits_it_always_has` pins both).
+  same code, measured when the solver's output was pinned per profile.
   CLAUDE.md's "every machine runs the same solver from the seed" holds only
   between builds of one profile and target; wasm vs native is unmeasured.
   Cosmetic today (corpses are props), but it is the same question prediction

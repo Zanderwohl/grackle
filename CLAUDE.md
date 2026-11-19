@@ -2338,6 +2338,15 @@ Four things about it are load-bearing and easy to undo by accident:
 - **Limits are stated in the bone's own rest frame.** That is what lets one
   table cover both sides of the body: the rig builds mirrored rest rotations,
   so "an elbow bends forwards" is the same local rotation on both arms.
+- **A corpse is seated before it is torn.** A body dies in a pose its hull
+  does not bound, so `Ragdoll::seated` sweeps every point out from the pelvis
+  to the body's side of any wall; once a hand starts through a wall or a head
+  through a ceiling, the walls hold it there. A gib's own root may be the
+  part through the wall, which is why `raise_ragdolls` seats the whole body
+  and then calls `Ragdoll::tear`.
+- **A point moved further than its radius is swept, not pushed out.** The rig
+  teleports points, and depenetration sends one more than halfway into a thin
+  wall out of its far side.
 
 Force arrives as `RagdollShove` — a **point, a `Push` and a radius**, not a
 bone. The bones inside the radius are shoved and the joints drag the rest

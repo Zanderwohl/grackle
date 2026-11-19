@@ -119,6 +119,32 @@ const SLEEP_DRIFT: f32 = 0.02;
 /// shove wakes it.
 const SLEEP_AFTER: f32 = 0.5;
 
+/// Seconds of age before which the momentum the joint limits add is kept.
+///
+/// While a blast's throw plays out, the limits carry the shove from the bones
+/// it reached to the rest; taken back from the start, a leg under a torso blast
+/// was pressed into the floor rather than thrown along it.
+const LIMITS_KEEP_MOMENTUM: f32 = 0.5;
+
+/// Seconds of age after which a corpse lying on something is damped harder and
+/// judged settled more loosely, ramping in over [`DROWSY_RAMP`].
+///
+/// A backstop, not a cure: a crumpled body whose joint limits the floor will
+/// not let it meet (a knee folded past its stop while lying on its side) can
+/// flail for the whole of [`RAGDOLL_LIFETIME`], since two points per bone
+/// cannot track the roll the limits are stated in.
+const DROWSY_AFTER: f32 = 3.0;
+
+/// Seconds over which the drowsiness comes fully in.
+const DROWSY_RAMP: f32 = 3.0;
+
+/// Fraction of each tick's move lost fully drowsy, and of the speed read back
+/// from what is left, on top of [`DRAG`].
+const DROWSY_DRAG: f32 = 0.25;
+
+/// [`SLEEP_DRIFT`] is multiplied by up to this, fully drowsy.
+const DROWSY_DRIFT: f32 = 3.0;
+
 /// Meters per second into a surface above which a piece of a body leaves
 /// blood where it strikes.
 pub const GIB_SPLAT_SPEED: f32 = 2.0;
@@ -286,6 +312,12 @@ impl Ragdoll {
 
     /// [`Ragdoll::blown_apart`], with the part lost chosen by `how`.
     pub fn torn(skeleton: &Skeleton, pose: &Pose, root: &Transform, carried: Vec3, how: BlownApart) -> Vec<Ragdoll> {
+        Ragdoll::tear(Ragdoll::from_body(skeleton, pose, root, carried), skeleton, pose, root, how)
+    }
+
+    /// [`Ragdoll::torn`], tearing `whole`, a corpse made from the body in `pose` at `root` and
+    /// perhaps [`Ragdoll::seated`] since, so that every piece is seated as the body was.
+    pub fn tear(whole: Ragdoll, skeleton: &Skeleton, pose: &Pose, root: &Transform, how: BlownApart) -> Vec<Ragdoll> {
         let posed = skeleton.posed_bones(pose, root);
         let bones = skeleton.bones();
         let Some(struck) = lost_bone(skeleton, &posed, how) else {
@@ -336,7 +368,6 @@ impl Ragdoll {
             .collect();
         let torn_at = lost.iter().sum::<Vec3>() / lost.len() as f32;
 
-        let whole = Ragdoll::from_posed(&posed, carried);
         (0..bones.len())
             .filter(|&index| piece[index] == index)
             .enumerate()
@@ -437,6 +468,20 @@ impl Ragdoll {
         }
         self.struck = struck.map(|(_, impact)| impact);
 
+        // Where each point was last known clear of the walls. Cleared here
+        // once, for a point the world moved onto, so the passes need only
+        // sweep from it.
+        let mut clear = Scratch::<Vec3, POINTS_ON_THE_STACK>::new(self.points.len(), Vec3::ZERO);
+        for ((point, contact), clear) in kept_points(kept, self.points.iter_mut().zip(touching.iter_mut()).zip(clear.iter_mut())) {
+            let out = world.depenetrate(point.at, point.half);
+            let pushed = out - point.at;
+            if pushed.length_squared() > 1.0e-12 {
+                contact.add(pushed.normalize());
+            }
+            point.at = out;
+            *clear = out;
+        }
+
         // The walls are solved with the rig, not before or after. Rig last,
         // and a foot is pushed back through the floor a little further each
         // tick (a swept move only stops crossings) and the corpse crawls.
@@ -448,15 +493,28 @@ impl Ragdoll {
         let root = self.root_frame();
         for _ in 0..SOLVER_ITERATIONS {
             self.hold_together(skeleton);
-            self.hold_joints(skeleton, root, &touching);
-            self.clear_walls(world, &mut touching);
+            let limited = self.hold_joints(skeleton, root, &touching);
+            // Where a limit and the distances disagree, the limits add
+            // momentum every pass, the same way, and a leg skated across a
+            // floor at 0.6 m/s on it. The whole piece moving back changes no
+            // length or angle.
+            if self.age > LIMITS_KEEP_MOMENTUM {
+                self.shift(-limited / self.mass());
+            }
+            self.clear_walls(world, &mut touching, &mut clear);
         }
 
-        self.settle(dt);
+        self.hold_still(skeleton, world, &touching, &mut clear, &started, dt);
 
         self.grounded = touching.iter().any(|contact| !contact.is_empty());
+        let drowsy = if self.grounded { ((self.age - DROWSY_AFTER) / DROWSY_RAMP).clamp(0.0, 1.0) } else { 0.0 };
+        self.settle(dt, drowsy);
+
         let kept = &self.kept;
         for ((point, was), contact) in kept_points(kept, self.points.iter_mut().zip(started.iter()).zip(touching.iter())) {
+            // Its move as well as its speed: a solve that does not converge
+            // walks a piece along a little every tick with no speed carried.
+            point.at = *was + (point.at - *was) * (1.0 - drowsy * DROWSY_DRAG);
             let mut velocity = point.at - *was;
             // Into the surface and off it alike: a bounce is not wanted.
             for normal in contact.iter() {
@@ -470,7 +528,58 @@ impl Ragdoll {
                     velocity = Vec3::ZERO;
                 }
             }
-            point.previous = point.at - velocity;
+            point.previous = point.at - velocity * (1.0 - drowsy * DROWSY_DRAG);
+        }
+    }
+
+    /// Static friction: a point touching something that slid less than
+    /// [`STICK_SPEED`] along it this tick goes back to where it started along
+    /// it, then the bones are pulled back to length once.
+    ///
+    /// The solve moves a resting point a little every tick, always the same
+    /// way; stopping only its velocity let corpses walk a few centimeters a
+    /// second. A point moved after the solve leaves its bones the wrong
+    /// length, hence the last pull.
+    fn hold_still(
+        &mut self,
+        skeleton: &Skeleton,
+        world: &CollisionWorld,
+        touching: &[Touched],
+        clear: &mut [Vec3],
+        started: &[Vec3],
+        dt: f32,
+    ) {
+        let mut any = false;
+        let kept = &self.kept;
+        for ((point, contact), was) in kept_points(kept, self.points.iter_mut().zip(touching).zip(started)) {
+            if contact.is_empty() {
+                continue;
+            }
+            let mut across = point.at - *was;
+            for normal in contact.iter() {
+                across -= normal * across.dot(normal);
+            }
+            if across.length() < STICK_SPEED * dt {
+                point.at -= across;
+                any = true;
+            }
+        }
+        if any {
+            self.hold_together(skeleton);
+            let mut contacts = Scratch::<Touched, POINTS_ON_THE_STACK>::new(self.points.len(), Touched::default());
+            self.clear_walls(world, &mut contacts, clear);
+        }
+    }
+
+    /// The mass of the bones this corpse keeps, which is one for a whole body.
+    fn mass(&self) -> f32 {
+        kept_points(&self.kept, self.points.iter()).map(|point| 1.0 / point.inverse_mass).sum()
+    }
+
+    /// Every kept point moved by `by`.
+    fn shift(&mut self, by: Vec3) {
+        for point in kept_points(&self.kept, self.points.iter_mut()) {
+            point.at += by;
         }
     }
 
@@ -692,9 +801,13 @@ impl Ragdoll {
     /// A tail is not pushed into a surface it touches. Otherwise a limit pointing into the floor
     /// and the floor push it back and forth every pass, and the sideways part of each push moves
     /// the corpse across the room.
-    fn hold_joints(&mut self, skeleton: &Skeleton, root: Quat, touching: &[Touched]) {
+    ///
+    /// Returns the momentum it added, in per-tick units: moving a tail alone is
+    /// not balanced by anything.
+    fn hold_joints(&mut self, skeleton: &Skeleton, root: Quat, touching: &[Touched]) -> Vec3 {
         let bones = skeleton.bones();
         let mut frames = Scratch::<Quat, BONES_ON_THE_STACK>::new(bones.len(), Quat::IDENTITY);
+        let mut momentum = Vec3::ZERO;
 
         for (index, bone) in bones.iter().enumerate() {
             if !self.kept[index] {
@@ -708,10 +821,14 @@ impl Ragdoll {
             let was = (self.points[index * 2 + 1].at - head).normalize_or(direction);
             let eased = was.lerp(direction, LIMIT_RELAXATION).normalize_or(direction);
 
-            let tail = &mut self.points[index * 2 + 1].at;
-            *tail += touching[index * 2 + 1].clip(head + eased * bone.length - *tail);
+            let tail = &mut self.points[index * 2 + 1];
+            let moved = touching[index * 2 + 1].clip(head + eased * bone.length - tail.at);
+            tail.at += moved;
+            momentum += moved / tail.inverse_mass;
             frames[index] = world;
         }
+
+        momentum
     }
 
     /// Where bone `index` has ended up: its frame with the joint at rest, the
@@ -749,23 +866,83 @@ impl Ragdoll {
         Quat::from_rotation_arc(self.root_seed * Vec3::Y, direction) * self.root_seed
     }
 
-    /// Lift every point back out of anything it has been pushed into.
-    /// [`CollisionWorld::depenetrate`], because the shortest way out of a floor
-    /// is downwards, out of the level.
-    fn clear_walls(&mut self, world: &CollisionWorld, touching: &mut [Touched]) {
-        for (point, contact) in kept_points(&self.kept, self.points.iter_mut().zip(touching)) {
-            let out = world.depenetrate(point.at, point.half);
-
-            // Being pushed out counts as contact. Otherwise a foot the rig
-            // keeps pressing into the floor never gets friction and buzzes
-            // forever; the swept move cannot see it, since a point starting
-            // inside a wall never crosses one.
-            let pushed = out - point.at;
-            if pushed.length_squared() > 1.0e-12 {
-                contact.add(pushed.normalize());
+    /// Bring every point the rig moved back out of anything it moved into.
+    ///
+    /// A point that moved further than its own radius since it was last clear
+    /// is swept from there instead: the rig moves points without sweeping them,
+    /// and one pulled more than halfway into a thin wall was pushed out of its
+    /// far side, leaving a bone through the wall for good. A shorter move
+    /// cannot sink a clear point that far into anything, and pushing out costs
+    /// half what a sweep does.
+    ///
+    /// Stopping at or being pushed off a surface counts as contact. Otherwise a
+    /// foot the rig keeps pressing into the floor never gets friction and
+    /// buzzes forever.
+    fn clear_walls(&mut self, world: &CollisionWorld, touching: &mut [Touched], clear: &mut [Vec3]) {
+        for ((point, contact), clear) in kept_points(&self.kept, self.points.iter_mut().zip(touching).zip(clear.iter_mut())) {
+            let moved = point.at - *clear;
+            if moved == Vec3::ZERO {
+                continue;
             }
-            point.at = out;
+            if moved.length_squared() > point.half.x * point.half.x {
+                let (swept, touched) = world.slide(*clear, point.half, moved);
+                for normal in touched.iter() {
+                    contact.add(normal);
+                }
+                point.at = swept;
+            } else {
+                let out = world.depenetrate(point.at, point.half);
+                let pushed = out - point.at;
+                if pushed.length_squared() > 1.0e-12 {
+                    contact.add(pushed.normalize());
+                }
+                point.at = out;
+            }
+            *clear = point.at;
         }
+    }
+
+    /// This corpse with every point brought back to the body's side of any
+    /// wall between it and the joint it hangs from.
+    ///
+    /// A body dies in a pose its hull does not bound, so a hand can start
+    /// through a wall, or a head through a ceiling and out of the map, and
+    /// once there the walls hold it there. Seat a whole body before tearing
+    /// it: a piece's own root may be the part through the wall.
+    pub fn seated(mut self, skeleton: &Skeleton, world: &CollisionWorld) -> Ragdoll {
+        let root = self.root * 2;
+        let (at, half) = (self.points[root].at, self.points[root].half);
+        self.place(root, world.depenetrate(at, half));
+        // Parents first, so each point is swept from one already seated.
+        for (index, bone) in skeleton.bones().iter().enumerate() {
+            if !self.kept[index] {
+                continue;
+            }
+            if let Some(parent) = bone.parent.filter(|&parent| self.kept[parent]) {
+                self.reach(world, parent * 2 + 1, index * 2);
+            }
+            self.reach(world, index * 2, index * 2 + 1);
+        }
+        for (anchor, point) in self.anchor.iter_mut().zip(&self.points) {
+            *anchor = point.at;
+        }
+        self
+    }
+
+    /// Point `to` moved as far as it gets swept from point `from`.
+    fn reach(&mut self, world: &CollisionWorld, from: usize, to: usize) {
+        let (target, half) = (self.points[to].at, self.points[to].half);
+        // A sweep starting inside a wall sees no wall, and `to` may be larger than `from`.
+        let start = world.depenetrate(self.points[from].at, half);
+        let (reached, _) = world.slide(start, half, target - start);
+        self.place(to, reached);
+    }
+
+    /// Point `index` moved to `at`, keeping its velocity.
+    fn place(&mut self, index: usize, at: Vec3) {
+        let point = &mut self.points[index];
+        point.previous += at - point.at;
+        point.at = at;
     }
 
     fn pull(&mut self, a: usize, b: usize, rest: f32) {
@@ -787,13 +964,15 @@ impl Ragdoll {
         self.points[b].at -= correction * (wb / share);
     }
 
-    fn settle(&mut self, dt: f32) {
+    /// `drowsy` is how far into [`DROWSY_RAMP`] it is, 0 to 1.
+    fn settle(&mut self, dt: f32, drowsy: f32) {
+        let drift = SLEEP_DRIFT * (1.0 + (DROWSY_DRIFT - 1.0) * drowsy);
         // A lacked bone's points never move, so they never count as drift.
         let drifted = self
             .points
             .iter()
             .zip(&self.anchor)
-            .any(|(point, anchor)| point.at.distance_squared(*anchor) > SLEEP_DRIFT * SLEEP_DRIFT);
+            .any(|(point, anchor)| point.at.distance_squared(*anchor) > drift * drift);
 
         if drifted {
             for (point, anchor) in self.points.iter().zip(&mut self.anchor) {
@@ -929,14 +1108,16 @@ pub fn raise_ragdolls(
         ),
         (Added<Dying>, Without<Ragdolled>),
     >,
+    world: Res<CollisionWorld>,
 ) {
     for (entity, skeleton, pose, global, offset, tint, team, player, physics, name, id, blown, burning) in &bodies {
         // Per-tick displacement, which is the unit the solver keeps.
         let carried = physics.map_or(Vec3::ZERO, |body| body.current - body.previous);
         let root = skeleton_root(global, offset);
+        let whole = Ragdoll::from_body(skeleton, pose, &root, carried).seated(skeleton, &world);
         let pieces = match blown {
-            Some(&blown) => Ragdoll::torn(skeleton, pose, &root, carried, blown),
-            None => vec![Ragdoll::from_body(skeleton, pose, &root, carried)],
+            Some(&blown) => Ragdoll::tear(whole, skeleton, pose, &root, blown),
+            None => vec![whole],
         };
         // The death cam follows one piece: the biggest, the first of equals.
         let largest = pieces
@@ -1561,6 +1742,7 @@ mod tests {
 
     /// A body with a skeleton, at zero health, marked `Dying`.
     fn a_dead_body(world: &mut World, extras: impl Bundle) -> Entity {
+        world.init_resource::<CollisionWorld>();
         let mut health = Damageable::with_health(100);
         health.apply(100);
         let body = world
@@ -1624,6 +1806,7 @@ mod tests {
     #[test]
     fn a_dead_thing_with_no_body_leaves_nothing() {
         let mut world = World::new();
+        world.init_resource::<CollisionWorld>();
         let mut health = Damageable::with_health(20);
         health.apply(20);
         let crate_entity = world
@@ -1639,6 +1822,7 @@ mod tests {
     #[test]
     fn a_body_nobody_announced_is_left_standing() {
         let mut world = World::new();
+        world.init_resource::<CollisionWorld>();
         world.spawn((
             Damageable::with_health(100),
             DamageLog::default(),
@@ -2062,7 +2246,7 @@ mod tests {
                         continue;
                     }
                     assert!(head.y > -0.05 && tail.y > -0.05, "{shape:?}: {} went through the floor", bone.name);
-                    assert!((head.distance(tail) - bone.length).abs() < bone.length * 0.02, "{shape:?}: {} stretched", bone.name);
+                    assert!((head.distance(tail) - bone.length).abs() < bone.length * 0.02, "{shape:?}: {} stretched {} vs {}", bone.name, head.distance(tail), bone.length);
                 }
             }
         }
@@ -2357,41 +2541,17 @@ mod tests {
         hash
     }
 
-    /// The solver's arithmetic is pinned, not merely its behavior.
+    /// One seed reaches the same bits twice in one build.
     ///
     /// A corpse is replicated as a seed and every machine runs this solver
-    /// from it, so a change that moved the result by one bit is a corpse that
-    /// lies differently on two screens — and none of the settling tests would
-    /// notice, since a corpse that settles a millimeter to the left still
-    /// settles. The number was recorded from the solver before its working
-    /// lists moved onto the stack. If a change *means* to alter the
-    /// simulation, record it again; if it did not mean to, it has.
-    ///
-    /// **There are two numbers, one per build profile**, and that is a finding
-    /// rather than a convenience: an optimized build reaches different bits
-    /// from a debug build of the very same code, measured on the solver as it
-    /// stood before this test existed. So "every machine runs the same
-    /// solver" holds between two builds of the same profile and target, and
-    /// not beyond — a debug client watching a release server already sees a
-    /// corpse lie slightly differently.
-    ///
-    /// Both were measured on aarch64 macOS, and the bits depend on the target
-    /// too (`acos` is the platform's), so they are only checked there.
-    /// Everywhere, the same seed has to reach the same bits twice in one
-    /// build, which is the property a replicated corpse actually leans on.
+    /// from it, so anything in it that is not a function of the seed (an
+    /// iteration order, a value left over from another corpse) is a corpse
+    /// that lies differently on two screens, and no settling test notices.
+    /// Bits are not compared across builds: an optimized build already reaches
+    /// different ones from a debug build of the same code.
     #[test]
-    fn the_solver_reaches_the_same_bits_it_always_has() {
-        let reached = fingerprint();
-        assert_eq!(reached, fingerprint(), "one seed reached two answers in one build");
-
-        if cfg!(all(target_arch = "aarch64", target_os = "macos")) {
-            let expected = if cfg!(debug_assertions) {
-                0x174c_c9c0_537d_4118
-            } else {
-                0x93d1_f1d3_b313_e938
-            };
-            assert_eq!(reached, expected);
-        }
+    fn one_seed_reaches_the_same_bits_twice() {
+        assert_eq!(fingerprint(), fingerprint(), "one seed reached two answers in one build");
     }
 
     /// The tick writes over the pose the corpse already has, and what was

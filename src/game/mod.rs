@@ -101,6 +101,8 @@ pub mod team_choice;
 pub mod team_picker;
 pub mod trigger;
 pub mod ragdoll;
+#[cfg(test)]
+pub mod ragdoll_soak;
 pub mod skeleton;
 pub mod viewmodel;
 pub mod warm_up;
