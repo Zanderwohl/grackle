@@ -85,6 +85,10 @@ pub struct BotIntent {
     /// Meters feet to feet it means to fight from, for the weapon it means to fight with. Written
     /// by `fight`; `think` reads it a tick later.
     pub standoff: Option<f32>,
+    /// Stands where it is rather than walking its route, as a bot does looking through a scope.
+    pub hold: bool,
+    /// Where a bot that has reached its camp keeps watch, at eye height. Written by `think`.
+    pub watch: Option<Vec3>,
 }
 
 /// What [`steer_bots`] last put on a bot's legs, so the next move eases from it instead of
@@ -496,6 +500,9 @@ pub fn steer_bots(
         // A leap is replayed from where the bake started it, so its run-up stays on line.
         let leap_next = route.ahead().first().is_some_and(|link| link.leap.is_some());
         let mut world = Vec2::new(-input.yaw.sin(), -input.yaw.cos()) * input.movement.length();
+        if intent.hold && !leaping && !leap_next {
+            world = Vec2::ZERO;
+        }
         let footwork = mind.map_or(Footwork::default(), |mind| mind.footwork);
         let step = dt / footwork.ramp.max(1e-3);
         let mut stride = stride.map(Mut::into_inner);

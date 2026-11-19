@@ -22,6 +22,7 @@ use crate::game::collision::CollisionWorld;
 use crate::game::death::Dying;
 use crate::game::player::{PhysicsBody, Player};
 use crate::game::projectile::Projectile;
+use crate::game::sights::Sights;
 use crate::common::team::Allegiances;
 use crate::tool::nav_bake::NavBake;
 
@@ -50,6 +51,18 @@ const ERROR_DRIFT: f32 = 0.5;
 const LOOK_AHEAD: f32 = 10.0;
 /// Meters to the side a bot checks there is floor before strafing that way.
 const STRAFE_CHECK: f32 = 1.0;
+/// Meters from which a bot raises a scope at what it fights. Nearer, a target crosses the narrow
+/// view too quickly, and the scoped primary is counted only from here out.
+pub const SCOPE_FROM: f32 = 10.0;
+/// Seconds a scoped bot keeps watching after it last saw what it fights, before it is done and
+/// lowers the scope.
+const SCOPE_LINGER: f32 = 3.0;
+/// Seconds a bot leaves its scope down after a hit lowered it, so it can turn on whoever hit it.
+const SCOPE_REST: f32 = 1.5;
+/// Seconds of tracking a bot goes for the head before it settles for the body.
+const HEAD_PATIENCE: f32 = 1.5;
+/// Meters.
+const HEAD_WIDTH: f32 = 0.3;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 pub enum Preference {
@@ -76,11 +89,13 @@ pub struct Aim {
     /// rest it catches up on, so a bot tracking a runner trails them a little.
     pub tracking: f32,
     pub preference: Preference,
+    /// The chance, per target, that it goes for the head with a weapon that pays for one, 0 to 1.
+    pub headhunting: f32,
 }
 
 impl Default for Aim {
     fn default() -> Self {
-        Aim { turn_rate: 6.0, error: 0.08, settle: 0.5, ease: 0.1, tracking: 0.75, preference: Preference::Nearest }
+        Aim { turn_rate: 6.0, error: 0.08, settle: 0.5, ease: 0.1, tracking: 0.75, preference: Preference::Nearest, headhunting: 0.5 }
     }
 }
 
@@ -91,6 +106,8 @@ const AIM_ERROR: std::ops::Range<f32> = 0.06..0.17;
 const SETTLE: std::ops::Range<f32> = 0.5..1.1;
 const EASE: std::ops::Range<f32> = 0.06..0.16;
 const TRACKING: std::ops::Range<f32> = 0.45..0.8;
+/// Not narrowed by skill: no round has measured what it is worth.
+const HEADHUNTING: std::ops::Range<f32> = 0.2..0.8;
 
 impl Aim {
     pub fn temperament(skill: BotSkill) -> Self {
@@ -102,6 +119,7 @@ impl Aim {
             ease: rand::random_range(skill.within(EASE, Better::Lower)),
             tracking: rand::random_range(skill.within(TRACKING, Better::Higher)),
             preference,
+            headhunting: rand::random_range(HEADHUNTING),
         }
     }
 }
@@ -177,19 +195,22 @@ const FURTHEST_TRIED: f32 = 60.0;
 /// Meters a bot keeps from whoever it fights at least, whatever it holds, and at most.
 pub const CLOSEST_STANDOFF: f32 = 3.0;
 pub const FURTHEST_STANDOFF: f32 = 25.0;
+/// For a scoped weapon.
+pub const SCOPED_FURTHEST_STANDOFF: f32 = 40.0;
 
 /// The furthest a weapon still does `comfort` of its best damage from, within
-/// [`CLOSEST_STANDOFF`] and [`FURTHEST_STANDOFF`]. Every weapon's [`worth`] peaks close in, so its
+/// [`CLOSEST_STANDOFF`] and [`FURTHEST_STANDOFF`], or [`SCOPED_FURTHEST_STANDOFF`] for a scoped one. Every weapon's [`worth`] peaks close in, so its
 /// best distance alone walks a bot onto its target. `None` for a weapon that reaches nobody.
 pub fn comfortable_range(weapon: &Weapon, comfort: f32) -> Option<f32> {
-    let worth_at = |distance: f32| worth(&weapon.primary, distance).max(worth(&weapon.secondary, distance));
+    let worth_at = |distance: f32| weapon_worth(weapon, distance).1;
     let distances = (2..=(FURTHEST_TRIED / RANGE_STEP) as u32).map(|step| step as f32 * RANGE_STEP);
     let best = distances.clone().map(worth_at).fold(0.0, f32::max);
     if best <= 0.0 {
         return None;
     }
     let furthest = distances.filter(|distance| worth_at(*distance) >= comfort * best).last()?;
-    Some(furthest.clamp(CLOSEST_STANDOFF, FURTHEST_STANDOFF))
+    let furthest_allowed = if scoped(weapon).is_some() { SCOPED_FURTHEST_STANDOFF } else { FURTHEST_STANDOFF };
+    Some(furthest.clamp(CLOSEST_STANDOFF, furthest_allowed))
 }
 
 /// How a bot meets a projectile coming at it with an airblast in hand, rolled per seat inside its
@@ -279,6 +300,15 @@ pub struct BotAim {
     incoming: Option<Incoming>,
     /// The weapon whose [`comfortable_range`] was last worked out, and that range.
     standoff: Option<(WeaponId, Option<f32>)>,
+    /// Wants its sights up.
+    scoping: bool,
+    /// Seconds of game time: the scope last asked up, what it fights last seen through it, and
+    /// until when a hit keeps it down.
+    scoped_at: f32,
+    scoped_seen: f32,
+    rest_until: f32,
+    /// Goes for the head this target, rolled from [`Aim::headhunting`] as it is taken.
+    head: bool,
 }
 
 /// Turns `(yaw, pitch)` toward `(to_yaw, to_pitch)` by at most `step` radians, the short way.
@@ -309,6 +339,11 @@ fn angle_between(a: (f32, f32), b: (f32, f32)) -> f32 {
 /// How much one button of a weapon is worth against a body `distance` meters away, as rough
 /// damage per second. Zero for what cannot reach or would hurt the bot more than its target.
 pub fn worth(mounted: &Mounted, distance: f32) -> f32 {
+    worth_aimed(mounted, distance, AIM_FALLOFF)
+}
+
+/// [`worth`], with a hitscan shot half as likely to land at `aim_falloff` meters.
+fn worth_aimed(mounted: &Mounted, distance: f32, aim_falloff: f32) -> f32 {
     let interval = mounted.cadence.interval().max(1.0 / 64.0);
     match mounted.action {
         WeaponAction::Hitscan(spec @ HitscanSpec { range_m, damage, pellets, .. }) => {
@@ -323,7 +358,7 @@ pub fn worth(mounted: &Mounted, distance: f32) -> f32 {
                     (grid.across * grid.across) as f32 * share * share
                 }
             };
-            damage as f32 * spec.scale_at(distance) * landed / (1.0 + distance / AIM_FALLOFF) / interval
+            damage as f32 * spec.scale_at(distance) * landed / (1.0 + distance / aim_falloff) / interval
         }
         WeaponAction::Projectile(spec) => {
             // Inside its own blast the shooter takes the splash too.
@@ -343,13 +378,37 @@ pub fn worth(mounted: &Mounted, distance: f32) -> f32 {
     }
 }
 
+/// What the primary fires once sighted, when [`Sights::mounted`] says that differs from the
+/// unsighted primary, and how many times the scope magnifies against the open view.
+fn scoped(weapon: &Weapon) -> Option<(Mounted, f32)> {
+    let scope = weapon.scope()?;
+    let up = Sights { up: true, raised: 1.0, weapon: Some(weapon.id), button_down: false };
+    let mounted = up.mounted(weapon, crate::game::weapon::Button::Primary);
+    (mounted != weapon.primary).then_some((mounted, (2.0 * crate::game::bot_sense::HALF_VIEW / scope.fov.max(1e-3)).max(1.0)))
+}
+
+/// Whether to press the scope's button: while the sights are not as wanted, and only after a tick
+/// with it up, since they toggle as it goes down and a press lost while held is never seen.
+fn scope_press(scoped_weapon: bool, scoping: bool, sights: &Sights) -> bool {
+    scoped_weapon && scoping != sights.up && !sights.button_down
+}
+
+/// `true` for the secondary. The scoped primary counts from [`SCOPE_FROM`] out, a far shot through
+/// it as much likelier to land as the scope magnifies.
+pub fn weapon_worth(weapon: &Weapon, distance: f32) -> (bool, f32) {
+    let through_scope = scoped(weapon)
+        .filter(|_| distance >= SCOPE_FROM)
+        .map_or(0.0, |(mounted, zoom)| worth_aimed(&mounted, distance, AIM_FALLOFF * zoom));
+    let (primary, secondary) = (worth(&weapon.primary, distance).max(through_scope), worth(&weapon.secondary, distance));
+    if secondary > primary { (true, secondary) } else { (false, primary) }
+}
+
 /// A carried weapon against a body `distance` away: its better button and what that is worth,
 /// nothing with no ammo at all, and less while its clip is empty by the reload it needs first.
 fn armed(weapon: WeaponId, ammo: &Ammo, catalog: &WeaponCatalog, distance: f32) -> Option<(WeaponId, bool, f32)> {
     let state = ammo.at(weapon).filter(|state| state.clip + state.reserve > 0)?;
     let spec = catalog.get(weapon)?;
-    let (primary, secondary) = (worth(&spec.primary, distance), worth(&spec.secondary, distance));
-    let (alt, value) = if secondary > primary { (true, secondary) } else { (false, primary) };
+    let (alt, value) = weapon_worth(spec, distance);
     let reload = if spec.magazine.clip.is_some() && state.clip == 0 { spec.magazine.first_reload.unwrap_or(spec.magazine.reload) } else { 0.0 };
     Some((weapon, alt, value / (1.0 + reload / EMPTY_CLIP_SECONDS))).filter(|(.., value)| *value > 0.0)
 }
@@ -389,9 +448,11 @@ pub fn would_land(world: &CollisionWorld, eye: Vec3, aim: (f32, f32), point: Vec
     splash <= 0.0 || world.ray_distance(&ray, splash * 1.2).is_none()
 }
 
-/// The angle off a body `distance` away that still hits it, for this action.
-fn tolerance(action: &WeaponAction, distance: f32) -> f32 {
+/// The angle off a body `distance` away that still hits it, for this action; off its head with
+/// `head`.
+fn tolerance(action: &WeaponAction, distance: f32, head: bool) -> f32 {
     let radius = match action {
+        _ if head => HEAD_WIDTH * 0.5,
         WeaponAction::Projectile(spec) => (spec.explosion_radius * 0.5).max(BODY_WIDTH * 0.5),
         WeaponAction::Flame(spec) => return spec.spread,
         _ => BODY_WIDTH * 0.5,
@@ -414,7 +475,7 @@ pub fn fight(
     rules: Option<Res<MovementRules>>,
     nav: Option<Res<NavBake>>,
     bodies: Query<(&PhysicsBody, &Stance, &Player, &Hitboxes), Without<Dying>>,
-    mut bots: Query<(Entity, &BotSenses, &BotMind, Option<(&Equipped, &Ammo)>, &mut BotIntent, &mut BotAim), With<BotOf>>,
+    mut bots: Query<(Entity, &BotSenses, &BotMind, Option<(&Equipped, &Ammo)>, Option<&Sights>, &mut BotIntent, &mut BotAim), With<BotOf>>,
     projectiles: Query<(Entity, &Projectile, &PhysicsBody)>,
     allegiances: Allegiances,
 ) {
@@ -422,10 +483,25 @@ pub fn fight(
     let dt = time.delta_secs();
     let retuned = catalog.as_ref().is_some_and(|catalog| catalog.is_changed());
     let gravity = rules.as_deref().map_or(MovementRules::default().gravity, |rules| rules.gravity);
-    for (bot, senses, mind, arms, mut intent, mut aim) in &mut bots {
+    for (bot, senses, mind, arms, sights, mut intent, mut aim) in &mut bots {
         let Ok((body, stance, player, _)) = bodies.get(bot) else { continue };
         let eye = body.current + Vec3::Y * player.duck.eye_from_center(*stance, player.eye);
-        let skill = mind.aim;
+        let sights = sights.copied().unwrap_or_default();
+        let rifle = arms.zip(catalog.as_deref()).and_then(|((equipped, _), catalog)| catalog.held_by(equipped)).filter(|weapon| scoped(weapon).is_some());
+        let scope = rifle.and_then(|weapon| weapon.scope());
+        if rifle.is_none() {
+            aim.scoping = false;
+        }
+        if aim.scoping && senses.hurt.is_some_and(|hurt| hurt >= aim.scoped_at) {
+            aim.scoping = false;
+            aim.rest_until = now + SCOPE_REST;
+        }
+        let sighted = sights.sighted() && scope.is_some();
+        let skill = match scope.filter(|_| sighted) {
+            // The mouse turns slower through a scope.
+            Some(scope) => Aim { turn_rate: mind.aim.turn_rate * scope.look_speed, ..mind.aim },
+            None => mind.aim,
+        };
         let airblast = arms.zip(catalog.as_deref()).and_then(|((equipped, _), catalog)| match catalog.get(equipped.held()?)?.secondary.action {
             WeaponAction::Airblast(spec) if spec.reflect => Some(spec),
             _ => None,
@@ -483,6 +559,7 @@ pub fn fight(
         };
         if target != aim.target {
             aim.target = target;
+            aim.head = rand::random::<f32>() < skill.headhunting;
             aim.tracked = 0.0;
             aim.last_bearing = None;
             (aim.yaw, aim.pitch) = (player.yaw, player.pitch);
@@ -490,7 +567,25 @@ pub fn fight(
         }
 
         let Some((them, their_stance, their, boxes)) = target.and_then(|target| bodies.get(target).ok()) else {
-            intent.look_at = None;
+            if let Some(watch) = intent.watch {
+                if rifle.is_some() && !aim.scoping && now >= aim.rest_until {
+                    aim.scoping = true;
+                    aim.scoped_at = now;
+                }
+                if aim.scoping {
+                    aim.scoped_seen = now;
+                }
+                (aim.yaw, aim.pitch) = skill.ease_toward((player.yaw, player.pitch), aim_at(eye, watch), dt);
+                intent.look_at = Some(eye + look(aim.yaw, aim.pitch) * LOOK_AHEAD);
+            } else {
+                if aim.scoping && now - aim.scoped_seen > SCOPE_LINGER {
+                    aim.scoping = false;
+                }
+                intent.look_at = aim.scoping.then(|| eye + look(player.yaw, player.pitch) * LOOK_AHEAD);
+                (aim.yaw, aim.pitch) = (player.yaw, player.pitch);
+            }
+            // Lingering after a camp is left, it walks on to whatever `think` wants now.
+            intent.hold = aim.scoping && intent.watch.is_some();
             intent.fire = false;
             intent.alt_fire = false;
             intent.strafe = 0.0;
@@ -500,8 +595,7 @@ pub fn fight(
             intent.reload = arms.is_some_and(|(equipped, ammo)| {
                 equipped.held().and_then(|held| Some((catalog.as_deref()?.get(held)?.magazine.clip?, ammo.at(held)?))).is_some_and(|(clip, state)| state.clip * 2 < clip && state.reserve > 0)
             });
-            (aim.yaw, aim.pitch) = (player.yaw, player.pitch);
-            intent.alt_fire = reflecting;
+            intent.alt_fire = reflecting || scope_press(rifle.is_some(), aim.scoping, &sights);
             continue;
         };
         intent.reload = false;
@@ -514,17 +608,35 @@ pub fn fight(
             let best = best_weapon(equipped.carried(), ammo, catalog, distance)?;
             let held = equipped.held().and_then(|held| armed(held, ammo, catalog, distance));
             let pick = match held {
-                Some(held) if best.2 <= held.2 * SWITCH_GAIN => held,
+                // Scoped, it keeps the rifle.
+                Some(held) if aim.scoping || best.2 <= held.2 * SWITCH_GAIN => held,
                 _ => best,
             };
             let action = if pick.1 { catalog.get(pick.0)?.secondary.action } else { catalog.get(pick.0)?.primary.action };
             Some((pick.0, pick.1, action, equipped.held() == Some(pick.0)))
         });
+        let rifle_ready = rifle.is_some() && choice.is_some_and(|(weapon, alt, _, holding)| holding && !alt && rifle.is_some_and(|rifle| rifle.id == weapon));
+        if !rifle_ready {
+            aim.scoping = false;
+        } else if !aim.scoping && distance >= SCOPE_FROM && now >= aim.rest_until && !reflecting {
+            aim.scoping = true;
+            aim.scoped_at = now;
+        }
+        if aim.scoping {
+            aim.scoped_seen = now;
+        }
+        // Until the sights are up, nothing fires.
+        let choice = choice.map(|(weapon, alt, action, holding)| match rifle.filter(|_| aim.scoping && !alt).and_then(scoped) {
+            Some((mounted, _)) => (weapon, alt, mounted.action, holding),
+            None => (weapon, alt, action, holding),
+        });
         // Drawing another weapon would put the airblast away before it goes off.
         intent.select = choice.filter(|(_, _, _, holding)| !holding && !reflecting).map(|(weapon, ..)| weapon);
 
         let action = choice.map_or(WeaponAction::None, |(_, _, action, _)| action);
-        let point = aim_point(&world, eye, center, feet, their.velocity, &action, gravity);
+        let pays_for_heads = matches!(action, WeaponAction::Hitscan(spec) if spec.headshot_multiplier > 1);
+        let head = boxes.head.filter(|_| aim.head && pays_for_heads && aim.tracked < HEAD_PATIENCE).map(|head| head.center);
+        let point = head.unwrap_or_else(|| aim_point(&world, eye, center, feet, their.velocity, &action, gravity));
         let true_aim = aim_at(eye, point);
         // Off the body rather than the point, which jumps between feet and chest as the feet go
         // in and out of view.
@@ -536,17 +648,20 @@ pub fn fight(
         }
         aim.last_bearing = Some(bearing);
         aim.lean += ERROR_DRIFT * dt;
-        let error = skill.error * ((-aim.tracked / skill.settle).exp() + CROSSING_ERROR * crossing);
+        // A scope magnifies a hand's error down with the view.
+        let zoom = rifle.and_then(scoped).filter(|_| sighted).map_or(1.0, |(_, zoom)| zoom);
+        let error = skill.error * ((-aim.tracked / skill.settle).exp() + CROSSING_ERROR * crossing) / zoom;
         let off = (true_aim.0 + error * aim.lean.cos(), true_aim.1 + error * aim.lean.sin());
         let followed = (aim.yaw + moved.0 * skill.tracking, aim.pitch + moved.1 * skill.tracking);
         (aim.yaw, aim.pitch) = skill.ease_toward(followed, off, dt);
         intent.look_at = Some(eye + look(aim.yaw, aim.pitch) * LOOK_AHEAD);
 
-        let ready = choice.is_some_and(|(.., holding)| holding);
-        let lands = ready && would_land(&world, eye, (aim.yaw, aim.pitch), point, tolerance(&action, distance), splash_of(&action));
+        let ready = choice.is_some_and(|(.., holding)| holding) && (!aim.scoping || sighted);
+        let lands = ready && would_land(&world, eye, (aim.yaw, aim.pitch), point, tolerance(&action, distance, head.is_some()), splash_of(&action));
         let alt = choice.is_some_and(|(_, alt, ..)| alt);
         intent.fire = lands && !alt && !reflecting;
-        intent.alt_fire = (lands && alt) || reflecting;
+        intent.alt_fire = (lands && alt) || reflecting || scope_press(rifle.is_some(), aim.scoping, &sights);
+        intent.hold = aim.scoping;
 
         aim.strafe_for -= dt;
         if aim.strafe_for <= 0.0 {
@@ -568,10 +683,10 @@ pub fn fight(
             aim.last_side = aim.strafe;
             aim.strafe_for = mind.footwork.stride;
         }
-        intent.strafe = aim.strafe;
+        intent.strafe = if aim.scoping { 0.0 } else { aim.strafe };
 
         intent.standoff = standoff(&mut aim, choice.map(|(weapon, ..)| weapon), catalog.as_deref(), mind.footwork.comfort, retuned);
-        let advance = intent.standoff.map_or(0.0, |range| advance_toward(standing.distance(feet), range));
+        let advance = intent.standoff.filter(|_| !aim.scoping).map_or(0.0, |range| advance_toward(standing.distance(feet), range));
         intent.advance = if advance != 0.0 && safe(forward * advance.signum()) { advance } else { 0.0 };
     }
 }
@@ -675,7 +790,7 @@ mod tests {
         let (eye, point) = (Vec3::new(0.0, 1.6, 0.0), Vec3::new(0.0, 1.0, -10.0));
         let aim = aim_at(eye, point);
         let rifle = WeaponAction::Hitscan(HitscanSpec { range_m: 100.0, damage: 10, headshot_multiplier: 1, shove_per_damage: 0.0, shove_radius_m: 0.0, pellets: None, kill_shove: None, ramp_up: None, falloff: None, trail: crate::common::weapon::HitscanTrail::Streak });
-        let tolerance = tolerance(&rifle, 10.0);
+        let tolerance = tolerance(&rifle, 10.0, false);
         assert!(!would_land(&walled, eye, aim, point, tolerance, 0.0), "fired into the pillar");
         assert!(would_land(&clear, eye, aim, point, tolerance, 0.0));
         let wide = (aim.0 + 0.3, aim.1);
@@ -698,7 +813,7 @@ mod tests {
             current = skill.ease_toward(current, (wanted.0 + error * lean.cos(), wanted.1 + error * lean.sin()), dt);
         }
         let rifle = WeaponAction::Hitscan(HitscanSpec { range_m: 100.0, damage: 10, headshot_multiplier: 1, shove_per_damage: 0.0, shove_radius_m: 0.0, pellets: None, kill_shove: None, ramp_up: None, falloff: None, trail: crate::common::weapon::HitscanTrail::Streak });
-        assert!(angle_between(current, wanted) <= tolerance(&rifle, eye.distance(point)), "still off by {}", angle_between(current, wanted));
+        assert!(angle_between(current, wanted) <= tolerance(&rifle, eye.distance(point), false), "still off by {}", angle_between(current, wanted));
     }
 
     /// Breaks if weapon choice ignores range: the shotgun close, the sniper rifle far, and the
@@ -781,15 +896,105 @@ mod tests {
         (world, bot)
     }
 
+    /// The scope comes up and down in the tick it is pressed.
     fn fight_for(world: &mut World, seconds: f32) -> bool {
+        fight_scoped_for(world, seconds).0
+    }
+
+    fn fight_scoped_for(world: &mut World, seconds: f32) -> (bool, bool) {
         use bevy::ecs::system::RunSystemOnce;
-        let mut fired = false;
+        let (mut fired, mut sighted_shot) = (false, false);
         for _ in 0..(seconds * 64.0) as usize {
             world.resource_mut::<Time>().advance_by(std::time::Duration::from_secs_f32(1.0 / 64.0));
             world.run_system_once(fight).unwrap();
-            fired |= world.query::<&BotIntent>().iter(world).any(|intent| intent.fire);
+            for (intent, equipped, mut sights) in world.query::<(&BotIntent, &Equipped, &mut Sights)>().iter_mut(world) {
+                if intent.alt_fire && !sights.button_down {
+                    sights.up = !sights.up;
+                    sights.raised = if sights.up { 1.0 } else { 0.0 };
+                    sights.weapon = equipped.held();
+                }
+                sights.button_down = intent.alt_fire;
+                fired |= intent.fire;
+                sighted_shot |= intent.fire && sights.sighted();
+            }
         }
-        fired
+        (fired, sighted_shot)
+    }
+
+    /// Breaks if a bot shoots far off without its scope, moves while scoped, or stays scoped when hit.
+    #[test]
+    fn a_bot_scopes_at_range_and_comes_out_when_hurt() {
+        let open = Room::new(Vec3::new(-20.0, 0.0, -20.0), Vec3::new(20.0, 6.0, 20.0));
+        let (mut world, bot) = a_fight(&[Volume::air(open)]);
+        let (fired, sighted_shot) = fight_scoped_for(&mut world, 2.0);
+        assert!(fired && sighted_shot, "fired {fired}, through the scope {sighted_shot}");
+        let unsighted_shots = {
+            let mut shots = 0;
+            for _ in 0..64 {
+                let (fired, sighted) = fight_scoped_for(&mut world, 1.0 / 64.0);
+                shots += (fired && !sighted) as u32;
+            }
+            shots
+        };
+        assert_eq!(unsighted_shots, 0, "shot without the scope at 16 m");
+        let intent = world.get::<BotIntent>(bot).unwrap();
+        assert!(intent.hold && intent.strafe == 0.0, "scoped but still moving: {intent:?}");
+
+        let now = world.resource::<Time>().elapsed_secs();
+        world.get_mut::<BotSenses>(bot).unwrap().hurt = Some(now + 1.0 / 64.0);
+        fight_scoped_for(&mut world, 2.0 / 64.0);
+        assert!(!world.get::<Sights>(bot).unwrap().up, "kept the scope up through a hit");
+        fight_scoped_for(&mut world, SCOPE_REST * 0.5);
+        assert!(!world.get::<Sights>(bot).unwrap().up, "raised the scope again at once");
+        fight_scoped_for(&mut world, SCOPE_REST);
+        assert!(world.get::<Sights>(bot).unwrap().up, "never raised the scope again");
+    }
+
+    /// Breaks if a camping bot does not watch through its scope, or keeps it up after camping.
+    #[test]
+    fn a_camping_bot_watches_through_its_scope() {
+        let open = Room::new(Vec3::new(-20.0, 0.0, -20.0), Vec3::new(20.0, 6.0, 20.0));
+        let (mut world, bot) = a_fight(&[Volume::air(open)]);
+        world.get_mut::<BotSenses>(bot).unwrap().known.clear();
+        let watch = Vec3::new(-15.0, 1.4, 0.0);
+        world.get_mut::<BotIntent>(bot).unwrap().watch = Some(watch);
+        // The fight never writes the body's facing; the step does, from the look.
+        for _ in 0..64 {
+            fight_scoped_for(&mut world, 1.0 / 64.0);
+            let look = world.get::<BotIntent>(bot).unwrap().look_at.unwrap();
+            let eye = world.get::<PhysicsBody>(bot).unwrap().current + Vec3::Y * 0.7;
+            let (yaw, pitch) = aim_at(eye, look);
+            let mut player = world.get_mut::<Player>(bot).unwrap();
+            (player.yaw, player.pitch) = (yaw, pitch);
+        }
+        assert!(world.get::<Sights>(bot).unwrap().sighted(), "the scope is down at camp");
+        let look = world.get::<BotIntent>(bot).unwrap().look_at.unwrap();
+        assert!(look.x < -5.0 && look.z.abs() < 2.0, "not watching the camp's floor: {look}");
+        assert!(world.get::<BotIntent>(bot).unwrap().hold);
+
+        world.get_mut::<BotIntent>(bot).unwrap().watch = None;
+        fight_scoped_for(&mut world, SCOPE_LINGER + 0.2);
+        assert!(!world.get::<Sights>(bot).unwrap().up, "kept the scope up after camping");
+    }
+
+    /// Breaks if a bot set on headshots aims no higher than one that is not.
+    #[test]
+    fn a_headhunting_bot_aims_at_the_head() {
+        use crate::common::hitbox::Box3;
+        let open = Room::new(Vec3::new(-20.0, 0.0, -20.0), Vec3::new(20.0, 6.0, 20.0));
+        let mut pitches = Vec::new();
+        for headhunting in [0.0, 1.0] {
+            let (mut world, bot) = a_fight(&[Volume::air(open.clone())]);
+            world.get_mut::<BotMind>(bot).unwrap().aim.headhunting = headhunting;
+            let enemy = world.query_filtered::<Entity, (With<Hitboxes>, Without<BotOf>)>().single(&world).unwrap();
+            let mut boxes = world.get_mut::<Hitboxes>(enemy).unwrap();
+            boxes.head = Some(Box3 { center: boxes.body.center + Vec3::Y * 0.75, half_extents: Vec3::splat(0.15) });
+            fight_scoped_for(&mut world, 1.0);
+            let look = world.get::<BotIntent>(bot).unwrap().look_at.unwrap();
+            let eye = world.get::<PhysicsBody>(bot).unwrap().current + Vec3::Y * Player::default().duck.eye_from_center(Stance::Standing, Player::default().eye);
+            pitches.push(aim_at(eye, look).1);
+        }
+        assert!(pitches[1] > pitches[0] + 0.02, "aimed no higher going for the head: {pitches:?}");
     }
 
     /// Breaks if the fight layer does not turn a bot onto somebody it sees and shoot, or shoots
@@ -899,13 +1104,17 @@ mod tests {
         for weapon in &catalog.weapons {
             let Some(range) = comfortable_range(weapon, Footwork::default().comfort) else { continue };
             let key = &weapon.key;
-            assert!((CLOSEST_STANDOFF..=FURTHEST_STANDOFF).contains(&range), "{key} keeps {range} m");
+            assert!((CLOSEST_STANDOFF..=SCOPED_FURTHEST_STANDOFF).contains(&range), "{key} keeps {range} m");
+            assert!(range <= FURTHEST_STANDOFF || scoped(weapon).is_some(), "{key} keeps {range} m without a scope");
             let reach = (worth(&weapon.primary, range) + worth(&weapon.secondary, range)) > 0.0;
             assert!(reach || range == CLOSEST_STANDOFF, "{key} keeps {range} m, out of its own reach");
         }
         let far = |comfort| catalog.weapons.iter().filter_map(|weapon| comfortable_range(weapon, comfort)).fold(0.0, f32::max);
         assert!(far(0.7) > 8.0, "nothing is fought from further than {} m", far(0.7));
         assert!(far(0.6) >= far(0.85), "a bot insisting on more damage keeps further off");
+        let rifle = catalog.get(WeaponId::of("sniper_rifle")).unwrap();
+        let rifle_range = comfortable_range(rifle, COMFORT.end).unwrap();
+        assert!(rifle_range > FURTHEST_STANDOFF, "the sniper rifle is fought from {rifle_range} m");
     }
 
     /// Breaks if a bot inside its standoff walks in, outside it walks off, or twitches back and

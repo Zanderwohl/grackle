@@ -188,6 +188,30 @@ have in sight: aim turning at a rate with an error that settles as it tracks,
 rockets led and put at the feet, fire held without a clear ray, the weapon by
 range, a strafe onto floor the graph has, and an airblast at a rocket it sees
 coming, tried for and timed by its rolled `Reflexes`, so it often misses. **A
+bot looks through a scope** at whatever it fights from `SCOPE_FROM` (10 m) out,
+with a weapon whose scope is on the secondary and which has a scoped primary:
+it presses the secondary while its `Sights` are not as it wants them, holds fire
+until they are up, stands still (`BotIntent::hold`), turns at the scope's
+`look_speed`, and its aim error is divided by the scope's magnification. A
+scoped primary counts toward a weapon's worth from `SCOPE_FROM` out, so a bot
+draws the rifle for a distant enemy, and its standoff may reach
+`SCOPED_FURTHEST_STANDOFF` (40 m) rather than 25. Sighted, `sense` sees only the scope's field of view, as wide as
+it is tall, out to `SCOPED_SIGHT_RANGE`, and hears nothing (`View`); a hit still
+reaches it (`BotSenses::hurt`), and lowers the scope for `SCOPE_REST`. It is
+done, and lowers it, `SCOPE_LINGER` seconds after it last saw what it fought.
+With a weapon whose `headshot_multiplier` pays, it goes for the head of a target
+by its `Aim::headhunting` chance, rolled as the target is taken, for
+`HEAD_PATIENCE` seconds of tracking before it settles for the body. **A bot
+camps** (`Want::Camp`, scored by the `camp` drive) only while the weapon in hand
+keeps a standoff past `LONG_RANGE` (25 m): it goes to one of the map's best
+camp places (`camps`, kept in `MapIndex`), cells that see much floor, are seen
+from less, and have a long median engagement range (`camp_value`), and holds it
+for its patience as it would an ambush; a camp's distance costs it half what a
+pickup's does, and while such a weapon is in hand a weapon not carried and an
+enemy out of sight are worth half (`LONG_RANGE_ARMS`, `LONG_RANGE_HUNT`), so it
+keeps the rifle drawn rather than collecting the map. Arrived, `think` writes the busiest
+floor that place sees from 10 m or more as `BotIntent::watch`, and `fight`
+turns to it and raises the scope. **A
 bot keeps its distance**: it hunts from a place at its weapon's
 `comfortable_range` with a clear line to the quarry, preferring one whose median
 engagement range is near that standoff, walks in or backs off to
@@ -659,7 +683,7 @@ painted in the killer's color; "assist finished off [icon] victim" (killed by th
 "[icon] victim died" and, from the explode key (`How::Exploded`), "[icon] victim exploded" are cream. Those three
 are arrays of wordings in the lang file, one picked per line by a seed drawn when the line is made. The icon is what killed ([`src/game/kill_icon.rs`](src/game/kill_icon.rs)): a
 weapon's `icon` in `weapons.toml`, a white SVG under `icons/` rasterized at runtime, else the flame for
-afterburn, the explosion for splash and the skull for the map, a suicide or a weapon with none. Each line is a **`Plate`** ([`src/game/plate.rs`](src/game/plate.rs)):
+afterburn, the explosion for splash, `kill_headshot` for a headshot and the skull for the map, a suicide or a weapon with none. Each line is a **`Plate`** ([`src/game/plate.rs`](src/game/plate.rs)):
 a node with `PlateText` children, given its leaning panel after layout, repainted when its size
 or `swatch` changes, its text black or white by `Swatch::text`. Its lines and panel stay hidden
 until the panel is laid out; the plate's own `Visibility` is its owner's, which is how a name tag

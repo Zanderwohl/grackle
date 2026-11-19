@@ -22,7 +22,9 @@ use crate::game::damage::DamageSystems;
 use crate::game::death::Dying;
 use crate::game::hitbox::update_hitboxes;
 use crate::game::nav::{CellId, NavGraph};
+use crate::common::weapon::{Equipped, WeaponCatalog};
 use crate::game::player::{PhysicsBody, Player};
+use crate::game::sights::Sights;
 use crate::tool::nav_bake::NavBake;
 
 /// Radians either side of the look: a 90° view.
@@ -31,6 +33,8 @@ pub const HALF_VIEW: f32 = std::f32::consts::FRAC_PI_4;
 pub const HALF_VIEW_VERTICAL: f32 = std::f32::consts::FRAC_PI_3;
 /// Meters.
 pub const SIGHT_RANGE: f32 = 60.0;
+/// Meters seen through a scope.
+pub const SCOPED_SIGHT_RANGE: f32 = 120.0;
 /// Meters within which a shot and a blast are heard.
 pub const HEARS_SHOTS: f32 = 30.0;
 pub const HEARS_BLASTS: f32 = 40.0;
@@ -108,6 +112,8 @@ pub struct Noise {
 pub struct BotSenses {
     pub known: Vec<Known>,
     pub noises: Vec<Noise>,
+    /// Seconds of game time it was last hurt by somebody else, seen or not.
+    pub hurt: Option<f32>,
 }
 
 impl BotSenses {
@@ -142,22 +148,53 @@ impl BotSenses {
     }
 }
 
-/// Whether `target` is inside the view of an eye at `eye` looking along `yaw` and `pitch`, in the
-/// step's convention: yaw about world Y with `-Z` at zero, pitch positive up.
-pub fn in_view(eye: Vec3, yaw: f32, pitch: f32, target: Vec3) -> bool {
-    let to = target - eye;
-    if to.length() > SIGHT_RANGE {
-        return false;
+/// What a bot can see from its eye: radians either side of the look, across and up and down,
+/// and meters.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct View {
+    pub across: f32,
+    pub up: f32,
+    pub range: f32,
+}
+
+impl View {
+    pub const OPEN: View = View { across: HALF_VIEW, up: HALF_VIEW_VERTICAL, range: SIGHT_RANGE };
+
+    /// Through a scope of vertical `fov` in radians: as wide as it is tall, and nothing outside it.
+    pub fn scoped(fov: f32) -> View {
+        View { across: fov / 2.0, up: fov / 2.0, range: SCOPED_SIGHT_RANGE }
     }
-    let across = (-to.x).atan2(-to.z);
-    let turned = crate::common::rotation::wrap_angle(across - yaw);
-    let up = to.y.atan2(to.xz().length());
-    turned.abs() <= HALF_VIEW && (up - pitch).abs() <= HALF_VIEW_VERTICAL
+
+    /// The scope's while sighted, else [`View::OPEN`].
+    pub fn of(sights: &Sights, equipped: &Equipped, catalog: Option<&WeaponCatalog>) -> View {
+        catalog.and_then(|catalog| sights.scope(equipped, catalog)).map_or(View::OPEN, |scope| View::scoped(scope.fov))
+    }
+
+    pub fn is_scoped(&self) -> bool {
+        *self != View::OPEN
+    }
+
+    /// Whether `target` is inside this view of an eye at `eye` looking along `yaw` and `pitch`, in
+    /// the step's convention: yaw about world Y with `-Z` at zero, pitch positive up.
+    pub fn contains(&self, eye: Vec3, yaw: f32, pitch: f32, target: Vec3) -> bool {
+        let to = target - eye;
+        if to.length() > self.range {
+            return false;
+        }
+        let across = (-to.x).atan2(-to.z);
+        let turned = crate::common::rotation::wrap_angle(across - yaw);
+        let up = to.y.atan2(to.xz().length());
+        turned.abs() <= self.across && (up - pitch).abs() <= self.up
+    }
+}
+
+pub fn in_view(eye: Vec3, yaw: f32, pitch: f32, target: Vec3) -> bool {
+    View::OPEN.contains(eye, yaw, pitch, target)
 }
 
 /// In view and with nothing solid between, by the ray test a shot uses.
-pub fn sees(world: &CollisionWorld, eye: Vec3, yaw: f32, pitch: f32, points: &[Vec3]) -> bool {
-    points.iter().any(|point| in_view(eye, yaw, pitch, *point) && world.segment_clear(eye, *point))
+pub fn sees(world: &CollisionWorld, eye: Vec3, yaw: f32, pitch: f32, view: View, points: &[Vec3]) -> bool {
+    points.iter().any(|point| view.contains(eye, yaw, pitch, *point) && world.segment_clear(eye, *point))
 }
 
 /// The baked sightlines' quick no, before any ray is cast, from the cells under the eye's and the
@@ -203,15 +240,17 @@ impl BotSenses {
 
 /// What every bot sees, hears and feels this tick. After the damage is applied, so this tick's
 /// shots, blasts and hits are among what it notices, and after the boxes, so a head is where
-/// this tick's step put it.
+/// this tick's step put it. Sighted through a scope, a bot sees only what the scope shows and hears
+/// nothing; a hit still reaches it.
 #[allow(clippy::type_complexity)]
 pub fn sense(
     time: Res<Time>,
     world: Res<CollisionWorld>,
     nav: Option<Res<NavBake>>,
+    catalog: Option<Res<WeaponCatalog>>,
     mut effects: MessageReader<Effect>,
     mut dealt: MessageReader<DamageDealt>,
-    mut bots: Query<(Entity, &PhysicsBody, &Stance, &Player, Option<&Team>, Option<&PlayerId>, &mut BotSenses), With<BotOf>>,
+    mut bots: Query<(Entity, &PhysicsBody, &Stance, &Player, (&Sights, &Equipped), Option<&Team>, Option<&PlayerId>, &mut BotSenses), With<BotOf>>,
     bodies: Query<(Entity, &PlayerId, &PhysicsBody, &Stance, &Hitboxes, Option<&Team>), (With<Player>, Without<Dying>)>,
 ) {
     let now = time.elapsed_secs();
@@ -245,8 +284,9 @@ pub fn sense(
         })
         .collect();
 
-    for (bot, body, stance, player, team, id, mut senses) in &mut bots {
+    for (bot, body, stance, player, (sights, equipped), team, id, mut senses) in &mut bots {
         senses.forget(now);
+        let view = View::of(sights, equipped, catalog.as_deref());
         let center = body.current;
         let feet = center - Vec3::Y * stance.half_extents().y;
         let eye = center + Vec3::Y * player.duck.eye_from_center(*stance, player.eye);
@@ -257,19 +297,19 @@ pub fn sense(
                 continue;
             }
             // Both must hold, so the cheap test goes first.
-            if !target.points.iter().any(|point| in_view(eye, player.yaw, player.pitch, *point)) {
+            if !target.points.iter().any(|point| view.contains(eye, player.yaw, player.pitch, *point)) {
                 continue;
             }
             let eye_cell = *own_cell.get_or_insert_with(|| sight_cell(graph, feet));
             if !could_see(graph, eye_cell, target.cell) {
                 continue;
             }
-            if sees(&world, eye, player.yaw, player.pitch, &target.points) {
+            if sees(&world, eye, player.yaw, player.pitch, view, &target.points) {
                 senses.notice(target.who, target.entity, target.center, Sense::Seen, now);
             }
         }
 
-        for &(at, earshot, by) in &heard {
+        for &(at, earshot, by) in heard.iter().filter(|_| !view.is_scoped()) {
             if by.is_some() && by == id.copied() {
                 continue;
             }
@@ -283,6 +323,7 @@ pub fn sense(
             if Some(from) == id.copied() {
                 continue;
             }
+            senses.hurt = Some(now);
             let Some(attacker) = targets.iter().find(|target| target.who == from) else { continue };
             // Seen, it already knows better than a direction.
             if senses.known.iter().any(|known| known.who == from && known.in_sight) {
@@ -337,17 +378,18 @@ fn draw_bot_senses(
     show: Res<ShowBots>,
     time: Res<Time>,
     mut gizmos: Gizmos,
-    bots: Query<(&PhysicsBody, &Stance, &Player, &BotSenses, Option<&Team>, Option<&PlayerColor>), With<BotOf>>,
+    catalog: Option<Res<WeaponCatalog>>,
+    bots: Query<(&PhysicsBody, &Stance, &Player, (&Sights, &Equipped), &BotSenses, Option<&Team>, Option<&PlayerColor>), With<BotOf>>,
 ) {
     if !show.0 {
         return;
     }
     let now = time.elapsed_secs();
-    for (body, stance, player, senses, team, color) in &bots {
+    for (body, stance, player, (sights, equipped), senses, team, color) in &bots {
         let color = Swatch::of_body(team.copied(), color.copied()).base;
         let eye = body.current + Vec3::Y * player.duck.eye_from_center(*stance, player.eye);
         let at = |yaw: f32, pitch: f32| eye + look(player.yaw + yaw, player.pitch + pitch) * VIEW_DRAWN;
-        let (across, up) = (HALF_VIEW, HALF_VIEW_VERTICAL);
+        let View { across, up, .. } = View::of(sights, equipped, catalog.as_deref());
         for (yaw, pitch) in [(-across, -up), (across, -up), (across, up), (-across, up)] {
             gizmos.line(eye, at(yaw, pitch), color);
         }
@@ -463,6 +505,43 @@ mod tests {
         a_body(&mut world, Vec3::new(0.0, 0.0, -10.0), 0.0, 2);
         world.run_system_once(sense).unwrap();
         assert!(seen(&world, bot).is_empty(), "the bot saw through the pillar");
+    }
+
+    /// Breaks if a scoped bot sees outside the scope or hears anything, or misses a hit.
+    #[test]
+    fn a_scoped_bot_notices_only_what_the_scope_shows() {
+        use crate::common::weapon::WeaponId;
+        let mut world = a_world(&[Room::new(Vec3::new(-20.0, 0.0, -100.0), Vec3::new(20.0, 6.0, 20.0))]);
+        world.insert_resource(crate::common::weapon_file::default_catalog());
+        let bot = a_bot(&mut world, Vec3::ZERO, 0.0);
+        let rifle = WeaponId::of("sniper_rifle");
+        world.entity_mut(bot).insert((Equipped::carrying([rifle]), Sights { up: true, raised: 1.0, weapon: Some(rifle), button_down: false }));
+        let aside = 20f32.to_radians();
+        a_body(&mut world, Vec3::new(-aside.sin(), 0.0, -aside.cos()) * 10.0, 0.0, 2);
+        a_body(&mut world, Vec3::new(0.0, 0.0, -90.0), 0.0, 3);
+        world.write_message(Effect::Tracer { from: Vec3::new(0.0, 1.5, 12.0), to: Vec3::ZERO, hit: false, by: Some(PlayerId(4)), trail: crate::common::weapon::HitscanTrail::Streak });
+        world.run_system_once(sense).unwrap();
+        assert_eq!(seen(&world, bot), vec![PlayerId(3)]);
+        let senses = world.get::<BotSenses>(bot).unwrap();
+        assert!(senses.noises.is_empty(), "heard a shot through the scope");
+        assert_eq!(senses.hurt, None);
+
+        a_body(&mut world, Vec3::new(0.0, 0.0, 10.0), 0.0, 5);
+        world.write_message(DamageDealt {
+            target: bot,
+            source: DamageSource::Player(PlayerId(5)),
+            amount: 10,
+            remaining: 100,
+            point: Vec3::Y,
+            from: Some(Vec3::new(0.0, 1.5, 10.0)),
+            cause: Default::default(),
+        });
+        world.run_system_once(sense).unwrap();
+        assert!(world.get::<BotSenses>(bot).unwrap().hurt.is_some(), "a hit through the scope went unfelt");
+
+        world.get_mut::<Sights>(bot).unwrap().up = false;
+        world.run_system_once(sense).unwrap();
+        assert!(seen(&world, bot).contains(&PlayerId(2)));
     }
 
     /// Breaks if a bot is deaf behind itself: a shot behind it is heard where it was fired.
