@@ -4,7 +4,9 @@
 //!   it flies faster than [`BLEED_SPEED`];
 //! - a burst of [`goo_splat`]s from where a blast took bones
 //!   ([`Ragdoll::torn_at`]);
-//! - a spurt of [`blob_sheet`] lumps out of a hitscan wound, along the ray.
+//! - a spurt of [`blob_sheet`] lumps out of a hitscan wound, along the ray,
+//!   and the same lumps fountaining from a beheaded corpse's neck
+//!   ([`Ragdoll::stump`]) for [`FOUNTAIN_SECONDS`].
 //!
 //! Drops are slowed by [`DRAG`], collide with nothing, and fade linearly with
 //! speed to nothing at [`STILL_SPEED`]; a spurt's drops fall, so they fade with
@@ -79,6 +81,15 @@ const SPURT_CLUMP: (f32, f32) = (1.0, 7.0);
 /// Seconds between clumps, 1/60 on average.
 const SPURT_PERIOD: (f32, f32) = (0.004, 2.0 / 60.0 - 0.004);
 
+/// Seconds a stump fountains for.
+pub const FOUNTAIN_SECONDS: f32 = 1.5;
+
+/// Meters per second out of the stump at first, falling linearly to
+/// [`FOUNTAIN_LAST_SHARE`] of it.
+const FOUNTAIN_SPEED: f32 = 7.0;
+
+const FOUNTAIN_LAST_SHARE: f32 = 0.3;
+
 /// Live drops per emitter: `RATE` times the longest life, from the fastest gib
 /// worth planning for (about 60 m/s, so 0.8 s), with room to spare.
 const CAPACITY: u32 = 128;
@@ -133,6 +144,27 @@ struct BleedsFrom {
 
 #[derive(Component)]
 struct Bleeding;
+
+/// Follows `gib`'s [`Ragdoll::stump`], so it is replayed as the gib is.
+/// Seconds, on the particles' clock.
+#[derive(Component)]
+struct Fountain {
+    gib: Entity,
+    age: f32,
+}
+
+/// The fountain's speed `age` seconds in.
+fn fountain_speed(age: f32) -> f32 {
+    let through = (age / FOUNTAIN_SECONDS).clamp(0.0, 1.0);
+    FOUNTAIN_SPEED * (1.0 + (FOUNTAIN_LAST_SHARE - 1.0) * through)
+}
+
+fn fountain_properties(direction: Dir3, age: f32, fall: f32) -> EffectProperties {
+    let mut properties = EffectProperties::default();
+    properties.set("velocity", (*direction * fountain_speed(age)).into());
+    properties.set("gravity", (Vec3::Y * fall).into());
+    properties
+}
 
 /// `radius` is in meters. A drop that `falls` never slows below `gravity / DRAG`,
 /// so it fades with age over the life it would have had without gravity.
@@ -439,9 +471,11 @@ fn make_the_effects(mut commands: Commands, mut effects: ResMut<Assets<EffectAss
 
 /// Keyed on the absence of [`Bleeding`] rather than on the gib arriving, since
 /// a client's gib has no `Skeleton` until it is dressed.
+#[allow(clippy::too_many_arguments)]
 fn bleed_from_new_gibs(
     mut commands: Commands,
     effects: Res<BloodEffects>,
+    rules: Option<Res<MovementRules>>,
     time: Res<Time>,
     particles: Res<Time<EffectSimulation>>,
     mut held: Local<HeldBursts<Vec3>>,
@@ -454,6 +488,19 @@ fn bleed_from_new_gibs(
             && ragdoll.age() <= BURST_SECONDS
         {
             held.hold(time.elapsed_secs_f64(), at);
+        }
+        if let Some((at, direction)) = ragdoll.stump()
+            && ragdoll.age() < FOUNTAIN_SECONDS
+        {
+            let fall = rules.as_deref().map_or_else(|| MovementRules::default().fall(), MovementRules::fall);
+            commands.spawn((
+                Fountain { gib, age: ragdoll.age() },
+                ParticleEffect::new(effects.spurt.clone()),
+                EffectMaterial { images: vec![effects.blobs.clone()] },
+                fountain_properties(direction, ragdoll.age(), fall),
+                Transform::from_translation(at),
+                Name::new("Neck fountain"),
+            ));
         }
         for (end, (at, _)) in ragdoll.severed_ends(skeleton, 0.0).enumerate() {
             commands.spawn((
@@ -518,6 +565,39 @@ fn follow_the_severed_ends(
         if bleeding {
             transform.translation = at;
             properties.set("velocity", velocity.into());
+        }
+    }
+}
+
+/// A fountain stops when its time is up or its gib goes, and is despawned once
+/// its last drop has faded.
+fn follow_the_stumps(
+    mut commands: Commands,
+    time: Res<Time<EffectSimulation>>,
+    rules: Option<Res<MovementRules>>,
+    gibs: Query<&Ragdoll>,
+    mut fountains: Query<(Entity, &mut Fountain, &mut Transform, &mut EffectProperties, Option<&mut EffectSpawner>)>,
+) {
+    let fall = rules.as_deref().map_or_else(|| MovementRules::default().fall(), MovementRules::fall);
+    for (entity, mut fountain, mut transform, mut properties, spawner) in &mut fountains {
+        fountain.age += time.delta_secs();
+        let stump = gibs.get(fountain.gib).ok().and_then(Ragdoll::stump);
+        let flowing = fountain.age < FOUNTAIN_SECONDS && stump.is_some();
+        if !flowing && fountain.age >= FOUNTAIN_SECONDS + LAST_DROP_GONE {
+            commands.entity(entity).despawn();
+            continue;
+        }
+        // Added by Hanabi in `PostUpdate`, so absent on an emitter's first frame.
+        if let Some(mut spawner) = spawner
+            && spawner.active != flowing
+        {
+            spawner.active = flowing;
+        }
+        if let Some((at, direction)) = stump
+            && flowing
+        {
+            transform.translation = at;
+            *properties = fountain_properties(direction, fountain.age, fall);
         }
     }
 }
@@ -616,7 +696,7 @@ impl Plugin for GibBloodPlugin {
         }
         app.add_systems(Startup, (make_the_effects, warm_up_the_blood).chain())
             // Ungated: corpses arrive from the wire whenever.
-            .add_systems(Update, (bleed_from_new_gibs, follow_the_severed_ends).chain())
+            .add_systems(Update, (bleed_from_new_gibs, (follow_the_severed_ends, follow_the_stumps)).chain())
             .add_systems(Update, (spurt_from_hits, end_the_bursts, start_the_warm_up));
     }
 }

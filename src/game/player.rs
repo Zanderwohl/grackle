@@ -239,6 +239,8 @@ pub struct PlayerInput {
     pub explode: bool,
     /// Set this body alight with the flamethrower's afterburn, credited to itself.
     pub ignite: bool,
+    /// As `suicide`, but the corpse loses its head as a headshot's does.
+    pub behead: bool,
     /// Put this player's spray on the wall in front of them, or move it there.
     pub spray: bool,
     /// Look direction about world Y, radians. An input because facing decides
@@ -582,6 +584,7 @@ pub fn gather_input(actions: Res<Actions>, mut latch: ResMut<InputLatch>) {
     input.suicide |= actions.just_pressed(Action::Suicide);
     input.explode |= actions.just_pressed(Action::Explode);
     input.ignite |= actions.just_pressed(Action::Ignite);
+    input.behead |= actions.just_pressed(Action::Behead);
     input.spray |= actions.just_pressed(Action::Spray);
 
     input.sprint = actions.pressed(Action::Sprint);
@@ -643,6 +646,7 @@ pub fn write_client_inputs(
     latch.0.suicide = false;
     latch.0.explode = false;
     latch.0.ignite = false;
+    latch.0.behead = false;
     latch.0.spray = false;
     latch.0.select = None;
 }

@@ -225,11 +225,15 @@ pub struct Cause {
     pub reflected: bool,
     /// A critical hit. The amount already counts it; this is the record.
     pub critical: bool,
+    /// Landed on the head of a weapon whose `headshot_multiplier` pays for it.
+    /// A kill by one takes the head off the corpse.
+    #[serde(default)]
+    pub headshot: bool,
 }
 
 impl Cause {
     pub fn of(weapon: Option<crate::common::weapon::WeaponId>, how: How) -> Self {
-        Cause { weapon, how, reflected: false, critical: false }
+        Cause { weapon, how, reflected: false, critical: false, headshot: false }
     }
 }
 

@@ -89,6 +89,7 @@ pub mod spectate;
 pub mod soundtrack;
 pub mod spray;
 pub mod streak;
+pub mod laser_dot;
 pub mod beam;
 pub mod tab_board;
 pub mod class_choice;
@@ -1213,6 +1214,34 @@ mod tests {
                 "a piece at {was} went to {now}, from a blast at {at}"
             );
         }
+    }
+
+    /// Fails if the headshot key does not kill, leaves more than one corpse, or
+    /// leaves it with its head.
+    #[test]
+    fn the_headshot_key_leaves_a_headless_corpse() {
+        use bevy::ecs::system::RunSystemOnce;
+        use crate::game::ragdoll::Ragdoll;
+
+        let mut app = armed(&[room(Vec3::new(-10.0, 0.0, -10.0), Vec3::new(10.0, 4.0, 10.0))]);
+        enter(&mut app);
+        app.world_mut().run_system_once(crate::game::skeleton::dress_new_players).unwrap();
+        app.update();
+        tick(&mut app, 30);
+
+        latch(&mut app).0.behead = true;
+        tick(&mut app, 2);
+        let corpses: Vec<(Ragdoll, crate::common::skeleton::Skeleton)> = app
+            .world_mut()
+            .query::<(&Ragdoll, &crate::common::skeleton::Skeleton)>()
+            .iter(app.world())
+            .map(|(ragdoll, skeleton)| (ragdoll.clone(), skeleton.clone()))
+            .collect();
+        assert_eq!(corpses.len(), 1, "{} corpses", corpses.len());
+        let (corpse, skeleton) = &corpses[0];
+        let head = skeleton.anatomy().head.unwrap();
+        assert!(!corpse.keeps(head), "the corpse kept its head");
+        assert!(corpse.stump().is_some());
     }
 
     /// A class built on a rig file plays a round as anybody does: it spawns as that rig, walks,

@@ -777,7 +777,7 @@ follows, so it should claim `weapon` and leave the arms that hold it unclaimed.
 **Nobody switches weapons while taunting** (`Condition::may_switch_weapons`):
 `select_weapons` drops the request, the selector stays shut, and a weapon
 picked up mid-taunt is carried but not drawn. **`O`** is
-suicide and **`P`** the same death blown apart through the torso (`BlownApart::Torso`) by a rocket-sized blast there, which hurts whoever is near, **`T`** puts your spray on the surface you look at within 2 m, or moves it there (see "Decals"), 1000 damage credited to yourself, a debug key for the death cam; **Ignite self**, unbound by default, sets you alight with the flamethrower's afterburn, credited to yourself; nobody
+suicide and **`P`** the same death blown apart through the torso (`BlownApart::Torso`) by a rocket-sized blast there, which hurts whoever is near, **`T`** puts your spray on the surface you look at within 2 m, or moves it there (see "Decals"), 1000 damage credited to yourself, a debug key for the death cam; **Ignite self**, unbound by default, sets you alight with the flamethrower's afterburn, credited to yourself; **Headshot self**, unbound by default, kills you headless as a headshot does (`Action::Behead`); nobody
 crouches while taunting; each taunt states what it claims, whether it
 shows the weapon, how far you can move, and how far your body (never the
 camera) can turn, and optionally a `view`: degrees left of the body's facing
@@ -2231,6 +2231,13 @@ leaves a whole corpse. A piece striking a surface faster than `GIB_SPLAT_SPEED`
 `GibImpact`, and `mark_the_world` puts blood there; each machine finds its own
 from its own copy of the piece, so nothing is sent.
 
+**A headshot that kills takes the head off** (`BlownApart::Head`): a hit on the
+head box by a weapon whose `headshot_multiplier` is above one sets
+`Cause::headshot`, and `apply_damage` marks the body. Only the head and what
+hangs from it go, so the corpse is one piece. Blood bursts where the head was
+and fountains from the neck's tail (`Ragdoll::stump`, sent with the seed) for
+`FOUNTAIN_SECONDS`, as the hit spurt's falling lumps (`gib_blood.rs`).
+
 **A corpse is replicated, not raised locally** — see "Corpses are props" below.
 The authority makes one and everybody else is sent the seed.
 
@@ -2932,6 +2939,16 @@ bot hears it. A press toggles only as the button goes down (`Sights::button_down
 so a server repeating a late tick's input sees one press, not up and back down.
 `scoped_primary` needs the scope on the secondary; the loader leaves out a
 weapon with one and no scope there.
+
+**A scope with `laser_dot` shows everybody where it is aimed**
+([`src/game/laser_dot.rs`](src/game/laser_dot.rs)): while sighted, the
+authority traces the scoped primary's ray each tick, walls and bodies, into a
+replicated `LaserDot` on the body (`None` while not sighted or when the ray
+reaches nothing), and every machine draws one red quad there, facing the view,
+lifted toward it and widened with distance. It is traced on the server rather
+than predicted, so a sniper's own dot trails their aim by a round trip.
+`LaserDotPlugin` is added in `main.rs` and joins the shared warm-up; the trace
+is `WeaponPlugin`'s.
 
 As the sights rise, black closes in from the screen's edges until only the
 weapon is left and the scope's lens is the one view out

@@ -113,6 +113,7 @@ fn defaults(action: Action) -> Vec<Chord> {
         Action::Suicide => vec![key(K::KeyO)],
         Action::Explode => vec![key(K::KeyP)],
         Action::Ignite => vec![],
+        Action::Behead => vec![],
         Action::NavOverlay => vec![key(K::F7)],
         Action::BotRoutes => vec![key(K::F8)],
         Action::SafeZone => vec![key(K::F9)],

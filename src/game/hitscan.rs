@@ -172,8 +172,12 @@ pub fn fire_hitscan(
             let Some(hit) = hit else { continue };
 
             let worth = damage_for(hit.zone, &spec, ray.origin.distance(hit.point), shot.critical);
+            let headshot = hit.zone == HitZone::Head && spec.headshot_multiplier > 1;
             match dealt.iter().position(|asked| asked.target == hit.target) {
-                Some(index) => worths[index] += worth,
+                Some(index) => {
+                    worths[index] += worth;
+                    dealt[index].cause.headshot |= headshot;
+                }
                 None => {
                     worths.push(worth);
                     dealt.push(Damage {
@@ -183,7 +187,7 @@ pub fn fire_hitscan(
                     point: hit.point,
                     from: Some(ray.origin),
                     kill_shove,
-                    cause: Cause { critical: shot.critical, ..Cause::of(shot.weapon, How::Hitscan) },
+                    cause: Cause { critical: shot.critical, headshot, ..Cause::of(shot.weapon, How::Hitscan) },
                     });
                 }
             }
@@ -525,7 +529,9 @@ mod tests {
         let (mut world, shooter, _) = a_shooter_and_a_target(boxes);
 
         fire(&mut world, shooter);
-        assert_eq!(asked_for(&mut world)[0].amount, LASER.damage * LASER.headshot_multiplier);
+        let asked = asked_for(&mut world);
+        assert_eq!(asked[0].amount, LASER.damage * LASER.headshot_multiplier);
+        assert!(asked[0].cause.headshot, "not recorded as a headshot");
     }
 
     /// Breaks if this system answers for another weapon's action.
