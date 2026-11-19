@@ -88,6 +88,7 @@ impl Plugin for PropCameraPlugin {
         app.init_resource::<MapViewpoints>()
             .init_resource::<OrbitPivot>()
             .init_resource::<ViewmodelPreview>()
+            .init_resource::<crate::game::muzzle_flash::FlashPreview>()
             .init_resource::<PreviewViewpoint>()
             .add_message::<FrameTheProp>()
             // After the build, because framing reads the prop's bounds.

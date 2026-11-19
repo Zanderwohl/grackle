@@ -311,7 +311,7 @@ fn bake_doc(
         rig: PropRig::of(&doc.bones),
         hold: doc.hold.clone(),
         viewmodel: doc.viewmodel,
-        muzzle: doc.muzzle,
+        muzzle: doc.muzzle.clone(),
         clips,
         archetype: doc.archetype,
         colliders: doc.colliders.clone(),

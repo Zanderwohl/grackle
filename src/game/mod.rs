@@ -92,6 +92,7 @@ pub mod soundtrack;
 pub mod spray;
 pub mod streak;
 pub mod laser_dot;
+pub mod muzzle_flash;
 pub mod beam;
 pub mod tab_board;
 pub mod class_choice;

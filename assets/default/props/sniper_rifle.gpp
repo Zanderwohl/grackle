@@ -274,3 +274,10 @@ at = [
     0.0,
     -0.338,
 ]
+
+[muzzle.flash]
+enabled = true
+length = 0.45
+radius = 0.16
+base = 0.02
+seconds = 0.09

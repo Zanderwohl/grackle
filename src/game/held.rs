@@ -29,7 +29,7 @@ use crate::game::skeleton::SkeletonRoot;
 use crate::prop::baked::{PropCache, SurfaceMaterials};
 use crate::game::collision::CollisionWorld;
 use crate::prop::rig::{place_part, OnPropBone, PropRig};
-use crate::prop::hold::{carry_frame, grip_hands, weapon_transform, HoldSpec, ViewmodelSpec};
+use crate::prop::hold::{carry_frame, grip_hands, weapon_transform, HoldSpec, MuzzleFlashSpec, MuzzleSpec, ViewmodelSpec};
 
 /// Meters above a point to start looking for the floor, and below it to keep
 /// looking. Generous: a keyed foot mid-stride is above the ground, and one on a
@@ -63,7 +63,7 @@ pub struct HeldModel {
     hold: HoldSpec,
     viewmodel: ViewmodelSpec,
     /// In the model's own space.
-    muzzle: Option<Vec3>,
+    muzzle: Option<MuzzleSpec>,
     /// Handles off the bake, so a save refilled under them is what plays.
     clips: BTreeMap<String, Handle<Clip>>,
     rig: PropRig,
@@ -190,7 +190,17 @@ impl HeldModel {
     }
 
     pub fn muzzle(&self) -> Option<Vec3> {
-        self.muzzle
+        self.muzzle.as_ref().map(|muzzle| muzzle.point())
+    }
+
+    /// The prop bone the muzzle rides on, if it names one the rig has.
+    pub fn muzzle_bone(&self) -> Option<OnPropBone> {
+        let name = self.muzzle.as_ref()?.bone.as_deref()?;
+        self.rig.index_of(name).map(OnPropBone)
+    }
+
+    pub fn muzzle_flash(&self) -> Option<MuzzleFlashSpec> {
+        self.muzzle.as_ref().and_then(|muzzle| muzzle.flash())
     }
 
     pub fn rig(&self) -> &PropRig {
@@ -205,7 +215,12 @@ impl HeldModel {
     /// that only ask which clip is chosen.
     #[cfg(test)]
     pub(crate) fn with_muzzle(muzzle: Vec3) -> HeldModel {
-        HeldModel { muzzle: Some(muzzle), ..default() }
+        HeldModel { muzzle: Some(MuzzleSpec { at: muzzle.to_array(), bone: None, flash: None }), ..default() }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_parts_and_muzzle(parts: Vec<Entity>, muzzle: MuzzleSpec, rig: PropRig) -> HeldModel {
+        HeldModel { weapon: Some(WeaponId::of("held")), resolved: true, parts, muzzle: Some(muzzle), rig, ..default() }
     }
 
     #[cfg(test)]
@@ -393,7 +408,7 @@ fn dress_held_weapons(
                     let parts = baked.parts.clone();
                     hold = baked.hold.for_class(class.copied());
                     viewmodel = baked.viewmodel;
-                    muzzle = baked.muzzle.map(|muzzle| muzzle.point());
+                    muzzle = baked.muzzle.clone();
                     clips = baked.clips.clone();
                     rig = baked.rig.clone();
                     // Before the parts: a carousel body is spawned without one.
@@ -439,7 +454,7 @@ fn replace_parts(
     resolved: bool,
     hold: HoldSpec,
     viewmodel: ViewmodelSpec,
-    muzzle: Option<Vec3>,
+    muzzle: Option<MuzzleSpec>,
     clips: BTreeMap<String, Handle<Clip>>,
     rig: PropRig,
     cached_at: u64,
@@ -795,7 +810,7 @@ fn show_held_weapons(
 }
 
 /// Prop bones are posed here rather than in the pose chain, since only the drawing reads them.
-fn place_held_weapons(
+pub(crate) fn place_held_weapons(
     clips: Res<Assets<Clip>>,
     bodies: Query<(&HeldModel, &WeaponInHand, &ClipStack)>,
     mut parts: Query<(&mut Transform, Option<&OnPropBone>), With<HeldPart>>,

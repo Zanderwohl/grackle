@@ -46,8 +46,9 @@ use crate::common::toolbar::{self, Joins, Segment};
 use crate::prop::feature::{BooleanOp, End, FeatureOp, PatternKind, PropFeatureId};
 use crate::prop::figure::ScaleFigure;
 use crate::prop::camera::ViewmodelPreview;
+use crate::game::muzzle_flash::FlashPreview;
 use crate::prop::gizmo::HoldHandles;
-use crate::prop::hold::{Framing, MuzzleSpec};
+use crate::prop::hold::{Framing, MuzzleFlashSpec, MuzzleSpec};
 use crate::prop::profile::{Placement, MAX_REVOLVE_STEPS, MIN_SIDES};
 use crate::prop::solid::{Shape, MIN_EXTENT};
 use crate::prop::surface::{Style, Surface};
@@ -181,6 +182,7 @@ struct PropTabs<'a> {
     plane: Option<Plane>,
     figure: &'a mut ScaleFigure,
     preview: &'a mut ViewmodelPreview,
+    flash_preview: &'a mut FlashPreview,
     requests: &'a mut PropRequests,
     session: &'a mut SketchSession,
     tool: Option<Task>,
@@ -228,7 +230,7 @@ impl<'a> TabViewer for PropTabs<'a> {
             PropTab::Hold => match self.editor.doc().archetype {
                 Archetype::Held => {
                     let front = self.build.bounds().map(front_of);
-                    hold(ui, self.editor, *self.figure, self.preview, front, self.taunts)
+                    hold(ui, self.editor, *self.figure, self.preview, self.flash_preview, front, self.taunts)
                 }
                 Archetype::Hat => hat_fit(ui, self.editor, *self.figure),
                 // Nothing holds or wears a placed prop.
@@ -269,6 +271,13 @@ struct Shared<'w> {
 
 /// Bundled to keep [`panels`] inside Bevy's parameter limit.
 #[derive(bevy::ecs::system::SystemParam)]
+struct Previews<'w> {
+    viewmodel: ResMut<'w, ViewmodelPreview>,
+    flash: ResMut<'w, FlashPreview>,
+}
+
+/// Bundled to keep [`panels`] inside Bevy's parameter limit.
+#[derive(bevy::ecs::system::SystemParam)]
 struct Picking<'w> {
     plane: ResMut<'w, PickedPlane>,
     tool: ResMut<'w, ActiveTool>,
@@ -283,7 +292,7 @@ fn panels(
     mut picking: Picking,
     mut figure: ResMut<ScaleFigure>,
     mut handles: ResMut<HoldHandles>,
-    mut preview: ResMut<ViewmodelPreview>,
+    mut previews: Previews,
     mut multicam: ResMut<MulticamState>,
     windows: Query<&Window, With<PrimaryWindow>>,
     dialog: Res<PropFileDialog>,
@@ -304,6 +313,7 @@ fn panels(
 
     // Off unless this frame's Hold tab turns it back on, so a tab closed
     // mid-drag cannot leave the preview stuck on.
+    let Previews { viewmodel: mut preview, flash: mut flash_preview } = previews;
     if preview.on {
         preview.on = false;
     }
@@ -317,6 +327,7 @@ fn panels(
         // figure's rig every frame.
         figure: &mut figure,
         preview: &mut preview,
+        flash_preview: &mut flash_preview,
         requests: &mut requests,
         session: &mut session,
         tool: picking.tool.0,
@@ -2246,6 +2257,11 @@ fn bones_ui(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
                     bone.parent = None;
                 }
             }
+            if let Some(muzzle) = doc.muzzle.as_mut()
+                && muzzle.bone.as_deref() == Some(gone.as_str())
+            {
+                muzzle.bone = None;
+            }
         });
         return;
     }
@@ -2257,6 +2273,11 @@ fn bones_ui(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
                 if bone.parent.as_deref() == Some(was.as_str()) {
                     bone.parent = Some(now.clone());
                 }
+            }
+            if let Some(muzzle) = doc.muzzle.as_mut()
+                && muzzle.bone.as_deref() == Some(was.as_str())
+            {
+                muzzle.bone = Some(now.clone());
             }
             for clip in doc.animations.clips.values_mut() {
                 for track in &mut clip.tracks {
@@ -2397,6 +2418,57 @@ fn front_of((min, max): (Vec3, Vec3)) -> Vec3 {
     Vec3::new(middle.x, middle.y, min.z)
 }
 
+/// The checkbox keeps the sizes when turned off, so turning it back on puts them back.
+fn flash_ui(ui: &mut Ui, flash: &mut Option<MuzzleFlashSpec>, preview: &mut FlashPreview) {
+    let mut on = flash.is_some_and(|flash| flash.enabled);
+    if ui.checkbox(&mut on, get!("prop.hold.muzzle_flash")).changed() {
+        flash.get_or_insert_default().enabled = on;
+    }
+    let Some(spec) = flash.as_mut() else { return };
+    ui.add_enabled_ui(spec.enabled, |ui| {
+        egui::Grid::new("prop_muzzle_flash").num_columns(2).show(ui, |ui| {
+            let row = |ui: &mut Ui, label: String, value: &mut f32, speed: f64, most: f32, suffix: &str| {
+                ui.label(label);
+                ui.add(egui::DragValue::new(value).speed(speed).range(0.001..=most).suffix(suffix));
+                ui.end_row();
+            };
+            row(ui, get!("prop.hold.flash_length"), &mut spec.length, 0.002, 5.0, " m");
+            row(ui, get!("prop.hold.flash_radius"), &mut spec.radius, 0.001, 2.0, " m");
+            row(ui, get!("prop.hold.flash_base"), &mut spec.base, 0.0005, 1.0, " m");
+            row(ui, get!("prop.hold.flash_seconds"), &mut spec.seconds, 0.002, 2.0, " s");
+        });
+        preview_ui(ui, preview, spec.seconds);
+    });
+}
+
+fn preview_ui(ui: &mut Ui, preview: &mut FlashPreview, seconds: f32) {
+    ui.checkbox(&mut preview.shown, get!("prop.hold.flash_preview"));
+    ui.add_enabled_ui(preview.shown, |ui| {
+        ui.horizontal(|ui| {
+            let mut still = preview.still;
+            ui.selectable_value(&mut still, false, get!("prop.hold.flash_continuous"));
+            ui.selectable_value(&mut still, true, get!("prop.hold.flash_still"));
+            if still != preview.still {
+                preview.set_still(still, seconds);
+            }
+        });
+        if preview.still {
+            ui.horizontal(|ui| {
+                ui.label(get!("prop.hold.flash_time"));
+                ui.add(egui::Slider::new(&mut preview.clock, 0.0..=seconds.max(0.01)).suffix(" s").max_decimals(3));
+            });
+        } else {
+            let icon = match preview.paused {
+                true => "▶",
+                false => "⏸",
+            };
+            if ui.button(icon).clicked() {
+                preview.paused = !preview.paused;
+            }
+        }
+    });
+}
+
 /// A key with no entry in `taunts.toml` is still shown, so it can be seen and cleared.
 fn taunt_ui(ui: &mut Ui, editor: &mut PropEditor, taunts: Option<&Taunts>) {
     let mut taunt = editor.doc().taunt.clone();
@@ -2420,6 +2492,7 @@ fn hold(
     editor: &mut PropEditor,
     figure: ScaleFigure,
     preview: &mut ViewmodelPreview,
+    flash_preview: &mut FlashPreview,
     front: Option<Vec3>,
     taunts: Option<&Taunts>,
 ) {
@@ -2452,17 +2525,30 @@ fn hold(
             });
         });
 
+        let bones: Vec<String> = editor.doc().bones.iter().map(|bone| bone.name.clone()).collect();
         section(ui, "hold_muzzle", get!("prop.hold.muzzle"), |ui| {
-            let mut muzzle = editor.doc().muzzle;
+            let mut muzzle = editor.doc().muzzle.clone();
             let mut has = muzzle.is_some();
             if ui.checkbox(&mut has, get!("prop.hold.has_muzzle")).changed() {
                 // Not on the grip, whose handles would sit on top of its own
                 // and win every tie.
                 let at = front.unwrap_or(edited.grip() + Vec3::NEG_Z * EMPTY_MUZZLE_REACH);
-                muzzle = has.then_some(MuzzleSpec { at: at.to_array() });
+                muzzle = has.then_some(MuzzleSpec { at: at.to_array(), bone: None, flash: None });
             }
             if let Some(muzzle) = muzzle.as_mut() {
                 vec3_ui(ui, get!("prop.hold.at"), &mut muzzle.at, 0.001, "m");
+                ui.horizontal(|ui| {
+                    ui.label(get!("prop.hold.muzzle_bone"));
+                    let shown = muzzle.bone.clone().unwrap_or_else(|| get!("prop.bones.no_parent"));
+                    egui::ComboBox::from_id_salt("prop_muzzle_bone").selected_text(shown).show_ui(ui, |ui| {
+                        ui.selectable_value(&mut muzzle.bone, None, get!("prop.bones.no_parent"));
+                        for bone in &bones {
+                            ui.selectable_value(&mut muzzle.bone, Some(bone.clone()), bone);
+                        }
+                    });
+                });
+                ui.separator();
+                flash_ui(ui, &mut muzzle.flash, flash_preview);
             }
             if muzzle != editor.doc().muzzle {
                 editor.begin_gesture();

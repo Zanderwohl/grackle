@@ -323,7 +323,7 @@ mod tests {
                 .find(|taunt| Some(&taunt.key) == pistol.taunt.as_ref())
                 .expect("the pistol names no taunt in taunts.toml");
             assert_eq!(taunt.clip, TAUNT_TWIRL);
-            let muzzle = pistol.muzzle.expect("the pistol has no muzzle").point();
+            let muzzle = pistol.muzzle.as_ref().expect("the pistol has no muzzle").point();
             Stage { clip, claims: taunt.claims, guard: guard_of(&pistol), hold: pistol.hold, muzzle }
         }
 
@@ -418,7 +418,7 @@ mod tests {
     fn the_generator_measures_the_pistol_its_file_describes() {
         let pistol = pistol();
         assert_eq!(GRIP, Vec3::from_array(pistol.hold.grip), "the pistol's grip moved; update `GRIP`");
-        assert_eq!(Some(MUZZLE), pistol.muzzle.map(|muzzle| muzzle.point()), "the pistol's muzzle moved; update `MUZZLE`");
+        assert_eq!(Some(MUZZLE), pistol.muzzle.as_ref().map(|muzzle| muzzle.point()), "the pistol's muzzle moved; update `MUZZLE`");
         assert_eq!(GUARD, guard_of(&pistol), "the pistol's guard moved; update `GUARD`");
     }
 

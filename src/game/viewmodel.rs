@@ -85,6 +85,13 @@ pub struct Viewmodel {
     grips: [Vec3; 2],
 }
 
+impl Viewmodel {
+    /// Where the weapon was drawn this frame, in the viewmodel camera's frame, after its clips.
+    pub fn weapon(&self) -> Option<Transform> {
+        self.weapon
+    }
+}
+
 /// Everything [`place_the_viewmodel_arms`] reads, and nothing else.
 ///
 /// The rig and the held model are only ever *inserted* — a respawn, a class
