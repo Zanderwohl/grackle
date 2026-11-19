@@ -63,6 +63,7 @@ pub fn kind_name(kind: BakeKind) -> String {
         BakeKind::Sunlight => get!("bakes.kind.sunlight"),
         BakeKind::Nav => get!("bakes.kind.nav"),
         BakeKind::Sight => get!("bakes.kind.sight"),
+        BakeKind::Postcards => get!("bakes.kind.postcards"),
     }
 }
 

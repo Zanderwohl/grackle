@@ -13,26 +13,41 @@ use bevy_egui::egui;
 use crate::common::assets::default_packs;
 use crate::get;
 
-const COLUMNS: usize = 4;
-const TILE: f32 = 64.0;
 const VISIBLE_ROWS: f32 = 4.5;
+const PLACEHOLDER_GRAY: egui::Color32 = egui::Color32::from_gray(90);
 /// So the button keeps its width whatever it names.
 const BUTTON_CHARS: f32 = 20.0;
 
 #[derive(Clone, Copy)]
-pub struct PickerKind(&'static str);
+pub struct PickerKind {
+    name: &'static str,
+    columns: usize,
+    /// Points, width then height.
+    tile: [f32; 2],
+    /// Each tile's label written under it.
+    captioned: bool,
+}
 
 impl PickerKind {
+    /// Four square tiles to a row.
     pub const fn new(name: &'static str) -> Self {
-        Self(name)
+        Self { name, columns: 4, tile: [64.0, 64.0], captioned: false }
+    }
+
+    pub const fn captioned(name: &'static str, columns: usize, tile: [f32; 2]) -> Self {
+        Self { name, columns, tile, captioned: true }
+    }
+
+    fn tile_size(self) -> egui::Vec2 {
+        egui::vec2(self.tile[0], self.tile[1])
     }
 
     fn choices_id(self) -> egui::Id {
-        egui::Id::new(("picker_choices", self.0))
+        egui::Id::new(("picker_choices", self.name))
     }
 
     fn open_id(self) -> egui::Id {
-        egui::Id::new(("picker_open", self.0))
+        egui::Id::new(("picker_open", self.name))
     }
 
     pub fn take_open(self, ctx: &egui::Context) -> bool {
@@ -57,12 +72,14 @@ pub struct Choice {
     pub badge: Option<String>,
     /// `None` is the label.
     pub tooltip: Option<String>,
+    /// Drawn white on gray when there is no preview; `None` shows the label instead.
+    pub placeholder: Option<String>,
 }
 
 impl Choice {
     pub fn named(name: impl Into<String>) -> Self {
         let name = name.into();
-        Self { label: name.clone(), name, preview: None, badge: None, tooltip: None }
+        Self { label: name.clone(), name, preview: None, badge: None, tooltip: None, placeholder: None }
     }
 }
 
@@ -74,6 +91,28 @@ pub fn picker_button(
     current: Option<&str>,
     plain: Option<&str>,
 ) -> Option<Option<String>> {
+    picker(ui, kind, current, plain, None)
+}
+
+/// [`picker_button`], labeling a `current` that names no choice `missing` rather than by its name,
+/// for a kind whose names mean nothing to read.
+pub fn picker_button_or_missing(
+    ui: &mut egui::Ui,
+    kind: PickerKind,
+    current: Option<&str>,
+    plain: Option<&str>,
+    missing: &str,
+) -> Option<Option<String>> {
+    picker(ui, kind, current, plain, Some(missing))
+}
+
+fn picker(
+    ui: &mut egui::Ui,
+    kind: PickerKind,
+    current: Option<&str>,
+    plain: Option<&str>,
+    missing: Option<&str>,
+) -> Option<Option<String>> {
     let choices = ui.data(|data| data.get_temp::<Choices>(kind.choices_id())).unwrap_or_default();
     let font = egui::TextStyle::Button.resolve(ui.style());
     let width = ui.fonts_mut(|fonts| fonts.glyph_width(&font, 'n')) * BUTTON_CHARS
@@ -81,7 +120,7 @@ pub fn picker_button(
     let named = current.and_then(|name| choices.0.iter().find(|choice| choice.name == name));
     let label = match (current, named) {
         (_, Some(choice)) => &choice.label,
-        (Some(name), None) => name,
+        (Some(name), None) => missing.unwrap_or(name),
         (None, None) => plain.unwrap_or_default(),
     };
     let mut response =
@@ -101,7 +140,7 @@ pub fn picker_button(
             ui.data_mut(|data| data.insert_temp(kind.open_id(), true));
             let mut search = ui.data_mut(|data| data.get_temp::<String>(search_id)).unwrap_or_default();
             // Before the search field, which would otherwise stretch the popup to as wide as it may be.
-            let width = COLUMNS as f32 * (TILE + ui.spacing().item_spacing.x) + ui.spacing().scroll.bar_width;
+            let width = kind.columns as f32 * (kind.tile[0] + ui.spacing().item_spacing.x) + ui.spacing().scroll.bar_width;
             ui.set_width(width);
             let field = ui.add(
                 egui::TextEdit::singleline(&mut search)
@@ -119,13 +158,14 @@ pub fn picker_button(
             });
             let tiles: Vec<Option<&Choice>> =
                 plain.map(|_| None).into_iter().chain(shown.map(Some)).collect();
+            let caption = if kind.captioned { ui.text_style_height(&egui::TextStyle::Body) + ui.spacing().item_spacing.y } else { 0.0 };
             egui::ScrollArea::vertical()
-                .max_height(VISIBLE_ROWS * (TILE + ui.spacing().item_spacing.y))
+                .max_height(VISIBLE_ROWS * (kind.tile[1] + caption + ui.spacing().item_spacing.y))
                 .show(ui, |ui| {
-                    for row in tiles.chunks(COLUMNS) {
+                    for row in tiles.chunks(kind.columns) {
                         ui.horizontal(|ui| {
                             for tile in row {
-                                if let Some(pick) = tile_ui(ui, *tile, current, plain.unwrap_or_default()) {
+                                if let Some(pick) = tile_ui(ui, kind, *tile, current, plain.unwrap_or_default()) {
                                     chosen = Some(pick);
                                     ui.close();
                                 }
@@ -138,14 +178,36 @@ pub fn picker_button(
 }
 
 /// `Some` when clicked: what should now be named.
-fn tile_ui(ui: &mut egui::Ui, choice: Option<&Choice>, current: Option<&str>, plain: &str) -> Option<Option<String>> {
-    let size = egui::Vec2::splat(TILE);
+fn tile_ui(ui: &mut egui::Ui, kind: PickerKind, choice: Option<&Choice>, current: Option<&str>, plain: &str) -> Option<Option<String>> {
+    if kind.captioned {
+        return ui
+            .vertical(|ui| {
+                ui.set_width(kind.tile[0]);
+                ui.add(egui::Label::new(choice.map_or(plain, |choice| choice.label.as_str())).truncate());
+                tile_button(ui, kind, choice, current, plain)
+            })
+            .inner;
+    }
+    tile_button(ui, kind, choice, current, plain)
+}
+
+fn tile_button(ui: &mut egui::Ui, kind: PickerKind, choice: Option<&Choice>, current: Option<&str>, plain: &str) -> Option<Option<String>> {
+    let size = kind.tile_size();
     let selected = choice.map(|choice| choice.name.as_str()) == current;
-    let button = match choice.and_then(|choice| choice.preview) {
-        Some(texture) => egui::Button::image(egui::Image::new((texture, size - ui.spacing().button_padding * 2.0))),
-        None => egui::Button::new(choice.map_or(plain, |choice| choice.label.as_str())).truncate(),
+    let inside = size - ui.spacing().button_padding * 2.0;
+    let placeholder = choice.filter(|choice| choice.preview.is_none()).and_then(|choice| choice.placeholder.as_deref());
+    let button = match (choice.and_then(|choice| choice.preview), placeholder) {
+        (Some(texture), _) => egui::Button::image(egui::Image::new((texture, inside))),
+        (None, Some(_)) => egui::Button::new(""),
+        (None, None) => egui::Button::new(choice.map_or(plain, |choice| choice.label.as_str())).truncate(),
     };
     let response = ui.add_sized(size, button.selected(selected));
+    if let Some(text) = placeholder {
+        let rect = egui::Rect::from_center_size(response.rect.center(), inside);
+        let painter = ui.painter_at(rect);
+        painter.rect_filled(rect, 2.0, PLACEHOLDER_GRAY);
+        painter.text(rect.center(), egui::Align2::CENTER_CENTER, text, egui::FontId::proportional(16.0), egui::Color32::WHITE);
+    }
     if let Some(badge) = choice.and_then(|choice| choice.badge.clone()) {
         let painter = ui.painter_at(response.rect);
         let text = painter.layout_no_wrap(badge, egui::FontId::proportional(10.0), egui::Color32::WHITE);

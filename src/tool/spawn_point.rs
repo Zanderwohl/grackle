@@ -8,6 +8,7 @@ use crate::common::team::Side;
 use crate::common::class::{TALLEST_CLASS_EYE_HEIGHT, TALLEST_CLASS_HEIGHT};
 use crate::editor::editable::{FeatureTrait, PointRef};
 use crate::editor::spawn_point::{SpawnPoint, SpawnPointMarker};
+use crate::tool::postcard_bake::PostcardBake;
 use crate::tool::point_placement::{add_point_placement_tool, PlaceablePoint};
 use crate::tool::Tools;
 
@@ -35,12 +36,14 @@ fn draw_spawn_sides(
     }
 }
 
-/// Hidden in Play, where a player spawns inside it.
+/// Hidden in Play, where a player spawns inside it, and out of the postcards.
 fn hide_spawn_bodies_while_playing(
     mode: Res<State<AppMode>>,
+    postcards: Option<Res<PostcardBake>>,
     mut bodies: Query<&mut Visibility, With<SpawnPointMarker>>,
 ) {
-    let wanted = match mode.get().is_authoring() {
+    let shooting = postcards.is_some_and(|postcards| postcards.is_shooting());
+    let wanted = match mode.get().is_authoring() && !shooting {
         true => Visibility::Inherited,
         false => Visibility::Hidden,
     };

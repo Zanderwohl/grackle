@@ -5,6 +5,48 @@ use crate::common::mode::GameMode;
 use crate::common::movement_rules::MovementRules;
 use crate::common::palette::Palette;
 use crate::common::sky::{Brightness, SkyTime, SunPosition};
+use crate::editor::editable::FeatureId;
+
+pub const POSTCARD_SLOTS: usize = 3;
+
+/// A postcard the bake always takes.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum BuiltInPostcard {
+    Top,
+}
+
+/// One of the postcards the bake takes, as a map names it. Only the choice is saved, never the
+/// picture, which is in `cache/postcards/` ([`crate::tool::postcard_bake`]).
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum PostcardChoice {
+    BuiltIn(BuiltInPostcard),
+    /// A spectator camera feature, or with `copy` the Mirror copy of it at that image.
+    SpectatorCamera { feature: FeatureId, copy: Option<u32> },
+}
+
+impl PostcardChoice {
+    /// The picture's file name without `.png`, and the name the picker stores.
+    pub fn file_stem(&self) -> String {
+        match self {
+            PostcardChoice::BuiltIn(BuiltInPostcard::Top) => "top".into(),
+            PostcardChoice::SpectatorCamera { feature, copy: None } => format!("camera_{}", feature._id()),
+            PostcardChoice::SpectatorCamera { feature, copy: Some(image) } => format!("camera_{}_copy_{image}", feature._id()),
+        }
+    }
+
+    /// The inverse of [`Self::file_stem`].
+    pub fn from_file_stem(stem: &str) -> Option<Self> {
+        if stem == "top" {
+            return Some(PostcardChoice::BuiltIn(BuiltInPostcard::Top));
+        }
+        let rest = stem.strip_prefix("camera_")?;
+        let (feature, copy) = match rest.split_once("_copy_") {
+            Some((feature, image)) => (feature, Some(image.parse().ok()?)),
+            None => (rest, None),
+        };
+        Some(PostcardChoice::SpectatorCamera { feature: FeatureId::from_raw(feature.parse().ok()?), copy })
+    }
+}
 
 /// Strongly typed map metadata, written at the top of a blueprint.
 #[derive(Resource, Debug, Clone)]
@@ -20,6 +62,8 @@ pub struct MapMetadata {
     pub brightness: Brightness,
     /// [`Track::path`](crate::common::music::Track::path)s, the same in every pack.
     pub music: Vec<String>,
+    /// In display order. Empty slots show nothing.
+    pub postcards: [Option<PostcardChoice>; POSTCARD_SLOTS],
     /// The panel's comma-separated authors text, refreshed when `authors` is replaced from disk.
     authors_ui_text: String,
     authors_ui_synced_from: Vec<String>,
@@ -39,6 +83,7 @@ impl Default for MapMetadata {
             sun: SunPosition::default(),
             brightness: Brightness::default(),
             music: Vec::new(),
+            postcards: [None; POSTCARD_SLOTS],
             authors_ui_text,
             authors_ui_synced_from: vec!["anonymous".to_string()],
         }

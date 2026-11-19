@@ -37,6 +37,7 @@ pub enum BakeKind {
     Sunlight,
     Nav,
     Sight,
+    Postcards,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

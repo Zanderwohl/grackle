@@ -234,8 +234,10 @@ fn touches(a: &Volume, b: &Volume) -> bool {
 }
 
 impl BakePlugin {
-    pub fn ui(ui: &mut egui::Ui, auto: bool, auto_sun: bool, halfbright: bool, nav: &mut NavCommands, progress: &BakeProgress) -> BakeCommands {
-        let mut commands = BakeCommands { auto, auto_sun, halfbright, ..default() };
+    /// Takes the switches as they stand and returns them as left, with any button pressed.
+    pub fn ui(ui: &mut egui::Ui, current: &BakeCommands, nav: &mut NavCommands, progress: &BakeProgress) -> BakeCommands {
+        let (auto, auto_sun, halfbright, auto_postcards) = (current.auto, current.auto_sun, current.halfbright, current.auto_postcards);
+        let mut commands = BakeCommands { auto, auto_sun, halfbright, auto_postcards, ..default() };
         ui.vertical(|ui| {
             ui.checkbox(&mut commands.auto, get!("bakes.auto_rooms"));
             ui.horizontal(|ui| {
@@ -255,6 +257,15 @@ impl BakePlugin {
                 }
                 if ui.small_button("x").clicked() {
                     commands.clear_sunlight = true;
+                }
+            });
+            ui.checkbox(&mut commands.auto_postcards, get!("bakes.auto_postcards"));
+            ui.horizontal(|ui| {
+                if ui.add_enabled(!auto_postcards, egui::Button::new(get!("bakes.postcards"))).clicked() {
+                    commands.bake_postcards = true;
+                }
+                if ui.small_button("x").clicked() {
+                    commands.clear_postcards = true;
                 }
             });
             nav_overlay::section(ui, nav);
@@ -1052,6 +1063,9 @@ pub struct BakeCommands {
     pub auto: bool,
     pub auto_sun: bool,
     pub halfbright: bool,
+    pub auto_postcards: bool,
+    pub bake_postcards: bool,
+    pub clear_postcards: bool,
     pub bake_sunlight: bool,
     pub clear_sunlight: bool,
     pub calculate_room_geometry: bool,

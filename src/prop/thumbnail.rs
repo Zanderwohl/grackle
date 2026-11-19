@@ -64,12 +64,18 @@ const SETTLE_FRAMES: u32 = 3;
 /// Pipelines compile in the background, so the first pictures of a new
 /// material can come back empty: an empty one is retaken this many frames
 /// later, up to [`ATTEMPTS`] times — about ten seconds at 60 Hz.
-const RETRY_FRAMES: u32 = 15;
-const ATTEMPTS: u32 = 40;
+pub(crate) const RETRY_FRAMES: u32 = 15;
+pub(crate) const ATTEMPTS: u32 = 40;
 
 /// Frames to wait for a picture before taking it again. A capture can be
 /// dropped outright, e.g. while the window is minimized.
-const CAPTURE_TIMEOUT: u32 = 120;
+pub(crate) const CAPTURE_TIMEOUT: u32 = 120;
+
+/// Every pixel one color: what a capture taken before its pipelines were ready comes back as.
+pub(crate) fn is_blank(picture: &image::RgbaImage) -> bool {
+    let first = picture.pixels().next().copied();
+    picture.pixels().all(|pixel| Some(*pixel) == first)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Framing {
@@ -492,9 +498,7 @@ fn develop(
         }
     };
 
-    // Every pixel the clear color: the pipelines were not ready yet.
-    let first = picture.pixels().next().copied();
-    if picture.pixels().all(|pixel| Some(*pixel) == first) {
+    if is_blank(&picture) {
         if !retake(sitting) {
             let sitting = thumbnails.sitting.take().unwrap();
             warn!("Gave up on a thumbnail of {}: every picture was empty", sitting.request.name);

@@ -37,6 +37,7 @@ use crate::common::round_settings::{BotSkill, RoundSettings, MOST_SLOTS};
 use crate::tool::bake_progress::{self, Step};
 use crate::tool::bakes::{BakePlugin, BakeCommands, LogECS, RoomBake};
 use crate::tool::sun_bake::{BakeSunlight, ClearSunlight, SunBake};
+use crate::tool::postcard_bake::PostcardPanel;
 use crate::tool::nav_overlay::{NavCommands, NavPanel};
 use crate::tool::retarget::RetargetState;
 use crate::tool::show::{ShowPlugin, GizmoVisibility};
@@ -147,8 +148,8 @@ struct PanelMessages<'w> {
     sun_bake: ResMut<'w, SunBake>,
     bake_progress: Res<'w, BakeProgress>,
     nav: NavPanel<'w>,
-    sunlight: MessageWriter<'w, BakeSunlight>,
-    clear_sunlight: MessageWriter<'w, ClearSunlight>,
+    sun_messages: (MessageWriter<'w, BakeSunlight>, MessageWriter<'w, ClearSunlight>),
+    postcards: PostcardPanel<'w>,
     edits: MessageWriter<'w, EditEvent>,
     net: MessageWriter<'w, NetRequest>,
     exit: MessageWriter<'w, AppExit>,
@@ -218,7 +219,7 @@ impl<'a> TabViewer for TabViewerAndResources<'a> {
                 Tools::ui(ui, self.current_tool, self.next_tool);
             }
             TabKinds::Bakes => {
-                *self.bake_commands = BakePlugin::ui(ui, self.bake_commands.auto, self.bake_commands.auto_sun, self.bake_commands.halfbright, self.nav_commands, self.bake_progress);
+                *self.bake_commands = BakePlugin::ui(ui, self.bake_commands, self.nav_commands, self.bake_progress);
             }
             TabKinds::Show => {
                 ShowPlugin::ui(ui, self.multicam_state, self.gizmo_visibility);
@@ -355,7 +356,7 @@ impl EditorPanels {
 
         map_metadata.sync_authors_ui_buffer_from_authors();
         
-        let mut bake_commands = BakeCommands { auto: messages.room_bake.auto(), auto_sun: messages.sun_bake.auto(), halfbright: messages.sun_bake.halfbright(), ..default() };
+        let mut bake_commands = BakeCommands { auto: messages.room_bake.auto(), auto_sun: messages.sun_bake.auto(), halfbright: messages.sun_bake.halfbright(), auto_postcards: messages.postcards.auto(), ..default() };
         let mut nav_commands = messages.nav.commands();
         let mut pending_edits = PendingEditEvents::default();
         let mut retarget_request: Option<(FeatureId, String)> = None;
@@ -636,11 +637,12 @@ impl EditorPanels {
             messages.sun_bake.set_halfbright(bake_commands.halfbright);
         }
         if bake_commands.bake_sunlight {
-            messages.sunlight.write(BakeSunlight);
+            messages.sun_messages.0.write(BakeSunlight);
         }
         if bake_commands.clear_sunlight {
-            messages.clear_sunlight.write(ClearSunlight);
+            messages.sun_messages.1.write(ClearSunlight);
         }
+        messages.postcards.apply(bake_commands.auto_postcards, bake_commands.bake_postcards, bake_commands.clear_postcards);
         if bake_commands.calculate_room_geometry {
             messages.room.write(CalculateRoomGeometry);
         }
@@ -826,6 +828,20 @@ fn map_metadata_panel_ui(ui: &mut egui::Ui, meta: &mut MapMetadata, music: &Musi
                     }
                 });
                 ui.end_row();
+            });
+
+        ui.add_space(8.0);
+        ui.heading(get!("editor.metadata.postcards"));
+        egui::Grid::new("editor_map_postcards_grid")
+            .num_columns(2)
+            .spacing([10.0, 6.0])
+            .striped(true)
+            .show(ui, |ui| {
+                for (index, slot) in meta.postcards.iter_mut().enumerate() {
+                    ui.label(get!("editor.metadata.postcard_slot", "number", index + 1));
+                    crate::tool::postcard_bake::postcard_button(ui, slot);
+                    ui.end_row();
+                }
             });
 
         ui.add_space(8.0);

@@ -277,6 +277,9 @@ pub struct FeatureTimeline {
     /// Bumped whenever `sync_entities` resolves, spawns or despawns a feature, which it does with
     /// change detection bypassed, so a cache of resolved geometry can tell.
     entity_generation: u64,
+    /// Bumped by every [`FeatureTimeline::adopt`], so whatever is kept for one map can tell when another
+    /// has replaced it.
+    adoptions: u64,
     /// The row being renamed in the Features panel. View state, like the bar.
     renaming: Option<Renaming>,
     /// Whole-map snapshots, oldest first. In memory only.
@@ -340,6 +343,7 @@ impl Default for FeatureTimeline {
             rollback: None,
             pending_despawns: vec![],
             entity_generation: 0,
+            adoptions: 0,
             renaming: None,
             undo: vec![],
             redo: vec![],
@@ -377,7 +381,9 @@ impl FeatureTimeline {
             .active_features()
             .filter_map(|(_, feature)| feature.object().entity())
             .collect();
+        let adoptions = self.adoptions + 1;
         *self = incoming;
+        self.adoptions = adoptions;
         for entity in old {
             self.queue_despawn(entity);
         }
@@ -607,6 +613,10 @@ impl FeatureTimeline {
         &self.features
     }
 
+    pub fn adoptions(&self) -> u64 {
+        self.adoptions
+    }
+
     pub fn entity_generation(&self) -> u64 {
         self.entity_generation
     }
@@ -656,6 +666,17 @@ impl FeatureTimeline {
             id_counter: self.id_counter,
             settings: metadata.map(SavedMetadata::of),
         }
+    }
+
+    /// Every feature as it would be saved, in order, hashed with [`Fnv`](crate::common::stable_hash::Fnv)
+    /// so it is the same on every run. Selection, rollback and history do not count.
+    pub fn content_hash(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = crate::common::stable_hash::Fnv::default();
+        for (id, text) in self.state(None).features {
+            (id._id(), text).hash(&mut hasher);
+        }
+        hasher.finish()
     }
 
     /// Record one undo step if the map changed since the last checkpoint. Called when idle, not by each
@@ -2316,6 +2337,18 @@ mod tests {
             timeline.replace_as_edit(on_disk(), &MapMetadata::default(), &mut MapMetadata::default());
         }
         assert_eq!(timeline.undo.len(), UNDO_DEPTH);
+    }
+
+    /// Breaks if opening another map is not told apart from editing this one, which is what evicts
+    /// what was kept for the old map.
+    #[test]
+    fn only_adopting_another_map_counts_as_opening_one() {
+        let mut timeline = FeatureTimeline::default();
+        timeline.adopt(FeatureTimeline::default());
+        timeline.adopt(FeatureTimeline::default());
+        assert_eq!(timeline.adoptions(), 2);
+        timeline.adopt_changes(FeatureTimeline::default());
+        assert_eq!(timeline.adoptions(), 2, "a newer copy of the same map counted as another");
     }
 
     #[test]

@@ -17,6 +17,7 @@ use crate::common::sky::{Brightness, SkyTime, SunPosition};
 use crate::common::palette::Palette;
 use crate::constants::{MAP_BACKUP_EXTENSION, MAP_BLUEPRINT_EXTENSION};
 use crate::editor::editable::{Feature, FeatureId, FeatureTimeline};
+use crate::editor::map_metadata::{PostcardChoice, POSTCARD_SLOTS};
 use crate::editor::map_metadata::MapMetadata;
 
 pub struct LoadedBlueprint {
@@ -54,6 +55,8 @@ pub struct SavedMetadata {
     brightness: Brightness,
     #[serde(default)]
     music: Vec<String>,
+    #[serde(default)]
+    postcards: [Option<PostcardChoice>; POSTCARD_SLOTS],
 }
 
 impl SavedMetadata {
@@ -68,13 +71,20 @@ impl SavedMetadata {
             sun: metadata.sun,
             brightness: metadata.brightness,
             music: metadata.music.clone(),
+            postcards: metadata.postcards,
         }
+    }
+
+    /// Only what can change a picture of the map: no name, authors, music or postcard choices,
+    /// so choosing a postcard does not make every postcard stale.
+    pub fn pictured(&self) -> Self {
+        Self { display_name: None, authors: Vec::new(), music: Vec::new(), postcards: [None; POSTCARD_SLOTS], ..self.clone() }
     }
 
     /// `*self == SavedMetadata::of(metadata)`, without cloning the metadata.
     pub fn matches(&self, metadata: &MapMetadata) -> bool {
         // Destructured so a new field cannot be left out of the comparison.
-        let SavedMetadata { display_name, authors, game_mode, movement, palette, sky, sun, brightness, music } = self;
+        let SavedMetadata { display_name, authors, game_mode, movement, palette, sky, sun, brightness, music, postcards } = self;
         *display_name == metadata.display_name
             && *authors == metadata.authors
             && game_mode == metadata.game_mode.prefix()
@@ -84,6 +94,7 @@ impl SavedMetadata {
             && *sun == metadata.sun
             && *brightness == metadata.brightness
             && *music == metadata.music
+            && *postcards == metadata.postcards
     }
 
     pub fn into_metadata(self) -> MapMetadata {
@@ -99,6 +110,7 @@ impl SavedMetadata {
         metadata.sun = self.sun;
         metadata.brightness = self.brightness;
         metadata.music = self.music;
+        metadata.postcards = self.postcards;
         metadata.normalize_authors_ui_text();
         metadata
     }
@@ -368,6 +380,11 @@ mod tests {
         metadata.sun = SunPosition { altitude: 12.5, azimuth: 270.0 };
         metadata.brightness = Brightness { ambient: 20.0, sun: 300.0, sky: 80.0 };
         metadata.music = vec!["music/Pump/Pump.mp3".into(), "music/mine.ogg".into()];
+        metadata.postcards = [
+            Some(PostcardChoice::SpectatorCamera { feature: FeatureId::from_raw(7), copy: Some(1) }),
+            None,
+            Some(PostcardChoice::BuiltIn(crate::editor::map_metadata::BuiltInPostcard::Top)),
+        ];
 
         let text = to_text(&timeline, &metadata).unwrap();
         let loaded = parse(&text).unwrap();
@@ -400,6 +417,7 @@ mod tests {
         assert_eq!(metadata.sun, SunPosition::default());
         assert_eq!(metadata.brightness, Brightness::default());
         assert!(metadata.music.is_empty());
+        assert_eq!(metadata.postcards, [None; POSTCARD_SLOTS]);
     }
 
     #[test]

@@ -35,6 +35,9 @@ const RESEND_INTERVAL: f32 = 0.25;
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct MapSnapshot {
     pub blueprint: Vec<u8>,
+    /// The server's [`FeatureTimeline::adoptions`]: a new count is another map, which a client takes
+    /// whole, as opening it, rather than as an edit.
+    pub opened: u64,
 }
 
 /// The map's settings, apart from its features so that changing one does not
@@ -167,7 +170,7 @@ fn broadcast_map_changes(
     last.since = 0.0;
     last.blueprint = blueprint.clone();
     info!("Map changed; sending {} bytes to everyone", blueprint.len());
-    sender.send::<_, MapChannel>(&MapSnapshot { blueprint }, &server, &NetworkTarget::All)?;
+    sender.send::<_, MapChannel>(&MapSnapshot { blueprint, opened: timeline.adoptions() }, &server, &NetworkTarget::All)?;
     Ok(())
 }
 
@@ -185,7 +188,7 @@ fn send_map_to_new_clients(
     }
 
     let Some(blueprint) = encode(&timeline) else { return Ok(()) };
-    let message = MapSnapshot { blueprint };
+    let message = MapSnapshot { blueprint, opened: timeline.adoptions() };
     let settings = MetadataSnapshot { metadata: SavedMetadata::of(&metadata), file: stem(file.as_deref()) };
 
     for client in &joined {
@@ -248,6 +251,8 @@ fn adopt_the_servers_map(
     mut bake: MessageWriter<CalculateRoomGeometry>,
     // Adopting is a visible rebuild, so an identical map is skipped.
     mut last: Local<Vec<u8>>,
+    // The server's `adoptions`, as last received.
+    mut opened: Local<Option<u64>>,
 ) {
     if role.is_authority() {
         return;
@@ -255,6 +260,8 @@ fn adopt_the_servers_map(
 
     for mut receiver in &mut receivers {
         for message in receiver.receive() {
+            let another_map = *opened != Some(message.opened);
+            *opened = Some(message.opened);
             if message.blueprint == *last {
                 continue;
             }
@@ -273,12 +280,15 @@ fn adopt_the_servers_map(
                 .into_iter()
                 .map(|feature| (feature.id(), feature))
                 .collect();
-            let rooms_touched = timeline.adopt_changes(FeatureTimeline::from_parts(
-                features,
-                incoming.order,
-                // No history: a client must not undo the server's map.
-                incoming.id_counter,
-            ));
+            // No history: a client must not undo the server's map.
+            let theirs = FeatureTimeline::from_parts(features, incoming.order, incoming.id_counter);
+            // Another map is opened, as on the server, so what was kept for the old one is evicted.
+            let rooms_touched = if another_map {
+                timeline.adopt(theirs);
+                true
+            } else {
+                timeline.adopt_changes(theirs)
+            };
             // Read a frame later, after `sync_entities` has given the features
             // entities; a bake this frame would bake nothing. This covers a map
             // arriving mid-round; `BakeSystems::All` covers one arriving as Play
@@ -305,6 +315,10 @@ mod tests {
         metadata.display_name = Some("Harvest".into());
         metadata.movement.gravity = 9.81;
         metadata.music = vec!["music/Pump/Pump.mp3".into()];
+        metadata.postcards[1] = Some(crate::editor::map_metadata::PostcardChoice::SpectatorCamera {
+            feature: crate::editor::editable::FeatureId::from_raw(3),
+            copy: None,
+        });
         let sent = MetadataSnapshot { metadata: SavedMetadata::of(&metadata), file: Some("harvest".into()) };
         let bytes = postcard::to_allocvec(&sent).expect("the settings would not encode");
         let received: MetadataSnapshot =

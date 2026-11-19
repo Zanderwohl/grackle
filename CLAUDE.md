@@ -258,7 +258,7 @@ shape is a new producer and not a rewrite of every consumer — see
 | `src/bin/` | `ensure_lang` (fills missing translation keys), `new_map_template` (writes the new-map, demo-scene, arena, cloister, waterworks and showcase blueprints), `map_stats` (bakes a blueprint's nav graph headless and prints its statistics and top-down charts of each field), `decal_images` (rasterizes the default pack's decal SVGs), `bake_body_clips` (seeds a pack's body animations from the pose functions they replace, and writes the clips `seed::WRITTEN` generates key by key), `default_materials` (writes the default pack's materials), `crate_drop`. |
 | `assets/default/` | The default pack: `lang/`, `blueprints/`, `servers/` (example `--server-config` files). |
 | `assets/user/` | The user pack: gitignored, made at startup, last in `default_packs()` so it overrides the shipped one. A new map or prop is saved here unless the document already has a folder. Also holds `settings.toml`, the player settings, `shortcuts.toml` and `server.toml` (the Round tab). |
-| `cache/` | Gitignored, derived from the packs and maps: `thumbnail/props/{name}.png`, `nav/{hash}.bin`, `lightmap/{hash}.bin`, `rounds/{map}/*.jsonl`. Safe to delete. |
+| `cache/` | Gitignored, derived from the packs and maps: `thumbnail/props/{name}.png`, `nav/{hash}.bin`, `lightmap/{hash}.bin`, `postcards/{hash}/*.png`, `rounds/{map}/*.jsonl`. Safe to delete. |
 | `logs/` | Gitignored: the log's file drain, one file per launch. |
 | `screenshots/` | Gitignored, made at startup: `F12` saves the window as drawn, HUD and egui included, as `{date}_{time}_{millisecond}.png` ([`src/common/screenshot.rs`](src/common/screenshot.rs)). |
 
@@ -1954,6 +1954,31 @@ plugins also stand alone in tests. **Not a `DirectionalLight`**: Bevy applies on
 draws whatever the mesh's render layers, so it lit every wall unshadowed and
 washed the lightmaps out.
 
+**Postcards are the last bake** ([`src/tool/postcard_bake.rs`](src/tool/postcard_bake.rs)):
+photographs of the map at 2160×1440 whatever the window's size, with no HUD, one through each
+spectator camera at its own vertical field of view and one orthographic from straight above, turned
+in 5° steps to whichever angle lets the rooms' and blocks' corners fill the most of the 3:2 frame.
+They go to `cache/postcards/{hash}/`, named by `PostcardChoice::file_stem` (`top.png`,
+`camera_{feature}.png`, `camera_{feature}_copy_{image}.png`), the hash being FNV over every feature
+as saved (`FeatureTimeline::content_hash`), the settings a picture can show
+(`SavedMetadata::pictured`, so naming the map or choosing postcards is no miss) and halfbright, so
+halfbright pictures, taken without sunlight, are filed apart. Pack content is not in
+the hash: delete the folder after editing a material. Taken only in the map editor and never while
+rolled back, once rooms and sunlight are up to date (or skipped) and the map has been still for the
+settle wait, by one camera re-aimed per shot, with spawn-point bodies hidden while it shoots.
+**Only the authority takes them**; any machine reads a set already on disk, and the set read or
+taken most recently is kept shrunk to 200 px high (`CapturedPostcards`) until another replaces it,
+and evicted when another map is opened (`FeatureTimeline::adoptions`, bumped by every `adopt`) or
+the `NetRole` changes. A set is baked only once its write lands; a write that fails, or a sitting
+whose captures never come back, gives up on that hash until the map changes or a bake is asked for.
+A map names three for its display in the Metadata tab's **Postcards** section
+(`MapMetadata::postcards`, `PostcardChoice`: a built-in, only `Top` so far, or a spectator camera
+by feature id and Mirror image), saved in the blueprint without the pictures. Each slot is a picker
+one tile wide (`PickerKind::captioned`) offering every postcard the map would have, with its
+picture or a gray "Not generated" placeholder (`Choice::placeholder`). Its
+own checkbox in the Bakes panel, on by default; a round never waits for it. `PostcardBakePlugin` is
+added in `main.rs`, since it renders.
+
 **Every bake reports the same way**
 ([`src/tool/bake_job.rs`](src/tool/bake_job.rs)): a `BakeStatus` per
 `BakeKind` in the `BakeProgress` resource — a state (up to date, stale,
@@ -3614,6 +3639,8 @@ anybody can work in.
   A client handed a newer copy uses `adopt_changes` instead, which rebuilds
   only the features whose serialized form differs, as an undo does —
   adopting every resend wholesale rebuilt every room for each moved grid.
+  Each snapshot carries the server's `FeatureTimeline::adoptions`, and a new
+  count is another map, which the client takes with `adopt`, as opening it.
 - **Re-bake room geometry after adopting.** The features have no entities until
   `sync_entities` has run, so a bake fired in the same frame bakes nothing;
   `CalculateRoomGeometry` is written and read a frame later, which is what
@@ -3818,7 +3845,7 @@ Saves write through a `.bak` and restore it on failure.
 
 **Map settings** are the metadata header (`MapMetadata`, saved as
 `SavedMetadata`): a display name (`None` falls back to the file name),
-authors, game mode, the sky (`SkyTime`), the sun's position and how bright the
+authors, game mode, the postcards it shows, the sky (`SkyTime`), the sun's position and how bright the
 ambient, sun and sky are (`Brightness`, see [documentation/sun.md](documentation/sun.md)),
 and a movement section — the sprint policy (Always by
 default, which makes Shift do nothing, as does Disabled) and gravity in
