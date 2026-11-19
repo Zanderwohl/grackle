@@ -54,6 +54,8 @@ pub struct WeaponEntry {
     pub magazine: Magazine,
     pub primary: Mounted,
     pub secondary: Mounted,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scoped_primary: Option<Mounted>,
 }
 
 impl WeaponEntry {
@@ -68,6 +70,7 @@ impl WeaponEntry {
             deploy: self.deploy,
             primary: self.primary,
             secondary: self.secondary,
+            scoped_primary: self.scoped_primary,
             magazine: self.magazine,
         }
     }
@@ -231,6 +234,7 @@ pub enum WeaponProblem {
     Collides { key: String, with: String },
     Bucket { key: String, bucket: u8 },
     Deploy { key: String, deploy: f32 },
+    ScopedPrimary { key: String },
 }
 
 /// English, for the log.
@@ -242,6 +246,9 @@ impl std::fmt::Display for WeaponProblem {
                 write!(f, "{key} is in bucket {bucket}, which no key selects (1–{BUCKETS})")
             }
             WeaponProblem::Deploy { key, deploy } => write!(f, "{key} deploys in {deploy} s"),
+            WeaponProblem::ScopedPrimary { key } => {
+                write!(f, "{key} has a primary while sighted but no scope on its secondary")
+            }
         }
     }
 }
@@ -259,6 +266,7 @@ impl WeaponProblem {
             WeaponProblem::Deploy { key, deploy } => {
                 crate::get!("weapon_editor.problems.deploy", "key", key, "deploy", deploy)
             }
+            WeaponProblem::ScopedPrimary { key } => crate::get!("weapon_editor.problems.scoped_primary", "key", key),
         }
     }
 }
@@ -292,6 +300,9 @@ fn problem(catalog: &WeaponCatalog, weapon: &PackWeapon) -> Option<WeaponProblem
     }
     if !(entry.deploy >= 0.0) {
         return Some(WeaponProblem::Deploy { key: key.clone(), deploy: entry.deploy });
+    }
+    if entry.scoped_primary.is_some() && !matches!(entry.secondary.action, crate::common::weapon::WeaponAction::Scope(_)) {
+        return Some(WeaponProblem::ScopedPrimary { key: key.clone() });
     }
     None
 }
@@ -416,6 +427,17 @@ mod tests {
         );
     }
 
+    /// Fails if a class states no health of its own, and so silently gets the default.
+    #[test]
+    fn every_class_states_its_health() {
+        use strum::IntoEnumIterator;
+        let catalog = the_default_pack();
+        let missing: Vec<Class> =
+            Class::iter().filter(|class| catalog.loadout(*class).and_then(|loadout| loadout.health).is_none()).collect();
+        assert!(missing.is_empty(), "{missing:?} state no health in loadouts.toml");
+        assert_eq!(catalog.health_of(Class::Heavy), 300);
+    }
+
     /// Fails when a `WeaponAction` variant is carried by nothing the
     /// placeholder class has.
     #[test]
@@ -469,7 +491,7 @@ mod tests {
                 duration: 0.0,
                 cooldown: 0.0,
             }),
-            WeaponAction::Scope(crate::common::weapon::ScopeSpec { zoom: 0.0 }),
+            WeaponAction::Scope(crate::common::weapon::ScopeSpec::default()),
         ];
         for action in wanted {
             assert!(

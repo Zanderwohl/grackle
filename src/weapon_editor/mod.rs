@@ -238,6 +238,7 @@ impl WeaponEditor {
                 cost: crate::common::weapon::Cost::Ammo { rounds: 1 },
             },
             secondary: Mounted::EMPTY,
+            scoped_primary: None,
         };
         self.insert(PackWeapon { pack, key: key.to_owned(), entry })
     }

@@ -61,7 +61,7 @@ const WEAPONS_BEHIND_THE_SPAWN: [(&str, f32); 6] = [
     ("flamethrower", -2.0),
     ("rpg", 2.0),
     ("pill_launcher", 6.0),
-    ("pistol", 10.0),
+    ("sniper_rifle", 10.0),
 ];
 
 /// A team's spawn nook, butted against a side wall so the shared face opens it into the room.

@@ -142,6 +142,15 @@ impl Plugin for WeaponPlugin {
                     .run_if(crate::common::app_mode::simulating)
                     .run_if(has_authority),
             )
+            // Predicted, so not authority-gated.
+            .add_systems(
+                FixedUpdate,
+                crate::game::sights::work_the_sights
+                    .after(select_weapons)
+                    .after(crate::game::player::step_player)
+                    .before(pull_trigger)
+                    .run_if(crate::common::app_mode::simulating),
+            )
             .add_systems(
                 Update,
                 note_unimplemented_actions.run_if(crate::common::app_mode::simulating),
@@ -156,14 +165,14 @@ pub fn pull_trigger(
     time: Res<Time<Fixed>>,
     catalog: Res<WeaponCatalog>,
     mut shooters: Query<
-        (Entity, &Equipped, &mut Ammo, &mut Trigger, &Inputs, &Condition),
+        (Entity, &Equipped, &mut Ammo, &mut Trigger, &Inputs, &Condition, Option<&crate::game::sights::Sights>),
         With<Player>,
     >,
     mut fired: MessageWriter<WeaponActionFired>,
 ) {
     let dt = time.delta_secs();
 
-    for (shooter, equipped, mut ammo, mut trigger, input, condition) in &mut shooters {
+    for (shooter, equipped, mut ammo, mut trigger, input, condition, sights) in &mut shooters {
         trigger.tick(dt);
         // A press that fires nothing — empty, drawing, humiliated — still
         // means the player wants to shoot rather than reload.
@@ -190,8 +199,9 @@ pub fn pull_trigger(
                 Button::Secondary => (input.alt_attack, input.alt_attack_held),
             };
 
-            let mounted = button.of(weapon);
-            if matches!(mounted.action, WeaponAction::None) {
+            let mounted = sights.map_or_else(|| button.of(weapon), |sights| sights.mounted(weapon, button));
+            // `work_the_sights` answers a scope, on a client too.
+            if matches!(mounted.action, WeaponAction::None | WeaponAction::Scope(_)) {
                 continue;
             }
 
@@ -453,6 +463,7 @@ mod tests {
             deploy: 0.0,
             primary,
             secondary,
+            scoped_primary: None,
             magazine,
         }
     }
@@ -902,7 +913,7 @@ mod tests {
         let mut world = a_world(one_weapon(weapon(
             semi(WeaponAction::Hitscan(LASER), 1),
             Mounted {
-                action: WeaponAction::Scope(crate::common::weapon::ScopeSpec { zoom: 2.0 }),
+                action: WeaponAction::Airblast(crate::common::weapon::AirblastSpec::default()),
                 cadence: Cadence::Semi { interval: 0.0 },
                 cost: Cost::Free,
             },

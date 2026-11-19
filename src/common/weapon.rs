@@ -282,18 +282,31 @@ impl Default for InvulnSpec {
     }
 }
 
-/// Stub.
+/// One press up, one down; see [`crate::game::sights`].
 #[derive(Clone, Copy, Debug, PartialEq, Reflect, Serialize, Deserialize)]
 #[reflect(Default)]
 pub struct ScopeSpec {
+    /// Vertical, once the sights are up.
+    #[reflect(@Unit::Radians)]
+    pub fov: f32,
+    /// Times the mouse's speed, once the sights are up.
     #[reflect(@Unit::Times)]
-    pub zoom: f32,
+    pub look_speed: f32,
+    #[reflect(@Unit::Seconds)]
+    pub raise: f32,
+    #[reflect(@Unit::Seconds)]
+    pub lower: f32,
+    /// Seconds after a sighted shot that the weapon comes down, to be up again
+    /// as the cooldown ends. Drawing only: [`crate::game::sights::Rechamber`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[reflect(@Unit::Seconds)]
+    pub rechamber: Option<f32>,
 }
 
 /// What the weapon editor starts a new one from.
 impl Default for ScopeSpec {
     fn default() -> Self {
-        Self { zoom: 2.5 }
+        Self { fov: 30f32.to_radians(), look_speed: 0.5, raise: 0.2, lower: 0.2, rechamber: None }
     }
 }
 
@@ -347,6 +360,7 @@ impl WeaponAction {
                 | WeaponAction::Projectile(_)
                 | WeaponAction::Flame(_)
                 | WeaponAction::Airblast(_)
+                | WeaponAction::Scope(_)
                 | WeaponAction::None
         )
     }
@@ -467,7 +481,19 @@ pub struct Weapon {
     pub deploy: f32,
     pub primary: Mounted,
     pub secondary: Mounted,
+    /// Fired by the primary while the sights are up.
+    #[serde(default)]
+    pub scoped_primary: Option<Mounted>,
     pub magazine: Magazine,
+}
+
+impl Weapon {
+    pub fn scope(&self) -> Option<ScopeSpec> {
+        [self.primary, self.secondary].into_iter().find_map(|mounted| match mounted.action {
+            WeaponAction::Scope(scope) => Some(scope),
+            _ => None,
+        })
+    }
 }
 
 /// A bucket is the weapon's; a [`Slot`] is a place in a class's loadout.
@@ -685,6 +711,11 @@ impl WeaponCatalog {
 
     pub fn loadout(&self, class: Class) -> Option<&Loadout> {
         self.loadouts.iter().find(|(for_class, _)| *for_class == class).map(|(_, l)| l)
+    }
+
+    /// A fresh body's.
+    pub fn health_of(&self, class: Class) -> u32 {
+        self.loadout(class).and_then(|loadout| loadout.health).unwrap_or(crate::common::damage::DEFAULT_HEALTH)
     }
 
     pub fn set_loadout(&mut self, class: Class, loadout: Loadout) {

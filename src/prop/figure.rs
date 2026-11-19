@@ -213,7 +213,7 @@ pub fn pose_the_figure(
     let holding = stage.holding && !beneath.hides_weapon;
     for (skeleton, mut pose, mut transform, mut reach, mut visibility) in &mut figures {
         // Hidden during the viewmodel preview: the eye is inside this head.
-        let wanted = match preview.0 {
+        let wanted = match preview.on {
             true => Visibility::Hidden,
             false => Visibility::Inherited,
         };

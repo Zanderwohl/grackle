@@ -109,6 +109,7 @@ pub fn sync_animation_grids(
     mut commands: Commands,
     clock: Res<AnimationClock>,
     builds: Res<ClassBuilds>,
+    catalog: Option<Res<crate::common::weapon::WeaponCatalog>>,
     grids: Query<(Entity, &Transform, Option<&RosterTeam>), With<AnimationGridMarker>>,
     bodies: Query<&OfGrid>,
     mut last_cycle: Local<Option<u64>>,
@@ -146,6 +147,9 @@ pub fn sync_animation_grids(
         let teams = teams.copied().unwrap_or_default();
         for cell in (0..cells.len()).filter(|cell| !standing[*cell]) {
             let mut body = commands.spawn(carousel_body(grid, cell, &cells[cell], placed_at, &builds));
+            // The class's own, as a player's body of that class has.
+            let health = catalog.as_deref().map_or(crate::common::damage::DEFAULT_HEALTH, |catalog| catalog.health_of(cells[cell].class));
+            body.insert(Damageable::with_health(health));
             if let Some(team) = teams.team_for(cell) {
                 body.insert(team);
             }
@@ -304,6 +308,30 @@ mod tests {
             .collect();
         cells.sort_unstable();
         cells
+    }
+
+    /// Fails if a grid body's health is not its class's, as a player's body of that class has.
+    #[test]
+    fn every_grid_body_has_its_class_health() {
+        let catalog = crate::common::weapon_file::default_catalog();
+        let mut world = World::new();
+        world.init_resource::<AnimationClock>();
+        world.init_resource::<ClassBuilds>();
+        world.insert_resource(catalog.clone());
+        world.spawn((AnimationGridMarker, Transform::IDENTITY));
+        world.run_system_once(sync_animation_grids).unwrap();
+        world.flush();
+
+        use crate::common::class::Class;
+        let bodies: Vec<(Class, u32)> = world
+            .query_filtered::<(&Class, &Damageable), With<CarouselBody>>()
+            .iter(&world)
+            .map(|(class, health)| (*class, health.health()))
+            .collect();
+        assert!(bodies.iter().any(|(class, _)| catalog.health_of(*class) != crate::common::damage::DEFAULT_HEALTH));
+        for (class, health) in bodies {
+            assert_eq!(health, catalog.health_of(class), "{class:?}");
+        }
     }
 
     #[test]

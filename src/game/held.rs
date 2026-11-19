@@ -827,6 +827,7 @@ mod tests {
             deploy: 0.0,
             primary: Mounted::EMPTY,
             secondary: Mounted::EMPTY,
+            scoped_primary: None,
             magazine: Magazine::BOTTOMLESS,
         }
     }

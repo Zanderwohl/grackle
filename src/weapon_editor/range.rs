@@ -80,6 +80,8 @@ pub enum BeatKind {
     Extinguish { button: Button },
     /// Fire straight down on a jump from a standstill.
     RocketJump { button: Button },
+    /// Raise the sights, fire the primary once they are up, and lower them.
+    Scoped { button: Button, distance: f32, raise: f32 },
     /// The button does nothing yet; press it anyway.
     Stub { button: Button },
     /// Draw the weapon from another.
@@ -110,12 +112,18 @@ impl Beat {
             BeatKind::Reflect { button: b } => get!("weapon_editor.beats.reflect", "button", button(b)),
             BeatKind::Extinguish { button: b } => get!("weapon_editor.beats.extinguish", "button", button(b)),
             BeatKind::RocketJump { button: b } => get!("weapon_editor.beats.rocket_jump", "button", button(b)),
+            BeatKind::Scoped { button: b, distance, .. } => {
+                get!("weapon_editor.beats.scoped", "button", button(b), "distance", format!("{distance:.0}"))
+            }
             BeatKind::Stub { button: b } => get!("weapon_editor.beats.stub", "button", button(b)),
             BeatKind::Deploy => get!("weapon_editor.beats.deploy"),
             BeatKind::Reload => get!("weapon_editor.beats.reload"),
         }
     }
 }
+
+/// Seconds a [`BeatKind::Scoped`] beat holds the sights up.
+const SCOPED_HOLD: f32 = 1.0;
 
 pub fn beats_for(button: Button, mounted: &Mounted) -> Vec<Beat> {
     let shot = mounted.cadence.interval().max(0.1);
@@ -165,7 +173,11 @@ pub fn beats_for(button: Button, mounted: &Mounted) -> Vec<Beat> {
             }
             beats
         }
-        WeaponAction::HealBeam(_) | WeaponAction::Invulnerable(_) | WeaponAction::Scope(_) => {
+        WeaponAction::Scope(spec) => vec![Beat {
+            kind: BeatKind::Scoped { button, distance: 15.0, raise: spec.raise },
+            length: LEAD_IN + spec.raise + SCOPED_HOLD + spec.lower + 1.0,
+        }],
+        WeaponAction::HealBeam(_) | WeaponAction::Invulnerable(_) => {
             vec![Beat { kind: BeatKind::Stub { button }, length: LEAD_IN + 1.5 }]
         }
         WeaponAction::None => Vec::new(),
@@ -556,6 +568,16 @@ fn shooter_presses(kind: BeatKind, t: f32, input: &mut PlayerInput, weapon: &cra
                 press(input, button);
             }
         }
+        BeatKind::Scoped { button, raise, .. } => {
+            // A frame past the raise, so the shot is the scoped one.
+            let up = raise + 0.1;
+            let tick = crate::constants::one_tick().as_secs_f32();
+            if t < tick || (up + SCOPED_HOLD..up + SCOPED_HOLD + tick).contains(&t) {
+                press(input, button);
+            } else if (up..up + 0.05).contains(&t) {
+                press(input, Button::Primary);
+            }
+        }
         BeatKind::Stub { button } if t < 1.0 => press(input, button),
         BeatKind::Deploy if t < 0.05 => input.select = Some(weapon.id),
         BeatKind::Reload => {
@@ -626,7 +648,10 @@ fn stand_up(
     let shooter = puppet(commands, Role::Shooter, 0.0, carried);
     commands.entity(shooter).insert((Watched, UneasedAim));
     match kind {
-        BeatKind::Shoot { distance, .. } | BeatKind::Burn { distance, .. } | BeatKind::Push { distance, .. } => {
+        BeatKind::Shoot { distance, .. }
+        | BeatKind::Burn { distance, .. }
+        | BeatKind::Push { distance, .. }
+        | BeatKind::Scoped { distance, .. } => {
             puppet(commands, Role::Enemy, distance, vec![]);
         }
         BeatKind::Reflect { .. } => {

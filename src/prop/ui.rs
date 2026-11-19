@@ -47,7 +47,7 @@ use crate::prop::feature::{BooleanOp, End, FeatureOp, PatternKind, PropFeatureId
 use crate::prop::figure::ScaleFigure;
 use crate::prop::camera::ViewmodelPreview;
 use crate::prop::gizmo::HoldHandles;
-use crate::prop::hold::MuzzleSpec;
+use crate::prop::hold::{Framing, MuzzleSpec};
 use crate::prop::profile::{Placement, MAX_REVOLVE_STEPS, MIN_SIDES};
 use crate::prop::solid::{Shape, MIN_EXTENT};
 use crate::prop::surface::{Style, Surface};
@@ -304,8 +304,8 @@ fn panels(
 
     // Off unless this frame's Hold tab turns it back on, so a tab closed
     // mid-drag cannot leave the preview stuck on.
-    if preview.0 {
-        preview.0 = false;
+    if preview.on {
+        preview.on = false;
     }
 
     let mut requests = PropRequests::default();
@@ -2482,37 +2482,33 @@ fn hold(
         // Outside the fold, so a folded section leaves the preview off.
         let mut holding = false;
         section(ui, "hold_viewmodel", get!("prop.hold.viewmodel"), |ui| {
-            // `across` is a fraction of the frustum at its depth, not meters.
-            ui.horizontal(|ui| {
-                ui.label(get!("prop.hold.across"));
-                for (component, axis) in viewmodel.across.iter_mut().zip(["x", "y"]) {
-                    let response = ui.add(
-                        egui::DragValue::new(component)
-                            .speed(0.01)
-                            .range(-2.0..=2.0)
-                            .prefix(format!("{axis} ")),
-                    );
-                    view_changed |= response.changed();
-                    holding |= response.dragged() || response.has_focus();
-                }
-            });
-            let (depth_changed, depth_held) =
-                held_drag(ui, get!("prop.hold.depth"), &mut viewmodel.depth, 0.005, "m");
-            view_changed |= depth_changed;
-            holding |= depth_held;
-
-            let mut degrees = viewmodel.rotation.map(f32::to_degrees);
-            let (turned, turn_held) =
-                held_vec3(ui, get!("prop.inspector.rotation"), &mut degrees, 1.0, "°");
-            if turned {
-                viewmodel.rotation = degrees.map(f32::to_radians);
+            let mut own = viewmodel.framing();
+            let (changed, held) = framing_ui(ui, &mut own);
+            if changed {
+                viewmodel.set_framing(own);
                 view_changed = true;
             }
-            holding |= turn_held;
+            holding |= held;
         });
 
-        if preview.0 != holding {
-            preview.0 = holding;
+        let mut sighting = false;
+        section(ui, "hold_sighted", get!("prop.hold.sighted"), |ui| {
+            let mut has = viewmodel.sighted.is_some();
+            if ui.checkbox(&mut has, get!("prop.hold.has_sighted")).changed() {
+                // Starts where the weapon already is, so turning it on moves nothing.
+                viewmodel.sighted = has.then_some(viewmodel.framing());
+                view_changed = true;
+            }
+            let Some(sighted) = viewmodel.sighted.as_mut() else { return };
+            let (changed, held) = framing_ui(ui, sighted);
+            view_changed |= changed;
+            sighting |= held;
+        });
+
+        let on = holding || sighting;
+        if preview.on != on || preview.sighted != sighting {
+            preview.on = on;
+            preview.sighted = sighting;
         }
     });
 
@@ -2627,6 +2623,32 @@ fn problems(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
 }
 
 /// As [`drag`], also returning whether the box is held.
+/// Whether a field changed, and whether one is held, which puts the view at the eye.
+fn framing_ui(ui: &mut Ui, framing: &mut Framing) -> (bool, bool) {
+    let (mut changed, mut held) = (false, false);
+    // `across` is a fraction of the frustum at its depth, not meters.
+    ui.horizontal(|ui| {
+        ui.label(get!("prop.hold.across"));
+        for (component, axis) in framing.across.iter_mut().zip(["x", "y"]) {
+            let response =
+                ui.add(egui::DragValue::new(component).speed(0.01).range(-2.0..=2.0).prefix(format!("{axis} ")));
+            changed |= response.changed();
+            held |= response.dragged() || response.has_focus();
+        }
+    });
+    let (depth_changed, depth_held) = held_drag(ui, get!("prop.hold.depth"), &mut framing.depth, 0.005, "m");
+    changed |= depth_changed;
+    held |= depth_held;
+
+    let mut degrees = framing.rotation.map(f32::to_degrees);
+    let (turned, turn_held) = held_vec3(ui, get!("prop.inspector.rotation"), &mut degrees, 1.0, "°");
+    if turned {
+        framing.rotation = degrees.map(f32::to_radians);
+        changed = true;
+    }
+    (changed, held | turn_held)
+}
+
 fn held_drag(
     ui: &mut Ui,
     label: String,

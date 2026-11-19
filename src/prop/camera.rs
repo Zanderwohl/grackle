@@ -50,7 +50,11 @@ const MAX_ORBIT_PITCH: f32 = 1.54;
 /// Whether the perspective view is standing in for the player's eye. Set by
 /// the Hold panel while a viewmodel field is being dragged.
 #[derive(Resource, Default)]
-pub struct ViewmodelPreview(pub bool);
+pub struct ViewmodelPreview {
+    pub on: bool,
+    /// From the sighted framing rather than the lowered one.
+    pub sighted: bool,
+}
 
 /// Where the perspective camera was before it stood in for an eye. Separate
 /// from [`MapViewpoints`] so a preview is never restored as the way back to
@@ -110,7 +114,7 @@ impl Plugin for PropCameraPlugin {
                 (
                     preview_the_viewmodel,
                     frame_on_request,
-                    navigate.run_if(|preview: Res<ViewmodelPreview>| !preview.0),
+                    navigate.run_if(|preview: Res<ViewmodelPreview>| !preview.on),
                     reset_the_hovered_view,
                 )
                     .after(PropSceneSystems::Build)
@@ -392,7 +396,7 @@ fn preview_the_viewmodel(
     mut saved: ResMut<PreviewViewpoint>,
     mut cameras: Query<(Entity, &mut Transform, &mut Projection, &Camera, &Multicam)>,
 ) {
-    if !preview.0 {
+    if !preview.on {
         if let Some((entity, transform, projection)) = saved.0.take()
             && let Ok((_, mut current, mut current_projection, _, _)) = cameras.get_mut(entity)
         {
@@ -402,7 +406,10 @@ fn preview_the_viewmodel(
         return;
     }
 
-    let spec = editor.doc().viewmodel;
+    let framing = match preview.sighted {
+        true => editor.doc().viewmodel.sighted_framing(),
+        false => editor.doc().viewmodel.framing(),
+    };
     for (entity, mut transform, mut projection, camera, multicam) in &mut cameras {
         if multicam.axis != CameraAxis::None {
             continue;
@@ -419,7 +426,7 @@ fn preview_the_viewmodel(
             near: VIEWMODEL_NEAR,
             ..default()
         });
-        let weapon = spec.transform(VIEWMODEL_FOV, size.x / size.y);
+        let weapon = framing.transform(VIEWMODEL_FOV, size.x / size.y);
         let rotation = weapon.rotation.inverse();
         *transform = Transform::from_translation(rotation * -weapon.translation)
             .with_rotation(rotation);
@@ -427,7 +434,7 @@ fn preview_the_viewmodel(
 }
 
 fn forget_the_preview(mut preview: ResMut<ViewmodelPreview>, mut saved: ResMut<PreviewViewpoint>) {
-    preview.0 = false;
+    preview.on = false;
     saved.0 = None;
 }
 

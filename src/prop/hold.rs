@@ -64,11 +64,25 @@ pub struct ViewmodelSpec {
     /// Euler angles in axis order.
     #[serde(default, with = "crate::prop::nice_f32::array")]
     pub rotation: [f32; 3],
+    /// With the sights up, such as a scope's eyepiece at the eye. `None` stays put.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sighted: Option<Framing>,
+}
+
+/// Where a weapon sits in the camera's frame, as [`ViewmodelSpec`] states it.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Framing {
+    #[serde(with = "crate::prop::nice_f32::array")]
+    pub across: [f32; 2],
+    #[serde(with = "crate::prop::nice_f32::scalar")]
+    pub depth: f32,
+    #[serde(default, with = "crate::prop::nice_f32::array")]
+    pub rotation: [f32; 3],
 }
 
 impl Default for ViewmodelSpec {
     fn default() -> Self {
-        Self { across: [0.35, -0.71], depth: 0.30, rotation: [0.0; 3] }
+        Self { across: [0.35, -0.71], depth: 0.30, rotation: [0.0; 3], sighted: None }
     }
 }
 
@@ -80,7 +94,7 @@ fn default_depth() -> f32 {
     ViewmodelSpec::default().depth
 }
 
-impl ViewmodelSpec {
+impl Framing {
     /// Where the weapon sits in the camera's own frame.
     pub fn transform(&self, vertical_fov: f32, aspect: f32) -> Transform {
         let half_height = self.depth * (vertical_fov / 2.0).tan();
@@ -89,12 +103,46 @@ impl ViewmodelSpec {
             self.across[1] * half_height,
             -self.depth,
         ))
-        .with_rotation(self.rotation())
+        .with_rotation(quat_from_euler(Vec3::from_array(self.rotation)))
+    }
+}
+
+impl ViewmodelSpec {
+    /// With the sights down.
+    pub fn framing(&self) -> Framing {
+        Framing { across: self.across, depth: self.depth, rotation: self.rotation }
+    }
+
+    pub fn set_framing(&mut self, Framing { across, depth, rotation }: Framing) {
+        (self.across, self.depth, self.rotation) = (across, depth, rotation);
+    }
+
+    /// With the sights down.
+    pub fn transform(&self, vertical_fov: f32, aspect: f32) -> Transform {
+        self.framing().transform(vertical_fov, aspect)
     }
 
     /// The prop turned into the camera's frame.
     pub fn rotation(&self) -> Quat {
         quat_from_euler(Vec3::from_array(self.rotation))
+    }
+
+    pub fn sighted_framing(&self) -> Framing {
+        self.sighted.unwrap_or_else(|| self.framing())
+    }
+
+    /// `raised` is 0 to 1.
+    pub fn transform_raised(&self, vertical_fov: f32, aspect: f32, raised: f32) -> Transform {
+        let down = self.transform(vertical_fov, aspect);
+        if raised <= 0.0 || self.sighted.is_none() {
+            return down;
+        }
+        let up = self.sighted_framing().transform(vertical_fov, aspect);
+        if raised >= 1.0 {
+            return up;
+        }
+        Transform::from_translation(down.translation.lerp(up.translation, raised))
+            .with_rotation(down.rotation.slerp(up.rotation, raised))
     }
 }
 
@@ -340,6 +388,20 @@ pub fn grip_hands(
 
 #[cfg(test)]
 mod tests {
+    /// Fails if a raise misses either end, or a framing with no sighted pose moves.
+    #[test]
+    fn a_raise_runs_from_the_lowered_framing_to_the_sighted_one() {
+        use super::{Framing, ViewmodelSpec};
+        let (fov, aspect) = (1.2, 16.0 / 9.0);
+        let sighted = Framing { across: [0.0, -0.2], depth: 0.5, rotation: [0.0, 0.1, 0.0] };
+        let spec = ViewmodelSpec { sighted: Some(sighted), ..ViewmodelSpec::default() };
+        assert_eq!(spec.transform_raised(fov, aspect, 0.0), spec.transform(fov, aspect));
+        let up = spec.transform_raised(fov, aspect, 1.0);
+        let wanted = spec.sighted_framing().transform(fov, aspect);
+        assert_eq!(up, wanted);
+        let plain = ViewmodelSpec::default();
+        assert_eq!(plain.transform_raised(fov, aspect, 1.0), plain.transform(fov, aspect));
+    }
 
     /// A body with no hands holds its weapon on its mount, turned by the aim, whatever the hold's
     /// carry says; nothing grips.
