@@ -116,7 +116,8 @@ struct PickerPanel;
 #[derive(Component)]
 struct ClassName;
 
-/// A body standing for its portrait.
+/// A body standing for a portrait, here or on the HUD. Its parts, hat and held weapon take its own
+/// `RenderLayers` ([`render_layers::part_layers`]).
 #[derive(Component)]
 pub struct PortraitBody;
 
@@ -156,7 +157,6 @@ impl Plugin for ClassPickerPlugin {
                             .or_else(resource_changed::<TeamOptions>)
                             .or_else(resource_changed::<Keymap>),
                     ),
-                    put_portraits_on_their_layer,
                     taunt_while_hovered,
                     report_the_choice,
                 )
@@ -603,11 +603,11 @@ pub struct PortraitWarmUpPlugin;
 impl Plugin for PortraitWarmUpPlugin {
     fn build(&self, app: &mut App) {
         crate::game::warm_up::ensure(app);
-        app.add_systems(Startup, stand_a_body_for_the_warm_up);
+        app.add_systems(Startup, stand_a_body_for_the_warm_up).add_systems(Update, arm_the_warm_up_body);
     }
 }
 
-/// A Scout, as a class with no hat: a hat is not on the warm-up layer.
+/// Drawn as the portraits are; [`arm_the_warm_up_body`] gives it a weapon.
 fn stand_a_body_for_the_warm_up(mut commands: Commands) {
     commands.spawn((
         crate::game::warm_up::WarmUp,
@@ -619,20 +619,18 @@ fn stand_a_body_for_the_warm_up(mut commands: Commands) {
     ));
 }
 
-/// A hat is spawned without its body's layers, which the body's own parts are given.
-fn put_portraits_on_their_layer(
+/// The HUD's portrait draws a held weapon, whose meshes are laid out unlike a body part's, so
+/// any modeled weapon is warmed up in the portrait view too.
+fn arm_the_warm_up_body(
     mut commands: Commands,
-    bodies: Query<Entity, With<PortraitBody>>,
-    children: Query<&Children>,
-    layers: Query<Option<&RenderLayers>>,
+    catalog: Option<Res<WeaponCatalog>>,
+    bodies: Query<Entity, (With<crate::game::warm_up::WarmUp>, With<Class>, Without<crate::common::weapon::Equipped>)>,
 ) {
-    let wanted = RenderLayers::layer(render_layers::PORTRAIT);
+    let Some(weapon) = catalog.as_ref().and_then(|catalog| catalog.weapons.iter().find(|weapon| weapon.model.is_some())) else {
+        return;
+    };
     for body in &bodies {
-        for part in children.iter_descendants(body) {
-            if layers.get(part).ok().flatten() != Some(&wanted) {
-                commands.entity(part).insert(wanted.clone());
-            }
-        }
+        commands.entity(body).insert(crate::common::weapon::Equipped::carrying([weapon.id]));
     }
 }
 
@@ -791,6 +789,20 @@ mod tests {
         assert_eq!(played(Class::Mercenary), "taunt_wave");
         assert_eq!(played(Class::Scout), "taunt_shadowbox");
         assert_eq!(played(Class::Raptor), "raptor/taunt_lunge");
+    }
+
+    /// Breaks if the warm-up body is not given a modeled weapon to hold, so no held weapon is drawn
+    /// in the portrait view before a round.
+    #[test]
+    fn the_warm_up_body_holds_a_modeled_weapon() {
+        use bevy::ecs::system::RunSystemOnce;
+        let mut world = World::new();
+        let catalog = crate::common::weapon_file::default_catalog();
+        let body = world.spawn((crate::game::warm_up::WarmUp, Class::Scout)).id();
+        world.insert_resource(catalog.clone());
+        world.run_system_once(arm_the_warm_up_body).unwrap();
+        let held = world.get::<crate::common::weapon::Equipped>(body).and_then(|equipped| equipped.held());
+        assert!(held.and_then(|id| catalog.get(id)).is_some_and(|weapon| weapon.model.is_some()), "holding {held:?}");
     }
 
     /// Breaks if the taunt lingers after the pointer leaves, fading or not.

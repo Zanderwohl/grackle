@@ -72,6 +72,8 @@ pub mod net_bodies;
 pub mod menu;
 pub mod pause_menu;
 pub mod hud;
+pub mod hud_portrait;
+pub mod medallion;
 pub mod name_tag;
 pub mod kill_feed;
 pub mod taunt_menu;
@@ -114,7 +116,7 @@ impl Plugin for GamePlugin {
             // same fixed steps and `CollisionWorld` as the player step.
             .add_plugins(RagdollPlugin)
             .add_plugins(PauseMenuPlugin)
-            .add_plugins(crate::game::hud::HudPlugin)
+            .add_plugins((crate::game::hud::HudPlugin, crate::game::hud_portrait::HudPortraitPlugin, crate::game::medallion::MedallionPlugin))
             .add_plugins(crate::game::score::ScorePlugin)
             .add_plugins(crate::game::rounds::RoundHistoryPlugin)
             .add_plugins(crate::game::telemetry::TelemetryPlugin)

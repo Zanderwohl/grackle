@@ -321,7 +321,7 @@ fn safe_zone(font: &Handle<Font>) -> impl Bundle {
         // Drawn inside the box, so it is on screen when the box is the window.
         Outline::new(Val::Px(2.0), Val::Px(-2.0), Color::NONE),
         Pickable::IGNORE,
-        children![health_readout(font), armor_readout(font), weapon_readout(font)],
+        children![portrait_readout(), health_readout(font), armor_readout(font), weapon_readout(font)],
     )
 }
 
@@ -391,6 +391,30 @@ pub(crate) fn hud_text(font: &Handle<Font>, words: String, size: f32, color: Col
 
 fn text(font: &Handle<Font>, kind: HudText, size: f32, alpha: f32) -> impl Bundle {
     (kind, hud_text(font, String::new(), size, Color::srgba(1.0, 1.0, 1.0, alpha)))
+}
+
+/// Logical pixels from the health panel's left edge to the portrait's.
+const PORTRAIT_INSET: f32 = 22.0;
+/// How far above the health readout's bottom the portrait's cut runs, inside the panel.
+const PORTRAIT_CUT_ABOVE: f32 = 26.0;
+
+/// Before the health readout, so the health panel is drawn over the bottom of it.
+fn portrait_readout() -> impl Bundle {
+    use crate::game::hud_portrait::{image_size, portrait_image, HudPortraitMedallion, PORTRAIT_KEPT, PORTRAIT_SIZE};
+    use crate::game::medallion::{medallion_box, medallion_node, Medallion};
+    let below_the_cut = medallion_box(PORTRAIT_SIZE).y - image_size().y;
+    (
+        ForTheLiving,
+        HudPortraitMedallion,
+        Medallion::new(Swatch::neutral(), PORTRAIT_KEPT),
+        Node {
+            position_type: PositionType::Absolute,
+            left: Val::Px(MARGIN_X + PORTRAIT_INSET),
+            bottom: Val::Px(MARGIN_Y + PORTRAIT_CUT_ABOVE - below_the_cut),
+            ..medallion_node(PORTRAIT_SIZE)
+        },
+        children![portrait_image()],
+    )
 }
 
 fn health_readout(font: &Handle<Font>) -> impl Bundle {

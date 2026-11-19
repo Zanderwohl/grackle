@@ -347,11 +347,12 @@ fn dress_held_weapons(
             Has<crate::game::player::Watched>,
             Option<&HeldModel>,
             Option<&Condition>,
+            Option<&RenderLayers>,
         ),
         With<Skeleton>,
     >,
 ) {
-    for (body, equipped, class, ours, watched, drawn, condition) in &bodies {
+    for (body, equipped, class, ours, watched, drawn, condition, own_layers) in &bodies {
         let ours = ours || watched;
         let held = equipped.held();
         if let Some(drawn) = drawn
@@ -403,7 +404,7 @@ fn dress_held_weapons(
                                     // Spawned already hidden: `show_held_weapons`
                                     // only catches it a frame later, which
                                     // flashes the weapon across your view.
-                                    held_visibility(ours, *view, condition.copied(), taunts.as_deref()),
+                                    held_visibility(ours, *view, condition.copied(), taunts.as_deref(), own_layers),
                                     Mesh3d(part.mesh),
                                     MeshMaterial3d(part.material),
                                     // Overwritten by `place_held_weapons`
@@ -461,7 +462,7 @@ fn replace_parts(
 /// placing the weapon and solving the arms onto it.
 pub(crate) fn place_the_weapon(
     mut bodies: Query<(
-        &Player,
+        Option<&Player>,
         &Skeleton,
         &Pose,
         Option<&SkeletonRoot>,
@@ -477,7 +478,8 @@ pub(crate) fn place_the_weapon(
         let root = Transform::from_translation(offset.map_or(Vec3::ZERO, |offset| offset.0));
         // `-Z` is forward and positive `X` rotation lifts it: the opposite sign
         // to a spine bone.
-        let aim = Quat::from_rotation_x(player.pitch);
+        // A body nobody steers, a portrait's, aims level.
+        let aim = Quat::from_rotation_x(player.map_or(0.0, |player| player.pitch));
 
         let Some(placed) = weapon_transform(skeleton, pose, &root, &held.hold, aim) else {
             continue;
@@ -737,10 +739,11 @@ fn held_visibility(
     view: ViewMode,
     condition: Option<Condition>,
     taunts: Option<&Taunts>,
+    body_layers: Option<&RenderLayers>,
 ) -> (Visibility, RenderLayers) {
     let taken_away = condition.is_some_and(|condition| !condition.shows_weapon(taunts));
     let visibility = if taken_away { Visibility::Hidden } else { Visibility::Inherited };
-    (visibility, crate::common::render_layers::body_layers(ours && !view.shows_own_body()))
+    (visibility, crate::common::render_layers::part_layers(body_layers, ours && !view.shows_own_body()))
 }
 
 fn show_held_weapons(
@@ -753,6 +756,7 @@ fn show_held_weapons(
         Option<Ref<LocalPlayer>>,
         Option<Ref<crate::game::player::Watched>>,
         Option<Ref<Condition>>,
+        Option<&RenderLayers>,
     )>,
     mut parts: Query<(&mut Visibility, Option<&RenderLayers>), With<HeldPart>>,
     mut no_longer_ours: RemovedComponents<LocalPlayer>,
@@ -765,7 +769,7 @@ fn show_held_weapons(
     let everybody = view.is_changed() || taunts.as_ref().is_some_and(|taunts| taunts.is_changed());
     let lost: Vec<Entity> =
         no_longer_ours.read().chain(no_longer_watched.read()).chain(no_longer_conditioned.read()).collect();
-    for (body, held, ours, watched, condition) in &bodies {
+    for (body, held, ours, watched, condition, own_layers) in &bodies {
         if !everybody
             && !held.is_changed()
             && !changed(&ours)
@@ -776,7 +780,7 @@ fn show_held_weapons(
             continue;
         }
         let (ours, watched, condition) = (ours.is_some(), watched.is_some(), condition.as_deref());
-        let (wanted, layers) = held_visibility(ours || watched, *view, condition.copied(), taunts.as_deref());
+        let (wanted, layers) = held_visibility(ours || watched, *view, condition.copied(), taunts.as_deref(), own_layers);
         for part in &held.parts {
             let Ok((mut visibility, had)) = parts.get_mut(*part) else { continue };
             // Assigned only on change, so parts are not dirtied every frame.
