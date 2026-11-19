@@ -146,14 +146,13 @@ struct BleedsFrom {
 struct Bleeding;
 
 /// Follows `gib`'s [`Ragdoll::stump`], so it is replayed as the gib is.
-/// Seconds, on the particles' clock.
+/// `age` is seconds on the particles' clock.
 #[derive(Component)]
 struct Fountain {
     gib: Entity,
     age: f32,
 }
 
-/// The fountain's speed `age` seconds in.
 fn fountain_speed(age: f32) -> f32 {
     let through = (age / FOUNTAIN_SECONDS).clamp(0.0, 1.0);
     FOUNTAIN_SPEED * (1.0 + (FOUNTAIN_LAST_SHARE - 1.0) * through)
@@ -493,11 +492,13 @@ fn bleed_from_new_gibs(
             && ragdoll.age() < FOUNTAIN_SECONDS
         {
             let fall = rules.as_deref().map_or_else(|| MovementRules::default().fall(), MovementRules::fall);
+            // Not the corpse's age, which is game time and runs on while a kill
+            // cam slows the particles.
             commands.spawn((
-                Fountain { gib, age: ragdoll.age() },
+                Fountain { gib, age: 0.0 },
                 ParticleEffect::new(effects.spurt.clone()),
                 EffectMaterial { images: vec![effects.blobs.clone()] },
-                fountain_properties(direction, ragdoll.age(), fall),
+                fountain_properties(direction, 0.0, fall),
                 Transform::from_translation(at),
                 Name::new("Neck fountain"),
             ));
@@ -569,8 +570,6 @@ fn follow_the_severed_ends(
     }
 }
 
-/// A fountain stops when its time is up or its gib goes, and is despawned once
-/// its last drop has faded.
 fn follow_the_stumps(
     mut commands: Commands,
     time: Res<Time<EffectSimulation>>,

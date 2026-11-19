@@ -4,7 +4,8 @@
 //! The authority traces it each tick into the replicated [`LaserDot`] on the
 //! body, so it is where the server would hit, walls and bodies alike. It is
 //! drawn by [`LaserDotPlugin`] as one quad turned to face the view, moved a
-//! little toward the eye so the surface under it does not cut it.
+//! little toward the eye so the surface under it does not cut it. Our own dot
+//! is the exception: it is traced where it is drawn, from this machine's aim.
 
 use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
@@ -16,9 +17,9 @@ use crate::game::collision::CollisionWorld;
 use crate::game::death::Dying;
 use crate::common::class::Stance;
 use crate::common::hitbox::Hitboxes;
-use crate::game::hitscan::{aim, eye, trace_past};
-use crate::game::player::{PhysicsBody, Player, PlayerCamera};
-use crate::game::sights::Sights;
+use crate::game::hitscan::{aim, aim_along, eye, trace_past};
+use crate::game::player::{InputLatch, LocalPlayer, PhysicsBody, Player, PlayerCamera};
+use crate::game::sights::{Rechamber, Sights};
 use crate::game::warm_up::{self, WarmUp};
 use crate::game::weapon::Button;
 
@@ -39,6 +40,26 @@ const TEXELS: u32 = 64;
 #[derive(Component, Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct LaserDot(pub Option<Vec3>);
 
+/// Meters, while the scope shows a dot.
+fn dot_range(sights: &Sights, equipped: &Equipped, catalog: &WeaponCatalog) -> Option<f32> {
+    sights
+        .scope(equipped, catalog)
+        .filter(|scope| scope.laser_dot)
+        .and_then(|_| catalog.held_by(equipped))
+        .and_then(|weapon| match sights.mounted(weapon, Button::Primary).action {
+            WeaponAction::Hitscan(spec) => Some(spec.range_m),
+            _ => None,
+        })
+}
+
+fn trace_dot(ray: &Ray3d, range: f32, shooter: Entity, world: &CollisionWorld, targets: &Query<(Entity, &Hitboxes)>) -> Option<Vec3> {
+    let wall = world.ray_distance(ray, range);
+    match trace_past(ray, wall.unwrap_or(range), shooter, targets) {
+        Some(hit) => Some(hit.point),
+        None => wall.map(|distance| ray.origin + *ray.direction * distance),
+    }
+}
+
 /// On the authority, after the move and the sights and with this tick's boxes,
 /// so the dot is where a shot this tick would land.
 #[allow(clippy::type_complexity)]
@@ -50,22 +71,9 @@ pub fn aim_the_laser_dots(
     targets: Query<(Entity, &Hitboxes)>,
 ) {
     for (body, physics, player, stance, equipped, sights, dot) in &mut bodies {
-        let range = sights
-            .scope(equipped, &catalog)
-            .filter(|scope| scope.laser_dot)
-            .and_then(|_| catalog.held_by(equipped))
-            .and_then(|weapon| match sights.mounted(weapon, Button::Primary).action {
-                WeaponAction::Hitscan(spec) => Some(spec.range_m),
-                _ => None,
-            });
-        let at = range.and_then(|range| {
+        let at = dot_range(sights, equipped, &catalog).and_then(|range| {
             let ray = Ray3d::new(eye(physics.current, *stance, player.duck, player.eye), aim(player));
-            let wall = world.ray_distance(&ray, range);
-            let reach = wall.unwrap_or(range);
-            match trace_past(&ray, reach, body, &targets) {
-                Some(hit) => Some(hit.point),
-                None => wall.map(|distance| ray.origin + *ray.direction * distance),
-            }
+            trace_dot(&ray, range, body, &world, &targets)
         });
         // Replicated, so written only on change.
         match dot {
@@ -89,7 +97,7 @@ struct DotLook {
     material: Handle<StandardMaterial>,
 }
 
-/// A soft disk in every channel, white at the middle and clear at the rim.
+/// White at the middle, clear at the rim, in every channel.
 fn glow(texels: u32) -> Image {
     use bevy::asset::RenderAssetUsages;
     use bevy::image::ImageSampler;
@@ -99,7 +107,6 @@ fn glow(texels: u32) -> Image {
     for y in 0..texels {
         for x in 0..texels {
             let p = (Vec2::new(x as f32, y as f32) + 0.5) / texels as f32 * 2.0 - Vec2::ONE;
-            // A bright core in a fainter halo.
             let r = p.length();
             let core = (1.0 - r / 0.35).clamp(0.0, 1.0);
             let halo = (1.0 - r).clamp(0.0, 1.0).powi(2) * 0.5;
@@ -155,7 +162,6 @@ fn warm_up_the_dot(mut commands: Commands, look: Res<DotLook>) {
     ));
 }
 
-/// Facing `eye`, lifted toward it and widened with distance from it.
 fn dot_transform(at: Vec3, eye: Option<Vec3>) -> Transform {
     let Some(eye) = eye else {
         return Transform::from_translation(at).with_scale(Vec3::splat(SIZE));
@@ -168,33 +174,77 @@ fn dot_transform(at: Vec3, eye: Option<Vec3>) -> Transform {
         .with_scale(Vec3::splat(SIZE.max(distance * SIZE_PER_METER)))
 }
 
+/// The replicated dot trails the mouse by a round trip, so our own is traced
+/// here from this machine's aim. Drawing only.
+#[allow(clippy::type_complexity)]
+fn our_own_dot(
+    catalog: &WeaponCatalog,
+    world: &CollisionWorld,
+    overstep: f32,
+    latch: &InputLatch,
+    body: (Entity, &Transform, &Player, &Stance, &Equipped, &Sights),
+    targets: &Query<(Entity, &Hitboxes)>,
+) -> Option<Vec3> {
+    let (entity, transform, player, stance, equipped, sights) = body;
+    let range = dot_range(sights, equipped, catalog)?;
+    let ray = Ray3d::new(
+        eye(transform.translation, *stance, player.drawn_duck(overstep), player.eye),
+        aim_along(latch.0.yaw, latch.0.pitch),
+    );
+    trace_dot(&ray, range, entity, world, targets)
+}
+
+/// The rechamber lowers the viewed body's rifle as
+/// [`sights::shown`](crate::game::sights::shown) does. Drawing only.
+fn being_worked(body: Entity, equipped: &Equipped, catalog: &WeaponCatalog, rechamber: Option<&Rechamber>) -> bool {
+    rechamber
+        .zip(catalog.held_by(equipped).and_then(|weapon| weapon.scope()))
+        .is_some_and(|(rechamber, scope)| rechamber.down(body, &scope) > 0.0)
+}
+
 /// Ungated, as tracers are: a client draws every body's dot.
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn draw_laser_dots(
     mut commands: Commands,
     look: Res<DotLook>,
+    catalog: Res<WeaponCatalog>,
+    world: Res<CollisionWorld>,
+    fixed: Res<Time<Fixed>>,
+    latch: Option<Res<InputLatch>>,
+    rechamber: Option<Res<Rechamber>>,
     // The view is a root, so its `Transform` is this frame's, where a
     // `GlobalTransform` before propagation is the last frame's.
     eye: Option<Single<&Transform, (With<PlayerCamera>, Without<DotOf>)>>,
-    bodies: Query<&LaserDot>,
+    ours: Option<Single<(Entity, &Transform, &Player, &Stance, &Equipped, &Sights), (With<LocalPlayer>, Without<Dying>, Without<DotOf>, Without<PlayerCamera>)>>,
+    // A dying body keeps its last dot, since the authority stops tracing it.
+    owners: Query<(Entity, &LaserDot, &Equipped), (Without<LocalPlayer>, Without<Dying>)>,
+    targets: Query<(Entity, &Hitboxes)>,
     mut dots: Query<(Entity, &DotOf, &mut Transform)>,
-    owners: Query<(Entity, &LaserDot), Without<DotOf>>,
 ) {
     let eye = eye.map(|eye| eye.translation);
-    let mut drawn = Vec::new();
-    for (entity, of, mut transform) in &mut dots {
-        match bodies.get(of.0) {
-            Ok(LaserDot(Some(at))) => {
-                *transform = dot_transform(*at, eye);
-                drawn.push(of.0);
-            }
-            _ => commands.entity(entity).despawn(),
+    let rechamber = rechamber.as_deref();
+    let mut wanted: Vec<(Entity, Vec3)> = owners
+        .iter()
+        .filter(|(body, _, equipped)| !being_worked(*body, equipped, &catalog, rechamber))
+        .filter_map(|(body, dot, _)| Some((body, dot.0?)))
+        .collect();
+    if let (Some(ours), Some(latch)) = (ours, latch) {
+        let ours = ours.into_inner();
+        if !being_worked(ours.0, ours.4, &catalog, rechamber)
+            && let Some(at) = our_own_dot(&catalog, &world, fixed.overstep_fraction(), &latch, ours, &targets)
+        {
+            wanted.push((ours.0, at));
         }
     }
-    for (body, dot) in &owners {
-        let Some(at) = dot.0 else { continue };
-        if drawn.contains(&body) {
-            continue;
+    for (entity, of, mut transform) in &mut dots {
+        match wanted.iter().position(|(body, _)| *body == of.0) {
+            Some(index) => {
+                *transform = dot_transform(wanted.swap_remove(index).1, eye);
+            }
+            None => commands.entity(entity).despawn(),
         }
+    }
+    for (body, at) in wanted {
         commands.spawn((
             DotOf(body),
             Mesh3d(look.mesh.clone()),
@@ -206,9 +256,8 @@ fn draw_laser_dots(
     }
 }
 
-/// Added in `main.rs` beside `StreakPlugin`: it builds a mesh, an image and a
-/// material, which the game's tests have no assets for. The dot itself is
-/// aimed by `WeaponPlugin`.
+/// Added in `main.rs`, since it builds assets the game's tests have no
+/// plugins for. `WeaponPlugin` aims the dot.
 pub struct LaserDotPlugin;
 
 impl Plugin for LaserDotPlugin {
@@ -251,6 +300,40 @@ mod tests {
         world.get_mut::<Sights>(body).unwrap().raised = 0.9;
         world.run_system_once(aim_the_laser_dots).unwrap();
         assert_eq!(world.get::<LaserDot>(body), Some(&LaserDot(None)));
+    }
+
+    /// Fails if our own dot is drawn where the replicated one says rather than
+    /// along this machine's aim.
+    #[test]
+    fn our_own_dot_follows_our_aim_not_the_server() {
+        let mut world = World::new();
+        world.insert_resource(default_catalog());
+        let mut walls = CollisionWorld::default();
+        walls.rebuild_map(&[Volume::air(Room::new(Vec3::new(-5.0, 0.0, -5.0), Vec3::new(5.0, 4.0, 5.0)))], &[]);
+        world.insert_resource(walls);
+        world.insert_resource(Time::<Fixed>::default());
+        world.insert_resource(DotLook { mesh: Handle::default(), material: Handle::default() });
+        // A quarter turn left, toward -X.
+        let mut latch = InputLatch::default();
+        latch.0.yaw = std::f32::consts::FRAC_PI_2;
+        world.insert_resource(latch);
+        let rifle = WeaponId::of("sniper_rifle");
+        let sighted = Sights { up: true, raised: 1.0, weapon: Some(rifle), button_down: false };
+        world.spawn((
+            Player::default(),
+            LocalPlayer,
+            Transform::from_xyz(0.0, 1.0, 0.0),
+            Stance::default(),
+            Equipped::carrying([rifle]),
+            sighted,
+            LaserDot(Some(Vec3::new(0.0, 1.0, -5.0))),
+        ));
+
+        world.run_system_once(draw_laser_dots).unwrap();
+        world.flush();
+        let drawn: Vec<Vec3> = world.query_filtered::<&Transform, With<DotOf>>().iter(&world).map(|t| t.translation).collect();
+        assert_eq!(drawn.len(), 1, "dots at {drawn:?}");
+        assert!((drawn[0].x + 5.0).abs() < 0.1 && drawn[0].z.abs() < 1.0e-3, "dot at {}", drawn[0]);
     }
 
     /// Fails if the dot does not face the eye, sits behind the surface, or

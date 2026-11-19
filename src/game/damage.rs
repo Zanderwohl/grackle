@@ -84,7 +84,7 @@ impl Plugin for DamagePlugin {
             .add_systems(FixedUpdate, apply_damage.in_set(DamageSystems::Apply))
             .add_systems(
                 FixedUpdate,
-                (suicide, ignite_yourself, behead_yourself, explode_yourself.before(crate::game::explosion::explode)).in_set(DamageSystems::Deal),
+                (suicide, ignite_yourself, behead_yourself.before(explode_yourself), explode_yourself.before(crate::game::explosion::explode)).in_set(DamageSystems::Deal),
             )
             .add_systems(
                 FixedUpdate,

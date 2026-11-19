@@ -84,7 +84,6 @@ impl Plugin for ProtocolPlugin {
 
         // Predicted: never refused, so a client works its own from its presses.
         app.component::<crate::game::sights::Sights>().replicate().predict();
-        // Traced by the authority alone, so it is where the server's shot would land.
         app.component::<crate::game::laser_dot::LaserDot>().replicate();
 
         // Placed props: the model and where, and whether a pickup is there to

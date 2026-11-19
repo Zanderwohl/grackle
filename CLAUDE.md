@@ -2232,8 +2232,8 @@ leaves a whole corpse. A piece striking a surface faster than `GIB_SPLAT_SPEED`
 from its own copy of the piece, so nothing is sent.
 
 **A headshot that kills takes the head off** (`BlownApart::Head`): a hit on the
-head box by a weapon whose `headshot_multiplier` is above one sets
-`Cause::headshot`, and `apply_damage` marks the body. Only the head and what
+head box by a weapon whose `headshot_multiplier` is above one, and not a crit
+(which pays no headshot bonus), sets `Cause::headshot`, and `apply_damage` marks the body. Only the head and what
 hangs from it go, so the corpse is one piece. Blood bursts where the head was
 and fountains from the neck's tail (`Ragdoll::stump`, sent with the seed) for
 `FOUNTAIN_SECONDS`, as the hit spurt's falling lumps (`gib_blood.rs`).
@@ -2945,8 +2945,11 @@ weapon with one and no scope there.
 authority traces the scoped primary's ray each tick, walls and bodies, into a
 replicated `LaserDot` on the body (`None` while not sighted or when the ray
 reaches nothing), and every machine draws one red quad there, facing the view,
-lifted toward it and widened with distance. It is traced on the server rather
-than predicted, so a sniper's own dot trails their aim by a round trip.
+lifted toward it and widened with distance. **The sniper's own machine draws
+its own dot** instead, traced as it draws from the drawn eye along the latch's
+aim (`our_own_dot`), since the replicated one trails the mouse by a round trip;
+it decides nothing, so it is not predicted and never corrected. A rechamber
+hides the viewed body's dot while it has the rifle down, on drawing only.
 `LaserDotPlugin` is added in `main.rs` and joins the shared warm-up; the trace
 is `WeaponPlugin`'s.
 
