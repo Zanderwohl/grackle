@@ -74,14 +74,23 @@ fn admitted<'a>(cameras: &'a Cameras, seat: Seat) -> impl Iterator<Item = (Entit
     cameras
         .iter()
         .filter(move |(_, _, spec, _, _, side)| spec.viewers.admits(seat, side.map(|side| side.0)))
-        .map(|(camera, _, spec, tag, copy, _)| {
-            let (feature, image) = match (tag, copy) {
-                (_, Some(copy)) => (copy.source._id(), copy.image + 1),
-                (Some(tag), None) => (tag.feature_id, 0),
-                (None, None) => (u64::MAX, 0),
-            };
-            (camera, (spec.order, feature, image))
-        })
+        .map(|(camera, _, spec, tag, copy, _)| (camera, rank_of(spec, tag, copy)))
+}
+
+/// Every camera, whoever may look through it, ranked as [`cameras_for`] ranks them.
+pub fn every_camera(cameras: &Cameras) -> Vec<(Entity, CameraRank)> {
+    let mut all: Vec<(Entity, CameraRank)> = cameras.iter().map(|(camera, _, spec, tag, copy, _)| (camera, rank_of(spec, tag, copy))).collect();
+    rank(&mut all);
+    all
+}
+
+fn rank_of(spec: &SpectatorCameraSpec, tag: Option<&FeatureTag>, copy: Option<&MirrorCopy>) -> CameraRank {
+    let (feature, image) = match (tag, copy) {
+        (_, Some(copy)) => (copy.source._id(), copy.image + 1),
+        (Some(tag), None) => (tag.feature_id, 0),
+        (None, None) => (u64::MAX, 0),
+    };
+    (spec.order, feature, image)
 }
 
 /// The cameras `seat` may look through, ranked.

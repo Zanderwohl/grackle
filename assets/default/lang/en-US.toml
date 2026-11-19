@@ -76,6 +76,8 @@ auto_rooms = "Auto-bake Rooms"
 sunlight = "Sunlight"
 auto_sunlight = "Auto-bake Sunlight"
 halfbright = "Halfbright (skip sunlight)"
+postcards = "Postcards"
+auto_postcards = "Auto-bake Postcards"
 
 [bakes.doing]
 surface = "The map's surface"
@@ -91,12 +93,17 @@ reach = "What can be reached"
 knockback = "Knockback"
 routes = "Pickups and traffic"
 sight = "Sightlines"
+top_down = "Top-down view"
+
+[bakes.postcard]
+not_generated = "Not generated"
 
 [bakes.kind]
 rooms = "Rooms"
 sunlight = "Sunlight"
 nav = "Nav graph"
 sight = "Sightlines"
+postcards = "Postcards"
 
 [bakes.progress]
 status = "Step { step }/{ steps }: { doing }"
@@ -363,6 +370,10 @@ sun_azimuth = "Sun azimuth"
 ambient = "Ambient"
 sun_brightness = "Sun brightness"
 sky_brightness = "Sky brightness"
+postcards = "Postcards"
+postcard_slot = "Slot { number }"
+postcard_none = "None"
+postcard_missing = "Missing camera"
 
 [editor.features.global_point]
 title = "Global Point"

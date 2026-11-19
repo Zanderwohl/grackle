@@ -52,6 +52,8 @@ auto_rooms = "Räume automatisch backen"
 sunlight = "Sonnenlicht"
 auto_sunlight = "Sonnenlicht automatisch backen"
 halfbright = "Halbhell (Sonnenlicht überspringen)"
+postcards = "Postkarten"
+auto_postcards = "Postkarten automatisch backen"
 
 [show]
 title = "Ein-/Ausblenden"
@@ -110,6 +112,10 @@ sun_azimuth = "Sonnenazimut"
 ambient = "Umgebungslicht"
 sun_brightness = "Sonnenhelligkeit"
 sky_brightness = "Himmelshelligkeit"
+postcards = "Postkarten"
+postcard_slot = "Platz { number }"
+postcard_none = "Keine"
+postcard_missing = "Kamera fehlt"
 
 [editor.features.global_point]
 title = "Globaler Punkt"
