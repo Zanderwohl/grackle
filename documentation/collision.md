@@ -174,9 +174,9 @@ normal, or a body settled onto it each tick creeps down it.
       than sliding the camera along the wall.
 - [x] Tests through `step_player`: standing still on 30°, walking up it,
       sliding off 60°, coming to rest in a V.
-- [ ] **Release fingerprint**: the ragdoll's release-profile number in
-      `the_solver_reaches_the_same_bits_it_always_has` is the Stage 1 one and
-      is now stale; `cargo test --release` fails there until it is re-recorded.
+- [x] **Release fingerprint**: the ragdoll's pinned numbers are gone;
+      `one_seed_reaches_the_same_bits_twice` checks determinism within one
+      build, which needs nothing re-recorded.
 
 ### Stage 3 — the world surface
 
