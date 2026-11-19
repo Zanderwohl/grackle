@@ -95,6 +95,13 @@ impl Swatch {
         }
     }
 
+    /// The base's hue turned 180° in OKLCH, lightness and chroma kept, so it reads as bright. A hue
+    /// that cannot hold the chroma in sRGB loses only chroma.
+    pub fn complement(&self) -> Self {
+        let base = Oklcha::from(self.base);
+        Self::from_oklch(base.lightness, base.chroma, (base.hue + 180.0).rem_euclid(360.0))
+    }
+
     /// The same hue and chroma, `by` lighter in OKLCH lightness (darker when negative).
     pub fn lightened(&self, by: f32) -> Self {
         let base = Oklcha::from(self.base);
@@ -170,6 +177,20 @@ mod tests {
 
     fn lightness(c: Color) -> f32 {
         Oklcha::from(c).lightness
+    }
+
+    /// Breaks if a complement is not opposite in hue, changes lightness, or does not turn back.
+    #[test]
+    fn a_complement_is_opposite_in_hue_and_as_light() {
+        let hue = |c: Color| Oklcha::from(c).hue;
+        let apart = |a: f32, b: f32| ((a - b + 540.0).rem_euclid(360.0) - 180.0).abs();
+        let players = (0..8).map(|i| Swatch::player(PlayerColor::nth(0.0, i)));
+        for swatch in [Team::Red, Team::Blue, Team::Yellow, Team::Green].map(Swatch::team).into_iter().chain(players) {
+            let complement = swatch.complement();
+            assert!((lightness(complement.base) - lightness(swatch.base)).abs() < 1e-3, "{swatch:?} changed lightness");
+            assert!((apart(hue(complement.base), hue(swatch.base)) - 180.0).abs() < 0.5, "{swatch:?} is not opposite");
+            assert!(apart(hue(complement.complement().base), hue(swatch.base)) < 0.5, "{swatch:?} does not turn back");
+        }
     }
 
     #[test]

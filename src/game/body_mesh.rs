@@ -46,7 +46,7 @@ pub struct FirstPersonHidden;
 /// A body's color when it has no team and no [`PlayerColor`], which both
 /// outrank it: who a body is, and above all which side, is what must read
 /// across a room.
-#[derive(Component, Clone, Copy, Debug)]
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
 pub struct BodyTint(pub Color);
 
 pub const DEFAULT_BODY_COLOR: Color = Color::srgb(0.62, 0.64, 0.70);

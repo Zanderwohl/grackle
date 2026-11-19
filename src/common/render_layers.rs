@@ -39,6 +39,10 @@ pub const INSIDE_HEAD: usize = 6;
 /// [`crate::game::class_picker`].
 pub const PORTRAIT: usize = 7;
 
+/// The HUD's portrait of the viewed body: its copy, camera and lights. See
+/// [`crate::game::hud_portrait`].
+pub const HUD_PORTRAIT: usize = 8;
+
 /// The editor's 2D shape painter and the egui camera.
 pub const PAINTER: usize = 31;
 
@@ -47,13 +51,32 @@ pub fn body_layers(inside_head: bool) -> bevy::camera::visibility::RenderLayers 
     bevy::camera::visibility::RenderLayers::layer(if inside_head { INSIDE_HEAD } else { WORLD })
 }
 
+/// A body part's, hat's or held weapon's layers: its body's own when the body is drawn somewhere
+/// of its own (a portrait), else [`body_layers`].
+pub fn part_layers(
+    body: Option<&bevy::camera::visibility::RenderLayers>,
+    inside_head: bool,
+) -> bevy::camera::visibility::RenderLayers {
+    body.cloned().unwrap_or_else(|| body_layers(inside_head))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// Breaks if a part of a body drawn somewhere of its own is put on the world, or inside the head.
+    #[test]
+    fn a_part_takes_its_bodys_own_layers() {
+        use bevy::camera::visibility::RenderLayers;
+        let portrait = RenderLayers::layer(HUD_PORTRAIT);
+        assert_eq!(part_layers(Some(&portrait), true), portrait);
+        assert_eq!(part_layers(None, true), RenderLayers::layer(INSIDE_HEAD));
+        assert_eq!(part_layers(None, false), RenderLayers::layer(WORLD));
+    }
+
     #[test]
     fn no_two_features_share_a_layer() {
-        let all = [WORLD, VIEWMODEL, EDITOR_ONLY, THUMBNAIL, GIZMOS, WARM_UP, INSIDE_HEAD, PORTRAIT, PAINTER];
+        let all = [WORLD, VIEWMODEL, EDITOR_ONLY, THUMBNAIL, GIZMOS, WARM_UP, INSIDE_HEAD, PORTRAIT, HUD_PORTRAIT, PAINTER];
         for (i, a) in all.iter().enumerate() {
             for b in &all[i + 1..] {
                 assert_ne!(a, b, "two features claim layer {a}");
