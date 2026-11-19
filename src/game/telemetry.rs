@@ -31,6 +31,7 @@ use crate::game::bot_think::{BotThought, Want};
 use crate::game::player::{PhysicsBody, Player};
 use crate::game::respawn::Identity;
 use crate::game::score::{ranked, Standing};
+use crate::game::sights::Sights;
 use crate::game::world_prop::{PickupTaken, PickupWhat};
 use crate::tool::nav_bake::NavBake;
 use crate::get;
@@ -96,6 +97,8 @@ pub struct KillRecord {
     pub weapon: Option<String>,
     pub how: How,
     pub reflected: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub headshot: bool,
     /// Meters from the killer's feet to the victim's.
     pub distance: Option<f32>,
     /// Seconds since the victim last spawned.
@@ -113,6 +116,9 @@ pub struct Sampled {
     pub armor: u32,
     pub weapon: Option<String>,
     pub want: Option<String>,
+    /// Looking through a scope.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub sighted: bool,
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
@@ -125,7 +131,19 @@ pub enum Event {
     Spawn { t: f32, id: u64, at: [f32; 3], yaw: f32 },
     /// The Round tab's bot skill changed mid-round.
     Skill { t: f32, bot_skill: BotSkill },
-    Damage { t: f32, target: Option<u64>, by: Option<u64>, amount: u32, remaining: u32, weapon: Option<String>, how: How, reflected: bool, at: [f32; 3] },
+    Damage {
+        t: f32,
+        target: Option<u64>,
+        by: Option<u64>,
+        amount: u32,
+        remaining: u32,
+        weapon: Option<String>,
+        how: How,
+        reflected: bool,
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        headshot: bool,
+        at: [f32; 3],
+    },
     Kill(KillRecord),
     Pickup { t: f32, by: Option<u64>, what: String, at: [f32; 3] },
     /// A bot going for something else. A retreat is a turn to health or cover with an enemy in
@@ -282,6 +300,7 @@ pub(crate) fn want_name(want: Want) -> String {
         Want::Hunt => "hunt",
         Want::Cover => "cover",
         Want::Ambush => "ambush",
+        Want::Camp => "camp",
         Want::Roam => "roam",
     }
     .to_owned()
@@ -366,6 +385,7 @@ type Bodies<'w, 's> = Query<
         Option<&'static Equipped>,
         Option<&'static BotThought>,
         Option<(&'static RouteCosts, &'static BotMind)>,
+        Option<&'static Sights>,
     ),
 >;
 
@@ -378,7 +398,7 @@ fn watch_bodies(
     standings: Query<&Standing>,
 ) {
     let t = time.elapsed_secs() - round.started;
-    for (entity, id, body, stance, player, health, armor, _, thought, temperament) in &bodies {
+    for (entity, id, body, stance, player, health, armor, _, thought, temperament, _) in &bodies {
         let named = standings.iter().find(|standing| standing.id == *id).map(|standing| standing.name.as_str());
         let at = point(crate::game::bot::feet_of(body, *stance));
         let temperament = temperament.map(|(route, mind)| Temperament { route: *route, mind: *mind });
@@ -446,6 +466,7 @@ fn note_damage(mut round: ResMut<Round>, time: Res<Time>, mut dealt: MessageRead
             weapon: weapon_key(catalog.as_deref(), hit.cause.weapon),
             how: hit.cause.how,
             reflected: hit.cause.reflected,
+            headshot: hit.cause.headshot,
             at: point(hit.point),
         };
         round.write(&event);
@@ -472,7 +493,7 @@ fn note_kills(mut round: ResMut<Round>, time: Res<Time>, mut died: MessageReader
             let (a, b) = (Vec3::from_array(killer.at), Vec3::from_array(party.at));
             (a.distance(b) * 100.0).round() / 100.0
         });
-        let record = KillRecord { t, victim: party, killer, assist, weapon: weapon_key(catalog.as_deref(), cause.weapon), how: cause.how, reflected: cause.reflected, distance, life, damage };
+        let record = KillRecord { t, victim: party, killer, assist, weapon: weapon_key(catalog.as_deref(), cause.weapon), how: cause.how, reflected: cause.reflected, headshot: cause.headshot, distance, life, damage };
         if round.open {
             info!("kill {}", ron::to_string(&record).expect("a kill is plain data"));
         }
@@ -557,7 +578,7 @@ fn sample(mut round: ResMut<Round>, time: Res<Time>, bodies: Bodies, catalog: Op
     round.next_sample = t + SAMPLE_EVERY;
     let mut sampled: Vec<Sampled> = bodies
         .iter()
-        .map(|(_, id, body, stance, player, health, armor, equipped, thought, _)| Sampled {
+        .map(|(_, id, body, stance, player, health, armor, equipped, thought, _, sights)| Sampled {
             id: id.0,
             at: point(crate::game::bot::feet_of(body, *stance)),
             yaw: (player.yaw * 1000.0).round() / 1000.0,
@@ -565,6 +586,7 @@ fn sample(mut round: ResMut<Round>, time: Res<Time>, bodies: Bodies, catalog: Op
             armor: armor.map_or(0, Armor::points),
             weapon: weapon_key(catalog.as_deref(), equipped.and_then(Equipped::held)),
             want: thought.and_then(|thought| thought.chosen).map(|chosen| want_name(chosen.want)),
+            sighted: sights.is_some_and(Sights::sighted),
         })
         .collect();
     sampled.sort_by_key(|body| body.id);

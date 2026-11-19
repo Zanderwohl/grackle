@@ -80,8 +80,9 @@ pub enum BeatKind {
     Extinguish { button: Button },
     /// Fire straight down on a jump from a standstill.
     RocketJump { button: Button },
-    /// Raise the sights, fire the primary once they are up, and lower them.
-    Scoped { button: Button, distance: f32, raise: f32 },
+    /// Raise the sights, fire the primary once they are up, and lower them; at the head, or at
+    /// the body.
+    Scoped { button: Button, distance: f32, raise: f32, head: bool },
     /// The button does nothing yet; press it anyway.
     Stub { button: Button },
     /// Draw the weapon from another.
@@ -112,8 +113,11 @@ impl Beat {
             BeatKind::Reflect { button: b } => get!("weapon_editor.beats.reflect", "button", button(b)),
             BeatKind::Extinguish { button: b } => get!("weapon_editor.beats.extinguish", "button", button(b)),
             BeatKind::RocketJump { button: b } => get!("weapon_editor.beats.rocket_jump", "button", button(b)),
-            BeatKind::Scoped { button: b, distance, .. } => {
+            BeatKind::Scoped { button: b, distance, head: false, .. } => {
                 get!("weapon_editor.beats.scoped", "button", button(b), "distance", format!("{distance:.0}"))
+            }
+            BeatKind::Scoped { button: b, distance, head: true, .. } => {
+                get!("weapon_editor.beats.scoped_head", "button", button(b), "distance", format!("{distance:.0}"))
             }
             BeatKind::Stub { button: b } => get!("weapon_editor.beats.stub", "button", button(b)),
             BeatKind::Deploy => get!("weapon_editor.beats.deploy"),
@@ -122,8 +126,12 @@ impl Beat {
     }
 }
 
-/// Seconds a [`BeatKind::Scoped`] beat holds the sights up.
+/// Seconds a [`BeatKind::Scoped`] beat holds the sights up, and meters to its target.
 const SCOPED_HOLD: f32 = 1.0;
+const SCOPED_DISTANCE: f32 = 20.0;
+/// Seconds each press of a scripted beat is held. Longer than a tick, so no tick misses it; the
+/// sights toggle as the button goes down, so holding it is still one toggle.
+const PRESS: f32 = 0.1;
 
 pub fn beats_for(button: Button, mounted: &Mounted) -> Vec<Beat> {
     let shot = mounted.cadence.interval().max(0.1);
@@ -173,10 +181,12 @@ pub fn beats_for(button: Button, mounted: &Mounted) -> Vec<Beat> {
             }
             beats
         }
-        WeaponAction::Scope(spec) => vec![Beat {
-            kind: BeatKind::Scoped { button, distance: 15.0, raise: spec.raise },
-            length: LEAD_IN + spec.raise + SCOPED_HOLD + spec.lower + 1.0,
-        }],
+        WeaponAction::Scope(spec) => [false, true]
+            .map(|head| Beat {
+                kind: BeatKind::Scoped { button, distance: SCOPED_DISTANCE, raise: spec.raise, head },
+                length: LEAD_IN + spec.raise + SCOPED_HOLD + spec.lower + 1.0,
+            })
+            .to_vec(),
         WeaponAction::HealBeam(_) | WeaponAction::Invulnerable(_) => {
             vec![Beat { kind: BeatKind::Stub { button }, length: LEAD_IN + 1.5 }]
         }
@@ -407,7 +417,7 @@ fn direct(
     world: Res<CollisionWorld>,
     rules: Res<MovementRules>,
     mut show: ResMut<RangeShow>,
-    mut puppets: Query<(Entity, &RangePuppet, &PhysicsBody, &Player, &mut Inputs, &Ammo)>,
+    mut puppets: Query<(Entity, &RangePuppet, &PhysicsBody, &Player, &mut Inputs, &Ammo, &crate::common::hitbox::Hitboxes)>,
     projectiles: Query<(Entity, &PhysicsBody), With<Projectile>>,
     corpses: Query<Entity, With<Ragdoll>>,
 ) {
@@ -477,23 +487,27 @@ fn direct(
     let t = show.elapsed - LEAD_IN;
     let kind = show.beats[show.current].kind;
     let shooter = puppets.iter().find(|(_, puppet, ..)| puppet.0 == Role::Shooter).map(|(entity, _, body, player, ..)| (entity, body.current, player.eye));
-    let target = puppets.iter().find(|(_, puppet, ..)| puppet.0 != Role::Shooter).map(|(_, _, body, player, ..)| (body.current, player.velocity));
+    let target = puppets
+        .iter()
+        .find(|(_, puppet, ..)| puppet.0 != Role::Shooter)
+        .map(|(_, _, body, player, _, _, boxes)| (body.current, player.velocity, boxes.head.map_or(eye_of(body.current, player.eye), |head| head.center)));
     let incoming = shooter.and_then(|(_, at, _)| {
         projectiles.iter().map(|(_, body)| body.current).min_by(|a, b| a.distance(at).total_cmp(&b.distance(at)))
     });
-    if let Some((_, velocity)) = target {
+    if let Some((_, velocity, _)) = target {
         show.tally.fastest = show.tally.fastest.max(velocity.length());
     }
 
-    for (_, puppet, body, player, mut inputs, ammo) in &mut puppets {
+    for (_, puppet, body, player, mut inputs, ammo, _) in &mut puppets {
         let eye = eye_of(body.current, player.eye);
         let mut input = PlayerInput { yaw: player.yaw, pitch: player.pitch, ..default() };
         match puppet.0 {
             Role::Shooter => {
-                if let Some((center, velocity)) = target {
+                if let Some((center, velocity, head)) = target {
                     let feet = center - Vec3::Y * CLASS_HALF_EXTENTS.y;
                     let point = match kind {
                         BeatKind::Shoot { button, .. } => aim_point(&world, eye, center, feet, velocity, action(weapon, button), rules.gravity),
+                        BeatKind::Scoped { head: true, .. } => head,
                         _ => center,
                     };
                     (input.yaw, input.pitch) = aim_at(eye, point);
@@ -569,12 +583,12 @@ fn shooter_presses(kind: BeatKind, t: f32, input: &mut PlayerInput, weapon: &cra
             }
         }
         BeatKind::Scoped { button, raise, .. } => {
-            // A frame past the raise, so the shot is the scoped one.
+            // Past the raise, so the shot is the scoped one.
             let up = raise + 0.1;
-            let tick = crate::constants::one_tick().as_secs_f32();
-            if t < tick || (up + SCOPED_HOLD..up + SCOPED_HOLD + tick).contains(&t) {
+            let down = up + SCOPED_HOLD;
+            if t < PRESS || (down..down + PRESS).contains(&t) {
                 press(input, button);
-            } else if (up..up + 0.05).contains(&t) {
+            } else if (up..up + PRESS).contains(&t) {
                 press(input, Button::Primary);
             }
         }
@@ -602,7 +616,7 @@ fn next_on(off: &[bool], from: usize, forward: bool) -> Option<usize> {
 
 fn clear(
     commands: &mut Commands,
-    puppets: &Query<(Entity, &RangePuppet, &PhysicsBody, &Player, &mut Inputs, &Ammo)>,
+    puppets: &Query<(Entity, &RangePuppet, &PhysicsBody, &Player, &mut Inputs, &Ammo, &crate::common::hitbox::Hitboxes)>,
     projectiles: &Query<(Entity, &PhysicsBody), With<Projectile>>,
     corpses: &Query<Entity, With<Ragdoll>>,
 ) {
@@ -997,6 +1011,81 @@ mod tests {
         app.update();
         let mut puppets = app.world_mut().query::<&RangePuppet>();
         assert_eq!(puppets.iter(app.world()).count(), 0, "puppets outlived the range");
+    }
+
+    /// Fails if the range's scoped beats do not raise the sights, fire the scoped primary once
+    /// they are up, and lower them again, or aim the head beat anywhere but higher.
+    #[test]
+    fn the_scoped_beats_raise_fire_and_lower() {
+        use crate::game::sights::Sights;
+        use crate::game::weapon::WeaponActionFired;
+        use std::time::Duration;
+
+        #[derive(Resource, Default)]
+        struct Fired(Vec<WeaponAction>);
+        fn collect(mut fired: MessageReader<WeaponActionFired>, mut seen: ResMut<Fired>) {
+            seen.0.extend(fired.read().map(|fired| fired.action));
+        }
+
+        let mut app = App::new();
+        app.add_plugins(bevy::state::app::StatesPlugin)
+            .add_plugins(bevy::input::InputPlugin)
+            .add_plugins(bevy::time::TimePlugin)
+            .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(Duration::from_secs_f64(1.0 / 64.0)))
+            .add_plugins(crate::game::GamePlugin)
+            .add_plugins((crate::game::hitbox::HitboxPlugin, crate::game::weapon::WeaponPlugin))
+            .init_resource::<Assets<Mesh>>()
+            .init_resource::<Assets<StandardMaterial>>()
+            .init_resource::<Assets<crate::common::air_lit::LitMaterial>>()
+            .init_resource::<Fired>()
+            .add_systems(FixedPostUpdate, collect)
+            .add_plugins(RangePlugin);
+        let mut editor = WeaponEditor::default();
+        editor.open(crate::common::weapon_file::read_pack_weapons(
+            &crate::common::assets::Assets::default(),
+            &crate::common::assets::default_packs(),
+        ));
+        editor.selected = editor.weapons.iter().position(|weapon| weapon.key == "sniper_rifle");
+        app.insert_resource(editor).insert_resource(default_catalog());
+        app.world_mut().resource_mut::<NextState<AppMode>>().set(AppMode::Weapon);
+        app.update();
+        app.update();
+
+        let scoped_damage = |action: &WeaponAction| match action {
+            WeaponAction::Hitscan(spec) => Some(spec.damage),
+            _ => None,
+        };
+        let catalog = default_catalog();
+        let rifle = catalog.get(WeaponId::of("sniper_rifle")).unwrap();
+        let wanted = rifle.scoped_primary.and_then(|mounted| scoped_damage(&mounted.action)).unwrap();
+        let beats = app.world().resource::<RangeShow>().beats.clone();
+        let mut pitches = Vec::new();
+        for head in [false, true] {
+            let index = beats.iter().position(|beat| matches!(beat.kind, BeatKind::Scoped { head: h, .. } if h == head)).expect("a scoped beat");
+            {
+                let mut show = app.world_mut().resource_mut::<RangeShow>();
+                show.off = (0..show.beats.len()).map(|other| other != index).collect();
+                show.restart = true;
+            }
+            app.world_mut().resource_mut::<Fired>().0.clear();
+            let (mut sighted, mut lowered_after, mut pitch) = (false, false, None::<f32>);
+            for _ in 0..(beats[index].length * 64.0) as usize - 2 {
+                app.update();
+                let mut shooters = app.world_mut().query::<(&RangePuppet, &Sights, &Player)>();
+                let Some((_, sights, player)) = shooters.iter(app.world()).find(|(puppet, ..)| puppet.0 == Role::Shooter) else { continue };
+                sighted |= sights.sighted();
+                lowered_after |= sighted && !sights.up;
+                if sights.sighted() {
+                    pitch = Some(player.pitch);
+                }
+            }
+            let fired = &app.world().resource::<Fired>().0;
+            assert!(sighted, "head {head}: the sights never came up");
+            assert!(lowered_after, "head {head}: the sights never went down");
+            assert_eq!(fired.iter().filter_map(scoped_damage).collect::<Vec<_>>(), vec![wanted], "head {head}: {fired:?}");
+            pitches.push(pitch.unwrap());
+        }
+        assert!(pitches[1] > pitches[0] + 0.01, "the head beat aimed no higher than the body's: {pitches:?}");
     }
 
     #[test]

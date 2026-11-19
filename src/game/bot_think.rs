@@ -73,6 +73,23 @@ const STANDOFF_TRIES: usize = 24;
 const BLOCKED_NEAR: f32 = 2.0;
 /// Meters above a cell's floor and a quarry's feet the line between them is checked at.
 const SIGHT_HEIGHT: f32 = 1.4;
+/// Meters of standoff past which a held weapon is a long-range one, which a bot may camp with.
+pub const LONG_RANGE: f32 = crate::game::bot_fight::FURTHEST_STANDOFF;
+/// The camp places kept, the least camp value one may have, and the meters a camp's watched floor
+/// is at least away.
+const CAMPS: usize = 48;
+const LEAST_CAMP: f32 = 0.35;
+const WATCHED_FROM: f32 = 10.0;
+/// Meters of median engagement range at which a cell's long sightlines count in full.
+const CAMP_RANGE: f32 = 20.0;
+/// With a long-range weapon in hand, the share of their worth a weapon not carried and an enemy
+/// out of sight keep: it means to keep the weapon drawn and pick enemies off from afar.
+const LONG_RANGE_ARMS: f32 = 0.5;
+const LONG_RANGE_HUNT: f32 = 0.5;
+/// Seconds a camp is left alone once held for a bot's patience.
+const CAMP_REST: f32 = 20.0;
+/// Meters above the floor a camp watches.
+const WATCH_HEIGHT: f32 = 1.4;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Want {
@@ -83,11 +100,13 @@ pub enum Want {
     Hunt,
     Cover,
     Ambush,
+    /// Somewhere that sees far and is little seen, with a long-range weapon in hand.
+    Camp,
     Roam,
 }
 
 impl Want {
-    pub const ALL: [Want; 7] = [Want::Health, Want::Armor, Want::Arms, Want::Hunt, Want::Cover, Want::Ambush, Want::Roam];
+    pub const ALL: [Want; 8] = [Want::Health, Want::Armor, Want::Arms, Want::Hunt, Want::Cover, Want::Ambush, Want::Camp, Want::Roam];
 
     pub fn name(self) -> String {
         match self {
@@ -97,6 +116,7 @@ impl Want {
             Want::Hunt => get!("bot.want.hunt"),
             Want::Cover => get!("bot.want.cover"),
             Want::Ambush => get!("bot.want.ambush"),
+            Want::Camp => get!("bot.want.camp"),
             Want::Roam => get!("bot.want.roam"),
         }
     }
@@ -111,16 +131,17 @@ pub struct Drives {
     pub hunt: f32,
     pub cover: f32,
     pub ambush: f32,
+    pub camp: f32,
     pub roam: f32,
     /// Times [`COMMITMENT`].
     pub stubbornness: f32,
-    /// Seconds an ambush is held with nobody coming.
+    /// Seconds an ambush or a camp is held with nobody coming.
     pub patience: f32,
 }
 
 impl Default for Drives {
     fn default() -> Self {
-        Drives { health: 1.0, armor: 0.6, arms: 0.7, hunt: 0.8, cover: 0.9, ambush: 0.3, roam: 1.0, stubbornness: 1.0, patience: 10.0 }
+        Drives { health: 1.0, armor: 0.6, arms: 0.7, hunt: 0.8, cover: 0.9, ambush: 0.3, camp: 1.0, roam: 1.0, stubbornness: 1.0, patience: 10.0 }
     }
 }
 
@@ -140,6 +161,7 @@ impl Drives {
             hunt: roll(base.hunt),
             cover: roll(base.cover),
             ambush: roll(base.ambush),
+            camp: roll(base.camp),
             roam: roll(base.roam),
             stubbornness: roll(base.stubbornness),
             patience: rand::random_range(PATIENCE),
@@ -195,7 +217,12 @@ pub struct Situation {
     pub cover: Option<Vec3>,
     /// An ambush place, as feet, the seconds to it, and how much of its hold is left.
     pub ambush: Option<(Vec3, f32, f32)>,
+    /// A camp place, as feet, the seconds to it, how much of its hold is left and its camp value,
+    /// while a long-range weapon is in hand.
+    pub camp: Option<(Vec3, f32, f32, f32)>,
     pub roam: Option<Vec3>,
+    /// A long-range weapon in hand.
+    pub long_range: bool,
 }
 
 fn nearness(seconds: f32) -> f32 {
@@ -211,7 +238,10 @@ pub fn candidates(situation: &Situation, drives: &Drives) -> Vec<Candidate> {
             // Armor once health is seen to, not instead of it.
             Offer::Armor => (Want::Armor, (1.0 - s.armor) * s.health * drives.armor),
             Offer::Ammo => (Want::Arms, s.ammo_missing * drives.arms),
-            Offer::Weapon { carried: false, .. } => (Want::Arms, drives.arms * (1.0 + if s.unarmed { FIRST_WEAPON * nearness(seconds) } else { 0.0 })),
+            Offer::Weapon { carried: false, .. } => (
+                Want::Arms,
+                drives.arms * (1.0 + if s.unarmed { FIRST_WEAPON * nearness(seconds) } else { 0.0 }) * if s.long_range { LONG_RANGE_ARMS } else { 1.0 },
+            ),
             Offer::Weapon { carried: true, missing } => (Want::Arms, missing * drives.arms),
         };
         if need > 0.0 {
@@ -221,13 +251,17 @@ pub fn candidates(situation: &Situation, drives: &Drives) -> Vec<Candidate> {
     // A bot hunts as boldly as it is healthy and armed.
     let boldness = s.health * (1.0 - 0.5 * s.ammo_missing) * drives.hunt;
     for &(at, freshness) in &s.enemies {
-        out.push(Candidate { want: Want::Hunt, goal: Goal::Place(at), score: boldness * freshness });
+        let unseen = if s.long_range && freshness < 1.0 { LONG_RANGE_HUNT } else { 1.0 };
+        out.push(Candidate { want: Want::Hunt, goal: Goal::Place(at), score: boldness * freshness * unseen });
     }
     if let (Some(at), true) = (s.cover, s.threatened) {
         out.push(Candidate { want: Want::Cover, goal: Goal::Place(at), score: (1.0 - s.health) * drives.cover });
     }
     if let Some((at, seconds, left)) = s.ambush {
         out.push(Candidate { want: Want::Ambush, goal: Goal::Place(at), score: s.health * left * nearness(seconds) * drives.ambush });
+    }
+    if let Some((at, seconds, left, value)) = s.camp {
+        out.push(Candidate { want: Want::Camp, goal: Goal::Place(at), score: s.health * left * value * (0.5 + 0.5 * nearness(seconds)) * drives.camp });
     }
     if let Some(at) = s.roam {
         out.push(Candidate { want: Want::Roam, goal: Goal::Place(at), score: ROAM_SCORE * drives.roam });
@@ -369,6 +403,8 @@ fn missing(weapon: WeaponId, ammo: &Ammo, catalog: &WeaponCatalog) -> f32 {
 pub struct MapIndex {
     generation: Option<u64>,
     ambushes: Vec<CellId>,
+    /// The best places to camp, with their camp value and the place each watches.
+    camps: Vec<(CellId, f32, Vec3)>,
     squares: std::collections::HashMap<IVec2, Vec<CellId>>,
 }
 
@@ -387,6 +423,7 @@ impl MapIndex {
         for cell in cells {
             self.squares.entry(square_of(graph.cells()[cell as usize].feet)).or_default().push(cell);
         }
+        self.camps = camps(graph, self);
         self.generation = Some(generation);
     }
 
@@ -400,6 +437,49 @@ impl MapIndex {
             .copied()
             .filter(move |cell| graph.cells()[*cell as usize].feet.distance(at) <= radius)
     }
+}
+
+/// 0 to 1. `reference` is the sight of the map's most seeing places; being seen from more than half
+/// of it costs up to half the value.
+pub fn camp_value(graph: &NavGraph, cell: CellId, reference: f32) -> Option<f32> {
+    if graph.cells()[cell as usize].hurt > 0 || Rating::Precarious.holds(graph, cell)? {
+        return Some(0.0);
+    }
+    let sight = graph.field(cell, Field::Sight)?;
+    let exposure = graph.field(cell, Field::Exposure)?;
+    let range = graph.field(cell, Field::RangeMedian)?;
+    let seen = ((exposure / reference.max(1.0) - 0.5) / 0.5).clamp(0.0, 1.0);
+    Some((sight / reference.max(1.0)).min(1.0) * (1.0 - 0.5 * seen) * (range / CAMP_RANGE).min(1.0))
+}
+
+/// The [`CAMPS`] best camp places at or over [`LEAST_CAMP`], best first, each with the busiest
+/// floor it sees from [`WATCHED_FROM`] or more away, within the sightlines' reach. Empty until the
+/// sightlines are baked.
+fn camps(graph: &NavGraph, index: &MapIndex) -> Vec<(CellId, f32, Vec3)> {
+    let fields = graph.fields();
+    if !fields.has_sight() || fields.sight.is_empty() {
+        return Vec::new();
+    }
+    let mut sights = fields.sight.clone();
+    sights.sort_by(f32::total_cmp);
+    let reference = sights[(sights.len() * 95 / 100).min(sights.len() - 1)];
+    let cells = graph.cells();
+    let mut scored: Vec<(CellId, f32)> =
+        (0..cells.len() as CellId).filter_map(|cell| Some((cell, camp_value(graph, cell, reference)?))).filter(|(_, value)| *value >= LEAST_CAMP).collect();
+    scored.sort_by(|a, b| b.1.total_cmp(&a.1));
+    scored.truncate(CAMPS);
+    scored
+        .into_iter()
+        .filter_map(|(cell, value)| {
+            let feet = cells[cell as usize].feet;
+            // Past its reach `could_see` is a maybe, not a yes.
+            let watched = index
+                .near(graph, feet, crate::game::nav_field::SIGHT_RANGE)
+                .filter(|other| cells[*other as usize].feet.distance(feet) >= WATCHED_FROM && fields.sightlines.could_see(cell, *other))
+                .max_by(|a, b| graph.field(*a, Field::Traffic).unwrap_or(0.0).total_cmp(&graph.field(*b, Field::Traffic).unwrap_or(0.0)))?;
+            Some((cell, value, cells[watched as usize].feet + Vec3::Y * WATCH_HEIGHT))
+        })
+        .collect()
 }
 
 #[allow(clippy::type_complexity)]
@@ -456,14 +536,14 @@ pub fn think(
                 if let Some(quarry) = thought.quarry.filter(|_| want == Want::Hunt) {
                     thought.rest(Goal::Place(quarry), now + UNREACHABLE_REST);
                 }
-            } else if arrived && want == Want::Ambush {
+            } else if arrived && matches!(want, Want::Ambush | Want::Camp) {
                 let held = match thought.held {
                     Some((held, seconds)) if same_goal(held, goal) => seconds + dt,
                     _ => dt,
                 };
                 thought.held = Some((goal, held));
                 if held >= mind.drives.patience {
-                    thought.rest(goal, now + AMBUSH_REST);
+                    thought.rest(goal, now + if want == Want::Camp { CAMP_REST } else { AMBUSH_REST });
                 }
             } else if arrived && (want == Want::Roam || (want == Want::Hunt && !senses.known.iter().any(|known| known.in_sight))) {
                 // Looked there and found nothing: not again until the memory is gone. A hunt
@@ -594,9 +674,23 @@ pub fn think(
             (least + COVER_GAIN <= mine).then(|| graph.cells()[best as usize].feet)
         });
 
-        if current.is_none_or(|(want, _)| want != Want::Ambush) {
+        if current.is_none_or(|(want, _)| !matches!(want, Want::Ambush | Want::Camp)) {
             thought.held = None;
         }
+        let left_of = |at: Vec3| match thought.held {
+            Some((held, seconds)) if same_goal(held, Goal::Place(at)) => (1.0 - seconds / mind.drives.patience).max(0.0),
+            _ => 1.0,
+        };
+        // `fight`'s standoff is the weapon in hand's, or the one it is drawing.
+        let long_range = intent.standoff.is_some_and(|range| range > LONG_RANGE);
+        let camp = index
+            .camps
+            .iter()
+            .filter(|_| long_range)
+            .map(|(cell, value, _)| (graph.cells()[*cell as usize].feet, *value))
+            .filter(|(at, _)| !thought.resting(Goal::Place(*at)))
+            .map(|(at, value)| (at, at.distance(feet) / speed, left_of(at), value))
+            .max_by(|a, b| (a.3 * nearness(a.1)).total_cmp(&(b.3 * nearness(b.1))));
         let ambush = index
             .ambushes
             .iter()
@@ -628,7 +722,9 @@ pub fn think(
             unarmed,
             cover,
             ambush,
+            camp,
             roam: thought.roam,
+            long_range,
         };
         let winner = post_game.then(|| id.is_some_and(|id| winners.as_ref().is_some_and(|won| won.0.contains(id))));
         let drives = mind.drives.in_the_post_game(winner);
@@ -644,6 +740,16 @@ pub fn think(
         };
         if moved {
             intent.goal = goal;
+        }
+        let watch = thought
+            .chosen
+            .filter(|chosen| chosen.want == Want::Camp && route.is_done() && !route.is_lost() && !moved)
+            .and_then(|chosen| match chosen.goal {
+                Goal::Place(at) => index.camps.iter().find(|(cell, ..)| graph.cells()[*cell as usize].feet.distance(at) <= SAME_PLACE).map(|(.., watch)| *watch),
+                Goal::Pickup(_) => None,
+            });
+        if intent.watch != watch {
+            intent.watch = watch;
         }
     }
 }
@@ -822,6 +928,67 @@ mod tests {
         assert_eq!(picked(&fresh, None).want, Want::Ambush);
         let worn = Situation { ambush: Some((Vec3::new(2.0, 0.0, 2.0), 0.0, 0.0)), ..calm() };
         assert_eq!(picked(&worn, None).want, Want::Roam);
+    }
+
+    /// Breaks if a good camp near at hand does not draw a bot, or one held past its patience keeps it.
+    #[test]
+    fn a_camp_draws_a_bot_until_it_wears_out() {
+        let fresh = Situation { camp: Some((Vec3::new(2.0, 0.0, 2.0), 1.0, 1.0, 0.8)), ..calm() };
+        assert_eq!(picked(&fresh, None).want, Want::Camp);
+        let worn = Situation { camp: Some((Vec3::new(2.0, 0.0, 2.0), 1.0, 0.0, 0.8)), ..calm() };
+        assert_eq!(picked(&worn, None).want, Want::Roam);
+    }
+
+    /// Breaks if a long-range weapon in hand does not halve the pull of weapons and unseen enemies.
+    #[test]
+    fn a_long_range_weapon_keeps_a_bot_at_its_camp() {
+        let camp = Some((Vec3::new(2.0, 0.0, 2.0), 3.0, 1.0, 0.7));
+        let tempted = Situation { camp, pickups: vec![(0, Offer::Weapon { carried: false, missing: 0.0 }, 4.0)], enemies: vec![(Vec3::new(20.0, 0.0, 0.0), 0.5)], ..calm() };
+        let current = Some((Want::Camp, Goal::Place(Vec3::new(2.0, 0.0, 2.0))));
+        assert_eq!(picked(&Situation { long_range: true, ..tempted.clone() }, current).want, Want::Camp);
+        let score = |situation: &Situation, want| candidates(situation, &Drives::default()).iter().find(|candidate| candidate.want == want).unwrap().score;
+        let long = Situation { long_range: true, ..tempted.clone() };
+        for want in [Want::Arms, Want::Hunt] {
+            assert!(score(&long, want) < score(&tempted, want) * 0.6, "{want:?} is as tempting with a long-range weapon in hand");
+        }
+        let seen = |long_range| Situation { enemies: vec![(Vec3::new(20.0, 0.0, 0.0), 1.0)], long_range, ..calm() };
+        assert_eq!(score(&seen(true), Want::Hunt), score(&seen(false), Want::Hunt), "an enemy in sight is hunted less");
+    }
+
+    /// Breaks if any shipped weapon but the sniper rifle counts as long-range.
+    #[test]
+    fn only_a_long_range_weapon_camps() {
+        let catalog = crate::common::weapon_file::default_catalog();
+        for weapon in &catalog.weapons {
+            let long = crate::game::bot_fight::comfortable_range(weapon, crate::game::bot_fight::Footwork::default().comfort).is_some_and(|range| range > LONG_RANGE);
+            assert_eq!(long, weapon.key == "sniper_rifle", "{} long-range: {long}", weapon.key);
+        }
+    }
+
+    /// Breaks if a camp is in the closet off a long hall, or watches floor within 10 m.
+    #[test]
+    fn camps_see_far_and_watch_floor_away_from_them() {
+        use crate::common::movement_rules::MovementRules;
+        use crate::common::world_surface::Volume;
+        use crate::game::collision::CollisionWorld;
+        use crate::game::{nav, nav_field};
+        use crate::tool::room::Room;
+        let mut world = CollisionWorld::default();
+        let hall = Room::new(Vec3::ZERO, Vec3::new(40.0, 4.0, 8.0));
+        let closet = Room::new(Vec3::new(18.0, 0.0, 8.0), Vec3::new(22.0, 4.0, 12.0));
+        let faces = world.rebuild_volumes(&[Volume::air(hall.clone()), Volume::air(closet)]);
+        let rules = MovementRules::default();
+        let mut graph = nav::graph(&world, &faces, &[], &rules, &[]);
+        graph.set_fields(nav_field::bake(&world, &graph, &[], &rules, Vec::new(), Vec::new()));
+        let mut index = MapIndex::default();
+        index.keep(&graph, 0);
+        let found = index.camps.clone();
+        assert!(!found.is_empty(), "no camp in a 40 m hall");
+        for (cell, value, watch) in found {
+            let feet = graph.cells()[cell as usize].feet;
+            assert!(feet.z < 8.0, "a camp in the closet at {feet}, worth {value}");
+            assert!(feet.distance(watch - Vec3::Y * WATCH_HEIGHT) >= WATCHED_FROM, "watches {watch} from {feet}");
+        }
     }
 
     /// Breaks if a goal with no way to it is kept, so a stranded bot searches the whole graph

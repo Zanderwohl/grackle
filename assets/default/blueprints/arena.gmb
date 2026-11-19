@@ -24,7 +24,7 @@ Blueprint(
         ),
         music: [],
     ),
-    next_id: 101,
+    next_id: 103,
     features: [
         Feature(
             id: FeatureId(
@@ -2275,6 +2275,52 @@ Blueprint(
                 _id: 84,
             ),
             object: {
+                "weapon_pickup": WeaponPickup(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(18.0),
+                        y: Relative(3.2),
+                        z: Relative(-5.5),
+                    ),
+                    yaw: 0.0,
+                    weapon: "sniper_rifle",
+                    respawn: 15.0,
+                    ammo: 0.5,
+                    style: tf2,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 85,
+            ),
+            object: {
+                "weapon_pickup": WeaponPickup(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(-18.0),
+                        y: Relative(3.2),
+                        z: Relative(5.5),
+                    ),
+                    yaw: 0.0,
+                    weapon: "sniper_rifle",
+                    respawn: 15.0,
+                    ammo: 0.5,
+                    style: tf2,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 86,
+            ),
+            object: {
                 "grackle_point_light": GracklePointLight(
                     location: PointRef(
                         reference: Some(FeatureId(
@@ -2293,7 +2339,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 85,
+                _id: 87,
             ),
             object: {
                 "grackle_point_light": GracklePointLight(
@@ -2314,48 +2360,6 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 86,
-            ),
-            object: {
-                "grackle_point_light": GracklePointLight(
-                    location: PointRef(
-                        reference: Some(FeatureId(
-                            _id: 0,
-                        )),
-                        point_key: "",
-                        x: Relative(18.0),
-                        y: Relative(2.6),
-                        z: Relative(21.5),
-                    ),
-                    intensity: 30000.0,
-                    radius: 0.1,
-                    range: 8.0,
-                ),
-            },
-        ),
-        Feature(
-            id: FeatureId(
-                _id: 87,
-            ),
-            object: {
-                "grackle_point_light": GracklePointLight(
-                    location: PointRef(
-                        reference: Some(FeatureId(
-                            _id: 0,
-                        )),
-                        point_key: "",
-                        x: Relative(-18.0),
-                        y: Relative(2.6),
-                        z: Relative(-21.5),
-                    ),
-                    intensity: 30000.0,
-                    radius: 0.1,
-                    range: 8.0,
-                ),
-            },
-        ),
-        Feature(
-            id: FeatureId(
                 _id: 88,
             ),
             object: {
@@ -2367,7 +2371,7 @@ Blueprint(
                         point_key: "",
                         x: Relative(18.0),
                         y: Relative(2.6),
-                        z: Relative(-21.5),
+                        z: Relative(21.5),
                     ),
                     intensity: 30000.0,
                     radius: 0.1,
@@ -2388,7 +2392,7 @@ Blueprint(
                         point_key: "",
                         x: Relative(-18.0),
                         y: Relative(2.6),
-                        z: Relative(21.5),
+                        z: Relative(-21.5),
                     ),
                     intensity: 30000.0,
                     radius: 0.1,
@@ -2399,6 +2403,48 @@ Blueprint(
         Feature(
             id: FeatureId(
                 _id: 90,
+            ),
+            object: {
+                "grackle_point_light": GracklePointLight(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(18.0),
+                        y: Relative(2.6),
+                        z: Relative(-21.5),
+                    ),
+                    intensity: 30000.0,
+                    radius: 0.1,
+                    range: 8.0,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 91,
+            ),
+            object: {
+                "grackle_point_light": GracklePointLight(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(-18.0),
+                        y: Relative(2.6),
+                        z: Relative(21.5),
+                    ),
+                    intensity: 30000.0,
+                    radius: 0.1,
+                    range: 8.0,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 92,
             ),
             object: {
                 "grackle_point_light": GracklePointLight(
@@ -2419,7 +2465,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 91,
+                _id: 93,
             ),
             object: {
                 "grackle_point_light": GracklePointLight(
@@ -2440,7 +2486,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 92,
+                _id: 94,
             ),
             object: {
                 "grackle_point_light": GracklePointLight(
@@ -2461,48 +2507,6 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 93,
-            ),
-            object: {
-                "grackle_point_light": GracklePointLight(
-                    location: PointRef(
-                        reference: Some(FeatureId(
-                            _id: 0,
-                        )),
-                        point_key: "",
-                        x: Relative(-7.0),
-                        y: Relative(3.5),
-                        z: Relative(-22.0),
-                    ),
-                    intensity: 50000.0,
-                    radius: 0.1,
-                    range: 12.0,
-                ),
-            },
-        ),
-        Feature(
-            id: FeatureId(
-                _id: 94,
-            ),
-            object: {
-                "grackle_point_light": GracklePointLight(
-                    location: PointRef(
-                        reference: Some(FeatureId(
-                            _id: 0,
-                        )),
-                        point_key: "",
-                        x: Relative(7.0),
-                        y: Relative(3.5),
-                        z: Relative(-22.0),
-                    ),
-                    intensity: 50000.0,
-                    radius: 0.1,
-                    range: 12.0,
-                ),
-            },
-        ),
-        Feature(
-            id: FeatureId(
                 _id: 95,
             ),
             object: {
@@ -2514,7 +2518,7 @@ Blueprint(
                         point_key: "",
                         x: Relative(-7.0),
                         y: Relative(3.5),
-                        z: Relative(22.0),
+                        z: Relative(-22.0),
                     ),
                     intensity: 50000.0,
                     radius: 0.1,
@@ -2535,7 +2539,7 @@ Blueprint(
                         point_key: "",
                         x: Relative(7.0),
                         y: Relative(3.5),
-                        z: Relative(22.0),
+                        z: Relative(-22.0),
                     ),
                     intensity: 50000.0,
                     radius: 0.1,
@@ -2546,6 +2550,48 @@ Blueprint(
         Feature(
             id: FeatureId(
                 _id: 97,
+            ),
+            object: {
+                "grackle_point_light": GracklePointLight(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(-7.0),
+                        y: Relative(3.5),
+                        z: Relative(22.0),
+                    ),
+                    intensity: 50000.0,
+                    radius: 0.1,
+                    range: 12.0,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 98,
+            ),
+            object: {
+                "grackle_point_light": GracklePointLight(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(7.0),
+                        y: Relative(3.5),
+                        z: Relative(22.0),
+                    ),
+                    intensity: 50000.0,
+                    radius: 0.1,
+                    range: 12.0,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 99,
             ),
             name: Some("North Camera"),
             object: {
@@ -2576,7 +2622,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 98,
+                _id: 100,
             ),
             name: Some("South Camera"),
             object: {
@@ -2607,7 +2653,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 99,
+                _id: 101,
             ),
             name: Some("East Camera"),
             object: {
@@ -2638,7 +2684,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 100,
+                _id: 102,
             ),
             name: Some("West Camera"),
             object: {

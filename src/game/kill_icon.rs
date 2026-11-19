@@ -1,7 +1,8 @@
 //! The icons a death is drawn with in the kill feed: square white SVGs at `icons/{name}.svg` in
 //! any pack, as the toolbar's are, rasterized once per name into an `Image` that a UI node tints.
 //!
-//! Afterburn draws [`FLAME`] and a blast's splash [`EXPLOSION`], whatever set them off. The map,
+//! Afterburn draws [`FLAME`], a blast's splash [`EXPLOSION`] and a headshot [`HEADSHOT`], whatever
+//! set them off. The map,
 //! a suicide, a team switch, and a weapon with no icon (or one whose file is missing) draw
 //! [`SKULL`].
 
@@ -20,6 +21,7 @@ use crate::common::weapon::WeaponCatalog;
 pub const SKULL: &str = "kill_skull";
 pub const EXPLOSION: &str = "kill_explosion";
 pub const FLAME: &str = "kill_flame";
+pub const HEADSHOT: &str = "kill_headshot";
 /// Texels on a side: sharp at the feed's size up to a display scale of two.
 const TEXELS: u32 = 64;
 
@@ -28,6 +30,7 @@ pub fn icon_for<'a>(cause: &Cause, catalog: Option<&'a WeaponCatalog>) -> &'a st
         How::Burn => FLAME,
         How::Splash | How::Exploded => EXPLOSION,
         How::Trigger | How::Kill => SKULL,
+        _ if cause.headshot => HEADSHOT,
         _ => cause.weapon.and_then(|weapon| catalog?.get(weapon)?.icon.as_deref()).unwrap_or(SKULL),
     }
 }
@@ -57,7 +60,7 @@ fn draw_the_icons_ahead(
     icons.images.clear();
     let (Some(pack), Some(mut images)) = (pack, images) else { return };
     let named = catalog.iter().flat_map(|catalog| catalog.weapons.iter().filter_map(|weapon| weapon.icon.clone()));
-    for name in named.collect::<Vec<_>>().iter().map(String::as_str).chain([SKULL, EXPLOSION, FLAME]) {
+    for name in named.collect::<Vec<_>>().iter().map(String::as_str).chain([SKULL, EXPLOSION, FLAME, HEADSHOT]) {
         icons.get(name, |relative| pack.read_from_packs(relative), &mut images);
     }
 }
@@ -115,6 +118,8 @@ mod tests {
         assert_eq!(icon(rocket, How::Kill), SKULL, "a suicide is not the weapon held");
         assert_eq!(icon(Some(WeaponId::of("medi_wrench")), How::Other), SKULL, "no icon of its own");
         assert_eq!(icon_for(&Cause::of(rocket, How::Direct), None), SKULL, "no catalog yet");
+        let headshot = Cause { headshot: true, ..Cause::of(Some(WeaponId::of("sniper_rifle")), How::Hitscan) };
+        assert_eq!(icon_for(&headshot, Some(&catalog)), HEADSHOT);
     }
 
     /// Breaks if a shipped weapon names an icon no pack has, or one does not draw.
@@ -122,7 +127,7 @@ mod tests {
     fn every_icon_a_shipped_weapon_names_draws() {
         let catalog = crate::common::weapon_file::default_catalog();
         let mut named = 0;
-        for name in catalog.weapons.iter().filter_map(|weapon| weapon.icon.as_deref()).chain([SKULL, EXPLOSION, FLAME]) {
+        for name in catalog.weapons.iter().filter_map(|weapon| weapon.icon.as_deref()).chain([SKULL, EXPLOSION, FLAME, HEADSHOT]) {
             let bytes = shipped(&format!("icons/{name}.svg")).unwrap_or_else(|| panic!("no icons/{name}.svg"));
             let image = rasterize(&bytes).unwrap_or_else(|e| panic!("{name}: {e}"));
             assert!(image.data.as_ref().unwrap().chunks(4).any(|pixel| pixel[3] > 0), "{name} is empty");

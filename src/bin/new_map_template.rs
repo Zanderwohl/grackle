@@ -474,6 +474,9 @@ fn arena() -> (FeatureTimeline, MapMetadata) {
         ("shotgun", Vec3::new(0.0, 0.0, 14.5), FRAC_PI_2),
         ("pill_launcher", Vec3::new(HALL_M - LEDGE_DEPTH_M / 2.0, LEDGE_M, 9.0), 0.0),
         ("pill_launcher", Vec3::new(-(HALL_M - LEDGE_DEPTH_M / 2.0), LEDGE_M, -9.0), 0.0),
+        // Between each ledge's armor and its alcove, looking down the side lane.
+        ("sniper_rifle", Vec3::new(HALL_M - LEDGE_DEPTH_M / 2.0, LEDGE_M, -5.5), 0.0),
+        ("sniper_rifle", Vec3::new(-(HALL_M - LEDGE_DEPTH_M / 2.0), LEDGE_M, 5.5), 0.0),
     ];
     for (weapon, feet, yaw) in weapons {
         timeline.apply_feature(Box::new(WeaponPickup::from_point_ref(at(feet.x, feet.y, feet.z)).with_weapon(weapon).with_yaw(yaw)));
