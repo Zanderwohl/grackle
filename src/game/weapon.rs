@@ -152,6 +152,14 @@ impl Plugin for WeaponPlugin {
                     .run_if(crate::common::app_mode::simulating),
             )
             .add_systems(
+                FixedUpdate,
+                crate::game::laser_dot::aim_the_laser_dots
+                    .after(crate::game::sights::work_the_sights)
+                    .after(crate::game::hitbox::update_hitboxes)
+                    .run_if(crate::common::app_mode::simulating)
+                    .run_if(has_authority),
+            )
+            .add_systems(
                 Update,
                 note_unimplemented_actions.run_if(crate::common::app_mode::simulating),
             );

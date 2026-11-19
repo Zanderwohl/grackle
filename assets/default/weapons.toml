@@ -47,12 +47,14 @@
 # stands a line in the shooter's color over the whole path, fading in over a
 # quarter second and out over the next second.
 
-# No clip: all 25 rounds are loaded and it never reloads. The secondary raises
+# No clip: all 25 rounds are loaded and it never reloads. Unscoped it does 50
+# and nothing extra on the head, so it takes no heads. The secondary raises
 # the scope over 0.25 s and lowers it over 0.2 s; once it is up the view
 # narrows to 25° (0.4363 rad), the mouse turns at half speed, and the primary
 # fires `scoped_primary` instead: 100, or 500 on the head. Half a second after
 # a scoped shot the rifle comes down to be worked and rises again to land in the
-# scope as the 1.5 s cooldown ends.
+# scope as the 1.5 s cooldown ends. While it is up, a red dot everybody can see
+# sits where the scoped shot would land.
 [weapons.sniper_rifle]
 name_key = "weapon.names.sniper_rifle"
 bucket = 1
@@ -60,8 +62,8 @@ deploy = 0.6
 model = "sniper_rifle"
 icon = "kill_sniper_rifle"
 magazine = { reserve = 25, reload = 0.0 }
-primary = { cadence = { kind = "semi", interval = 1.5 }, cost = { kind = "ammo", rounds = 1 }, action = { kind = "hitscan", range = 200.0, damage = 50, headshot_multiplier = 3, shove_per_damage = 0.15, shove_radius = 0.4, trail = "beam" } }
-secondary = { cadence = { kind = "semi" }, cost = { kind = "free" }, action = { kind = "scope", fov = 0.4363, look_speed = 0.5, raise = 0.25, lower = 0.2, rechamber = 0.5 } }
+primary = { cadence = { kind = "semi", interval = 1.5 }, cost = { kind = "ammo", rounds = 1 }, action = { kind = "hitscan", range = 200.0, damage = 50, headshot_multiplier = 1, shove_per_damage = 0.15, shove_radius = 0.4, trail = "beam" } }
+secondary = { cadence = { kind = "semi" }, cost = { kind = "free" }, action = { kind = "scope", fov = 0.4363, look_speed = 0.5, raise = 0.25, lower = 0.2, rechamber = 0.5, laser_dot = true } }
 scoped_primary = { cadence = { kind = "semi", interval = 1.5 }, cost = { kind = "ammo", rounds = 1 }, action = { kind = "hitscan", range = 200.0, damage = 100, headshot_multiplier = 5, shove_per_damage = 0.15, shove_radius = 0.4, trail = "beam" } }
 
 # TF2's: 90 at the center of the blast, which is also what a rocket landing on

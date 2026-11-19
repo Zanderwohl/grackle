@@ -16,7 +16,7 @@ use crate::common::net::has_authority;
 use crate::common::damage::{Armor, Cause, Damage, DamageDealt, Damageable, Died, How, Kill};
 use crate::common::game_rules::GameRules;
 use crate::common::team::Allegiances;
-use crate::game::death::{announce_deaths, announce_the_dead, explode_yourself, ignite_yourself, reap_the_dead, record_damage, suicide};
+use crate::game::death::{announce_deaths, announce_the_dead, behead_yourself, explode_yourself, ignite_yourself, reap_the_dead, record_damage, suicide};
 use crate::common::damage::{DamageSource, PlayerId};
 use crate::game::player::{LocalPlayer, PlayerCamera};
 use crate::game::ragdoll::{BlownApart, Push, RagdollShove};
@@ -84,7 +84,7 @@ impl Plugin for DamagePlugin {
             .add_systems(FixedUpdate, apply_damage.in_set(DamageSystems::Apply))
             .add_systems(
                 FixedUpdate,
-                (suicide, ignite_yourself, explode_yourself.before(crate::game::explosion::explode)).in_set(DamageSystems::Deal),
+                (suicide, ignite_yourself, behead_yourself.before(explode_yourself), explode_yourself.before(crate::game::explosion::explode)).in_set(DamageSystems::Deal),
             )
             .add_systems(
                 FixedUpdate,
@@ -113,8 +113,8 @@ impl Plugin for DamagePlugin {
 /// no zero is drawn over a friend. The record is the whole hit, armor's share
 /// included: a number is what you did, not where it landed.
 ///
-/// A body a projectile's direct hit kills is marked [`BlownApart`]; a splash
-/// kill is not.
+/// A body a projectile's direct hit kills is marked [`BlownApart`], and one a
+/// headshot kills loses its head; a splash kill is neither.
 #[allow(clippy::too_many_arguments)]
 pub fn apply_damage(
     mut commands: Commands,
@@ -160,6 +160,8 @@ pub fn apply_damage(
         let killed = was_alive && !target.is_alive();
         if killed && request.cause.how == How::Direct {
             commands.entity(request.target).try_insert(BlownApart::Nearest(request.point));
+        } else if killed && request.cause.headshot {
+            commands.entity(request.target).try_insert(BlownApart::Head);
         }
         // Lands on the corpse `raise_ragdolls` stands up later this tick.
         if let Some(shove) = request.kill_shove
@@ -340,6 +342,34 @@ mod tests {
         assert_eq!(thrown.len(), 1, "{thrown:?}");
         assert_eq!(thrown[0].push, Push::Along(Vec3::NEG_Z * 10.0));
         assert_eq!(thrown[0].at, Vec3::Y);
+    }
+
+    /// Breaks if a headshot that kills leaves the head on, or one that does
+    /// not kill marks the body.
+    #[test]
+    fn only_a_killing_headshot_takes_the_head() {
+        let mut world = World::new();
+        world.init_resource::<Messages<Damage>>();
+        world.init_resource::<Messages<DamageDealt>>();
+        world.init_resource::<Messages<Kill>>();
+        world.init_resource::<Messages<RagdollShove>>();
+        let headshot = Cause { headshot: true, ..Cause::of(None, How::Hitscan) };
+        let survivor = world.spawn(Damageable::with_health(100)).id();
+        let victim = world.spawn(Damageable::with_health(100)).id();
+        for (target, amount) in [(survivor, 50), (victim, 150)] {
+            world.write_message(Damage {
+                target,
+                source: DamageSource::Player(PlayerId(1)),
+                amount,
+                point: Vec3::Y,
+                from: None,
+                kill_shove: None,
+                cause: headshot,
+            });
+        }
+        world.run_system_once(apply_damage).unwrap();
+        assert_eq!(world.get::<BlownApart>(survivor), None);
+        assert_eq!(world.get::<BlownApart>(victim), Some(&BlownApart::Head));
     }
 
     /// Overkill is recorded as what actually came off, not what was swung.

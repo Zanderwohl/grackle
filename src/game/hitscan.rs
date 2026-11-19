@@ -76,11 +76,20 @@ impl Plugin for HitscanPlugin {
 /// From yaw and pitch rather than the camera, because in third person the
 /// camera is not at the eye.
 pub(crate) fn aim(player: &Player) -> Dir3 {
-    Dir3::new(looking(player) * Vec3::NEG_Z).unwrap_or(Dir3::NEG_Z)
+    aim_along(player.yaw, player.pitch)
+}
+
+/// Radians, as on [`Player`].
+pub(crate) fn aim_along(yaw: f32, pitch: f32) -> Dir3 {
+    Dir3::new(looking_along(yaw, pitch) * Vec3::NEG_Z).unwrap_or(Dir3::NEG_Z)
 }
 
 fn looking(player: &Player) -> Quat {
-    Quat::from_rotation_y(player.yaw) * Quat::from_rotation_x(player.pitch)
+    looking_along(player.yaw, player.pitch)
+}
+
+fn looking_along(yaw: f32, pitch: f32) -> Quat {
+    Quat::from_rotation_y(yaw) * Quat::from_rotation_x(pitch)
 }
 
 /// Where the eye is, given a body's center. Takes a center because the laser
@@ -172,8 +181,13 @@ pub fn fire_hitscan(
             let Some(hit) = hit else { continue };
 
             let worth = damage_for(hit.zone, &spec, ray.origin.distance(hit.point), shot.critical);
+            // A crit pays no headshot bonus, so it takes no head.
+            let headshot = hit.zone == HitZone::Head && spec.headshot_multiplier > 1 && !shot.critical;
             match dealt.iter().position(|asked| asked.target == hit.target) {
-                Some(index) => worths[index] += worth,
+                Some(index) => {
+                    worths[index] += worth;
+                    dealt[index].cause.headshot |= headshot;
+                }
                 None => {
                     worths.push(worth);
                     dealt.push(Damage {
@@ -183,7 +197,7 @@ pub fn fire_hitscan(
                     point: hit.point,
                     from: Some(ray.origin),
                     kill_shove,
-                    cause: Cause { critical: shot.critical, ..Cause::of(shot.weapon, How::Hitscan) },
+                    cause: Cause { critical: shot.critical, headshot, ..Cause::of(shot.weapon, How::Hitscan) },
                     });
                 }
             }
@@ -525,7 +539,35 @@ mod tests {
         let (mut world, shooter, _) = a_shooter_and_a_target(boxes);
 
         fire(&mut world, shooter);
-        assert_eq!(asked_for(&mut world)[0].amount, LASER.damage * LASER.headshot_multiplier);
+        let asked = asked_for(&mut world);
+        assert_eq!(asked[0].amount, LASER.damage * LASER.headshot_multiplier);
+        assert!(asked[0].cause.headshot, "not recorded as a headshot");
+    }
+
+    /// Fails if a crit on the head, which pays no headshot bonus, is still
+    /// recorded as a headshot and so takes the head.
+    #[test]
+    fn a_critical_head_hit_is_no_headshot() {
+        let mut boxes = target_boxes(5.0);
+        boxes.head.as_mut().unwrap().center.y = TALLEST_CLASS_EYE_HEIGHT;
+        let (mut world, shooter, _) = a_shooter_and_a_target(boxes);
+
+        fire_critical(&mut world, shooter, WeaponAction::Hitscan(LASER), true);
+        assert!(!asked_for(&mut world)[0].cause.headshot);
+    }
+
+    /// Fails if the shipped sniper rifle pays a headshot bonus unscoped, and so
+    /// beheads, or stops paying one scoped.
+    #[test]
+    fn only_the_scoped_sniper_rifle_pays_for_the_head() {
+        let catalog = crate::common::weapon_file::default_catalog();
+        let rifle = catalog.get(crate::common::weapon::WeaponId::of("sniper_rifle")).expect("no sniper rifle");
+        let multiplier = |action: WeaponAction| match action {
+            WeaponAction::Hitscan(spec) => spec.headshot_multiplier,
+            other => panic!("not a hitscan: {other:?}"),
+        };
+        assert_eq!(multiplier(rifle.primary.action), 1);
+        assert!(multiplier(rifle.scoped_primary.expect("no scoped primary").action) > 1);
     }
 
     /// Breaks if this system answers for another weapon's action.

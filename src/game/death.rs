@@ -67,6 +67,22 @@ pub fn ignite_yourself(
     }
 }
 
+/// A [`Kill`] rather than a [`Damage`], as [`explode_yourself`] is, so no
+/// living body is left marked to lose its head.
+pub fn behead_yourself(
+    mut commands: Commands,
+    bodies: Query<(Entity, &Inputs, &PlayerId, &GlobalTransform), Without<Dying>>,
+    mut kills: MessageWriter<Kill>,
+) {
+    for (body, input, id, placed) in &bodies {
+        if !input.behead {
+            continue;
+        }
+        commands.entity(body).try_insert(crate::game::ragdoll::BlownApart::Head);
+        kills.write(Kill { target: body, source: DamageSource::Player(*id), point: placed.translation(), how: How::Kill });
+    }
+}
+
 /// A [`Kill`] rather than a [`Damage`], so neither armor nor the mode's
 /// self-damage scaling can leave a living body marked to be blown apart. The
 /// blast spares the body, so the kill's cause stays [`How::Exploded`]. Ordered

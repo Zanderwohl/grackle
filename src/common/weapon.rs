@@ -301,12 +301,16 @@ pub struct ScopeSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[reflect(@Unit::Seconds)]
     pub rechamber: Option<f32>,
+    /// Puts a dot everybody sees where the scoped primary's ray ends, while
+    /// sighted: [`crate::game::laser_dot`].
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub laser_dot: bool,
 }
 
 /// What the weapon editor starts a new one from.
 impl Default for ScopeSpec {
     fn default() -> Self {
-        Self { fov: 30f32.to_radians(), look_speed: 0.5, raise: 0.2, lower: 0.2, rechamber: None }
+        Self { fov: 30f32.to_radians(), look_speed: 0.5, raise: 0.2, lower: 0.2, rechamber: None, laser_dot: false }
     }
 }
 

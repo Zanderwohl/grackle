@@ -44,7 +44,9 @@
 //! its hips, torso and head is nearest the blast goes, with its parent and
 //! children, and each piece left is a corpse of its own
 //! ([`Ragdoll::blown_apart`]). The explode key loses the torso whatever is
-//! nearest ([`BlownApart::Torso`]). A piece is a `Ragdoll` over the whole rig that
+//! nearest ([`BlownApart::Torso`]). A headshot that kills loses the head alone
+//! and leaves one piece, whose neck fountains ([`BlownApart::Head`],
+//! [`Ragdoll::stump`]). A piece is a `Ragdoll` over the whole rig that
 //! keeps only its own bones, so the wire and the mesh cache need nothing new.
 //! A splash kill leaves a whole corpse.
 //!
@@ -214,6 +216,9 @@ pub struct Ragdoll {
     /// Where the bones a blast took were, in world space. On the first piece
     /// only, so each body bursts once.
     torn_at: Option<Vec3>,
+    /// The bone whose tail a lost head hung from, on the piece that keeps it.
+    #[serde(default)]
+    stump: Option<usize>,
     /// The fastest strike in the last [`Ragdoll::step`], for a piece only,
     /// until [`report_gib_impacts`] takes it.
     #[serde(skip)]
@@ -232,6 +237,9 @@ pub enum BlownApart {
     Nearest(Vec3),
     /// The torso goes, or the hips on a rig whose torso is its root.
     Torso,
+    /// A headshot: the head goes, and what hangs from it, but not its parent,
+    /// which is left to fountain ([`Ragdoll::stump`]).
+    Head,
 }
 
 /// A body that has already had its corpse made.
@@ -286,14 +294,28 @@ impl Ragdoll {
 
         let mut kept = vec![true; bones.len()];
         kept[struck] = false;
-        if let Some(parent) = bones[struck].parent {
-            kept[parent] = false;
-        }
-        for (index, bone) in bones.iter().enumerate() {
-            if bone.parent == Some(struck) {
-                kept[index] = false;
+        let stump = match how {
+            // Parents first, so one pass takes every descendant.
+            BlownApart::Head => {
+                for (index, bone) in bones.iter().enumerate() {
+                    if bone.parent.is_some_and(|parent| !kept[parent]) {
+                        kept[index] = false;
+                    }
+                }
+                bones[struck].parent
             }
-        }
+            _ => {
+                if let Some(parent) = bones[struck].parent {
+                    kept[parent] = false;
+                }
+                for (index, bone) in bones.iter().enumerate() {
+                    if bone.parent == Some(struck) {
+                        kept[index] = false;
+                    }
+                }
+                None
+            }
+        };
 
         // Parents first, so a bone's piece is its parent's unless the parent
         // is gone, in which case it starts a piece of its own.
@@ -323,6 +345,7 @@ impl Ragdoll {
                 kept: piece.iter().map(|&of| of == root).collect(),
                 root,
                 torn_at: (nth == 0).then_some(torn_at),
+                stump: stump.filter(|&stump| piece[stump] == root),
                 ..whole.clone()
             })
             .collect()
@@ -362,6 +385,7 @@ impl Ragdoll {
             kept: vec![true; posed.len()],
             root: 0,
             torn_at: None,
+            stump: None,
             struck: None,
             grounded: false,
         }
@@ -538,6 +562,14 @@ impl Ragdoll {
 
     pub fn torn_at(&self) -> Option<Vec3> {
         self.torn_at
+    }
+
+    /// Where a lost head hung from and the way the stump points, in world
+    /// space: the tail of the head's parent, and along that bone.
+    pub fn stump(&self) -> Option<(Vec3, Dir3)> {
+        let bone = self.stump?;
+        let (head, tail) = (self.points.get(bone * 2)?, self.points.get(bone * 2 + 1)?);
+        Some((tail.at, Dir3::new(tail.at - head.at).ok()?))
     }
 
     pub fn is_grounded(&self) -> bool {
@@ -809,6 +841,8 @@ fn lost_bone(skeleton: &Skeleton, posed: &[PosedBone], how: BlownApart) -> Optio
         BlownApart::Nearest(at) => deletable(skeleton)
             .min_by(|&a, &b| distance_to_bone(at, &posed[a]).total_cmp(&distance_to_bone(at, &posed[b]))),
         BlownApart::Torso => skeleton.anatomy().carry.or_else(|| deletable(skeleton).next()),
+        // Not the root: a body is never all head.
+        BlownApart::Head => skeleton.anatomy().head.filter(|&head| head != 0),
     }
 }
 
@@ -2201,6 +2235,29 @@ mod tests {
         let body = headless.iter().find(|piece| piece.keeps(index(bone::CHEST))).expect("no body left");
         let ends: Vec<Vec3> = body.severed_ends(&skeleton, DT).map(|(at, _)| at).collect();
         assert_eq!(ends, vec![posed[index(bone::CHEST)].tail]);
+    }
+
+    /// Fails if a headshot's tear takes more than the head, leaves more than
+    /// one piece, or does not put the stump at the neck's tail pointing up it.
+    #[test]
+    fn a_headshot_takes_only_the_head_and_leaves_the_neck_to_fountain() {
+        let skeleton = rig();
+        let posed = skeleton.posed_bones(&Pose::rest(), &Transform::IDENTITY);
+        let index = |name| skeleton.index_of(name).unwrap();
+        let pieces = Ragdoll::torn(&skeleton, &Pose::rest(), &Transform::IDENTITY, Vec3::ZERO, BlownApart::Head);
+        assert_eq!(pieces.len(), 1);
+        let body = &pieces[0];
+        assert!(!body.keeps(index(bone::HEAD)));
+        assert_eq!(body.bones_kept(), skeleton.bones().len() - 1);
+
+        let neck = &posed[index(bone::NECK)];
+        let (at, up) = body.stump().expect("no stump");
+        assert!(at.abs_diff_eq(neck.tail, 1.0e-4), "stump at {at}, not {}", neck.tail);
+        assert!(up.dot((neck.tail - neck.head).normalize()) > 0.999);
+        assert!(body.torn_at().is_some_and(|torn| torn.abs_diff_eq(middle_of(&skeleton, bone::HEAD), 1.0e-4)));
+
+        let whole = Ragdoll::from_body(&skeleton, &Pose::rest(), &Transform::IDENTITY, Vec3::ZERO);
+        assert!(whole.stump().is_none());
     }
 
     /// Fails if a body blown apart does not report, on exactly one piece, where
