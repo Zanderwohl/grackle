@@ -12,6 +12,7 @@ use crate::common::match_phase::{phase_of, Countdown, MatchPhase};
 use crate::editor::map_metadata::MapMetadata;
 use crate::editor::panels::CurrentFilePath;
 use crate::game::hud::WINDOW_MARGIN;
+use crate::game::postcards::KeptClear;
 use crate::get;
 
 /// Real seconds "Start!" stays up after the match goes live.
@@ -77,8 +78,8 @@ fn spawn_the_banner(mut commands: Commands, existing: Query<(), With<Banner>>, f
         Visibility::Hidden,
         Name::new("Match banner"),
         children![
-            (line(100.0 / 3.0), Pickable::IGNORE, children![(MapTitle, words(&font.0, 8.0, String::new()))]),
-            (line(200.0 / 3.0), Pickable::IGNORE, children![(CountdownText, words(&font.0, 10.0, String::new()))]),
+            (line(100.0 / 3.0), Pickable::IGNORE, children![(MapTitle, KeptClear, words(&font.0, 8.0, String::new()))]),
+            (line(200.0 / 3.0), Pickable::IGNORE, children![(CountdownText, KeptClear, words(&font.0, 10.0, String::new()))]),
             (
                 Node {
                     position_type: PositionType::Absolute,
@@ -88,7 +89,7 @@ fn spawn_the_banner(mut commands: Commands, existing: Query<(), With<Banner>>, f
                     ..default()
                 },
                 Pickable::IGNORE,
-                children![(BetweenRoundsText, words(&font.0, 4.0, get!("match.between_rounds")))],
+                children![(BetweenRoundsText, KeptClear, words(&font.0, 4.0, get!("match.between_rounds")))],
             ),
         ],
     ));

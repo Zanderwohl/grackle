@@ -184,6 +184,7 @@ fn fill_in_the_board(
             },
             BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.7)),
             Pickable::IGNORE,
+            crate::game::postcards::KeptClear,
         ))
         .add_children(&rows)
         .id();

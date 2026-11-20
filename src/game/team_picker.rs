@@ -234,7 +234,7 @@ fn show_or_hide(
             BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.45)),
         ))
         .with_children(|root| {
-            root.spawn(menu_panel()).with_children(|menu| {
+            root.spawn((menu_panel(), crate::game::postcards::KeptClear)).with_children(|menu| {
                 menu.spawn(menu_title(font, get!("team.picker.title")));
                 for (choice, label, swatch, open) in rows(&offer) {
                     let mut row = match open {

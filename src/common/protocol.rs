@@ -127,6 +127,7 @@ mod tests {
         app.add_plugins(ProtocolPlugin);
         app.add_plugins(crate::common::pack_sync::PackSyncPlugin);
         app.add_plugins(crate::prop::sync::PropSyncPlugin);
+        app.add_plugins(crate::common::postcard_sync::PostcardSyncPlugin);
         app.finish();
     }
 }
