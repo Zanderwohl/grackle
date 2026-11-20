@@ -1,11 +1,6 @@
-//! The map's postcards on screen while the match is not being fought: in the pre-game, between
-//! rounds, and while the team picker is up. Cards no longer wanted fly out off the bottom. Each is the picture on a 3:2 card of off-white,
-//! grained paper with an inked outline, the picture inset by an eighth of the card on every side
-//! ([`crate::common::postcard_print::postcard`]), and up to three are laid in whatever space the rest of the UI
-//! leaves, tilted ([`lay_out`]). What counts as taken is every visible node marked [`KeptClear`].
-//!
-//! The cards are [`PrintedPostcards`]: printed by the authority, and sent to a client as it joins.
-//! A set is replaced whole, so the cards fly in together.
+//! The map's [`PrintedPostcards`] on the HUD in the pre-game, between rounds and while the team
+//! picker is up, and flown out off the bottom otherwise. Up to three are laid out tilted in the
+//! space left by every visible node marked [`KeptClear`] ([`lay_out`]).
 
 use bevy::prelude::*;
 
@@ -135,7 +130,6 @@ impl Card {
 }
 
 impl Card {
-    /// Where `self` was `ease` of the way from `from`.
     fn between(from: &Card, to: &Card, ease: f32) -> Card {
         Card {
             center: from.center.lerp(to.center, ease),
@@ -178,15 +172,17 @@ struct Flight {
 }
 
 impl Flight {
+    fn landed(&self, now: f32) -> bool {
+        now >= self.started + self.seconds
+    }
+
     fn at(&self, now: f32) -> Card {
         Card::between(&self.from, &self.to, (self.ease)((now - self.started) / self.seconds))
     }
 }
 
-/// Whether the cards are laid out again this frame. A new window size always is, once the window
-/// has held it for [`SETTLE_SECONDS`], so cards a small window had no room for come back. With the
-/// window still, a layout is redone when a card stops fitting, or when what is kept clear has
-/// changed while a card is still waiting for room.
+/// A new window size is always laid out again once settled, so cards a small window had no room
+/// for come back.
 fn lays_out_again(laid_out_for: Vec2, window: Vec2, settled: bool, fits: bool, waiting: bool, taken_changed: bool) -> bool {
     settled && (laid_out_for != window || !fits || (waiting && taken_changed))
 }
@@ -260,8 +256,7 @@ pub fn lay_out(window: Vec2, taken: &[Rect], count: usize) -> Vec<Card> {
     placed
 }
 
-/// Whether `cards` still fit among `taken`, so a layout is kept while it does rather than jumping
-/// as a kill feed line comes and goes.
+/// A layout is kept while it fits, so it does not jump as a kill feed line comes and goes.
 fn still_fits(window: Vec2, cards: &[Card], taken: &[Rect]) -> bool {
     let bounds = Rect::from_corners(Vec2::splat(WINDOW_MARGIN), window - WINDOW_MARGIN);
     cards.iter().enumerate().all(|(index, card)| fits(card, bounds, taken, &cards[..index]))
@@ -305,7 +300,6 @@ impl Plugin for PostcardHudPlugin {
     }
 }
 
-/// Whether the match is between fights or somebody is choosing, which is when postcards show.
 fn wanted(phase: Option<MatchPhase>, held: &MouseHeld) -> bool {
     held.team_picker || matches!(phase, Some(MatchPhase::PreGame | MatchPhase::BetweenRounds))
 }
@@ -402,7 +396,11 @@ fn show_the_postcards(
         for (mut card, _, _) in cards.iter_mut().filter(|(card, _, _)| !card.leaving) {
             let from = card.flight.at(now);
             let to = layout.cards.get(card.index).copied().unwrap_or_else(|| from.below(window));
-            let started = now + card.index as f32 * STAGGER;
+            // Only a card at rest waits its turn; one already moving turns toward its new place.
+            let started = match card.flight.landed(now) {
+                true => now + card.index as f32 * STAGGER,
+                false => card.flight.started.max(now),
+            };
             card.flight = Flight { from, to, started, seconds: MOVE_SECONDS, ease: ease_in_out_quart };
         }
     }
@@ -433,8 +431,7 @@ fn card_node(card: &Card) -> Node {
     }
 }
 
-/// Every card starts below the screen and flies to its place, one after another. A card with no
-/// place waits below the screen.
+/// A card with no place waits below the screen.
 fn fly_in(commands: &mut Commands, layout: &Layout, shown: &[Handle<Image>], window: Vec2, now: f32) {
     let waiting_place = Card { center: Vec2::new(window.x / 2.0, window.y), width: SHORTEST * window.y * 1.5, angle: 0.0 };
     commands

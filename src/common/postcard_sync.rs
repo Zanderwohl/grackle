@@ -1,9 +1,7 @@
-//! The map's chosen postcards, printed ([`postcard_print::postcard`]) on the authority and sent to
-//! clients as PNGs of the finished cards, so a client prints nothing and holds them from the moment
-//! it joins. The authority prints again whenever the set it keeps ([`CapturedPostcards`]) or the
-//! choice ([`MapMetadata::postcards`]) changes, sends the new cards to everyone, and sends the whole
-//! set to each client that joins. Every machine shows [`PrintedPostcards`], which is replaced only
-//! once every card of a set is printed or decoded, so a set never arrives a card at a time.
+//! The map's chosen postcards, printed on the authority whenever [`CapturedPostcards`] or
+//! [`MapMetadata::postcards`] changes, and sent to clients as PNGs, so a client prints nothing and
+//! has them from the moment it joins. [`PrintedPostcards`] is replaced only once every card of a
+//! set is ready, so a set never arrives a card at a time.
 
 use bevy::prelude::*;
 use bevy::tasks::futures::check_ready;
@@ -73,12 +71,13 @@ impl<T: Send + 'static> Batch<T> {
 struct Press {
     /// The kept set's generation and the choice last printed from, on the authority.
     printed_from: Option<(u64, Vec<String>)>,
-    /// Each card's PNG and image.
     printing: Option<Batch<(Vec<u8>, Image)>>,
     /// The server's cards, on a client; a card that will not decode is `None`.
     decoding: Option<Batch<Option<Image>>>,
     /// What the authority printed last, as sent.
     pngs: PrintedCards,
+    /// What a client was sent last.
+    received: PrintedCards,
 }
 
 pub struct PostcardSyncPlugin;
@@ -107,16 +106,15 @@ impl Plugin for PostcardSyncPlugin {
 }
 
 /// Each chosen postcard `captured` holds a picture of, once, in the map's order.
-fn chosen_pictures(metadata: &MapMetadata, captured: &CapturedPostcards, images: &Assets<Image>) -> Vec<(String, image::RgbaImage)> {
+fn chosen_pictures(metadata: &MapMetadata, captured: &CapturedPostcards) -> Vec<(String, image::RgbaImage)> {
     let mut pictures: Vec<(String, image::RgbaImage)> = Vec::new();
     for choice in metadata.postcards.iter().flatten() {
         let stem = choice.file_stem();
         if pictures.iter().any(|(taken, _)| *taken == stem) {
             continue;
         }
-        let Some(image) = captured.get(&stem).and_then(|handle| images.get(handle)) else { continue };
-        let Ok(picture) = image.clone().try_into_dynamic() else { continue };
-        pictures.push((stem, picture.to_rgba8()));
+        let Some(picture) = captured.picture(&stem) else { continue };
+        pictures.push((stem, picture.clone()));
     }
     pictures
 }
@@ -130,7 +128,16 @@ fn print_one(stem: String, picture: image::RgbaImage) -> (Vec<u8>, Image) {
     (png, with_mips(postcard_print::WIDTH, postcard_print::HEIGHT, card.into_raw()))
 }
 
-fn forget_the_postcards(mut press: ResMut<Press>, mut printed: ResMut<PrintedPostcards>, mut images: ResMut<Assets<Image>>) {
+/// Cards the authority printed stay while it stays the authority, as from solo to hosting.
+fn forget_the_postcards(
+    role: Res<NetRole>,
+    mut press: ResMut<Press>,
+    mut printed: ResMut<PrintedPostcards>,
+    mut images: ResMut<Assets<Image>>,
+) {
+    if role.is_authority() && press.printed_from.is_some() {
+        return;
+    }
     *press = Press::default();
     printed.replace(Vec::new(), &mut images);
 }
@@ -140,7 +147,6 @@ fn print_the_postcards(
     role: Option<Res<NetRole>>,
     metadata: Option<Res<MapMetadata>>,
     captured: Option<Res<CapturedPostcards>>,
-    images: Res<Assets<Image>>,
     mut press: ResMut<Press>,
 ) {
     if !role.is_none_or(|role| role.is_authority()) {
@@ -153,20 +159,24 @@ fn print_the_postcards(
         return;
     }
     press.printed_from = printed_from;
-    let tasks = chosen_pictures(&metadata, &captured, &images)
+    let tasks = chosen_pictures(&metadata, &captured)
         .into_iter()
         .map(|(stem, picture)| AsyncComputeTaskPool::get().spawn(async move { print_one(stem, picture) }))
         .collect();
     press.printing = Some(Batch::new(tasks));
 }
 
-/// A card that is too large, will not decode or is not a card's size is left out.
 fn decode(png: &[u8]) -> Option<Image> {
     if png.len() > MOST_BYTES {
         warn!("Refused a postcard of {} bytes from the server", png.len());
         return None;
     }
-    let card = match image::load_from_memory_with_format(png, image::ImageFormat::Png) {
+    let mut reader = image::ImageReader::with_format(std::io::Cursor::new(png), image::ImageFormat::Png);
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(postcard_print::WIDTH);
+    limits.max_image_height = Some(postcard_print::HEIGHT);
+    reader.limits(limits);
+    let card = match reader.decode() {
         Ok(card) => card.to_rgba8(),
         Err(e) => {
             warn!("A postcard from the server will not decode: {e}");
@@ -187,6 +197,10 @@ fn receive_the_postcards(role: Option<Res<NetRole>>, mut receivers: Query<&mut M
     let Some(latest) = receivers.iter_mut().flat_map(|mut receiver| receiver.receive().collect::<Vec<_>>()).last() else {
         return;
     };
+    if latest == press.received {
+        return;
+    }
+    press.received = latest.clone();
     let tasks = latest.0.into_iter().map(|png| AsyncComputeTaskPool::get().spawn(async move { decode(&png) })).collect();
     press.decoding = Some(Batch::new(tasks));
 }
@@ -195,8 +209,10 @@ fn take_the_finished_cards(mut press: ResMut<Press>, mut printed: ResMut<Printed
     if let Some(cards) = press.printing.as_mut().and_then(Batch::poll) {
         press.printing = None;
         let (pngs, cards): (Vec<_>, Vec<_>) = cards.into_iter().unzip();
-        press.pngs = PrintedCards(pngs);
-        printed.replace(cards, &mut images);
+        if press.pngs.0 != pngs {
+            press.pngs = PrintedCards(pngs);
+            printed.replace(cards, &mut images);
+        }
     }
     if let Some(cards) = press.decoding.as_mut().and_then(Batch::poll) {
         press.decoding = None;
@@ -217,6 +233,7 @@ fn send_postcards(
         *sent = press.pngs.clone();
         info!("Postcards changed; sending {} to everyone", sent.0.len());
         sender.send::<_, PostcardChannel>(&*sent, &server, &NetworkTarget::All)?;
+        return Ok(());
     }
     for client in &joined {
         sender.send_to_entities::<_, PostcardChannel>(&*sent, core::iter::once(client))?;
@@ -227,7 +244,6 @@ fn send_postcards(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bevy::asset::RenderAssetUsages;
 
     fn png(width: u32, height: u32) -> Vec<u8> {
         let mut bytes = Vec::new();
@@ -264,20 +280,16 @@ mod tests {
     fn only_chosen_postcards_with_pictures_are_printed_in_the_maps_order() {
         use crate::editor::editable::FeatureId;
         use crate::editor::map_metadata::{BuiltInPostcard, PostcardChoice};
-        let mut images = Assets::<Image>::default();
         let mut captured = CapturedPostcards::default();
-        let picture = |images: &mut Assets<Image>| {
-            images.add(Image::from_dynamic(image::DynamicImage::ImageRgba8(image::RgbaImage::new(30, 20)), true, RenderAssetUsages::default()))
-        };
-        captured.keep_for_test("top", picture(&mut images));
-        captured.keep_for_test("camera_4", picture(&mut images));
+        captured.keep_for_test("top", image::RgbaImage::new(30, 20));
+        captured.keep_for_test("camera_4", image::RgbaImage::new(30, 20));
         let mut metadata = MapMetadata::default();
         metadata.postcards = [
             Some(PostcardChoice::SpectatorCamera { feature: FeatureId::from_raw(4), copy: None }),
             Some(PostcardChoice::SpectatorCamera { feature: FeatureId::from_raw(9), copy: None }),
             Some(PostcardChoice::BuiltIn(BuiltInPostcard::Top)),
         ];
-        let chosen = chosen_pictures(&metadata, &captured, &images);
+        let chosen = chosen_pictures(&metadata, &captured);
         let stems: Vec<&str> = chosen.iter().map(|(stem, _)| stem.as_str()).collect();
         assert_eq!(stems, ["camera_4", "top"]);
     }

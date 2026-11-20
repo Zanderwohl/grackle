@@ -1,7 +1,6 @@
-//! Printing pictures onto a postcard: a 3:2 card of off-white grained paper, onto which any number
-//! of layers are printed in turn. Each layer is pressed into an [`Area`] of the card, desaturated a
-//! little, speckled and unevenly inked, and multiplied onto what is already there, as ink is, so the
-//! paper's tint and grain show through every layer. [`postcard`] is the usual card: an inked
+//! Printing pictures onto a 3:2 card of off-white grained paper. Each layer is pressed into an
+//! [`Area`] of the card, desaturated a little, speckled and unevenly inked, and multiplied onto
+//! what is already there, so the paper's tint and grain show through every layer. [`postcard`] is the usual card: an inked
 //! outline, then a 3:2 picture an eighth of the card in from every side.
 //!
 //! The noise is a hash of each pixel's place and the layer's number, so every machine prints the
@@ -35,8 +34,8 @@ const DESATURATION: f32 = 0.15;
 /// The darkest a layer's ink reaches, as a level of 255, before it is multiplied onto the paper:
 /// ink is never black.
 const DARKEST_INK: f32 = 45.0;
-/// Shares of full coverage the ink falls to where it took to the paper worst, and the pixels across
-/// a patch of it.
+/// Share of coverage the ink loses where it took to the paper worst, and the pixels across a patch
+/// of it.
 const INK_SKIP: f32 = 0.07;
 const SKIP_PATCH: f32 = 6.0;
 /// Levels of 255 a printed pixel's color is speckled by.
@@ -63,14 +62,12 @@ impl Area {
     }
 }
 
-/// A card being printed.
 pub struct Postcard {
     card: image::RgbaImage,
     layers: u32,
 }
 
 impl Postcard {
-    /// Blank paper.
     pub fn blank() -> Self {
         let mut card = image::RgbaImage::new(WIDTH, HEIGHT);
         for y in RIM..HEIGHT - RIM {

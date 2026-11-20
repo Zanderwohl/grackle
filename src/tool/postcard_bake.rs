@@ -54,7 +54,6 @@ use crate::tool::bake_job::{self, BakeKind, BakeProgress, BakeState, BakeStatus,
 use crate::tool::room::MapVolumes;
 use crate::tool::sun_bake::SunBake;
 
-/// Pixels rendered: twice the size kept, so halving it is an even average of four pixels each.
 pub const HEIGHT: u32 = 2 * KEPT_HEIGHT;
 pub const WIDTH: u32 = HEIGHT * 3 / 2;
 const ASPECT: f32 = WIDTH as f32 / HEIGHT as f32;
@@ -68,9 +67,7 @@ pub const CACHE_DIR: &str = "cache/postcards";
 pub const PREVIEW_HEIGHT: u32 = 200;
 const PREVIEW_WIDTH: u32 = PREVIEW_HEIGHT * 3 / 2;
 
-/// Pixels of a picture as stored and kept: exactly the size a postcard prints its picture at, so it
-/// is never resampled again.
-pub const KEPT_WIDTH: u32 = crate::common::postcard_print::PICTURE_WIDTH;
+/// The size a postcard prints its picture at, so a kept picture is never resampled again.
 pub const KEPT_HEIGHT: u32 = crate::common::postcard_print::PICTURE_HEIGHT;
 
 /// One wide, so each is big enough to see.
@@ -211,7 +208,7 @@ impl PostcardBake {
         images: &mut Assets<Image>,
         (hash, openings): (u64, u64),
         saved: Result<(), String>,
-        kept: Vec<(String, image::RgbaImage)>,
+        kept: Kept,
     ) {
         let clear = std::mem::take(&mut self.clear_after_write);
         if openings == self.openings {
@@ -234,16 +231,16 @@ impl PostcardBake {
 struct Writing {
     hash: u64,
     openings: u64,
-    task: Task<(Result<(), String>, Vec<(String, image::RgbaImage)>)>,
+    task: Task<(Result<(), String>, Kept)>,
 }
 
 /// Halves the set on the compute pool, then writes it on the IO pool.
-fn write_and_shrink(hash: u64, pictures: Vec<(String, image::RgbaImage)>) -> Task<(Result<(), String>, Vec<(String, image::RgbaImage)>)> {
+fn write_and_shrink(hash: u64, pictures: Vec<(String, image::RgbaImage)>) -> Task<(Result<(), String>, Kept)> {
     AsyncComputeTaskPool::get().spawn(async move {
         let kept = halved(&pictures);
         let written = kept.clone();
         let saved = IoTaskPool::get().spawn(async move { disk::store(hash, &written) }).await;
-        (saved, kept)
+        (saved, with_previews(kept))
     })
 }
 
@@ -732,15 +729,20 @@ fn next_shot(sitting: &mut Sitting) {
     sitting.shoot_at = sitting.frames + NEXT_SHOT_FRAMES;
 }
 
+/// Each picture by file stem, with a preview at the picker's size.
+type Kept = Vec<(String, image::RgbaImage, image::RgbaImage)>;
+
 /// The set of postcards read or taken most recently.
 #[derive(Resource, Default)]
 pub struct CapturedPostcards {
     hash: Option<u64>,
-    /// By file stem.
+    /// The previews, by file stem.
     pictures: HashMap<String, Handle<Image>>,
+    /// The pictures at [`KEPT_HEIGHT`], by file stem.
+    kept: HashMap<String, image::RgbaImage>,
     /// Bumped whenever `pictures` is replaced.
     generation: u64,
-    loading: Option<(u64, Task<Vec<(String, image::RgbaImage)>>)>,
+    loading: Option<(u64, Task<Kept>)>,
 }
 
 impl CapturedPostcards {
@@ -748,9 +750,13 @@ impl CapturedPostcards {
         self.pictures.get(stem)
     }
 
+    pub fn picture(&self, stem: &str) -> Option<&image::RgbaImage> {
+        self.kept.get(stem)
+    }
+
     #[cfg(test)]
-    pub fn keep_for_test(&mut self, stem: &str, picture: Handle<Image>) {
-        self.pictures.insert(stem.into(), picture);
+    pub fn keep_for_test(&mut self, stem: &str, picture: image::RgbaImage) {
+        self.kept.insert(stem.into(), picture);
     }
 
     /// Changes whenever the set is replaced or evicted.
@@ -763,36 +769,62 @@ impl CapturedPostcards {
         for (_, handle) in self.pictures.drain() {
             images.remove(&handle);
         }
+        self.kept.clear();
         self.hash = None;
         self.loading = None;
         self.generation += 1;
     }
 
-    /// The pictures on disk under `hash`, unless it is the one kept or being read, read on the
-    /// IO pool.
+    /// The pictures on disk under `hash`, unless it is the one kept or being read: read on the
+    /// IO pool, previewed on the compute pool.
     fn read(&mut self, hash: u64) {
         if self.hash == Some(hash) || self.loading.as_ref().is_some_and(|(loading, _)| *loading == hash) {
             return;
         }
-        let task = IoTaskPool::get().spawn(async move { disk::read(hash) });
+        let task = AsyncComputeTaskPool::get().spawn(async move {
+            with_previews(IoTaskPool::get().spawn(async move { disk::read(hash) }).await)
+        });
         self.loading = Some((hash, task));
     }
 
-    fn keep(&mut self, hash: u64, kept: Vec<(String, image::RgbaImage)>, images: &mut Assets<Image>) {
+    fn keep(&mut self, hash: u64, kept: Kept, images: &mut Assets<Image>) {
         self.evict(images);
-        for (stem, picture) in kept {
-            let image = Image::from_dynamic(image::DynamicImage::ImageRgba8(picture), true, RenderAssetUsages::default());
-            self.pictures.insert(stem, images.add(image));
+        for (stem, picture, preview) in kept {
+            let image = Image::from_dynamic(image::DynamicImage::ImageRgba8(preview), true, RenderAssetUsages::RENDER_WORLD);
+            self.pictures.insert(stem.clone(), images.add(image));
+            self.kept.insert(stem, picture);
         }
         self.hash = Some(hash);
     }
 }
 
+/// Each picture at half its size, every pixel the average of the four it covers.
 fn halved(pictures: &[(String, image::RgbaImage)]) -> Vec<(String, image::RgbaImage)> {
     pictures
         .iter()
         .map(|(stem, picture)| {
-            (stem.clone(), image::imageops::resize(picture, KEPT_WIDTH, KEPT_HEIGHT, image::imageops::FilterType::Triangle))
+            let (width, height) = ((picture.width() / 2).max(1), (picture.height() / 2).max(1));
+            let half = image::RgbaImage::from_fn(width, height, |x, y| {
+                let mut sum = [0u32; 4];
+                for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+                    let pixel = picture.get_pixel((2 * x + dx).min(picture.width() - 1), (2 * y + dy).min(picture.height() - 1));
+                    for (total, channel) in sum.iter_mut().zip(pixel.0) {
+                        *total += channel as u32;
+                    }
+                }
+                image::Rgba(sum.map(|total| ((total + 2) / 4) as u8))
+            });
+            (stem.clone(), half)
+        })
+        .collect()
+}
+
+fn with_previews(pictures: Vec<(String, image::RgbaImage)>) -> Kept {
+    pictures
+        .into_iter()
+        .map(|(stem, picture)| {
+            let preview = image::imageops::resize(&picture, PREVIEW_WIDTH, PREVIEW_HEIGHT, image::imageops::FilterType::Triangle);
+            (stem, picture, preview)
         })
         .collect()
 }
@@ -1016,8 +1048,8 @@ mod tests {
         assert_ne!(captured.generation, generation, "the picker would keep showing the old textures");
     }
 
-    fn kept_set() -> Vec<(String, image::RgbaImage)> {
-        vec![("top".into(), image::RgbaImage::new(3, 2))]
+    fn kept_set() -> Kept {
+        vec![("top".into(), image::RgbaImage::new(6, 4), image::RgbaImage::new(3, 2))]
     }
 
     /// Breaks if a set written after another map was opened is shown for the new map.
