@@ -282,4 +282,31 @@ mod tests {
         }
         assert!(checked > 0, "the default pack ships no materials to check");
     }
+
+    /// texture-graph's GPU baker panics on a ramp of more than 16 stops, which the CPU evaluator
+    /// above takes without complaint.
+    #[test]
+    fn every_shipped_ramp_fits_the_baker() {
+        let Ok(entries) = std::fs::read_dir(Path::new("assets/default").join(MATERIALS_DIR)) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some(FILE_EXTENSION) {
+                continue;
+            }
+            let graph = super::super::load(&path).unwrap_or_else(|e| panic!("{e}"));
+            for layer in &graph.layers {
+                if let texture_graph_core::LayerKind::ColorRamp(ramp) = &layer.kind {
+                    assert!(
+                        ramp.stops.len() <= 16,
+                        "{}: {:?} has {} stops",
+                        path.display(),
+                        layer.name,
+                        ramp.stops.len()
+                    );
+                }
+            }
+        }
+    }
 }

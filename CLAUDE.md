@@ -1792,7 +1792,11 @@ GPU path draws them ([`src/material/library.rs`](src/material/library.rs),
   art pass still shows whose room is whose, and **`team_brick`**
   (`palette::TEAM_BRICK`), painted brick the same way (`painted_brick_*`, orange
   unsided), **`team_tiles`** (`palette::TEAM_TILES`), glazed tiles the same way
-  (`tiles_*`), and **`team_cladding`** (`palette::TEAM_CLADDING`): Red's wooden
+  (`tiles_*`), **`team_linoleum`** (`palette::TEAM_LINOLEUM`), vinyl tiles
+  checkered in two shades of each team's color the same way (`linoleum_*`;
+  `linoleum_gray` is in no role), **`team_linoleum_large`**
+  (`palette::TEAM_LINOLEUM_LARGE`), the same in 500 mm tiles rather than 333
+  (`linoleum_large_*`), and **`team_cladding`** (`palette::TEAM_CLADDING`): Red's wooden
   fence, Blue's corrugated steel, Yellow's and Green's stripes, orange stripes
   unsided. A map role of the same name shadows one; `Palette::every_role` is
   what the picker lists, and every material a built-in role names must ship

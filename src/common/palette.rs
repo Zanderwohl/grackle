@@ -56,6 +56,8 @@ static BUILT_IN: LazyLock<BTreeMap<String, RolePaint>> = LazyLock::new(|| {
         (TEAM_GRID.to_owned(), per_team("grid_", "orange")),
         (TEAM_BRICK.to_owned(), per_team("painted_brick_", "painted_brick_orange")),
         (TEAM_TILES.to_owned(), per_team("tiles_", "tiles_orange")),
+        (TEAM_LINOLEUM.to_owned(), per_team("linoleum_", "linoleum_orange")),
+        (TEAM_LINOLEUM_LARGE.to_owned(), per_team("linoleum_large_", "linoleum_large_orange")),
         (
             TEAM_CLADDING.to_owned(),
             RolePaint {
@@ -77,6 +79,10 @@ pub const TEAM_GRID: &str = "team_grid";
 pub const TEAM_BRICK: &str = "team_brick";
 /// Glazed tiles in each team's color, orange where no Mirror claims the room.
 pub const TEAM_TILES: &str = "team_tiles";
+/// Checkered vinyl tiles in two shades of each team's color, orange where no Mirror claims the room.
+pub const TEAM_LINOLEUM: &str = "team_linoleum";
+/// [`TEAM_LINOLEUM`] in 500 mm tiles rather than 333 mm.
+pub const TEAM_LINOLEUM_LARGE: &str = "team_linoleum_large";
 /// A different cladding per team: Red's wooden fence, Blue's corrugated steel, Yellow's and Green's
 /// stripes, orange stripes where no Mirror claims the room.
 pub const TEAM_CLADDING: &str = "team_cladding";
@@ -177,6 +183,15 @@ mod tests {
         let palette = Palette::default();
         assert_eq!(palette.resolve(TEAM_BRICK, Some(Side(Team::Blue))), Some("painted_brick_blue"));
         assert_eq!(palette.resolve(TEAM_BRICK, None), Some("painted_brick_orange"));
+    }
+
+    #[test]
+    fn every_map_has_the_team_linoleum() {
+        let palette = Palette::default();
+        assert_eq!(palette.resolve(TEAM_LINOLEUM, Some(Side(Team::Green))), Some("linoleum_green"));
+        assert_eq!(palette.resolve(TEAM_LINOLEUM, None), Some("linoleum_orange"));
+        assert_eq!(palette.resolve(TEAM_LINOLEUM_LARGE, Some(Side(Team::Red))), Some("linoleum_large_red"));
+        assert_eq!(palette.resolve(TEAM_LINOLEUM_LARGE, None), Some("linoleum_large_orange"));
     }
 
     #[test]
