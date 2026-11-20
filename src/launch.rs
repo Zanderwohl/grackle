@@ -138,7 +138,7 @@ pub fn run(binary: Binary) {
             MulticamPlugin {
                 test_scene: false,
             },
-            (EditorPanelPlugin, crate::tool::round_prep::RoundPrepPlugin),
+            (EditorPanelPlugin, crate::tool::round_prep::RoundPrepPlugin, crate::editor::kill_history::KillHistoryPlugin),
             EditorStepsPlugin,
             ToolPlugin,
             PropEditorPlugin,

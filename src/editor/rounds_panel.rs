@@ -19,7 +19,7 @@ use bevy_egui::egui;
 use crate::common::app_mode::AppMode;
 use crate::common::net::NetRole;
 use crate::common::weapon::WeaponCatalog;
-use crate::game::round_file::{RoundTables, Table, TableKind};
+use crate::game::round_file::{KillPlace, RoundTables, Table, TableKind};
 use crate::game::rounds::RoundHistory;
 use crate::get;
 
@@ -27,7 +27,7 @@ use crate::get;
 pub const LISTED_ROUNDS: usize = 100;
 
 /// Modified time and length, which say whether a file must be read again.
-type Stamp = (SystemTime, u64);
+pub type Stamp = (SystemTime, u64);
 
 pub struct ArchivedRound {
     pub path: PathBuf,
@@ -58,11 +58,58 @@ pub struct RoundArchive {
     table: TableKind,
     /// Per table: the column sorted by, and whether largest first.
     sort: HashMap<TableKind, (usize, bool)>,
+    /// Draw the selected file's kills over the map ([`kill_history`](super::kill_history)).
+    pub show_kills: bool,
+    /// A row of the kills table, by its unsorted index.
+    pub selected_kill: Option<usize>,
 }
 
 impl Default for RoundArchive {
     fn default() -> Self {
-        RoundArchive { rounds: Vec::new(), scan: None, stale: true, selected: None, table: TableKind::Players, sort: HashMap::new() }
+        RoundArchive {
+            rounds: Vec::new(),
+            scan: None,
+            stale: true,
+            selected: None,
+            table: TableKind::Players,
+            sort: HashMap::new(),
+            show_kills: false,
+            selected_kill: None,
+        }
+    }
+}
+
+impl RoundArchive {
+    /// The selected file's kills while Show Kills is on, with the stamp it was read at.
+    pub fn shown_kills(&self) -> Option<(&PathBuf, Stamp, &[KillPlace])> {
+        if !self.show_kills {
+            return None;
+        }
+        let Some(Selected::File(path)) = &self.selected else { return None };
+        let round = self.rounds.iter().find(|round| &round.path == path)?;
+        round.read.as_ref().ok().map(|tables| (path, round.stamp, tables.kill_places.as_slice()))
+    }
+
+    #[cfg(test)]
+    pub fn with_file(path: PathBuf, stamp: Stamp, tables: RoundTables) -> Self {
+        RoundArchive {
+            rounds: vec![ArchivedRound { path: path.clone(), stamp, read: Ok(tables) }],
+            stale: false,
+            selected: Some(Selected::File(path)),
+            ..default()
+        }
+    }
+
+    #[cfg(test)]
+    pub fn select_nothing(&mut self) {
+        self.selected = None;
+    }
+
+    fn select(&mut self, selected: Selected) {
+        if self.selected.as_ref() != Some(&selected) {
+            self.selected_kill = None;
+        }
+        self.selected = Some(selected);
     }
 }
 
@@ -182,7 +229,10 @@ impl RoundsView<'_> {
                     None => None,
                 };
                 match shown {
-                    Some(Ok(tables)) => round_ui(ui, tables, &mut archive.table, &mut archive.sort),
+                    Some(Ok(tables)) => {
+                        let selected_kill = archive.show_kills.then_some(&mut archive.selected_kill);
+                        round_ui(ui, tables, &mut archive.table, &mut archive.sort, selected_kill)
+                    }
                     Some(Err(error)) => {
                         ui.label(error);
                     }
@@ -203,6 +253,13 @@ fn list_ui(ui: &mut egui::Ui, archive: &mut RoundArchive, session: &[(u32, Round
         if archive.scan.is_some() {
             ui.spinner();
         }
+        if ui.checkbox(&mut archive.show_kills, get!("editor.rounds.show_kills")).changed() {
+            archive.selected_kill = None;
+        }
+        let unplaced = archive.shown_kills().map_or(0, |(_, _, places)| places.iter().filter(|place| place.victim.is_none()).count());
+        if unplaced > 0 {
+            ui.label(get!("editor.rounds.unplaced", "count", unplaced));
+        }
     });
     egui::ScrollArea::vertical().id_salt("rounds_list").auto_shrink([false, false]).show(ui, |ui| {
         if !session.is_empty() {
@@ -211,7 +268,7 @@ fn list_ui(ui: &mut egui::Ui, archive: &mut RoundArchive, session: &[(u32, Round
                 let text = format!("{}\n{}", get!("editor.rounds.session_round", "number", number), detail_line(tables));
                 let selected = archive.selected == Some(Selected::Session(*number));
                 if ui.selectable_label(selected, text).clicked() {
-                    archive.selected = Some(Selected::Session(*number));
+                    archive.select(Selected::Session(*number));
                 }
             }
             ui.strong(get!("editor.rounds.recorded"));
@@ -222,6 +279,7 @@ fn list_ui(ui: &mut egui::Ui, archive: &mut RoundArchive, session: &[(u32, Round
                 false => get!("editor.rounds.none"),
             });
         }
+        let mut clicked = None;
         for round in &archive.rounds {
             let text = match &round.read {
                 Ok(tables) => {
@@ -236,8 +294,11 @@ fn list_ui(ui: &mut egui::Ui, archive: &mut RoundArchive, session: &[(u32, Round
             };
             let selected = archive.selected.as_ref().is_some_and(|selected| *selected == Selected::File(round.path.clone()));
             if ui.selectable_label(selected, text).clicked() {
-                archive.selected = Some(Selected::File(round.path.clone()));
+                clicked = Some(Selected::File(round.path.clone()));
             }
+        }
+        if let Some(clicked) = clicked {
+            archive.select(clicked);
         }
     });
 }
@@ -252,7 +313,14 @@ fn detail_line(tables: &RoundTables) -> String {
     line
 }
 
-fn round_ui(ui: &mut egui::Ui, tables: &RoundTables, shown: &mut TableKind, sort: &mut HashMap<TableKind, (usize, bool)>) {
+/// `selected_kill` is given while Show Kills is on, which makes the kills table's rows selectable.
+fn round_ui(
+    ui: &mut egui::Ui,
+    tables: &RoundTables,
+    shown: &mut TableKind,
+    sort: &mut HashMap<TableKind, (usize, bool)>,
+    selected_kill: Option<&mut Option<usize>>,
+) {
     let summary = &tables.summary;
     ui.horizontal_wrapped(|ui| {
         if let Some((name, color)) = &summary.winner {
@@ -292,10 +360,18 @@ fn round_ui(ui: &mut egui::Ui, tables: &RoundTables, shown: &mut TableKind, sort
             ui.selectable_value(shown, kind, kind.name());
         }
     });
+    let mut selected_kill = selected_kill;
+    // A selection with no row on screen to clear it by would leave the map faded.
+    if *shown != TableKind::Kills
+        && let Some(selected) = selected_kill.as_deref_mut()
+    {
+        *selected = None;
+    }
     ui.separator();
     if let Some(table) = tables.table(*shown) {
         let order = sort.get(shown).copied();
-        let order = table_ui(ui, *shown, table, order);
+        let selected_row = selected_kill.filter(|_| *shown == TableKind::Kills);
+        let order = table_ui(ui, *shown, table, order, selected_row);
         match order {
             Some(order) => sort.insert(*shown, order),
             None => sort.remove(shown),
@@ -304,7 +380,16 @@ fn round_ui(ui: &mut egui::Ui, tables: &RoundTables, shown: &mut TableKind, sort
 }
 
 /// Clicking a header sorts by it, numbers largest first; again, the other way. Returns the order.
-fn table_ui(ui: &mut egui::Ui, kind: TableKind, table: &Table, sort: Option<(usize, bool)>) -> Option<(usize, bool)> {
+///
+/// With `selected_row`, clicking anywhere on a row selects it (by its unsorted index), and
+/// clicking the selected row again clears it. Rows are tinted rather than made buttons.
+fn table_ui(
+    ui: &mut egui::Ui,
+    kind: TableKind,
+    table: &Table,
+    sort: Option<(usize, bool)>,
+    mut selected_row: Option<&mut Option<usize>>,
+) -> Option<(usize, bool)> {
     let mut sort = sort.filter(|(column, _)| *column < table.columns.len());
     let mut rows: Vec<usize> = (0..table.rows.len()).collect();
     if let Some((column, descending)) = sort {
@@ -313,8 +398,26 @@ fn table_ui(ui: &mut egui::Ui, kind: TableKind, table: &Table, sort: Option<(usi
             if descending { order.reverse() } else { order }
         });
     }
+    let selectable = selected_row.is_some();
+    let hover_id = egui::Id::new(("rounds_hovered_row", kind));
+    // Unsorted rows, as the last frame drew them; as grid rows, the header being 0.
+    let grid_row = |unsorted: usize| rows.iter().position(|row| *row == unsorted).map(|position| position + 1);
+    let hovered: Option<usize> = ui.data(|data| data.get_temp::<usize>(hover_id)).filter(|_| selectable).and_then(grid_row);
+    let chosen: Option<usize> = selected_row.as_deref().copied().flatten().and_then(grid_row);
+    let spacing = egui::vec2(14.0, 4.0);
+    let mut grid = egui::Grid::new(("rounds_grid", kind)).spacing(spacing);
+    grid = grid.with_row_color(move |row, style| {
+        if Some(row) == chosen {
+            Some(style.visuals.selection.bg_fill)
+        } else if Some(row) == hovered {
+            Some(style.visuals.widgets.hovered.weak_bg_fill)
+        } else {
+            (row % 2 == 1).then_some(style.visuals.faint_bg_color)
+        }
+    });
+    let mut now_hovered = None;
     egui::ScrollArea::both().id_salt(("rounds_table", kind)).auto_shrink([false, false]).show(ui, |ui| {
-        egui::Grid::new(("rounds_grid", kind)).striped(true).spacing([14.0, 4.0]).show(ui, |ui| {
+        grid.show(ui, |ui| {
             for (index, column) in table.columns.iter().enumerate() {
                 let arrow = match sort {
                     Some((sorted, true)) if sorted == index => " ▼",
@@ -330,18 +433,44 @@ fn table_ui(ui: &mut egui::Ui, kind: TableKind, table: &Table, sort: Option<(usi
                 }
             }
             ui.end_row();
-            for row in rows {
+            for row in rows.iter().copied() {
+                let mut span: Option<egui::Rect> = None;
                 for cell in &table.rows[row] {
-                    ui.horizontal(|ui| {
-                        if let Some(color) = cell.swatch {
-                            swatch(ui, color);
-                        }
-                        ui.label(&cell.text);
-                    });
+                    let rect = ui
+                        .horizontal(|ui| {
+                            if let Some(color) = cell.swatch {
+                                swatch(ui, color);
+                            }
+                            // A selectable label would take the click for text selection.
+                            ui.add(egui::Label::new(&cell.text).selectable(!selectable));
+                        })
+                        .response
+                        .rect;
+                    span = Some(span.map_or(rect, |span| span.union(rect)));
+                }
+                if let (Some(selected), Some(span)) = (selected_row.as_deref_mut(), span) {
+                    let response = ui.interact(span.expand2(spacing / 2.0), ui.id().with(("kill_row", row)), egui::Sense::click());
+                    if response.hovered() {
+                        now_hovered = Some(row);
+                    }
+                    if response.clicked() {
+                        *selected = match *selected == Some(row) {
+                            true => None,
+                            false => Some(row),
+                        };
+                    }
                 }
                 ui.end_row();
             }
         });
+    });
+    ui.data_mut(|data| match now_hovered {
+        Some(row) => {
+            data.insert_temp(hover_id, row);
+        }
+        None => {
+            data.remove_temp::<usize>(hover_id);
+        }
     });
     sort
 }
