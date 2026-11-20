@@ -1980,7 +1980,7 @@ own checkbox in the Bakes panel, on by default; a round never waits for it. `Pos
 added in `main.rs`, since it renders.
 
 **The chosen postcards are on the HUD** while nobody is fighting — the pre-game, between rounds,
-and while the team or class picker is up ([`src/game/postcards.rs`](src/game/postcards.rs)). Up to
+and while the team picker is up ([`src/game/postcards.rs`](src/game/postcards.rs)); when none of those holds they fly out off the bottom (easeInQuart, a quarter second apart). Up to
 three are laid out tilted — 4° at the tallest to 20° at the smallest, up to 8° more toward the
 bottom of the window, never past 30° — in the space left by every visible node marked
 `KeptClear` — the pickers' panels, the scoreboards and the banner's lines. A new piece of

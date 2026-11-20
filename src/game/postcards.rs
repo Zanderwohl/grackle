@@ -1,5 +1,5 @@
 //! The map's postcards on screen while the match is not being fought: in the pre-game, between
-//! rounds, and while the team or class picker is up. Each is the picture on a 3:2 card of off-white,
+//! rounds, and while the team picker is up. Cards no longer wanted fly out off the bottom. Each is the picture on a 3:2 card of off-white,
 //! grained paper with an inked outline, the picture inset by an eighth of the card on every side
 //! ([`crate::common::postcard_print::postcard`]), and up to three are laid in whatever space the rest of the UI
 //! leaves, tilted ([`lay_out`]). What counts as taken is every visible node marked [`KeptClear`].
@@ -38,7 +38,9 @@ const SETTLE_SECONDS: f32 = 0.3;
 const FLY_IN_SECONDS: f32 = 0.8;
 /// Seconds of the cards' clock a card takes to move to its place in a new layout.
 const MOVE_SECONDS: f32 = 0.5;
-/// How much later each card after the first sets off, flying in or moving.
+/// Seconds of the cards' clock a card takes to fly out off the bottom of the screen.
+const FLY_OUT_SECONDS: f32 = 0.5;
+/// How much later each card after the first sets off, flying in, moving or flying out.
 const STAGGER: f32 = 0.25;
 /// The most seconds the cards' clock moves in one frame, so a hitch slows a flight rather than
 /// skipping it.
@@ -152,6 +154,10 @@ pub fn ease_out_quart(t: f32) -> f32 {
     1.0 - (1.0 - t.clamp(0.0, 1.0)).powi(4)
 }
 
+pub fn ease_in_quart(t: f32) -> f32 {
+    t.clamp(0.0, 1.0).powi(4)
+}
+
 pub fn ease_in_out_quart(t: f32) -> f32 {
     let t = t.clamp(0.0, 1.0);
     match t < 0.5 {
@@ -261,13 +267,17 @@ fn still_fits(window: Vec2, cards: &[Card], taken: &[Rect]) -> bool {
     cards.iter().enumerate().all(|(index, card)| fits(card, bounds, taken, &cards[..index]))
 }
 
-#[derive(Component)]
-struct PostcardRoot;
+/// `leaving_until` is set once its cards are flying out, to when the last is off the screen.
+#[derive(Component, Default)]
+struct PostcardRoot {
+    leaving_until: Option<f32>,
+}
 
 #[derive(Component)]
 struct PostcardCard {
     index: usize,
     flight: Flight,
+    leaving: bool,
 }
 
 /// What the cards were last laid out for.
@@ -297,7 +307,7 @@ impl Plugin for PostcardHudPlugin {
 
 /// Whether the match is between fights or somebody is choosing, which is when postcards show.
 fn wanted(phase: Option<MatchPhase>, held: &MouseHeld) -> bool {
-    held.team_picker || held.class_picker || matches!(phase, Some(MatchPhase::PreGame | MatchPhase::BetweenRounds))
+    held.team_picker || matches!(phase, Some(MatchPhase::PreGame | MatchPhase::BetweenRounds))
 }
 
 /// A node's on-screen box in logical pixels, its `UiTransform` included.
@@ -322,7 +332,7 @@ fn show_the_postcards(
     printed: Option<Res<PrintedPostcards>>,
     windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
     kept_clear: Query<(&ComputedNode, &UiGlobalTransform, &InheritedVisibility), With<KeptClear>>,
-    roots: Query<Entity, With<PostcardRoot>>,
+    mut roots: Query<(Entity, &mut PostcardRoot)>,
     mut cards: Query<(&mut PostcardCard, &mut Node, &mut UiTransform)>,
     time: Res<Time<Real>>,
     mut layout: Local<Layout>,
@@ -348,9 +358,26 @@ fn show_the_postcards(
     layout.clock += time.delta_secs().min(MOST_STEP);
     let now = layout.clock;
 
-    if layout.pictures != shown || roots.is_empty() == !shown.is_empty() {
-        for root in &roots {
-            commands.entity(root).despawn();
+    for (entity, root) in &roots {
+        if root.leaving_until.is_some_and(|until| now >= until) {
+            commands.entity(entity).despawn();
+        }
+    }
+    let staying = roots.iter().filter(|(_, root)| root.leaving_until.is_none()).count();
+    if layout.pictures != shown || (staying == 0) == !shown.is_empty() {
+        for (_, mut root) in &mut roots {
+            if root.leaving_until.is_none() {
+                let last = layout.pictures.len().saturating_sub(1) as f32;
+                root.leaving_until = Some(now + last * STAGGER + FLY_OUT_SECONDS);
+            }
+        }
+        for (mut card, _, _) in &mut cards {
+            if !card.leaving {
+                card.leaving = true;
+                let from = card.flight.at(now);
+                let started = now + card.index as f32 * STAGGER;
+                card.flight = Flight { from, to: from.below(window), started, seconds: FLY_OUT_SECONDS, ease: ease_in_quart };
+            }
         }
         layout.pictures = shown.clone();
         layout.window = window;
@@ -359,19 +386,20 @@ fn show_the_postcards(
         if !shown.is_empty() {
             fly_in(&mut commands, &layout, &shown, window, now);
         }
-        return;
-    }
-    if shown.is_empty() {
-        return;
-    }
-
-    let fits = layout.window != window || still_fits(window, &layout.cards, &taken);
-    let waiting = layout.cards.len() < shown.len();
-    if lays_out_again(layout.window, window, settled, fits, waiting, layout.taken != taken) {
+    } else if !shown.is_empty()
+        && lays_out_again(
+            layout.window,
+            window,
+            settled,
+            layout.window != window || still_fits(window, &layout.cards, &taken),
+            layout.cards.len() < shown.len(),
+            layout.taken != taken,
+        )
+    {
         layout.window = window;
         layout.cards = lay_out(window, &taken, shown.len());
         layout.taken = taken;
-        for (mut card, _, _) in &mut cards {
+        for (mut card, _, _) in cards.iter_mut().filter(|(card, _, _)| !card.leaving) {
             let from = card.flight.at(now);
             let to = layout.cards.get(card.index).copied().unwrap_or_else(|| from.below(window));
             let started = now + card.index as f32 * STAGGER;
@@ -411,7 +439,7 @@ fn fly_in(commands: &mut Commands, layout: &Layout, shown: &[Handle<Image>], win
     let waiting_place = Card { center: Vec2::new(window.x / 2.0, window.y), width: SHORTEST * window.y * 1.5, angle: 0.0 };
     commands
         .spawn((
-            PostcardRoot,
+            PostcardRoot::default(),
             GlobalZIndex(LAYER),
             Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() },
             Pickable::IGNORE,
@@ -428,7 +456,7 @@ fn fly_in(commands: &mut Commands, layout: &Layout, shown: &[Handle<Image>], win
                     ease: ease_out_quart,
                 };
                 root.spawn((
-                    PostcardCard { index, flight },
+                    PostcardCard { index, flight, leaving: false },
                     card_node(&flight.from),
                     UiTransform { rotation: Rot2::radians(flight.from.angle), ..default() },
                     ImageNode::new(image.clone()),
@@ -508,7 +536,7 @@ mod tests {
 
     #[test]
     fn the_eases_start_at_zero_and_end_at_one() {
-        for ease in [ease_out_quart, ease_in_out_quart] {
+        for ease in [ease_out_quart, ease_in_quart, ease_in_out_quart] {
             assert_eq!(ease(0.0), 0.0);
             assert_eq!(ease(1.0), 1.0);
             assert_eq!(ease(-1.0), 0.0, "a card waiting its turn moved");
