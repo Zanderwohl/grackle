@@ -104,7 +104,7 @@ pub fn countdown_words(left: Option<f32>) -> String {
 }
 
 /// The map's own name, else its file's: the server's, on a client.
-fn map_name(metadata: Option<&MapMetadata>, server_file: Option<&ServerMapFile>, file: Option<&CurrentFilePath>) -> String {
+pub(crate) fn map_name(metadata: Option<&MapMetadata>, server_file: Option<&ServerMapFile>, file: Option<&CurrentFilePath>) -> String {
     metadata
         .and_then(|metadata| metadata.display_name.clone())
         .filter(|name| !name.is_empty())

@@ -115,6 +115,7 @@ pub fn run(binary: Binary) {
         .insert_resource(crate::weapon_editor::StartInWeaponEditor(editor_params.start_arming))
         .insert_resource(StartInLangEditor(editor_params.start_translating))
         .insert_resource(server.round())
+        .insert_resource(server.listing())
         .insert_resource(BotsAtStartup(server.bots))
         .add_plugins((
             EguiPlugin::default(),
@@ -147,7 +148,7 @@ pub fn run(binary: Binary) {
             (PerfPlugin, crate::common::screenshot::ScreenshotPlugin, SettingsPlugin, FontsPlugin, crate::common::music::MusicPlugin, crate::common::icons::IconsPlugin, UiShapePlugin, crate::common::player_settings::PlayerSettingsPlugin { profile: editor_params.profile }),
             ))
         .add_plugins(RoundSettingsFilePlugin { path: USER_SERVER_CONFIG.into() })
-        .add_plugins(crate::main_menu::MainMenuPlugin)
+        .add_plugins((crate::main_menu::MainMenuPlugin, crate::common::lan_discovery::LanDiscoveryPlugin, crate::server_browser::ServerBrowserPlugin))
         .add_plugins(crate::onboarding::OnboardingPlugin { skip: editor_params.chooses_where_to_start(), home: binary.home() })
         .add_systems(Startup, move || {
             // Read before the log existed, so said now.

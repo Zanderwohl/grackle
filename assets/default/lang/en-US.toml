@@ -239,6 +239,10 @@ unresolved = "Does not resolve"
 
 [editor.round]
 title = "Round"
+server = "Server"
+name = "Name"
+motd = "Message of the day"
+discoverable = "Discoverable over LAN"
 slots = "Slots"
 bots = "Bots"
 bots_enabled = "Bots enabled"
@@ -1063,6 +1067,41 @@ window_title = "Grackle"
 title = "Grackle"
 browse_servers = "Browse Servers"
 direct_join = "Direct Join"
+
+[server_browser]
+title = "Servers"
+querying = "Querying..."
+no_match = "No servers match the filters"
+unnamed = "Unnamed server"
+untitled = "Untitled"
+ping_ms = "{ ms } ms"
+incompatible = "Another version: { build }"
+search = "Search"
+mode = "Game mode"
+map = "Map name"
+bots = "Bots enabled"
+any = "Any"
+no = "No"
+yes = "Yes"
+max_ping = "Max ping"
+# Shown after the number, not while it is typed.
+ms_suffix = " ms"
+has_players = "Has players"
+not_full = "Not full"
+join = "Join"
+
+[server_browser.section]
+game = "Game"
+players = "Players"
+other = "Other"
+
+[server_browser.column]
+name = "Name"
+motd = "MOTD"
+map = "Map"
+mode = "Game Mode"
+players = "Players"
+ping = "Ping"
 
 [main_menu.quit_modal]
 title = "Quit Grackle?"

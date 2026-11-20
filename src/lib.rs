@@ -7,6 +7,7 @@ pub mod material;
 pub mod lang_editor;
 pub mod launch;
 pub mod main_menu;
+pub mod server_browser;
 pub mod onboarding;
 pub mod tool;
 pub mod prop;

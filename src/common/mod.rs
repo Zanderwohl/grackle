@@ -35,6 +35,7 @@ pub mod match_state;
 pub mod match_phase;
 pub mod effects;
 pub mod net;
+pub mod lan_discovery;
 pub mod net_events;
 pub mod net_transport;
 pub mod protocol;

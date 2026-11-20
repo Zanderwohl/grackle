@@ -8,7 +8,7 @@
 //!   cannot hear a client.
 
 use std::collections::BTreeSet;
-use std::net::{IpAddr, SocketAddr};
+use std::net::SocketAddr;
 
 use bevy::audio::{AudioPlayer, AudioSink, AudioSinkPlayback, PlaybackMode, PlaybackSettings, Volume};
 use bevy::prelude::*;
@@ -22,7 +22,7 @@ use crate::common::damage::PlayerId;
 use crate::common::match_phase::{Countdown, MatchNumber, MatchPhase};
 use crate::common::match_state::MatchChannel;
 use crate::common::music::MusicLibrary;
-use crate::common::net::{has_authority, is_remote_client, NetRole};
+use crate::common::net::{has_authority, is_local, is_remote_client, NetRole};
 use crate::common::net_transport::NetLink;
 use crate::common::player_settings::PlayerSettings;
 use crate::common::round_settings::RoundSettings;
@@ -325,20 +325,6 @@ fn stop_the_music(mut commands: Commands, playing: Query<Entity, With<Soundtrack
     }
 }
 
-/// Loopback, private (10/8, 172.16/12, 192.168/16), link-local, and their IPv6 counterparts.
-pub fn is_local(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(ip) => ip.is_loopback() || ip.is_private() || ip.is_link_local(),
-        IpAddr::V6(ip) => match ip.to_ipv4_mapped() {
-            Some(v4) => is_local(IpAddr::V4(v4)),
-            None => {
-                let first = ip.segments()[0];
-                ip.is_loopback() || first & 0xfe00 == 0xfc00 || first & 0xffc0 == 0xfe80
-            }
-        },
-    }
-}
-
 /// A host never is, since it may be the machine on the room's speakers.
 pub fn on_a_local_network(role: &NetRole, peers: impl IntoIterator<Item = SocketAddr>) -> bool {
     let mut peers = peers.into_iter();
@@ -475,16 +461,6 @@ mod tests {
     fn the_opening_starts_over_anything_and_a_later_one_only_in_quiet() {
         assert!(starts(CueStart::Now, true) && starts(CueStart::Now, false));
         assert!(starts(CueStart::IfQuiet, false) && !starts(CueStart::IfQuiet, true));
-    }
-
-    #[test]
-    fn local_addresses_are_loopback_private_and_link_local() {
-        for local in ["127.0.0.1", "10.1.2.3", "172.20.0.5", "192.168.1.9", "169.254.3.3", "::1", "fd00::1", "fe80::1", "::ffff:192.168.0.2"] {
-            assert!(is_local(local.parse().unwrap()), "{local}");
-        }
-        for remote in ["8.8.8.8", "172.32.0.1", "100.64.0.1", "2001:db8::1", "::ffff:8.8.8.8"] {
-            assert!(!is_local(remote.parse().unwrap()), "{remote}");
-        }
     }
 
     #[test]

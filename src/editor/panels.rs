@@ -33,7 +33,7 @@ use crate::editor::rounds_panel::{RoundsTab, RoundsView};
 use crate::get;
 use crate::tool::Tools;
 use crate::tool::bake_job::BakeProgress;
-use crate::common::round_settings::{BotSkill, RoundSettings, MOST_SLOTS};
+use crate::common::round_settings::{BotSkill, RoundSettings, ServerListing, MOST_SLOTS};
 use crate::tool::bake_progress::{self, Step};
 use crate::tool::bakes::{BakePlugin, BakeCommands, LogECS, RoomBake};
 use crate::tool::sun_bake::{BakeSunlight, ClearSunlight, SunBake};
@@ -141,6 +141,7 @@ struct PanelMessages<'w> {
     rounds: RoundsTab<'w>,
     music: Res<'w, MusicLibrary>,
     round: ResMut<'w, RoundSettings>,
+    listing: ResMut<'w, ServerListing>,
     room: MessageWriter<'w, CalculateRoomGeometry>,
     clear_room: MessageWriter<'w, ClearRoomGeometry>,
     log_ecs: MessageWriter<'w, LogECS>,
@@ -181,6 +182,7 @@ struct TabViewerAndResources<'a> {
     rounds: RoundsView<'a>,
     music: &'a MusicLibrary,
     round: &'a mut RoundSettings,
+    listing: &'a mut ServerListing,
 }
 
 impl<'a> TabViewer for TabViewerAndResources<'a> {
@@ -228,7 +230,7 @@ impl<'a> TabViewer for TabViewerAndResources<'a> {
                 map_metadata_panel_ui(ui, self.map_metadata, self.music);
             }
             TabKinds::Round => {
-                round_panel_ui(ui, self.round);
+                round_panel_ui(ui, self.round, self.listing);
             }
             TabKinds::Features => {
                 self.timeline_touched |= FeatureTimeline::ui(
@@ -252,6 +254,7 @@ impl Plugin for EditorPanelPlugin {
         app
             .init_resource::<EditorPanels>()
             .init_resource::<RoundSettings>()
+            .init_resource::<ServerListing>()
             .init_resource::<MusicLibrary>()
             .init_resource::<CurrentFilePath>()
             .add_plugins(crate::editor::rounds_panel::RoundArchivePlugin)
@@ -399,6 +402,7 @@ impl EditorPanels {
             // Through `bypass_change_detection`: held every frame, it would read as changed every
             // frame.
             round: messages.round.bypass_change_detection(),
+            listing: messages.listing.bypass_change_detection(),
         };
 
         panels.menu_bar_height = egui::Panel::top("menu_bar")
@@ -698,7 +702,18 @@ const DEFAULT_TIME_LIMIT: f32 = 600.0;
 /// What ticking Frag limit starts at.
 const DEFAULT_FRAG_LIMIT: u32 = 20;
 
-fn round_panel_ui(ui: &mut egui::Ui, settings: &mut RoundSettings) {
+fn round_panel_ui(ui: &mut egui::Ui, settings: &mut RoundSettings, listing: &mut ServerListing) {
+    ui.heading(get!("editor.round.server"));
+    egui::Grid::new("editor_round_server_grid").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
+        ui.label(get!("editor.round.name"));
+        ui.add(egui::TextEdit::singleline(&mut listing.name).char_limit(crate::common::lan_discovery::NAME_CHARS).desired_width(f32::INFINITY));
+        ui.end_row();
+        ui.label(get!("editor.round.motd"));
+        ui.add(egui::TextEdit::singleline(&mut listing.motd).char_limit(crate::common::lan_discovery::MOTD_CHARS).desired_width(f32::INFINITY));
+        ui.end_row();
+    });
+    ui.checkbox(&mut listing.discoverable, get!("editor.round.discoverable"));
+
     ui.heading(get!("editor.round.slots"));
     ui.add(egui::DragValue::new(&mut settings.slots).range(1..=MOST_SLOTS));
 

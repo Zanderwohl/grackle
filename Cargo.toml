@@ -98,6 +98,9 @@ getrandom = { version = "0.3.3", features = ["wasm_js"] }
 # so it logs to the console alone.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tracing-appender = "0.2"
+# LAN discovery's sockets: `SO_REUSEADDR`/`SO_REUSEPORT`, so several servers on one machine all
+# hear a broadcast. A browser cannot send one, so it is native only. Already in the tree.
+socket2 = { version = "0.6", features = ["all"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = { version = "0.6.1", features = ["relax-sign-encoding"] }

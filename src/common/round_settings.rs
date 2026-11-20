@@ -60,6 +60,23 @@ impl Default for RoundSettings {
     }
 }
 
+/// How the server presents itself to somebody looking for a game, and whether it answers LAN
+/// discovery ([`crate::common::lan_discovery`]). Apart from [`RoundSettings`] because it is about
+/// finding the server, not running a round.
+#[derive(Resource, Clone, Debug, PartialEq)]
+pub struct ServerListing {
+    /// Blank stands for the host's player name.
+    pub name: String,
+    pub motd: String,
+    pub discoverable: bool,
+}
+
+impl Default for ServerListing {
+    fn default() -> Self {
+        ServerListing { name: String::new(), motd: String::new(), discoverable: true }
+    }
+}
+
 /// Which part of each skill trait's range a bot rolls in: the aim, reaction, airblast attempt,
 /// standoff comfort, drift and health drive, which went with a high score over 295 `Varied` rounds
 /// (documentation/bot-brain.md). `Varied` rolls every range whole.
@@ -156,6 +173,10 @@ pub struct ServerConfig {
     pub post_game_length: f32,
     /// Seconds.
     pub between_rounds_length: f32,
+    /// Blank stands for the host's player name.
+    pub name: String,
+    pub motd: String,
+    pub discoverable: bool,
 }
 
 impl Default for ServerConfig {
@@ -173,6 +194,9 @@ impl Default for ServerConfig {
             pre_game_length: round.pre_game_length,
             post_game_length: round.post_game_length,
             between_rounds_length: round.between_rounds_length,
+            name: ServerListing::default().name,
+            motd: ServerListing::default().motd,
+            discoverable: ServerListing::default().discoverable,
         }
     }
 }
@@ -239,11 +263,16 @@ impl ServerConfig {
             between_rounds_length: self.between_rounds_length,
         }
     }
+
+    pub fn listing(&self) -> ServerListing {
+        ServerListing { name: self.name.clone(), motd: self.motd.clone(), discoverable: self.discoverable }
+    }
 }
 
-/// `text`, a server config, with every key the Round tab holds set to `settings`. Edited in place,
-/// so comments and keys it does not hold (`bots`) survive; a file that is not TOML is replaced.
-pub fn written_into(text: &str, settings: &RoundSettings) -> String {
+/// `text`, a server config, with every key the Round tab holds set to `settings` and `listing`.
+/// Edited in place, so comments and keys it does not hold (`bots`) survive; a file that is not TOML
+/// is replaced.
+pub fn written_into(text: &str, settings: &RoundSettings, listing: &ServerListing) -> String {
     let mut doc: toml_edit::DocumentMut = text.parse().unwrap_or_default();
     // Through the shortest decimal, so 0.1 is written as 0.1 and not as 0.10000000149011612.
     let seconds = |value: f32| toml_edit::value(value.to_string().parse::<f64>().unwrap_or(f64::from(value)));
@@ -268,6 +297,9 @@ pub fn written_into(text: &str, settings: &RoundSettings) -> String {
     doc["pre_game_length"] = seconds(settings.pre_game_length);
     doc["post_game_length"] = seconds(settings.post_game_length);
     doc["between_rounds_length"] = seconds(settings.between_rounds_length);
+    doc["name"] = toml_edit::value(listing.name.as_str());
+    doc["motd"] = toml_edit::value(listing.motd.as_str());
+    doc["discoverable"] = toml_edit::value(listing.discoverable);
     doc.to_string()
 }
 
@@ -289,25 +321,31 @@ struct RoundSettingsFile(std::path::PathBuf);
 #[derive(Default)]
 struct Written {
     /// What the file holds, as far as this run knows; the settings it started with at first.
-    written: Option<RoundSettings>,
+    written: Option<(RoundSettings, ServerListing)>,
     /// The settings last seen, and since when. Compared by value: the Round tab borrows them
     /// mutably every frame it is drawn, so change detection fires whether or not anything changed.
-    seen: Option<(RoundSettings, f32)>,
+    seen: Option<((RoundSettings, ServerListing), f32)>,
 }
 
-fn write_round_settings(settings: Res<RoundSettings>, file: Res<RoundSettingsFile>, time: Res<Time<Real>>, mut state: Local<Written>) {
+fn write_round_settings(
+    settings: Res<RoundSettings>,
+    listing: Option<Res<ServerListing>>,
+    file: Res<RoundSettingsFile>,
+    time: Res<Time<Real>>,
+    mut state: Local<Written>,
+) {
     let now = time.elapsed_secs();
-    let current = *settings;
-    let written = *state.written.get_or_insert(current);
-    if state.seen.is_none_or(|(seen, _)| seen != current) {
-        state.seen = Some((current, now));
+    let current = (*settings, listing.as_deref().cloned().unwrap_or_default());
+    let written = state.written.get_or_insert_with(|| current.clone()).clone();
+    if state.seen.as_ref().is_none_or(|(seen, _)| *seen != current) {
+        state.seen = Some((current.clone(), now));
     }
     let Some((_, since)) = state.seen else { return };
     if current == written || now - since < WRITE_AFTER_SECONDS {
         return;
     }
     let text = std::fs::read_to_string(&file.0).unwrap_or_default();
-    match std::fs::write(&file.0, written_into(&text, &current)) {
+    match std::fs::write(&file.0, written_into(&text, &current.0, &current.1)) {
         Ok(()) => info!("Saved the round settings to {}", file.0.display()),
         Err(error) => warn!("Could not save the round settings to {}: {error}", file.0.display()),
     }
@@ -327,6 +365,7 @@ mod tests {
     fn an_empty_config_is_the_round_tabs_defaults() {
         let config = ServerConfig::parse("").unwrap();
         assert_eq!(config.round(), RoundSettings::default());
+        assert_eq!(config.listing(), ServerListing::default());
         assert_eq!(config.bots, 0);
     }
 
@@ -419,13 +458,14 @@ mod tests {
             post_game_length: 4.0,
             between_rounds_length: 0.0,
         };
-        let text = written_into("# mine\nbots = 2\nslots = 9\n", &settings);
+        let listing = ServerListing { name: "Upstairs".into(), motd: "No \"rockets\"".into(), discoverable: false };
+        let text = written_into("# mine\nbots = 2\nslots = 9\n", &settings, &listing);
         assert!(text.contains("# mine") && text.contains("pre_game_length = 0.1\n"), "{text}");
         let read = ServerConfig::parse(&text).unwrap();
-        assert_eq!((read.round(), read.bots), (settings, 2));
-        let unlimited = written_into(&text, &RoundSettings { time_limit: None, ..settings });
+        assert_eq!((read.round(), read.listing(), read.bots), (settings, listing.clone(), 2));
+        let unlimited = written_into(&text, &RoundSettings { time_limit: None, ..settings }, &listing);
         assert_eq!(ServerConfig::parse(&unlimited).unwrap().round().time_limit, None);
-        assert_eq!(ServerConfig::parse(&written_into("not = [toml", &settings)).unwrap().round(), settings);
+        assert_eq!(ServerConfig::parse(&written_into("not = [toml", &settings, &listing)).unwrap().round(), settings);
     }
 
     /// Breaks if a change is written before it settles, an unchanged run writes at all, or a
