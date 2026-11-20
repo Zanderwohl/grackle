@@ -80,6 +80,7 @@ pub mod taunt_menu;
 pub mod taunt_view;
 pub mod kill_icon;
 pub mod plate;
+pub mod postcards;
 pub mod plate_button;
 pub mod pickup_beam;
 pub mod rounds;

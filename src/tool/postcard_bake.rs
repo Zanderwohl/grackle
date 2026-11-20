@@ -1,5 +1,6 @@
 //! The postcard bake: photographs of the map, 3:2 at [`HEIGHT`] pixels high whatever the window's
-//! size, with no HUD. One is taken through each spectator camera at its own vertical field of view,
+//! size, with no HUD, halved once to the size a postcard prints its picture at ([`KEPT_HEIGHT`]),
+//! which is all that is stored. One is taken through each spectator camera at its own vertical field of view,
 //! and one straight down, orthographic, turned in [`ANGLE_STEP_DEGREES`] steps to whichever angle
 //! lets the map's rooms and blocks fill the most of the frame.
 //!
@@ -10,13 +11,14 @@
 //! (materials, props) is not in it: after editing one, delete `cache/postcards/`.
 //!
 //! Only the authority takes them; any machine reads a set already on disk. The set read or taken
-//! most recently is kept, shrunk to [`PREVIEW_HEIGHT`], as [`CapturedPostcards`] for the postcard
-//! picker ([`postcard_button`]), until another set replaces it or another map is opened
-//! ([`FeatureTimeline::adoptions`]) or the machine joins or leaves a server, which evict it.
+//! most recently is kept as [`CapturedPostcards`] for the postcard picker ([`postcard_button`]) and
+//! the printed cards ([`crate::common::postcard_sync`]), until another set replaces it or another
+//! map is opened ([`FeatureTimeline::adoptions`]) or the machine joins or leaves a server, which
+//! evict it.
 //!
 //! Taken only in the map editor and not while rolled back, once the rooms and the sunlight (unless
 //! halfbright skips it) are baked and the map has been still for [`bake_job::SETTLE_SECONDS`]. One
-//! camera is re-aimed for each shot, so only one full-size target exists at a time. Spawn-point
+//! camera is re-aimed for each shot, so only one target exists at a time. Spawn-point
 //! bodies are hidden while it shoots ([`PostcardBake::is_shooting`]).
 
 use std::hash::{Hash, Hasher};
@@ -52,7 +54,7 @@ use crate::tool::bake_job::{self, BakeKind, BakeProgress, BakeState, BakeStatus,
 use crate::tool::room::MapVolumes;
 use crate::tool::sun_bake::SunBake;
 
-pub const HEIGHT: u32 = 1440;
+pub const HEIGHT: u32 = 2 * KEPT_HEIGHT;
 pub const WIDTH: u32 = HEIGHT * 3 / 2;
 const ASPECT: f32 = WIDTH as f32 / HEIGHT as f32;
 
@@ -64,6 +66,9 @@ pub const CACHE_DIR: &str = "cache/postcards";
 /// Pixels: a picture's height in the picker.
 pub const PREVIEW_HEIGHT: u32 = 200;
 const PREVIEW_WIDTH: u32 = PREVIEW_HEIGHT * 3 / 2;
+
+/// The size a postcard prints its picture at, so a kept picture is never resampled again.
+pub const KEPT_HEIGHT: u32 = crate::common::postcard_print::PICTURE_HEIGHT;
 
 /// One wide, so each is big enough to see.
 const PICKER: PickerKind = PickerKind::captioned("postcard", 1, [PREVIEW_WIDTH as f32, PREVIEW_HEIGHT as f32]);
@@ -203,11 +208,11 @@ impl PostcardBake {
         images: &mut Assets<Image>,
         (hash, openings): (u64, u64),
         saved: Result<(), String>,
-        small: Vec<(String, image::RgbaImage)>,
+        kept: Kept,
     ) {
         let clear = std::mem::take(&mut self.clear_after_write);
         if openings == self.openings {
-            captured.keep(hash, small, images);
+            captured.keep(hash, kept, images);
         }
         match saved {
             Ok(()) if clear => disk::remove(hash),
@@ -226,16 +231,16 @@ impl PostcardBake {
 struct Writing {
     hash: u64,
     openings: u64,
-    task: Task<(Result<(), String>, Vec<(String, image::RgbaImage)>)>,
+    task: Task<(Result<(), String>, Kept)>,
 }
 
-/// Shrinks the set on the compute pool, then writes it on the IO pool, so the full-size pictures
-/// are never copied.
-fn write_and_shrink(hash: u64, pictures: Vec<(String, image::RgbaImage)>) -> Task<(Result<(), String>, Vec<(String, image::RgbaImage)>)> {
+/// Halves the set on the compute pool, then writes it on the IO pool.
+fn write_and_shrink(hash: u64, pictures: Vec<(String, image::RgbaImage)>) -> Task<(Result<(), String>, Kept)> {
     AsyncComputeTaskPool::get().spawn(async move {
-        let small = shrunk(&pictures);
-        let saved = IoTaskPool::get().spawn(async move { disk::store(hash, &pictures) }).await;
-        (saved, small)
+        let kept = halved(&pictures);
+        let written = kept.clone();
+        let saved = IoTaskPool::get().spawn(async move { disk::store(hash, &written) }).await;
+        (saved, with_previews(kept))
     })
 }
 
@@ -415,7 +420,7 @@ mod disk {
         let _ = std::fs::remove_dir_all(folder(hash));
     }
 
-    /// By file stem. A picture that will not decode is left out.
+    /// The pictures, by file stem. A picture that will not decode is left out.
     pub fn read(hash: u64) -> Vec<(String, image::RgbaImage)> {
         let Ok(entries) = std::fs::read_dir(folder(hash)) else { return Vec::new() };
         entries
@@ -539,11 +544,11 @@ fn bake_postcards(
     }
 
     if let Some(writing) = &mut state.writing
-        && let Some((saved, small)) = check_ready(&mut writing.task)
+        && let Some((saved, kept)) = check_ready(&mut writing.task)
     {
         let key = (writing.hash, writing.openings);
         state.writing = None;
-        state.landed_write(&mut captured, &mut images, key, saved, small);
+        state.landed_write(&mut captured, &mut images, key, saved, kept);
     }
 
     if clears.read().count() > 0 {
@@ -724,15 +729,20 @@ fn next_shot(sitting: &mut Sitting) {
     sitting.shoot_at = sitting.frames + NEXT_SHOT_FRAMES;
 }
 
-/// The set of postcards read or taken most recently, shrunk for the picker.
+/// Each picture by file stem, with a preview at the picker's size.
+type Kept = Vec<(String, image::RgbaImage, image::RgbaImage)>;
+
+/// The set of postcards read or taken most recently.
 #[derive(Resource, Default)]
 pub struct CapturedPostcards {
     hash: Option<u64>,
-    /// By file stem.
+    /// The previews, by file stem.
     pictures: HashMap<String, Handle<Image>>,
+    /// The pictures at [`KEPT_HEIGHT`], by file stem.
+    kept: HashMap<String, image::RgbaImage>,
     /// Bumped whenever `pictures` is replaced.
     generation: u64,
-    loading: Option<(u64, Task<Vec<(String, image::RgbaImage)>>)>,
+    loading: Option<(u64, Task<Kept>)>,
 }
 
 impl CapturedPostcards {
@@ -740,44 +750,81 @@ impl CapturedPostcards {
         self.pictures.get(stem)
     }
 
+    pub fn picture(&self, stem: &str) -> Option<&image::RgbaImage> {
+        self.kept.get(stem)
+    }
+
+    #[cfg(test)]
+    pub fn keep_for_test(&mut self, stem: &str, picture: image::RgbaImage) {
+        self.kept.insert(stem.into(), picture);
+    }
+
+    /// Changes whenever the set is replaced or evicted.
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
     /// Forgets the set kept and any read in progress.
     fn evict(&mut self, images: &mut Assets<Image>) {
         for (_, handle) in self.pictures.drain() {
             images.remove(&handle);
         }
+        self.kept.clear();
         self.hash = None;
         self.loading = None;
         self.generation += 1;
     }
 
-    /// The set on disk under `hash`, unless it is the one kept or being read: read on the IO pool,
-    /// shrunk on the compute pool.
+    /// The pictures on disk under `hash`, unless it is the one kept or being read: read on the
+    /// IO pool, previewed on the compute pool.
     fn read(&mut self, hash: u64) {
         if self.hash == Some(hash) || self.loading.as_ref().is_some_and(|(loading, _)| *loading == hash) {
             return;
         }
         let task = AsyncComputeTaskPool::get().spawn(async move {
-            let full = IoTaskPool::get().spawn(async move { disk::read(hash) }).await;
-            shrunk(&full)
+            with_previews(IoTaskPool::get().spawn(async move { disk::read(hash) }).await)
         });
         self.loading = Some((hash, task));
     }
 
-    fn keep(&mut self, hash: u64, small: Vec<(String, image::RgbaImage)>, images: &mut Assets<Image>) {
+    fn keep(&mut self, hash: u64, kept: Kept, images: &mut Assets<Image>) {
         self.evict(images);
-        for (stem, picture) in small {
-            let image = Image::from_dynamic(image::DynamicImage::ImageRgba8(picture), true, RenderAssetUsages::default());
-            self.pictures.insert(stem, images.add(image));
+        for (stem, picture, preview) in kept {
+            let image = Image::from_dynamic(image::DynamicImage::ImageRgba8(preview), true, RenderAssetUsages::RENDER_WORLD);
+            self.pictures.insert(stem.clone(), images.add(image));
+            self.kept.insert(stem, picture);
         }
         self.hash = Some(hash);
     }
 }
 
-fn shrunk(pictures: &[(String, image::RgbaImage)]) -> Vec<(String, image::RgbaImage)> {
+/// Each picture at half its size, every pixel the average of the four it covers.
+fn halved(pictures: &[(String, image::RgbaImage)]) -> Vec<(String, image::RgbaImage)> {
     pictures
         .iter()
         .map(|(stem, picture)| {
-            (stem.clone(), image::imageops::resize(picture, PREVIEW_WIDTH, PREVIEW_HEIGHT, image::imageops::FilterType::Triangle))
+            let (width, height) = ((picture.width() / 2).max(1), (picture.height() / 2).max(1));
+            let half = image::RgbaImage::from_fn(width, height, |x, y| {
+                let mut sum = [0u32; 4];
+                for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+                    let pixel = picture.get_pixel((2 * x + dx).min(picture.width() - 1), (2 * y + dy).min(picture.height() - 1));
+                    for (total, channel) in sum.iter_mut().zip(pixel.0) {
+                        *total += channel as u32;
+                    }
+                }
+                image::Rgba(sum.map(|total| ((total + 2) / 4) as u8))
+            });
+            (stem.clone(), half)
+        })
+        .collect()
+}
+
+fn with_previews(pictures: Vec<(String, image::RgbaImage)>) -> Kept {
+    pictures
+        .into_iter()
+        .map(|(stem, picture)| {
+            let preview = image::imageops::resize(&picture, PREVIEW_WIDTH, PREVIEW_HEIGHT, image::imageops::FilterType::Triangle);
+            (stem, picture, preview)
         })
         .collect()
 }
@@ -1001,8 +1048,8 @@ mod tests {
         assert_ne!(captured.generation, generation, "the picker would keep showing the old textures");
     }
 
-    fn small_set() -> Vec<(String, image::RgbaImage)> {
-        vec![("top".into(), image::RgbaImage::new(3, 2))]
+    fn kept_set() -> Kept {
+        vec![("top".into(), image::RgbaImage::new(6, 4), image::RgbaImage::new(3, 2))]
     }
 
     /// Breaks if a set written after another map was opened is shown for the new map.
@@ -1010,9 +1057,9 @@ mod tests {
     fn a_write_landing_after_an_eviction_keeps_no_pictures() {
         let (mut state, mut captured, mut images) = (PostcardBake::default(), CapturedPostcards::default(), Assets::<Image>::default());
         state.openings = 1;
-        state.landed_write(&mut captured, &mut images, (7, 0), Ok(()), small_set());
+        state.landed_write(&mut captured, &mut images, (7, 0), Ok(()), kept_set());
         assert!(captured.get("top").is_none(), "the old map's picture came back");
-        state.landed_write(&mut captured, &mut images, (7, 1), Ok(()), small_set());
+        state.landed_write(&mut captured, &mut images, (7, 1), Ok(()), kept_set());
         assert!(captured.get("top").is_some());
     }
 
@@ -1021,7 +1068,7 @@ mod tests {
     fn a_failed_write_is_not_baked() {
         let (mut state, mut captured, mut images) = (PostcardBake::default(), CapturedPostcards::default(), Assets::<Image>::default());
         state.current = Some(7);
-        state.landed_write(&mut captured, &mut images, (7, 0), Err("disk full".into()), small_set());
+        state.landed_write(&mut captured, &mut images, (7, 0), Err("disk full".into()), kept_set());
         assert_eq!(state.baked, None);
         assert_eq!(state.gave_up, Some(7));
         assert_eq!(state.status().state, BakeState::Stale, "auto-bake would retry a failing write every second");
@@ -1032,7 +1079,7 @@ mod tests {
     fn a_clear_during_a_write_is_honored_when_it_lands() {
         let (mut state, mut captured, mut images) = (PostcardBake::default(), CapturedPostcards::default(), Assets::<Image>::default());
         state.clear_after_write = true;
-        state.landed_write(&mut captured, &mut images, (7, 0), Ok(()), small_set());
+        state.landed_write(&mut captured, &mut images, (7, 0), Ok(()), kept_set());
         assert_eq!(state.baked, None);
         assert!(!state.clear_after_write);
     }
