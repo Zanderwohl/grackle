@@ -18,8 +18,9 @@ incremental = false
 debug = false
 
 [dependencies]
-# Default features play Ogg Vorbis only; the packs' music is mostly MP3.
-bevy = { version = "0.20.0", features = ["mp3", "flac", "wav"] }
+# Default features play Ogg Vorbis only; the packs' music is mostly MP3. `jpeg` is for the main
+# menu's backgrounds; PNG is a default.
+bevy = { version = "0.20.0", features = ["mp3", "flac", "wav", "jpeg"] }
 bevy_vector_shapes = "0.14.0"
 crossbeam-channel = "0.5.15"
 

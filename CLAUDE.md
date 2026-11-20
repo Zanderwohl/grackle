@@ -129,9 +129,14 @@ file in place so comments and `bots` survive (`RoundSettingsFilePlugin`, the app
 binaries only, not tests). `--server-config PATH` reads all of it, and bots to seat by hand,
 from another TOML file for the run (`ServerConfig`;
 [`assets/default/servers/bot_arena.toml`](assets/default/servers/bot_arena.toml)
-is the example). A file that will not read is passed over with a warning in
-the log (`ServerConfig::resolve`): the named file, then the user's, then the
-defaults. **An unattended round** is
+is the example), and never writes to it. **`--server-profile NAME`** runs
+the server as a profile, as `--profile N` does a player (`ServerFiles`):
+`servers/NAME.toml` from the highest pack below the user's is read until the
+user pack has its own copy, which the Round tab saves to, starting from the
+shipped file's text so its comments and `bots` carry over; a name no pack has
+starts from the defaults, with a warning. A file that will not read is passed
+over with a warning in the log (`ServerConfig::resolve`): the named file, then
+the saved one, then the profile's shipped copy, then the defaults. **An unattended round** is
 `--map PATH --server-config PATH --play --spectate --rounds 1`: `--map` opens
 a blueprint as its file, `--spectate` takes the Spectate seat each round,
 `--rounds N` quits once N rounds have ended (the cycle starts each next one), and every round's standings are
@@ -259,8 +264,8 @@ shape is a new producer and not a rewrite of every consumer — see
 | `src/common/` | Shared: i18n, geometry, rays, gamemodes, items. |
 | `src/unlock/` | The crate-drop prototype. Orthogonal — see above. |
 | `src/bin/` | `ensure_lang` (fills missing translation keys), `new_map_template` (writes the new-map, demo-scene, arena, cloister, waterworks and showcase blueprints), `map_stats` (bakes a blueprint's nav graph headless and prints its statistics and top-down charts of each field), `decal_images` (rasterizes the default pack's decal SVGs), `bake_body_clips` (seeds a pack's body animations from the pose functions they replace, and writes the clips `seed::WRITTEN` generates key by key), `default_materials` (writes the default pack's materials), `crate_drop`. |
-| `assets/default/` | The default pack: `lang/`, `blueprints/`, `servers/` (example `--server-config` files). |
-| `assets/user/` | The user pack: gitignored, made at startup, last in `default_packs()` so it overrides the shipped one. A new map or prop is saved here unless the document already has a folder. Also holds `settings.toml`, the player settings, `shortcuts.toml` and `server.toml` (the Round tab). |
+| `assets/default/` | The default pack: `lang/`, `blueprints/`, `servers/` (example `--server-config` files), `images/backgrounds/title/` (main-menu backgrounds). |
+| `assets/user/` | The user pack: gitignored, made at startup with `blueprints/`, `props/` and `images/backgrounds/title/`, last in `default_packs()` so it overrides the shipped one. A new map or prop is saved here unless the document already has a folder. Also holds `settings.toml`, the player settings, `shortcuts.toml` and `server.toml` (the Round tab). |
 | `cache/` | Gitignored, derived from the packs and maps: `thumbnail/props/{name}.png`, `nav/{hash}.bin`, `lightmap/{hash}.bin`, `postcards/{hash}/*.png`, `rounds/{map}/*.jsonl`. Safe to delete. |
 | `logs/` | Gitignored: the log's file drain, one file per launch. |
 | `screenshots/` | Gitignored, made at startup: `F12` saves the window as drawn, HUD and egui included, as `{date}_{time}_{millisecond}.png` ([`src/common/screenshot.rs`](src/common/screenshot.rs)). |
@@ -459,7 +464,7 @@ in a team mode is still a gamemode question.
 the Mode menu's order. **`Onboarding`** ([`src/onboarding.rs`](src/onboarding.rs)) is never in the
 menu: it is the *initial* state, inserted by `OnboardingPlugin` when the saved player name is
 blank and the command line names nothing to open or play (`EditorParams::chooses_where_to_start`:
-any mode flag, `--map`, `--serve`, `--connect`, `--server-config`, `--spectate`, `--rounds` or
+any mode flag, `--map`, `--serve`, `--connect`, `--server-config`, `--server-profile`, `--spectate`, `--rounds` or
 `--class`; not `--lang`, `--game` or `--profile`). It asks for a name and a field of
 view (45°–110°, default 80°), and Continue writes those two fields to `PlayerSettings`, leaving the rest as the Settings window left them, requests File → Demo
 Maps → Demo Scene and enters the binary's home mode (`launch::Binary::home`): the main menu for
@@ -467,7 +472,10 @@ Maps → Demo Scene and enters the binary's home mode (`launch::Binary::home`): 
 
 **The main menu** ([`src/main_menu.rs`](src/main_menu.rs)) is Bevy UI plates
 (`game::menu`) on the egui context camera, the one camera live outside the
-viewport modes: Browse Servers, the server browser
+viewport modes, over a picture chosen at random each time it goes up from every
+pack's `images/backgrounds/title/` (PNG or JPEG, its extension lower case; a higher pack's file replacing a
+lower one's at the same path), sized to cover the window at its own aspect and
+resized with it ([`src/title_background.rs`](src/title_background.rs)): Browse Servers, the server browser
 ([`src/server_browser.rs`](src/server_browser.rs), an egui window opening centered: a table of
 the servers LAN discovery found, sorted by name until a header is clicked, the header pinned
 above the scroll, "Querying..." while empty, a search bar whose space-separated terms must each

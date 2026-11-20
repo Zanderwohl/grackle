@@ -1,6 +1,8 @@
 pub const MAP_BLUEPRINT_EXTENSION: &str = "gmb";
 /// Where maps live inside a pack.
 pub const BLUEPRINTS_DIR: &str = "blueprints";
+/// The main menu's background pictures inside a pack.
+pub const TITLE_BACKGROUNDS_DIR: &str = "images/backgrounds/title";
 pub const MAP_BACKUP_EXTENSION: &str = "bak";
 
 /// What `--serve` binds and a bare hostname connects to. Unregistered, and

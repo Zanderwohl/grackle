@@ -23,6 +23,9 @@ pub struct EditorParams {
     pub map: Option<PathBuf>,
     /// `--server-config PATH`. Read by [`crate::common::round_settings::ServerConfig::resolve`], which falls back past a bad one.
     pub server_config: Option<PathBuf>,
+    /// `--server-profile NAME`: `servers/NAME.toml` from the packs, saved to the user pack's copy.
+    /// See [`crate::common::round_settings::ServerFiles`].
+    pub server_profile: Option<String>,
     pub start_spectating: bool,
     /// `--rounds N`: quit once N rounds have ended.
     pub rounds: Option<u32>,
@@ -43,6 +46,7 @@ impl EditorParams {
             || self.map.is_some()
             || self.net != NetRole::Solo
             || self.server_config.is_some()
+            || self.server_profile.is_some()
             || self.start_spectating
             || self.rounds.is_some()
             || self.class.is_some()
@@ -160,6 +164,20 @@ impl EditorParams {
                     .help("Read the Round tab's settings, and bots to seat, from a TOML file.")
             )
             .arg(
+                Arg::new("server_profile")
+                    .long("server-profile")
+                    .value_name("NAME")
+                    .value_parser(|name: &str| {
+                        if crate::common::round_settings::is_profile_name(name) {
+                            Ok(name.to_owned())
+                        } else {
+                            Err("a profile is named by letters, digits, '-' and '_'".to_owned())
+                        }
+                    })
+                    .conflicts_with_all(["connect", "server_config"])
+                    .help("Run the server as profile NAME: servers/NAME.toml from the packs, with the Round tab saving to the user pack's copy.")
+            )
+            .arg(
                 Arg::new("spectate")
                     .long("spectate")
                     .action(ArgAction::SetTrue)
@@ -230,6 +248,7 @@ impl EditorParams {
             profile: matches.get_one::<u8>("profile").copied(),
             map,
             server_config: matches.get_one::<PathBuf>("server_config").cloned(),
+            server_profile: matches.get_one::<String>("server_profile").cloned(),
             start_spectating: matches.get_flag("spectate"),
             rounds: matches.get_one::<u32>("rounds").copied(),
             class,
@@ -257,6 +276,14 @@ mod tests {
     }
 
     #[test]
+    fn a_server_profile_is_a_name_and_excludes_a_server_config() {
+        assert_eq!(parse(&["--server-profile", "bot_arena"]).unwrap().server_profile.as_deref(), Some("bot_arena"));
+        assert!(parse(&["--server-profile", "../player"]).is_err());
+        assert!(parse(&["--server-profile", "duel", "--server-config", "x.toml"]).is_err());
+        assert!(parse(&["--server-profile", "duel", "--connect", "example.net"]).is_err());
+    }
+
+    #[test]
     fn only_a_bare_launch_may_onboard() {
         for bare in [&[][..], &["--profile", "2"], &["--lang", "de-DE"]] {
             assert!(!parse(bare).unwrap().chooses_where_to_start(), "{bare:?}");
@@ -273,6 +300,7 @@ mod tests {
             &["--map", "assets/default/blueprints/arena.gmb"],
             &["--spectate"],
             &["--rounds", "1"],
+            &["--server-profile", "bot_arena"],
         ] {
             assert!(parse(chosen).unwrap().chooses_where_to_start(), "{chosen:?}");
         }
@@ -364,12 +392,18 @@ mod tests {
         assert!(params.map.is_none() && params.server_config.is_none() && !params.start_spectating && params.rounds.is_none());
     }
 
-    /// The shipped example has to parse, or the documented way to start a bot round fails.
+    /// The shipped example has to parse, by path and as a profile, or the documented way to
+    /// start a bot round fails.
     #[test]
     fn the_shipped_server_config_is_read() {
-        let params = parse(&["--server-config", "assets/default/servers/bot_arena.toml"]).unwrap();
-        let (config, problems) = crate::common::round_settings::ServerConfig::resolve(params.server_config.as_deref(), std::path::Path::new("no_such_user_file.toml"));
-        assert!(config.fill_with_bots && problems.is_empty(), "{problems:?}");
+        use crate::common::round_settings::{ServerConfig, ServerFiles};
+        for args in [&["--server-config", "assets/default/servers/bot_arena.toml"][..], &["--server-profile", "bot_arena"]] {
+            let params = parse(args).unwrap();
+            let files = ServerFiles::new(params.server_config, params.server_profile, &crate::common::lang::default_packs());
+            let files = ServerFiles { saved: "no_such_user_file.toml".into(), ..files };
+            let (config, problems) = ServerConfig::resolve(&files);
+            assert!(config.fill_with_bots && problems.is_empty(), "{args:?}: {problems:?}");
+        }
     }
 
     #[test]

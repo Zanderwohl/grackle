@@ -3,13 +3,54 @@
 //! saved with it nor sent to clients. They are kept in [`USER_SERVER_CONFIG`], which the Round tab
 //! writes back to, and `--server-config` reads them from another [`ServerConfig`] file for a run.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use bevy::prelude::*;
 use serde::Deserialize;
 
-/// The Round tab's settings between runs, read at startup unless `--server-config` names another.
+/// The Round tab's settings between runs, read at startup unless `--server-config` or
+/// `--server-profile` names another.
 pub const USER_SERVER_CONFIG: &str = "assets/user/server.toml";
+
+/// Where a pack keeps server configs, each a profile named by its stem.
+pub const SERVERS_DIR: &str = "servers";
+
+/// Which server configs a run reads, and which one the Round tab writes back to.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ServerFiles {
+    /// `--server-config`: read first and never written.
+    pub named: Option<PathBuf>,
+    pub profile: Option<String>,
+    /// Where the Round tab saves: the user pack's copy of the profile, else [`USER_SERVER_CONFIG`].
+    pub saved: PathBuf,
+    /// The highest-priority pack's copy of the profile below the user pack. Read while `saved`
+    /// does not exist, and the text the first save edits, so its comments and `bots` carry over.
+    pub shipped: Option<PathBuf>,
+}
+
+impl ServerFiles {
+    /// `packs` lowest priority first, as [`crate::common::lang::default_packs`] lists them.
+    pub fn new(named: Option<PathBuf>, profile: Option<String>, packs: &[PathBuf]) -> Self {
+        let Some(name) = &profile else {
+            return ServerFiles { named, profile, saved: USER_SERVER_CONFIG.into(), shipped: None };
+        };
+        let file = Path::new(SERVERS_DIR).join(format!("{name}.toml"));
+        let user = Path::new(crate::common::assets::USER_PACK);
+        let shipped = packs
+            .iter()
+            .rev()
+            .filter(|pack| pack.as_path() != user)
+            .map(|pack| pack.join(&file))
+            .find(|path| path.exists());
+        ServerFiles { named, saved: user.join(&file), shipped, profile }
+    }
+}
+
+/// What `--server-profile` accepts: a file stem, so a profile cannot name a path outside
+/// `servers/`.
+pub fn is_profile_name(name: &str) -> bool {
+    !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
 
 /// How long the Round tab's settings stay unchanged before they are written, so a drag on a
 /// number is one write.
@@ -229,22 +270,36 @@ impl ServerConfig {
         Self::parse(&text).map_err(|error| format!("{}: {error}", path.display()))
     }
 
-    /// The config named on the command line, else the user's, else the defaults, each falling
-    /// back past one that will not read. Returns why any was passed over; a missing user file is
-    /// not a problem, since nothing has been saved yet.
-    pub fn resolve(named: Option<&Path>, user: &Path) -> (Self, Vec<String>) {
+    /// `files.named`, else the saved file, else a profile's shipped copy, else the defaults, each
+    /// falling back past one that will not read. Returns why any was passed over; a missing saved
+    /// file is not a problem, since nothing has been saved yet.
+    pub fn resolve(files: &ServerFiles) -> (Self, Vec<String>) {
         let mut problems = Vec::new();
-        if let Some(named) = named {
+        if let Some(named) = &files.named {
             match Self::read(named) {
                 Ok(config) => return (config, problems),
-                Err(error) => problems.push(format!("--server-config {error}; reading {} instead", user.display())),
+                Err(error) => problems.push(format!("--server-config {error}; reading {} instead", files.saved.display())),
             }
         }
-        if user.exists() {
-            match Self::read(user) {
+        let present: Vec<&PathBuf> = std::iter::once(&files.saved).chain(&files.shipped).filter(|path| path.exists()).collect();
+        for (index, path) in present.iter().enumerate() {
+            match Self::read(path) {
                 Ok(config) => return (config, problems),
-                Err(error) => problems.push(format!("{error}; using the default round settings")),
+                Err(error) => {
+                    let instead = present
+                        .get(index + 1)
+                        .map_or("using the default round settings".to_owned(), |next| format!("reading {} instead", next.display()));
+                    problems.push(format!("{error}; {instead}"));
+                }
             }
+        }
+        if let Some(profile) = &files.profile
+            && files.shipped.is_none()
+            && !files.saved.exists()
+        {
+            problems.push(format!(
+                "no pack has {SERVERS_DIR}/{profile}.toml, so server profile {profile} starts from the defaults"
+            ));
         }
         (Self::default(), problems)
     }
@@ -306,17 +361,23 @@ pub fn written_into(text: &str, settings: &RoundSettings, listing: &ServerListin
 /// Writes the Round tab's settings to a file once they have been left alone for a moment. Added
 /// by the editor binary only, so tests write nothing.
 pub struct RoundSettingsFilePlugin {
-    pub path: std::path::PathBuf,
+    pub path: PathBuf,
+    /// Edited instead while `path` does not exist yet: [`ServerFiles::shipped`].
+    pub seed: Option<PathBuf>,
 }
 
 impl Plugin for RoundSettingsFilePlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(RoundSettingsFile(self.path.clone())).add_systems(Update, write_round_settings);
+        app.insert_resource(RoundSettingsFile { path: self.path.clone(), seed: self.seed.clone() })
+            .add_systems(Update, write_round_settings);
     }
 }
 
 #[derive(Resource)]
-struct RoundSettingsFile(std::path::PathBuf);
+struct RoundSettingsFile {
+    path: PathBuf,
+    seed: Option<PathBuf>,
+}
 
 #[derive(Default)]
 struct Written {
@@ -344,10 +405,28 @@ fn write_round_settings(
     if current == written || now - since < WRITE_AFTER_SECONDS {
         return;
     }
-    let text = std::fs::read_to_string(&file.0).unwrap_or_default();
-    match std::fs::write(&file.0, written_into(&text, &current.0, &current.1)) {
-        Ok(()) => info!("Saved the round settings to {}", file.0.display()),
-        Err(error) => warn!("Could not save the round settings to {}: {error}", file.0.display()),
+    let seed = || file.seed.as_ref().and_then(|seed| std::fs::read_to_string(seed).ok());
+    // `resolve` passed over a saved file that will not parse, so the seed is what is in force. A
+    // file that cannot be read is left alone.
+    let text = match std::fs::read_to_string(&file.path) {
+        Ok(text) if ServerConfig::parse(&text).is_err() => Some(seed().unwrap_or(text)),
+        Ok(text) => Some(text),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Some(seed().unwrap_or_default()),
+        Err(error) => {
+            warn!("Could not read {} to save the round settings into it: {error}", file.path.display());
+            None
+        }
+    };
+    if let Some(text) = text {
+        let saved = file
+            .path
+            .parent()
+            .map_or(Ok(()), std::fs::create_dir_all)
+            .and_then(|()| std::fs::write(&file.path, written_into(&text, &current.0, &current.1)));
+        match saved {
+            Ok(()) => info!("Saved the round settings to {}", file.path.display()),
+            Err(error) => warn!("Could not save the round settings to {}: {error}", file.path.display()),
+        }
     }
     // Not tried again until they change, whether or not the write went through.
     state.written = Some(current);
@@ -412,34 +491,108 @@ mod tests {
         dir.join(name)
     }
 
-    /// Breaks if the order is not named, then the user's, then the defaults, or a bad file stops
-    /// the fall rather than being passed over.
+    fn files(named: Option<&Path>, saved: &Path, shipped: Option<&Path>) -> ServerFiles {
+        ServerFiles {
+            named: named.map(Path::to_path_buf),
+            profile: shipped.map(|_| "profile".to_owned()),
+            saved: saved.to_path_buf(),
+            shipped: shipped.map(Path::to_path_buf),
+        }
+    }
+
+    /// Breaks if the order is not named, then the saved file, then the shipped one, then the
+    /// defaults, or a bad file stops the fall rather than being passed over.
     #[test]
     fn a_config_that_will_not_read_falls_back_to_the_next() {
         let named = scratch("named.toml");
         let user = scratch("user.toml");
+        let shipped = scratch("shipped.toml");
         let missing = scratch("missing.toml");
         std::fs::write(&named, "slots = 3").unwrap();
         std::fs::write(&user, "slots = 5").unwrap();
+        std::fs::write(&shipped, "slots = 7").unwrap();
+        let resolve = |named: Option<&Path>, saved: &Path, shipped: Option<&Path>| {
+            let (config, problems) = ServerConfig::resolve(&files(named, saved, shipped));
+            (config, problems.len())
+        };
 
-        let (config, problems) = ServerConfig::resolve(Some(&named), &user);
-        assert_eq!((config.slots, problems.len()), (3, 0), "the named file was not the one used");
-        let (config, problems) = ServerConfig::resolve(None, &user);
-        assert_eq!((config.slots, problems.len()), (5, 0), "the user's file was not read by default");
-        let (config, problems) = ServerConfig::resolve(None, &missing);
-        assert_eq!((config, problems.len()), (ServerConfig::default(), 0), "a missing user file was a problem");
+        assert_eq!(resolve(Some(&named), &user, None).0.slots, 3, "the named file was not the one used");
+        assert_eq!(resolve(None, &user, None), (ServerConfig::read(&user).unwrap(), 0), "the saved file was not read by default");
+        assert_eq!(resolve(None, &missing, None), (ServerConfig::default(), 0), "a missing saved file was a problem");
+        assert_eq!(resolve(None, &user, Some(&shipped)).0.slots, 5, "a shipped profile beat the saved one");
+        assert_eq!(resolve(None, &missing, Some(&shipped)), (ServerConfig::read(&shipped).unwrap(), 0), "a profile never saved did not read its shipped copy");
 
         std::fs::write(&named, "slots = 0").unwrap();
-        let (config, problems) = ServerConfig::resolve(Some(&named), &user);
-        assert_eq!((config.slots, problems.len()), (5, 1), "a bad named file did not fall back to the user's");
-        let (config, problems) = ServerConfig::resolve(Some(&missing), &user);
-        assert_eq!((config.slots, problems.len()), (5, 1), "a missing named file did not fall back to the user's");
+        assert_eq!(resolve(Some(&named), &user, None).0.slots, 5, "a bad named file did not fall back to the saved one");
+        assert_eq!(resolve(Some(&missing), &user, None).1, 1, "a missing named file was not a problem");
 
         std::fs::write(&user, "slots = \"many\"").unwrap();
-        let (config, problems) = ServerConfig::resolve(Some(&named), &user);
-        assert_eq!((config, problems.len()), (ServerConfig::default(), 2), "two bad files did not fall back to the defaults");
-        let (config, problems) = ServerConfig::resolve(None, &user);
-        assert_eq!((config, problems.len()), (ServerConfig::default(), 1));
+        assert_eq!(resolve(Some(&named), &user, None), (ServerConfig::default(), 2), "two bad files did not fall back to the defaults");
+        assert_eq!(resolve(None, &user, Some(&shipped)), (ServerConfig::read(&shipped).unwrap(), 1), "a bad saved profile did not fall back to the shipped one");
+    }
+
+    /// Breaks if a profile is not read from the highest pack below the user's, not saved to the user
+    /// pack, or not reported when no pack has it.
+    #[test]
+    fn a_server_profile_is_found_in_the_packs() {
+        let root = scratch("packs");
+        let (low, high) = (root.join("low"), root.join("high"));
+        for pack in [&low, &high] {
+            std::fs::create_dir_all(pack.join(SERVERS_DIR)).unwrap();
+            std::fs::write(pack.join(SERVERS_DIR).join("duel.toml"), "slots = 2").unwrap();
+        }
+        let packs = [low.clone(), high.clone(), crate::common::assets::USER_PACK.into()];
+
+        let duel = ServerFiles::new(None, Some("duel".into()), &packs);
+        assert_eq!(duel.shipped, Some(high.join("servers/duel.toml")));
+        assert_eq!(duel.saved, Path::new(crate::common::assets::USER_PACK).join("servers/duel.toml"));
+
+        let plain = ServerFiles::new(None, None, &packs);
+        assert_eq!((plain.saved, plain.shipped), (PathBuf::from(USER_SERVER_CONFIG), None));
+
+        let nowhere = ServerFiles { saved: scratch("nowhere.toml"), ..ServerFiles::new(None, Some("nowhere".into()), &packs) };
+        let (config, problems) = ServerConfig::resolve(&nowhere);
+        assert_eq!((config, problems.len()), (ServerConfig::default(), 1), "a profile found nowhere was not reported");
+    }
+
+    #[test]
+    fn a_profile_name_is_a_file_stem() {
+        assert!(is_profile_name("bot_arena") && is_profile_name("duel-2"));
+        for bad in ["", "../server", "a/b", "a.toml", "with space"] {
+            assert!(!is_profile_name(bad), "{bad:?}");
+        }
+    }
+
+    /// Breaks if a profile's first save, or a save over a broken one, loses the shipped copy's
+    /// `bots`, or the folder is not made.
+    #[test]
+    fn a_profiles_first_save_keeps_its_shipped_file() {
+        use bevy::time::TimeUpdateStrategy;
+        let seed = scratch("seed.toml");
+        std::fs::write(&seed, "# shipped\nbots = 3\nslots = 4\n").unwrap();
+        let path = scratch("fresh").join("servers").join("seeded.toml");
+        let _ = std::fs::remove_dir_all(scratch("fresh"));
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, RoundSettingsFilePlugin { path: path.clone(), seed: Some(seed) }));
+        app.insert_resource(TimeUpdateStrategy::ManualDuration(std::time::Duration::from_secs_f32(0.2)));
+        app.insert_resource(ServerConfig::parse("slots = 4").unwrap().round());
+        app.update();
+        app.world_mut().resource_mut::<RoundSettings>().slots = 6;
+        for _ in 0..5 {
+            app.update();
+        }
+        let text = std::fs::read_to_string(&path).unwrap();
+        let read = ServerConfig::parse(&text).unwrap();
+        assert!(text.contains("# shipped"), "{text}");
+        assert_eq!((read.slots, read.bots), (6, 3));
+
+        std::fs::write(&path, "slots = \"many\"\n").unwrap();
+        app.world_mut().resource_mut::<RoundSettings>().slots = 7;
+        for _ in 0..5 {
+            app.update();
+        }
+        let read = ServerConfig::read(&path).unwrap();
+        assert_eq!((read.slots, read.bots), (7, 3), "a broken saved profile was edited instead of the shipped one");
     }
 
     /// Breaks if what the Round tab writes does not read back as the same settings, or the
@@ -476,7 +629,7 @@ mod tests {
         let path = scratch("written.toml");
         let _ = std::fs::remove_file(&path);
         let mut app = App::new();
-        app.add_plugins((MinimalPlugins, RoundSettingsFilePlugin { path: path.clone() }));
+        app.add_plugins((MinimalPlugins, RoundSettingsFilePlugin { path: path.clone(), seed: None }));
         app.insert_resource(TimeUpdateStrategy::ManualDuration(std::time::Duration::from_secs_f32(0.2)));
         app.init_resource::<RoundSettings>();
         for _ in 0..10 {
