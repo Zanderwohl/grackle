@@ -118,7 +118,8 @@ chokepoint:
   it is what makes a private game among friends possible, and it is the fallback
   when the list is down or the game is old enough that nobody is running one.
 - **LAN discovery.** A broadcast on the local network so servers turn up without
-  anyone typing an address, for playing offline together.
+  anyone typing an address, for playing offline together. Built: see
+  `src/common/lan_discovery.rs` and the main menu's server browser.
 
 LAN discovery carries a constraint the other two do not: **a browser cannot send
 a UDP broadcast**, so it cannot work in the wasm client. It is a native-build

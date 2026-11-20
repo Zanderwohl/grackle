@@ -15,15 +15,14 @@ use crate::common::keybind::{self, Action, Actions};
 use crate::common::settings::{OpenSettings, SettingsWindow};
 use crate::common::swatch::Swatch;
 use crate::editor::net_menu::{ConnectDialog, ConnectMode};
-use crate::game::menu::{menu_button, menu_item_node, menu_panel, menu_title, panel_swatch, ITEM_SIZE};
+use crate::server_browser::ServerBrowser;
+use crate::game::menu::{menu_button, menu_panel, menu_title, panel_swatch, ITEM_SIZE};
 use crate::game::hud::{LEAN, WINDOW_MARGIN, ZONE_DROP, ZONE_STROKE};
 use crate::game::kill_icon;
-use crate::game::plate::{plate_row_node, plate_text, PlateRow, FollowsTheLean, Plate, PlateIcon};
+use crate::game::plate::{plate_row_node, plate_text, PlateRow, Plate, PlateIcon};
 use crate::game::plate_button::{plate_button_node, ButtonActivated, PlateButton};
 use crate::get;
 
-/// OKLCH lightness a row that does nothing yet is below a button.
-const UNAVAILABLE_DARKEN: f32 = -0.2;
 const BACKGROUND: Color = Color::srgb(0.07, 0.07, 0.08);
 const BLOCKER_SHADE: Color = Color::srgba(0.0, 0.0, 0.0, 0.6);
 const MENU_LAYER: i32 = 10;
@@ -44,6 +43,7 @@ impl Plugin for MainMenuPlugin {
         app.init_resource::<QuitQuestion>()
             .init_resource::<DisplayFont>()
             .init_resource::<ConnectDialog>()
+            .init_resource::<ServerBrowser>()
             .add_message::<AppExit>()
             .add_observer(choose)
             .add_systems(
@@ -78,6 +78,7 @@ struct QuitRoot;
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 enum MenuItem {
+    BrowseServers,
     DirectJoin,
     Tools,
     Settings,
@@ -158,8 +159,7 @@ fn spawn_the_menu(commands: &mut Commands, camera: Option<Entity>, font: &Handle
     root.with_children(|root| {
         root.spawn(menu_panel()).with_children(|menu| {
             menu.spawn(menu_title(font, get!("main_menu.title")));
-            let unavailable = Swatch::neutral().lightened(UNAVAILABLE_DARKEN);
-            menu.spawn((Plate::new(unavailable), FollowsTheLean, menu_item_node()))
+            menu.spawn((MenuItem::BrowseServers, menu_button(Swatch::neutral())))
                 .with_child(plate_text(font, get!("main_menu.browse_servers"), ITEM_SIZE));
             menu.spawn((MenuItem::DirectJoin, menu_button(Swatch::neutral())))
                 .with_child(plate_text(font, get!("main_menu.direct_join"), ITEM_SIZE));
@@ -217,11 +217,13 @@ fn choose(
     mut commands: Commands,
     mut question: ResMut<QuitQuestion>,
     mut dialog: ResMut<ConnectDialog>,
+    mut browser: ResMut<ServerBrowser>,
     mut next: ResMut<NextState<AppMode>>,
     mut exit: MessageWriter<AppExit>,
 ) {
     if let Ok(item) = items.get(activated.entity) {
         match item {
+            MenuItem::BrowseServers => browser.open = true,
             MenuItem::DirectJoin => dialog.show(ConnectMode::Join),
             MenuItem::Tools => next.set(AppMode::Editor),
             MenuItem::Settings => commands.insert_resource(OpenSettings),
@@ -273,11 +275,12 @@ fn dock_button_node() -> Node {
 fn show_what_is_over_it(
     question: Res<QuitQuestion>,
     dialog: Res<ConnectDialog>,
+    browser: Res<ServerBrowser>,
     settings: Option<Res<SettingsWindow>>,
     asked: Option<Res<OpenSettings>>,
     mut nodes: Query<(&mut Node, Has<Blocker>), Or<(With<Blocker>, With<QuitRoot>)>>,
 ) {
-    let covered = question.open || dialog.open || asked.is_some() || settings.is_some_and(|window| window.is_open());
+    let covered = question.open || dialog.open || browser.open || asked.is_some() || settings.is_some_and(|window| window.is_open());
     for (mut node, blocker) in &mut nodes {
         let display = match if blocker { covered } else { question.open } {
             true => Display::Flex,
@@ -367,12 +370,14 @@ mod tests {
         assert!(!showing::<MainMenuRoot>(&mut self::app(AppMode::Editor)));
     }
 
-    /// Fails if Browse Servers can be activated before it exists.
+    /// Fails if Browse Servers does not open the browser, or leaves the menu clickable under it.
     #[test]
-    fn the_unbuilt_rows_are_not_buttons() {
+    fn browse_servers_opens_the_browser_over_a_blocked_menu() {
         let mut app = app(AppMode::MainMenu);
-        let buttons = app.world_mut().query::<&MenuItem>().iter(app.world()).count();
-        assert_eq!(buttons, 4);
+        activate(&mut app, MenuItem::BrowseServers);
+        app.update();
+        assert!(app.world().resource::<ServerBrowser>().open);
+        assert!(displayed::<Blocker>(&mut app), "the menu took clicks under the browser");
     }
 
     /// Fails if a dock button loses its icon or gains text, or Quit is joined to the others.

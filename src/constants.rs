@@ -10,6 +10,10 @@ pub const DEFAULT_PORT: u16 = 27100;
 /// `DEFAULT_PORT` as text, since clap wants a `&'static str` default.
 pub const DEFAULT_PORT_TEXT: &str = "27100";
 
+/// The UDP port LAN discovery queries are broadcast to and every discoverable server answers on,
+/// whatever its game port. See [`crate::common::lan_discovery`].
+pub const DISCOVERY_PORT: u16 = 27101;
+
 /// Physics rate and network tick. Lightyear's tick and `Time<Fixed>` must
 /// agree exactly, since prediction reconciles in ticks.
 pub const TICK_HZ: f64 = 64.0;

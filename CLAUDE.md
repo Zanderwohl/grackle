@@ -102,8 +102,10 @@ start with the launcher drawn. A `Goal` is a place or a pickup. The
 **Round** tab, right of Metadata, holds the server's `RoundSettings`
 ([`src/common/round_settings.rs`](src/common/round_settings.rs)) — not the
 map's, so neither saved nor sent: **slots**, the host and bots included, which
-caps the clients a server takes from when it starts listening; **bots enabled**
-(on by default), which off retires every bot seat, grays out the other bot
+caps the clients a server takes from when it starts listening; a **name**,
+a **message of the day** and **discoverable over LAN** (on by default), which are
+`ServerListing`, kept apart from `RoundSettings` because they are about finding the server;
+**bots enabled** (on by default), which off retires every bot seat, grays out the other bot
 settings, and lets a round start without the nav graph or its sightlines,
 neither of which is baked during it (`RoundSettings::wants_bots`); and **fill empty
 slots with bots**, which `fill_empty_slots` keeps true through a round as
@@ -465,8 +467,16 @@ Maps → Demo Scene and enters the binary's home mode (`launch::Binary::home`): 
 
 **The main menu** ([`src/main_menu.rs`](src/main_menu.rs)) is Bevy UI plates
 (`game::menu`) on the egui context camera, the one camera live outside the
-viewport modes: Browse Servers as a plain plate, since it does not exist
-yet; and Direct Join, the connect dialog's join half. A dock of small icon
+viewport modes: Browse Servers, the server browser
+([`src/server_browser.rs`](src/server_browser.rs), an egui window opening centered: a table of
+the servers LAN discovery found, sorted by name until a header is clicked, the header pinned
+above the scroll, "Querying..." while empty, a search bar whose space-separated terms must each
+appear in the name, MOTD, map or mode, and filters in sections that wrap with the window's width:
+Game (mode, map name alone), Players (has a person, not full, bots) and Other (max ping), each
+drawn at the size of the largest as measured the frame before; a
+double-click or Join connects. The controls are an `egui::Panel` laid out before the table, which
+takes what height is left: a table sized by a guess at the controls' height grew the window every
+frame, which `the_window_keeps_its_height` catches); and Direct Join, the connect dialog's join half. A dock of small icon
 plates in the bottom right, on a dark plate of its own so their edges show,
 holds two clusters, each a `PlateRow`: Settings
 (the gear), which in this mode draws the Settings window's contents
@@ -3321,6 +3331,28 @@ Two rules, and both are easy to undo:
   already routes through the place that will do it. It also declines to write a
   role equal to the one already set, because the transport will hang off
   `Changed<NetRole>` and re-picking "Host" must not drop everybody connected.
+
+### Finding a server on the LAN
+
+[`src/common/lan_discovery.rs`](src/common/lan_discovery.rs), native only, since a browser cannot
+send a UDP broadcast. While the server browser is open, a client broadcasts a `Question` to
+`255.255.255.255:27101` (`DISCOVERY_PORT`) every two seconds; a listen server whose
+`ServerListing` is discoverable answers a sender on a local address (`net::is_local`) with a
+`Reply`: its game port, name (blank falls back to the host's player name), MOTD, map, mode key,
+netcode protocol id and build, people taking a slot (spectators and bots do not), slots, whether
+bots are enabled, and the question's nonce, which times the ping. The server's address is the
+reply's source address, since a server bound to every interface does not know which of its
+addresses the client can reach. Every server binds the discovery port with `SO_REUSEADDR` and
+`SO_REUSEPORT` (`socket2`), so several on one machine all hear a broadcast; a bind that fails is
+tried again every 5 s, warned about once. A reply is up to 85 times a question's size and a UDP
+source can be forged, so a server answers an address (IP and port) at most once a second and 20
+replies a second in all (`Throttle`). Both sockets are non-blocking and read in `First` and `Last`,
+so a datagram waits about half a frame at most, timed on a monotonic clock read at the send and
+the read; a server's ping is the lowest of its last four round trips. Each datagram is a magic, `DISCOVERY_VERSION` and a postcard
+body; strings are capped by characters so a reply fits one datagram, cut on sending and refused
+past the cap on reading. `ServerList` exists only in `AppMode::MainMenu`, and a server silent for
+`FORGET_AFTER` drops off it. A server whose netcode protocol differs is listed grayed out and
+cannot be joined.
 
 ### What a networked body is
 
