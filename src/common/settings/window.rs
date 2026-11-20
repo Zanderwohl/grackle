@@ -273,14 +273,24 @@ impl SettingsWindow {
 
     fn show_as_page(&mut self, ctx: &egui::Context, now: &mut InForce, held: Held, packs: Credited) {
         let unsaved = self.has_unsaved_changes(now);
-        let mut page_ui = Ui::new(
-            ctx.clone(),
-            Id::new(PAGE_ID),
-            egui::UiBuilder::new().layer_id(page_layer()).max_rect(ctx.viewport_rect()),
-        );
+        // An `Area`, not a bare `Ui` on a layer: egui finds the layer under the pointer only among
+        // areas, and a scroll area on a layer it cannot find never takes the wheel or shows a bar.
+        let viewport = ctx.viewport_rect();
+        egui::Area::new(page_layer().id)
+            .order(page_layer().order)
+            .fixed_pos(viewport.min)
+            .constrain_to(viewport)
+            .movable(false)
+            .show(ctx, |ui| {
+                // Laid out in the viewport, not the area's remembered size, so a window that grows is filled.
+                ui.scope_builder(egui::UiBuilder::new().max_rect(viewport), |ui| self.page(ui, now, held, packs, unsaved));
+            });
+    }
+
+    fn page(&mut self, page_ui: &mut Ui, now: &mut InForce, held: Held, packs: Credited, unsaved: bool) {
         egui::CentralPanel::default()
-            .frame(egui::Frame::central_panel(&ctx.global_style()).inner_margin(PAGE_MARGIN))
-            .show(&mut page_ui, |ui| {
+            .frame(egui::Frame::central_panel(page_ui.style()).inner_margin(PAGE_MARGIN))
+            .show(page_ui, |ui| {
                 egui::Panel::top("settings_page_header")
                     .frame(egui::Frame::NONE.inner_margin(egui::Margin { bottom: GAP, ..Default::default() }))
                     .show(ui, |ui| {
@@ -774,6 +784,22 @@ mod tests {
                 assert!(button.bottom() < 900.0, "a button is off the bottom of the screen");
             }
             assert!((apply.top() - close.top()).abs() < 1.0, "Apply and Close are not on one row");
+        }
+    }
+
+    /// Fails if the page is drawn on a layer egui does not look for under the pointer, where no
+    /// scroll area takes the wheel and the Shortcuts page cannot be scrolled.
+    #[test]
+    fn the_full_screen_page_is_the_layer_under_the_pointer() {
+        let ctx = egui::Context::default();
+        let mut window = SettingsWindow::default();
+        let (mut settings, mut keymap, mut player) = (Settings::default(), Keymap::default(), PlayerSettings::default());
+        window.open(&ctx, &InForce { settings: &mut settings, keymap: &mut keymap, player: Some(&mut player) });
+        for _ in 0..3 {
+            frame_as(&ctx, &mut window, true);
+        }
+        for point in [Pos2::new(600.0, 450.0), Pos2::new(1150.0, 850.0)] {
+            assert_eq!(ctx.layer_id_at(point), Some(page_layer()), "the page is not under {point:?}");
         }
     }
 
