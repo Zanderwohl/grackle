@@ -8,6 +8,7 @@ pub mod editor_room;
 pub mod footprint_room;
 pub mod net_menu;
 pub mod panels;
+pub mod kill_history;
 pub mod rounds_panel;
 pub mod save;
 pub mod animation_display;

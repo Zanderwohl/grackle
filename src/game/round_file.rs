@@ -161,6 +161,16 @@ impl Summary {
 pub struct RoundTables {
     pub summary: Summary,
     pub tables: Vec<(TableKind, Table)>,
+    /// One per row of the kills table, in its unsorted order.
+    pub kill_places: Vec<KillPlace>,
+}
+
+/// Where the two parties to a kill stood, feet.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct KillPlace {
+    pub victim: Option<Vec3>,
+    /// `None` for a suicide or the map.
+    pub killer: Option<Vec3>,
 }
 
 impl RoundTables {
@@ -192,7 +202,7 @@ impl RoundTables {
             winner: standings.first().map(|standing| (standing.display_name(), Some(standing.swatch()))),
             ..default()
         };
-        RoundTables { summary, tables: vec![(TableKind::Players, table)] }
+        RoundTables { summary, tables: vec![(TableKind::Players, table)], kill_places: Vec::new() }
     }
 }
 
@@ -270,6 +280,9 @@ struct PartyLine {
     id: u64,
     name: String,
     health: u32,
+    /// Feet.
+    #[serde(default)]
+    at: Option<[f32; 3]>,
 }
 
 #[derive(Deserialize)]
@@ -611,8 +624,16 @@ pub fn read(text: &str, weapon_names: &HashMap<String, String>) -> RoundTables {
         ]);
     }
 
+    let kill_places = kills
+        .iter()
+        .map(|kill| KillPlace {
+            victim: kill.victim.at.map(Vec3::from),
+            killer: kill.killer.as_ref().filter(|killer| killer.id != kill.victim.id).and_then(|killer| killer.at).map(Vec3::from),
+        })
+        .collect();
     RoundTables {
         summary,
+        kill_places,
         tables: vec![
             (TableKind::Players, players),
             (TableKind::Weapons, weapon_table),
@@ -723,6 +744,11 @@ not json at all
         assert_eq!(row(bots, "Ann")[column(bots, "reaction")].text, "250 ms");
 
         assert_eq!(tables.table(TableKind::Kills).unwrap().rows.len(), 2);
+        assert_eq!(
+            tables.kill_places,
+            vec![KillPlace { victim: Some(Vec3::ZERO), killer: Some(Vec3::new(4.0, 0.0, 0.0)) }, KillPlace { victim: Some(Vec3::ZERO), killer: None }],
+            "the places are the kills table's rows, and the map stands nowhere"
+        );
     }
 
     /// Breaks if a file cut off mid-round stops reading, or reads as finished.
