@@ -4,7 +4,7 @@
 
 use bevy::prelude::*;
 
-use crate::common::app_mode::AppMode;
+use crate::common::app_mode::{AppMode, Home};
 use crate::common::fonts::DisplayFont;
 use crate::common::net::{NetRequest, NetRole};
 use crate::common::settings::{OpenSettings, SettingsWindow};
@@ -58,8 +58,8 @@ struct PauseMenuRoot;
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 enum PauseItem {
-    /// Back to the editor on the authority, which ends the round for everybody;
-    /// a client disconnects instead.
+    /// Back to [`Home::after_a_round`] on the authority, which ends the round for everybody;
+    /// a client disconnects and goes home instead.
     Leave,
     Settings,
     ChangeTeams,
@@ -116,6 +116,7 @@ fn show_or_hide(
     font: Res<DisplayFont>,
     role: Option<Res<NetRole>>,
     offer: Option<Res<TeamOptions>>,
+    home: Option<Res<Home>>,
 ) {
     for root in &existing {
         commands.entity(root).despawn();
@@ -124,9 +125,11 @@ fn show_or_hide(
         return;
     }
 
-    let leave = match role.as_deref().is_none_or(NetRole::is_authority) {
-        true => get!("pause.back_to_editor"),
-        false => get!("pause.disconnect"),
+    let home = home.as_deref().copied().unwrap_or_default();
+    let leave = match (role.as_deref().is_none_or(NetRole::is_authority), home.after_a_round(role.as_deref())) {
+        (false, _) => get!("pause.disconnect"),
+        (true, AppMode::MainMenu) => get!("pause.back_to_main_menu"),
+        (true, _) => get!("pause.back_to_editor"),
     };
     // Without teams, somebody already playing changes rather than joins.
     let change_teams = match offer.as_deref().is_none_or(|offer| offer.teams || offer.seat.is_playing()) {
@@ -172,6 +175,7 @@ fn choose(
     mut commands: Commands,
     mut menu: ResMut<PauseMenu>,
     role: Option<Res<NetRole>>,
+    home: Option<Res<Home>>,
     mut next: ResMut<NextState<AppMode>>,
     mut requests: MessageWriter<NetRequest>,
 ) {
@@ -188,11 +192,17 @@ fn choose(
         }
         // Leaving Play closes the menu. A client leaves Play in the same frame,
         // before the role changes, so it is never the authority in a round.
+        // A client's role is solo by the time it would be bounced back out of a home not offered
+        // networked, since `back_to_the_map_editor_when_networked` runs after the request is applied.
         PauseItem::Leave => {
-            if !role.as_deref().is_none_or(NetRole::is_authority) {
-                requests.write(NetRequest::GoSolo);
+            let home = home.as_deref().copied().unwrap_or_default();
+            match role.as_deref().is_none_or(NetRole::is_authority) {
+                true => next.set(home.after_a_round(role.as_deref())),
+                false => {
+                    requests.write(NetRequest::GoSolo);
+                    next.set(home.0);
+                }
             }
-            next.set(AppMode::Editor);
         }
     }
 }
@@ -445,6 +455,18 @@ mod tests {
         app.update();
         assert_eq!(*app.world().resource::<State<AppMode>>().get(), AppMode::Editor);
         assert!(!showing(&mut app), "the menu outlived the round");
+    }
+
+    /// Breaks if the game binary's way out of a solo round does not go to its main menu.
+    #[test]
+    fn a_solo_game_goes_back_to_its_main_menu() {
+        let mut app = app();
+        app.insert_resource(Home(AppMode::MainMenu));
+        press_escape(&mut app);
+        assert!(labels(&mut app).contains(&get!("pause.back_to_main_menu")));
+        activate(&mut app, PauseItem::Leave);
+        app.update();
+        assert_eq!(*app.world().resource::<State<AppMode>>().get(), AppMode::MainMenu);
     }
 
     /// Breaks if a client's way out does not disconnect and leave Play.

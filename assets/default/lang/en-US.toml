@@ -806,6 +806,7 @@ settings = "Settings"
 change_teams = "Change Teams"
 join_or_spectate = "Join or Spectate"
 back_to_editor = "Back to Editor"
+back_to_main_menu = "Back to Main Menu"
 disconnect = "Disconnect"
 
 [anim]
@@ -1057,6 +1058,17 @@ name = "Name"
 field_of_view = "Field of view"
 continue = "Continue"
 
+[main_menu]
+window_title = "Grackle"
+title = "Grackle"
+browse_servers = "Browse Servers"
+direct_join = "Direct Join"
+
+[main_menu.quit_modal]
+title = "Quit Grackle?"
+quit = "Quit"
+back = "Back"
+
 [app_mode]
 editor = "Map Editor"
 prop = "Prop Editor"
@@ -1064,6 +1076,7 @@ animation = "Animation Editor"
 material = "Material Editor"
 weapon = "Weapon Editor"
 lang = "Lang Editor"
+main_menu = "Main Menu"
 play = "Play"
 onboarding = "Onboarding"
 
@@ -1772,6 +1785,9 @@ icon = "No pack has icons/{ icon }.svg, so its kills draw the skull"
 window_title = "Settings"
 apply = "Apply"
 close = "Close"
+accept = "Accept"
+back = "Back"
+revert = "Revert"
 
 [settings.page]
 general = "General"

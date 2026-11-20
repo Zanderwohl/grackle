@@ -76,7 +76,7 @@ fn announce_role(role: Res<NetRole>) {
 
 /// The only writer of [`NetRole`]. Knows nothing about sockets;
 /// `NetTransportPlugin` reacts to `Changed<NetRole>`.
-fn apply_net_requests(mut requests: MessageReader<NetRequest>, mut role: ResMut<NetRole>) {
+pub fn apply_net_requests(mut requests: MessageReader<NetRequest>, mut role: ResMut<NetRole>) {
     for request in requests.read() {
         let wanted = match request {
             NetRequest::GoSolo => NetRole::Solo,

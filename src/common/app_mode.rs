@@ -30,6 +30,8 @@ pub enum AppMode {
     Weapon,
     /// One pack's strings for one language.
     Lang,
+    /// The first screen of the `grackle` binary.
+    MainMenu,
     Play,
     /// A name and a field of view, for somebody with no name saved. Never offered by the Mode menu.
     Onboarding,
@@ -78,6 +80,7 @@ impl AppMode {
             AppMode::Material => get!("app_mode.material"),
             AppMode::Weapon => get!("app_mode.weapon"),
             AppMode::Lang => get!("app_mode.lang"),
+            AppMode::MainMenu => get!("app_mode.main_menu"),
             AppMode::Play => get!("app_mode.play"),
             AppMode::Onboarding => get!("app_mode.onboarding"),
         }
@@ -152,6 +155,21 @@ pub fn mode_menu(
     });
 }
 
+/// Where a bare launch of this binary starts: the map editor for `editor`, the main menu for
+/// `grackle`.
+#[derive(Resource, Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Home(pub AppMode);
+
+impl Home {
+    /// A host stays online after a round, so it cannot go to a home that is not offered networked.
+    pub fn after_a_round(self, role: Option<&NetRole>) -> AppMode {
+        match role.is_some_and(NetRole::is_online) && !self.0.offered_networked() {
+            true => AppMode::Editor,
+            false => self.0,
+        }
+    }
+}
+
 /// `--play`. A resource rather than a different initial state, so starting in
 /// Play still goes through `OnEnter(AppMode::Play)`.
 #[derive(Resource, Debug, Clone, Copy, Default)]
@@ -206,6 +224,7 @@ mod tests {
         assert!(!AppMode::Material.shows_the_world());
         assert!(!AppMode::Weapon.shows_the_world());
         assert!(!AppMode::Lang.shows_the_world());
+        assert!(!AppMode::MainMenu.shows_the_world());
     }
 
     /// Fails if the material editor's full-window panels are drawn over live viewports, or if
@@ -231,7 +250,7 @@ mod tests {
         let host = NetRole::Listen { port: 1 };
         let client = NetRole::Client { host: "example".into(), port: 1 };
         for role in [&host, &client] {
-            for mode in [AppMode::Prop, AppMode::Animation, AppMode::Material, AppMode::Weapon, AppMode::Lang] {
+            for mode in [AppMode::Prop, AppMode::Animation, AppMode::Material, AppMode::Weapon, AppMode::Lang, AppMode::MainMenu] {
                 assert!(!mode.selectable_from(AppMode::Editor, Some(role)), "{mode:?} offered to {role:?}");
             }
             // A host that was modeling when it started hosting can still get back.
@@ -240,6 +259,29 @@ mod tests {
         assert!(AppMode::Play.selectable_from(AppMode::Editor, Some(&host)));
         assert!(AppMode::Prop.selectable_from(AppMode::Editor, Some(&NetRole::Solo)));
         assert!(AppMode::Prop.selectable_from(AppMode::Editor, None));
+    }
+
+    /// Fails if the Mode menu stops offering the main menu, or offers it somewhere other than
+    /// just above Play.
+    #[test]
+    fn the_main_menu_is_offered_just_above_play() {
+        let modes: Vec<AppMode> = AppMode::iter().collect();
+        let menu = modes.iter().position(|mode| *mode == AppMode::MainMenu).unwrap();
+        assert_eq!(modes[menu + 1], AppMode::Play);
+        assert!(AppMode::MainMenu.selectable_from(AppMode::Editor, None));
+        assert!(AppMode::Editor.selectable_from(AppMode::MainMenu, None));
+        assert!(!AppMode::MainMenu.is_authoring());
+    }
+
+    /// Fails if a host is sent to a main menu it would be bounced out of, or a solo game or a client
+    /// leaving is not sent home.
+    #[test]
+    fn leaving_a_round_goes_home_unless_home_is_not_offered_online() {
+        let game = Home(AppMode::MainMenu);
+        assert_eq!(game.after_a_round(None), AppMode::MainMenu);
+        assert_eq!(game.after_a_round(Some(&NetRole::Solo)), AppMode::MainMenu);
+        assert_eq!(game.after_a_round(Some(&NetRole::Listen { port: 1 })), AppMode::Editor);
+        assert_eq!(Home::default().after_a_round(None), AppMode::Editor);
     }
 
     /// Both halves: a client that could leave a round would walk out of the

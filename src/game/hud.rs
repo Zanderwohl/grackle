@@ -184,30 +184,32 @@ pub(crate) const LEAN: f32 = 0.12;
 
 /// Inset by the stroke and the drop so neither is cut off.
 pub(crate) fn leaning_panel(size: Vec2, leans_right: bool, big: Corner, small: Corner) -> Path {
+    leaning_panel_each(size, leans_right, leaning_corners(leans_right, big, small))
+}
+
+/// A leaning panel's corners, clockwise from the top left, rounded big on the two acute ones.
+pub(crate) fn leaning_corners(leans_right: bool, big: Corner, small: Corner) -> [Corner; 4] {
+    match leans_right {
+        true => [small, big, small, big],
+        false => [big, small, big, small],
+    }
+}
+
+/// How far a leaning panel's top is moved sideways from its bottom, in a box of `height`.
+pub(crate) fn lean_across(height: f32) -> f32 {
+    LEAN * (height - 2.0 * ZONE_STROKE - ZONE_DROP.y)
+}
+
+/// [`leaning_panel`] with each corner given, clockwise from the top left.
+pub(crate) fn leaning_panel_each(size: Vec2, leans_right: bool, corners: [Corner; 4]) -> Path {
     let lo = Vec2::splat(ZONE_STROKE);
     let hi = size - Vec2::splat(ZONE_STROKE) - ZONE_DROP;
-    let lean = LEAN * (hi.y - lo.y);
-    if leans_right {
-        Path::rounded_polygon_each(
-            &[
-                Vec2::new(lo.x + lean, lo.y),
-                Vec2::new(hi.x, lo.y),
-                Vec2::new(hi.x - lean, hi.y),
-                Vec2::new(lo.x, hi.y),
-            ],
-            &[small, big, small, big],
-        )
-    } else {
-        Path::rounded_polygon_each(
-            &[
-                Vec2::new(lo.x, lo.y),
-                Vec2::new(hi.x - lean, lo.y),
-                Vec2::new(hi.x, hi.y),
-                Vec2::new(lo.x + lean, hi.y),
-            ],
-            &[big, small, big, small],
-        )
-    }
+    let lean = lean_across(size.y);
+    let points = match leans_right {
+        true => [Vec2::new(lo.x + lean, lo.y), Vec2::new(hi.x, lo.y), Vec2::new(hi.x - lean, hi.y), Vec2::new(lo.x, hi.y)],
+        false => [Vec2::new(lo.x, lo.y), Vec2::new(hi.x - lean, lo.y), Vec2::new(hi.x, hi.y), Vec2::new(lo.x + lean, hi.y)],
+    };
+    Path::rounded_polygon_each(&points, &corners)
 }
 
 pub(crate) fn panel_style(swatch: &Swatch) -> ShapeStyle {

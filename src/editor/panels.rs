@@ -362,7 +362,9 @@ impl EditorPanels {
         let mut retarget_request: Option<(FeatureId, String)> = None;
         let mut loaded_blueprint: Option<LoadedBlueprint> = None;
 
-        let mut pending_file_op: Option<FileAction> = current_file.requested_op.take();
+        // A client's map is the server's: a request queued before it joined (onboarding asks for
+        // the demo scene) would stand a map over it that the server never corrects.
+        let mut pending_file_op: Option<FileAction> = current_file.requested_op.take().filter(|_| net_role.is_authority());
         let mut wanted_mode: Option<AppMode> = None;
         let mut pending_edit: Option<EditAction> = None;
         // Read before the viewer borrows the timeline for the rest of the frame.

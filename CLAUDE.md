@@ -123,8 +123,8 @@ mode's own `frag_limit` in `modes.toml` still decides whether it keeps a
 scoreboard — into the post-game, not back to the editor.
 All of it is kept in `assets/user/server.toml` (`USER_SERVER_CONFIG`), which
 the Round tab writes back to half a second after its last change, editing the
-file in place so comments and `bots` survive (`RoundSettingsFilePlugin`, editor
-binary only). `--server-config PATH` reads all of it, and bots to seat by hand,
+file in place so comments and `bots` survive (`RoundSettingsFilePlugin`, the app
+binaries only, not tests). `--server-config PATH` reads all of it, and bots to seat by hand,
 from another TOML file for the run (`ServerConfig`;
 [`assets/default/servers/bot_arena.toml`](assets/default/servers/bot_arena.toml)
 is the example). A file that will not read is passed over with a warning in
@@ -138,7 +138,7 @@ logged as a table as it ends (`rounds::report`). **Telemetry**
 line in the log per kill — victim, killer and assist with health, place and
 goal pulls, the weapon, how it killed, every attacker's share — and a
 `RoundRecord` at the round's end with each bot's temperament and the
-scoreboard; and, where the `editor` binary asks (`RecordRounds`, so tests write
+scoreboard; and, where an app binary asks (`RecordRounds`, so tests write
 nothing), a JSON Lines file per round — each match's live phase, so matches
 back to back are a file each — at `cache/rounds/{map}/{started}.jsonl`:
 spawns, hits, kills, pickups, goal changes (a retreat marked), first sightings
@@ -245,7 +245,8 @@ shape is a new producer and not a rewrite of every consumer — see
 
 | Path | What lives there |
 | --- | --- |
-| `src/main.rs` | The `editor` binary — plugin wiring only. |
+| `src/launch.rs` | Plugin wiring for both app binaries: `grackle` (`src/bin/grackle.rs`, the default, opening onto the main menu) and `editor` (`src/main.rs`, opening onto the map editor). |
+| `src/main_menu.rs` | `AppMode::MainMenu`: the game's first screen. See "The main menu". |
 | `src/editor/` | The document model: features, timeline, save/load, panels, cameras. |
 | `src/tool/` | One module per editor tool, each its own `Plugin` with its own `Tools` state. |
 | `src/game/` | Playing the open map: `AppMode` swap, player body, collision, weapons, damage, ragdolls, placed props, hats. |
@@ -452,14 +453,36 @@ in a team mode is still a gamemode question.
 ## Editor and game in one process
 
 `AppMode` ([`src/common/app_mode.rs`](src/common/app_mode.rs)) is `Editor`,
-`Prop`, `Animation`, `Material`, `Weapon`, `Lang`, `Play` or `Onboarding`, iterable in that order, which is
+`Prop`, `Animation`, `Material`, `Weapon`, `Lang`, `MainMenu`, `Play` or `Onboarding`, iterable in that order, which is
 the Mode menu's order. **`Onboarding`** ([`src/onboarding.rs`](src/onboarding.rs)) is never in the
 menu: it is the *initial* state, inserted by `OnboardingPlugin` when the saved player name is
 blank and the command line names nothing to open or play (`EditorParams::chooses_where_to_start`:
 any mode flag, `--map`, `--serve`, `--connect`, `--server-config`, `--spectate`, `--rounds` or
 `--class`; not `--lang`, `--game` or `--profile`). It asks for a name and a field of
 view (45°–110°, default 80°), and Continue writes those two fields to `PlayerSettings`, leaving the rest as the Settings window left them, requests File → Demo
-Maps → Demo Scene and enters the map editor. **`F5` swaps between the map editor and Play, and nothing
+Maps → Demo Scene and enters the binary's home mode (`launch::Binary::home`): the main menu for
+`grackle`, the map editor for `editor`. A bare launch by a named player starts there too.
+
+**The main menu** ([`src/main_menu.rs`](src/main_menu.rs)) is Bevy UI plates
+(`game::menu`) on the egui context camera, the one camera live outside the
+viewport modes: Browse Servers as a plain plate, since it does not exist
+yet; and Direct Join, the connect dialog's join half. A dock of small icon
+plates in the bottom right, on a dark plate of its own so their edges show,
+holds two clusters, each a `PlateRow`: Settings
+(the gear), which in this mode draws the Settings window's contents
+full-screen over Accept (Back while nothing changed), Revert and Apply,
+`Escape` asking about changes as Close does, joined to Tools (the hammer),
+the map editor; and apart from them, in red, Quit (the power symbol), a
+question of its own in Bevy UI that `Escape` or Back dismisses. Its icons are pack SVGs rasterized as
+the kill feed's are (`kill_icon::rasterize`).
+egui draws over Bevy UI but does not stop Bevy's picking, so while a dialog,
+the page or the question is up a `Blocker` node covers the menu and takes the
+pointer. It is not offered while networked, so joining from it lands in the
+map editor with everybody else, and a file action queued before joining (the
+demo scene onboarding asks for) is dropped there, since a client's map is the
+server's.
+
+**`F5` swaps between the map editor and Play, and nothing
 else** — the only way back to the editor, as `Escape` belongs to the pause
 menu. From the prop editor it is answered with a line in the log rather than
 starting a round: the key's whole meaning is that it toggles between *two*
@@ -523,7 +546,10 @@ new, undo, redo.
 **The Settings window** ([`src/common/settings/`](src/common/settings/mod.rs),
 ported from redwing) is **Edit → Settings…** in every authoring mode, or
 `Ctrl+,` — for a client too, whose other Edit entries are grayed out. A
-floating window, not a dock tab, because every mode opens it. It
+floating window, not a dock tab, because every mode opens it; in the main
+menu its contents fill the screen over Accept (apply and go back; Back while nothing changed), Revert
+and Apply instead (`show_as_page`), and Apply and Close belong to the
+window, not the contents. It
 edits a draft — nothing is saved or in force until Apply, and Close with
 changes asks. `Escape` is Close (or answers the question by keeping the
 window), unless a binding is waiting for a key or a text field has the
@@ -616,14 +642,20 @@ panels are egui because they are editor tools, and this is part of the game, so
 it has to exist in a build with no editor and on a browser tab where the egui
 layer is one more thing to have gone wrong. It offers **Resume**, **Settings**
 (closes the menu and opens the Settings window), **Change Teams** ("Join or Spectate" in a mode without teams to somebody not yet playing; closes the menu and brings up the team picker, as `.` does) and **Back to Editor** — on the
-authority, ending the round for everybody, who stay connected — or, on a
-client, **Disconnect**, which also leaves Play in the same frame. A client that
+authority, ending the round for everybody, who stay connected; **Back to Main Menu** where the
+binary's `Home` is the main menu and nobody is connected (`Home::after_a_round`) — or, on a
+client, **Disconnect**, which also leaves Play for `Home` in the same frame. A client that
 stops being one drops every entity the server sent (lightyear's `Remote`) and,
 mid-round, goes back to the editor (`leave_a_round_without_a_server`). Its buttons are `PlateButton`s
 ([`src/game/plate_button.rs`](src/game/plate_button.rs)): a `Plate` that is
 lighter while hovered and darker while held, and triggers `ButtonActivated` on
 release; reuse it for any in-game button. A plate's child marked
-`FollowsTheLean` is moved sideways to keep its distance from the slanted sides.
+`FollowsTheLean` is moved sideways to keep its distance from the slanted sides. Plates that are
+children of a `PlateRow` (`plate_row`) are one group: each pulled left over
+the one before by the slant and both strokes (`join_the_rows`, after layout,
+since the slant depends on the row's height), so their slanted sides meet,
+with square corners where they do. Rows only: stacked plates' slanted sides
+would not line up at one width.
 
 Three things there are easy to get wrong and none of them errors:
 
@@ -3930,7 +3962,7 @@ key that has slots — fill those in by hand.
 - Asset paths are relative to the working directory (`assets/default/...`), so
   binaries must run from the repo root.
 - **Every binary links `lib.rs`; none re-declares the module tree.** `main.rs`
-  is `use grackle::...` and plugin wiring, nothing else. This used to be
+  and `bin/grackle.rs` are a call to `launch::run`, where the wiring is. This used to be
   `mod common; mod editor; mod tool;`, which compiled a second copy of the
   whole tree with its own `LANG` table and its own caches. That is not a build
   time problem to get round to — a client and a server that must reach the same
