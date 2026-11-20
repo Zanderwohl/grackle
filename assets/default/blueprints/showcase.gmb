@@ -33,8 +33,9 @@ Blueprint(
             sky: 600.0,
         ),
         music: [],
+        postcards: (None, None, None),
     ),
-    next_id: 87,
+    next_id: 109,
     features: [
         Feature(
             id: FeatureId(
@@ -171,14 +172,14 @@ Blueprint(
                         point_key: "",
                         x: Relative(-3.0),
                         y: Relative(0.0),
-                        z: Relative(-38.0),
+                        z: Relative(-46.0),
                     ),
                     max: PointRef(
                         reference: None,
                         point_key: "",
                         x: Relative(6.0),
                         y: Relative(5.0),
-                        z: Relative(26.0),
+                        z: Relative(34.0),
                     ),
                     max_base: OwnMin,
                     surfaces: RoomSurfaces(
@@ -405,7 +406,7 @@ Blueprint(
             id: FeatureId(
                 _id: 14,
             ),
-            name: Some("Bay: team_tiles"),
+            name: Some("Bay: team_linoleum"),
             object: {
                 "editor_room": EditorRoom(
                     min: PointRef(
@@ -427,7 +428,7 @@ Blueprint(
                     max_base: OwnMin,
                     surfaces: RoomSurfaces(
                         floor: Some("concrete"),
-                        walls: Some("team_tiles"),
+                        walls: Some("team_linoleum"),
                         ceiling: Some("plaster"),
                     ),
                 ),
@@ -458,6 +459,112 @@ Blueprint(
             id: FeatureId(
                 _id: 16,
             ),
+            name: Some("Bay: team_linoleum_large"),
+            object: {
+                "editor_room": EditorRoom(
+                    min: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(-9.0),
+                        y: Relative(0.0),
+                        z: Relative(-36.0),
+                    ),
+                    max: PointRef(
+                        reference: None,
+                        point_key: "",
+                        x: Relative(6.0),
+                        y: Relative(4.5),
+                        z: Relative(6.0),
+                    ),
+                    max_base: OwnMin,
+                    surfaces: RoomSurfaces(
+                        floor: Some("concrete"),
+                        walls: Some("team_linoleum_large"),
+                        ceiling: Some("plaster"),
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 17,
+            ),
+            object: {
+                "grackle_point_light": GracklePointLight(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(-6.0),
+                        y: Relative(3.9),
+                        z: Relative(-33.0),
+                    ),
+                    intensity: 60000.0,
+                    radius: 0.1,
+                    range: 10.0,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 18,
+            ),
+            name: Some("Bay: team_tiles"),
+            object: {
+                "editor_room": EditorRoom(
+                    min: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(3.0),
+                        y: Relative(0.0),
+                        z: Relative(-44.0),
+                    ),
+                    max: PointRef(
+                        reference: None,
+                        point_key: "",
+                        x: Relative(6.0),
+                        y: Relative(4.5),
+                        z: Relative(6.0),
+                    ),
+                    max_base: OwnMin,
+                    surfaces: RoomSurfaces(
+                        floor: Some("concrete"),
+                        walls: Some("team_tiles"),
+                        ceiling: Some("plaster"),
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 19,
+            ),
+            object: {
+                "grackle_point_light": GracklePointLight(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(6.0),
+                        y: Relative(3.9),
+                        z: Relative(-41.0),
+                    ),
+                    intensity: 60000.0,
+                    radius: 0.1,
+                    range: 10.0,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 20,
+            ),
             object: {
                 "grackle_point_light": GracklePointLight(
                     location: PointRef(
@@ -477,7 +584,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 17,
+                _id: 21,
             ),
             object: {
                 "grackle_point_light": GracklePointLight(
@@ -498,7 +605,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 18,
+                _id: 22,
             ),
             object: {
                 "grackle_point_light": GracklePointLight(
@@ -519,7 +626,28 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 19,
+                _id: 23,
+            ),
+            object: {
+                "grackle_point_light": GracklePointLight(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(0.0),
+                        y: Relative(4.4),
+                        z: Relative(-41.0),
+                    ),
+                    intensity: 30000.0,
+                    radius: 0.1,
+                    range: 9.0,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 24,
             ),
             name: Some("Arm Spawn"),
             object: {
@@ -531,7 +659,7 @@ Blueprint(
                         point_key: "",
                         x: Relative(0.0),
                         y: Relative(0.0),
-                        z: Relative(-36.0),
+                        z: Relative(-44.0),
                     ),
                     yaw: -3.1415925,
                 ),
@@ -539,7 +667,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 20,
+                _id: 25,
             ),
             name: Some("Four Arms"),
             object: {
@@ -600,6 +728,21 @@ Blueprint(
                         FeatureId(
                             _id: 19,
                         ),
+                        FeatureId(
+                            _id: 20,
+                        ),
+                        FeatureId(
+                            _id: 21,
+                        ),
+                        FeatureId(
+                            _id: 22,
+                        ),
+                        FeatureId(
+                            _id: 23,
+                        ),
+                        FeatureId(
+                            _id: 24,
+                        ),
                     ],
                     teams: (Red, Blue),
                     turned_teams: Some((Yellow, Green)),
@@ -608,7 +751,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 21,
+                _id: 26,
             ),
             name: Some("Gallery Door"),
             object: {
@@ -640,7 +783,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 22,
+                _id: 27,
             ),
             name: Some("Gallery"),
             object: {
@@ -657,7 +800,7 @@ Blueprint(
                     max: PointRef(
                         reference: None,
                         point_key: "",
-                        x: Relative(83.0),
+                        x: Relative(101.0),
                         y: Relative(5.0),
                         z: Relative(6.0),
                     ),
@@ -667,7 +810,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 23,
+                _id: 28,
             ),
             name: Some("Alcove: board_formed_concrete"),
             object: {
@@ -699,7 +842,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 24,
+                _id: 29,
             ),
             object: {
                 "grackle_point_light": GracklePointLight(
@@ -720,7 +863,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 25,
+                _id: 30,
             ),
             name: Some("Alcove: bright_angel_sandstone"),
             object: {
@@ -752,7 +895,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 26,
+                _id: 31,
             ),
             object: {
                 "grackle_point_light": GracklePointLight(
@@ -773,7 +916,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 27,
+                _id: 32,
             ),
             name: Some("Alcove: bright_angel_sandstone_floor"),
             object: {
@@ -805,7 +948,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 28,
+                _id: 33,
             ),
             object: {
                 "grackle_point_light": GracklePointLight(
@@ -826,7 +969,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 29,
+                _id: 34,
             ),
             name: Some("Alcove: concrete"),
             object: {
@@ -858,7 +1001,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 30,
+                _id: 35,
             ),
             object: {
                 "grackle_point_light": GracklePointLight(
@@ -879,7 +1022,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 31,
+                _id: 36,
             ),
             name: Some("Alcove: desert_sand"),
             object: {
@@ -911,7 +1054,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 32,
+                _id: 37,
             ),
             object: {
                 "grackle_point_light": GracklePointLight(
@@ -932,7 +1075,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 33,
+                _id: 38,
             ),
             name: Some("Alcove: desert_stripes"),
             object: {
@@ -964,7 +1107,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 34,
+                _id: 39,
             ),
             object: {
                 "grackle_point_light": GracklePointLight(
@@ -985,7 +1128,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 35,
+                _id: 40,
             ),
             name: Some("Alcove: dirt_path"),
             object: {
@@ -1017,7 +1160,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 36,
+                _id: 41,
             ),
             object: {
                 "grackle_point_light": GracklePointLight(
@@ -1038,7 +1181,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 37,
+                _id: 42,
             ),
             name: Some("Alcove: grid_gray"),
             object: {
@@ -1070,7 +1213,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 38,
+                _id: 43,
             ),
             object: {
                 "grackle_point_light": GracklePointLight(
@@ -1091,7 +1234,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 39,
+                _id: 44,
             ),
             name: Some("Alcove: grid_light"),
             object: {
@@ -1123,7 +1266,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 40,
+                _id: 45,
             ),
             object: {
                 "grackle_point_light": GracklePointLight(
@@ -1144,7 +1287,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 41,
+                _id: 46,
             ),
             name: Some("Alcove: hardwood_floor"),
             object: {
@@ -1176,7 +1319,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 42,
+                _id: 47,
             ),
             object: {
                 "grackle_point_light": GracklePointLight(
@@ -1197,7 +1340,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 43,
+                _id: 48,
             ),
             name: Some("Alcove: hardwood_floor_worn"),
             object: {
@@ -1229,7 +1372,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 44,
+                _id: 49,
             ),
             object: {
                 "grackle_point_light": GracklePointLight(
@@ -1250,7 +1393,113 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 45,
+                _id: 50,
+            ),
+            name: Some("Alcove: linoleum_gray"),
+            object: {
+                "editor_room": EditorRoom(
+                    min: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(44.0),
+                        y: Relative(0.0),
+                        z: Relative(12.0),
+                    ),
+                    max: PointRef(
+                        reference: None,
+                        point_key: "",
+                        x: Relative(5.0),
+                        y: Relative(4.0),
+                        z: Relative(4.0),
+                    ),
+                    max_base: OwnMin,
+                    surfaces: RoomSurfaces(
+                        floor: Some("linoleum_gray"),
+                        walls: Some("linoleum_gray"),
+                        ceiling: Some("plaster"),
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 51,
+            ),
+            object: {
+                "grackle_point_light": GracklePointLight(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(46.5),
+                        y: Relative(3.4),
+                        z: Relative(14.0),
+                    ),
+                    intensity: 40000.0,
+                    radius: 0.1,
+                    range: 8.0,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 52,
+            ),
+            name: Some("Alcove: linoleum_large_gray"),
+            object: {
+                "editor_room": EditorRoom(
+                    min: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(50.0),
+                        y: Relative(0.0),
+                        z: Relative(22.0),
+                    ),
+                    max: PointRef(
+                        reference: None,
+                        point_key: "",
+                        x: Relative(5.0),
+                        y: Relative(4.0),
+                        z: Relative(4.0),
+                    ),
+                    max_base: OwnMin,
+                    surfaces: RoomSurfaces(
+                        floor: Some("linoleum_large_gray"),
+                        walls: Some("linoleum_large_gray"),
+                        ceiling: Some("plaster"),
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 53,
+            ),
+            object: {
+                "grackle_point_light": GracklePointLight(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(52.5),
+                        y: Relative(3.4),
+                        z: Relative(24.0),
+                    ),
+                    intensity: 40000.0,
+                    radius: 0.1,
+                    range: 8.0,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 54,
             ),
             name: Some("Alcove: linoleum_tiles"),
             object: {
@@ -1260,7 +1509,7 @@ Blueprint(
                             _id: 0,
                         )),
                         point_key: "",
-                        x: Relative(44.0),
+                        x: Relative(50.0),
                         y: Relative(0.0),
                         z: Relative(12.0),
                     ),
@@ -1282,7 +1531,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 46,
+                _id: 55,
             ),
             object: {
                 "grackle_point_light": GracklePointLight(
@@ -1291,7 +1540,7 @@ Blueprint(
                             _id: 0,
                         )),
                         point_key: "",
-                        x: Relative(46.5),
+                        x: Relative(52.5),
                         y: Relative(3.4),
                         z: Relative(14.0),
                     ),
@@ -1303,7 +1552,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 47,
+                _id: 56,
             ),
             name: Some("Alcove: muav_limestone"),
             object: {
@@ -1313,7 +1562,7 @@ Blueprint(
                             _id: 0,
                         )),
                         point_key: "",
-                        x: Relative(50.0),
+                        x: Relative(56.0),
                         y: Relative(0.0),
                         z: Relative(22.0),
                     ),
@@ -1335,7 +1584,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 48,
+                _id: 57,
             ),
             object: {
                 "grackle_point_light": GracklePointLight(
@@ -1344,7 +1593,7 @@ Blueprint(
                             _id: 0,
                         )),
                         point_key: "",
-                        x: Relative(52.5),
+                        x: Relative(58.5),
                         y: Relative(3.4),
                         z: Relative(24.0),
                     ),
@@ -1356,7 +1605,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 49,
+                _id: 58,
             ),
             name: Some("Alcove: muav_limestone_floor"),
             object: {
@@ -1366,7 +1615,7 @@ Blueprint(
                             _id: 0,
                         )),
                         point_key: "",
-                        x: Relative(50.0),
+                        x: Relative(56.0),
                         y: Relative(0.0),
                         z: Relative(12.0),
                     ),
@@ -1388,7 +1637,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 50,
+                _id: 59,
             ),
             object: {
                 "grackle_point_light": GracklePointLight(
@@ -1397,7 +1646,7 @@ Blueprint(
                             _id: 0,
                         )),
                         point_key: "",
-                        x: Relative(52.5),
+                        x: Relative(58.5),
                         y: Relative(3.4),
                         z: Relative(14.0),
                     ),
@@ -1409,7 +1658,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 51,
+                _id: 60,
             ),
             name: Some("Alcove: osb"),
             object: {
@@ -1419,7 +1668,7 @@ Blueprint(
                             _id: 0,
                         )),
                         point_key: "",
-                        x: Relative(56.0),
+                        x: Relative(62.0),
                         y: Relative(0.0),
                         z: Relative(22.0),
                     ),
@@ -1441,7 +1690,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 52,
+                _id: 61,
             ),
             object: {
                 "grackle_point_light": GracklePointLight(
@@ -1450,7 +1699,7 @@ Blueprint(
                             _id: 0,
                         )),
                         point_key: "",
-                        x: Relative(58.5),
+                        x: Relative(64.5),
                         y: Relative(3.4),
                         z: Relative(24.0),
                     ),
@@ -1462,7 +1711,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 53,
+                _id: 62,
             ),
             name: Some("Alcove: painted_brick_gray"),
             object: {
@@ -1472,7 +1721,7 @@ Blueprint(
                             _id: 0,
                         )),
                         point_key: "",
-                        x: Relative(56.0),
+                        x: Relative(62.0),
                         y: Relative(0.0),
                         z: Relative(12.0),
                     ),
@@ -1494,7 +1743,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 54,
+                _id: 63,
             ),
             object: {
                 "grackle_point_light": GracklePointLight(
@@ -1503,7 +1752,7 @@ Blueprint(
                             _id: 0,
                         )),
                         point_key: "",
-                        x: Relative(58.5),
+                        x: Relative(64.5),
                         y: Relative(3.4),
                         z: Relative(14.0),
                     ),
@@ -1515,7 +1764,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 55,
+                _id: 64,
             ),
             name: Some("Alcove: painted_brick_white"),
             object: {
@@ -1525,7 +1774,7 @@ Blueprint(
                             _id: 0,
                         )),
                         point_key: "",
-                        x: Relative(62.0),
+                        x: Relative(68.0),
                         y: Relative(0.0),
                         z: Relative(22.0),
                     ),
@@ -1547,266 +1796,22 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 56,
-            ),
-            object: {
-                "grackle_point_light": GracklePointLight(
-                    location: PointRef(
-                        reference: Some(FeatureId(
-                            _id: 0,
-                        )),
-                        point_key: "",
-                        x: Relative(64.5),
-                        y: Relative(3.4),
-                        z: Relative(24.0),
-                    ),
-                    intensity: 40000.0,
-                    radius: 0.1,
-                    range: 8.0,
-                ),
-            },
-        ),
-        Feature(
-            id: FeatureId(
-                _id: 57,
-            ),
-            name: Some("Alcove: red_brick"),
-            object: {
-                "editor_room": EditorRoom(
-                    min: PointRef(
-                        reference: Some(FeatureId(
-                            _id: 0,
-                        )),
-                        point_key: "",
-                        x: Relative(62.0),
-                        y: Relative(0.0),
-                        z: Relative(12.0),
-                    ),
-                    max: PointRef(
-                        reference: None,
-                        point_key: "",
-                        x: Relative(5.0),
-                        y: Relative(4.0),
-                        z: Relative(4.0),
-                    ),
-                    max_base: OwnMin,
-                    surfaces: RoomSurfaces(
-                        floor: Some("red_brick"),
-                        walls: Some("red_brick"),
-                        ceiling: Some("plaster"),
-                    ),
-                ),
-            },
-        ),
-        Feature(
-            id: FeatureId(
-                _id: 58,
-            ),
-            object: {
-                "grackle_point_light": GracklePointLight(
-                    location: PointRef(
-                        reference: Some(FeatureId(
-                            _id: 0,
-                        )),
-                        point_key: "",
-                        x: Relative(64.5),
-                        y: Relative(3.4),
-                        z: Relative(14.0),
-                    ),
-                    intensity: 40000.0,
-                    radius: 0.1,
-                    range: 8.0,
-                ),
-            },
-        ),
-        Feature(
-            id: FeatureId(
-                _id: 59,
-            ),
-            name: Some("Alcove: redwall_sandstone"),
-            object: {
-                "editor_room": EditorRoom(
-                    min: PointRef(
-                        reference: Some(FeatureId(
-                            _id: 0,
-                        )),
-                        point_key: "",
-                        x: Relative(68.0),
-                        y: Relative(0.0),
-                        z: Relative(22.0),
-                    ),
-                    max: PointRef(
-                        reference: None,
-                        point_key: "",
-                        x: Relative(5.0),
-                        y: Relative(4.0),
-                        z: Relative(4.0),
-                    ),
-                    max_base: OwnMin,
-                    surfaces: RoomSurfaces(
-                        floor: Some("redwall_sandstone"),
-                        walls: Some("redwall_sandstone"),
-                        ceiling: Some("plaster"),
-                    ),
-                ),
-            },
-        ),
-        Feature(
-            id: FeatureId(
-                _id: 60,
-            ),
-            object: {
-                "grackle_point_light": GracklePointLight(
-                    location: PointRef(
-                        reference: Some(FeatureId(
-                            _id: 0,
-                        )),
-                        point_key: "",
-                        x: Relative(70.5),
-                        y: Relative(3.4),
-                        z: Relative(24.0),
-                    ),
-                    intensity: 40000.0,
-                    radius: 0.1,
-                    range: 8.0,
-                ),
-            },
-        ),
-        Feature(
-            id: FeatureId(
-                _id: 61,
-            ),
-            name: Some("Alcove: redwall_sandstone_floor"),
-            object: {
-                "editor_room": EditorRoom(
-                    min: PointRef(
-                        reference: Some(FeatureId(
-                            _id: 0,
-                        )),
-                        point_key: "",
-                        x: Relative(68.0),
-                        y: Relative(0.0),
-                        z: Relative(12.0),
-                    ),
-                    max: PointRef(
-                        reference: None,
-                        point_key: "",
-                        x: Relative(5.0),
-                        y: Relative(4.0),
-                        z: Relative(4.0),
-                    ),
-                    max_base: OwnMin,
-                    surfaces: RoomSurfaces(
-                        floor: Some("redwall_sandstone_floor"),
-                        walls: Some("redwall_sandstone_floor"),
-                        ceiling: Some("plaster"),
-                    ),
-                ),
-            },
-        ),
-        Feature(
-            id: FeatureId(
-                _id: 62,
-            ),
-            object: {
-                "grackle_point_light": GracklePointLight(
-                    location: PointRef(
-                        reference: Some(FeatureId(
-                            _id: 0,
-                        )),
-                        point_key: "",
-                        x: Relative(70.5),
-                        y: Relative(3.4),
-                        z: Relative(14.0),
-                    ),
-                    intensity: 40000.0,
-                    radius: 0.1,
-                    range: 8.0,
-                ),
-            },
-        ),
-        Feature(
-            id: FeatureId(
-                _id: 63,
-            ),
-            name: Some("Alcove: steel_plate"),
-            object: {
-                "editor_room": EditorRoom(
-                    min: PointRef(
-                        reference: Some(FeatureId(
-                            _id: 0,
-                        )),
-                        point_key: "",
-                        x: Relative(74.0),
-                        y: Relative(0.0),
-                        z: Relative(22.0),
-                    ),
-                    max: PointRef(
-                        reference: None,
-                        point_key: "",
-                        x: Relative(5.0),
-                        y: Relative(4.0),
-                        z: Relative(4.0),
-                    ),
-                    max_base: OwnMin,
-                    surfaces: RoomSurfaces(
-                        floor: Some("steel_plate"),
-                        walls: Some("steel_plate"),
-                        ceiling: Some("plaster"),
-                    ),
-                ),
-            },
-        ),
-        Feature(
-            id: FeatureId(
-                _id: 64,
-            ),
-            object: {
-                "grackle_point_light": GracklePointLight(
-                    location: PointRef(
-                        reference: Some(FeatureId(
-                            _id: 0,
-                        )),
-                        point_key: "",
-                        x: Relative(76.5),
-                        y: Relative(3.4),
-                        z: Relative(24.0),
-                    ),
-                    intensity: 40000.0,
-                    radius: 0.1,
-                    range: 8.0,
-                ),
-            },
-        ),
-        Feature(
-            id: FeatureId(
                 _id: 65,
             ),
-            name: Some("Alcove: tiles_white"),
             object: {
-                "editor_room": EditorRoom(
-                    min: PointRef(
+                "grackle_point_light": GracklePointLight(
+                    location: PointRef(
                         reference: Some(FeatureId(
                             _id: 0,
                         )),
                         point_key: "",
-                        x: Relative(74.0),
-                        y: Relative(0.0),
-                        z: Relative(12.0),
+                        x: Relative(70.5),
+                        y: Relative(3.4),
+                        z: Relative(24.0),
                     ),
-                    max: PointRef(
-                        reference: None,
-                        point_key: "",
-                        x: Relative(5.0),
-                        y: Relative(4.0),
-                        z: Relative(4.0),
-                    ),
-                    max_base: OwnMin,
-                    surfaces: RoomSurfaces(
-                        floor: Some("tiles_white"),
-                        walls: Some("tiles_white"),
-                        ceiling: Some("plaster"),
-                    ),
+                    intensity: 40000.0,
+                    radius: 0.1,
+                    range: 8.0,
                 ),
             },
         ),
@@ -1814,6 +1819,144 @@ Blueprint(
             id: FeatureId(
                 _id: 66,
             ),
+            name: Some("Alcove: pine_brown"),
+            object: {
+                "editor_room": EditorRoom(
+                    min: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(68.0),
+                        y: Relative(0.0),
+                        z: Relative(12.0),
+                    ),
+                    max: PointRef(
+                        reference: None,
+                        point_key: "",
+                        x: Relative(5.0),
+                        y: Relative(4.0),
+                        z: Relative(4.0),
+                    ),
+                    max_base: OwnMin,
+                    surfaces: RoomSurfaces(
+                        floor: Some("pine_brown"),
+                        walls: Some("pine_brown"),
+                        ceiling: Some("plaster"),
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 67,
+            ),
+            object: {
+                "grackle_point_light": GracklePointLight(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(70.5),
+                        y: Relative(3.4),
+                        z: Relative(14.0),
+                    ),
+                    intensity: 40000.0,
+                    radius: 0.1,
+                    range: 8.0,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 68,
+            ),
+            name: Some("Alcove: pine_gray"),
+            object: {
+                "editor_room": EditorRoom(
+                    min: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(74.0),
+                        y: Relative(0.0),
+                        z: Relative(22.0),
+                    ),
+                    max: PointRef(
+                        reference: None,
+                        point_key: "",
+                        x: Relative(5.0),
+                        y: Relative(4.0),
+                        z: Relative(4.0),
+                    ),
+                    max_base: OwnMin,
+                    surfaces: RoomSurfaces(
+                        floor: Some("pine_gray"),
+                        walls: Some("pine_gray"),
+                        ceiling: Some("plaster"),
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 69,
+            ),
+            object: {
+                "grackle_point_light": GracklePointLight(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(76.5),
+                        y: Relative(3.4),
+                        z: Relative(24.0),
+                    ),
+                    intensity: 40000.0,
+                    radius: 0.1,
+                    range: 8.0,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 70,
+            ),
+            name: Some("Alcove: pine_honey"),
+            object: {
+                "editor_room": EditorRoom(
+                    min: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(74.0),
+                        y: Relative(0.0),
+                        z: Relative(12.0),
+                    ),
+                    max: PointRef(
+                        reference: None,
+                        point_key: "",
+                        x: Relative(5.0),
+                        y: Relative(4.0),
+                        z: Relative(4.0),
+                    ),
+                    max_base: OwnMin,
+                    surfaces: RoomSurfaces(
+                        floor: Some("pine_honey"),
+                        walls: Some("pine_honey"),
+                        ceiling: Some("plaster"),
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 71,
+            ),
             object: {
                 "grackle_point_light": GracklePointLight(
                     location: PointRef(
@@ -1833,9 +1976,9 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 67,
+                _id: 72,
             ),
-            name: Some("Alcove: tread_plate"),
+            name: Some("Alcove: pine_pale"),
             object: {
                 "editor_room": EditorRoom(
                     min: PointRef(
@@ -1856,8 +1999,8 @@ Blueprint(
                     ),
                     max_base: OwnMin,
                     surfaces: RoomSurfaces(
-                        floor: Some("tread_plate"),
-                        walls: Some("tread_plate"),
+                        floor: Some("pine_pale"),
+                        walls: Some("pine_pale"),
                         ceiling: Some("plaster"),
                     ),
                 ),
@@ -1865,7 +2008,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 68,
+                _id: 73,
             ),
             object: {
                 "grackle_point_light": GracklePointLight(
@@ -1886,9 +2029,9 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 69,
+                _id: 74,
             ),
-            name: Some("Alcove: weathered_wood"),
+            name: Some("Alcove: pine_silvering"),
             object: {
                 "editor_room": EditorRoom(
                     min: PointRef(
@@ -1909,8 +2052,8 @@ Blueprint(
                     ),
                     max_base: OwnMin,
                     surfaces: RoomSurfaces(
-                        floor: Some("weathered_wood"),
-                        walls: Some("weathered_wood"),
+                        floor: Some("pine_silvering"),
+                        walls: Some("pine_silvering"),
                         ceiling: Some("plaster"),
                     ),
                 ),
@@ -1918,7 +2061,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 70,
+                _id: 75,
             ),
             object: {
                 "grackle_point_light": GracklePointLight(
@@ -1939,9 +2082,9 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 71,
+                _id: 76,
             ),
-            name: Some("Alcove: wood_grain_laminate"),
+            name: Some("Alcove: red_brick"),
             object: {
                 "editor_room": EditorRoom(
                     min: PointRef(
@@ -1962,8 +2105,8 @@ Blueprint(
                     ),
                     max_base: OwnMin,
                     surfaces: RoomSurfaces(
-                        floor: Some("wood_grain_laminate"),
-                        walls: Some("wood_grain_laminate"),
+                        floor: Some("red_brick"),
+                        walls: Some("red_brick"),
                         ceiling: Some("plaster"),
                     ),
                 ),
@@ -1971,7 +2114,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 72,
+                _id: 77,
             ),
             object: {
                 "grackle_point_light": GracklePointLight(
@@ -1992,7 +2135,378 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 73,
+                _id: 78,
+            ),
+            name: Some("Alcove: redwall_sandstone"),
+            object: {
+                "editor_room": EditorRoom(
+                    min: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(86.0),
+                        y: Relative(0.0),
+                        z: Relative(12.0),
+                    ),
+                    max: PointRef(
+                        reference: None,
+                        point_key: "",
+                        x: Relative(5.0),
+                        y: Relative(4.0),
+                        z: Relative(4.0),
+                    ),
+                    max_base: OwnMin,
+                    surfaces: RoomSurfaces(
+                        floor: Some("redwall_sandstone"),
+                        walls: Some("redwall_sandstone"),
+                        ceiling: Some("plaster"),
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 79,
+            ),
+            object: {
+                "grackle_point_light": GracklePointLight(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(88.5),
+                        y: Relative(3.4),
+                        z: Relative(14.0),
+                    ),
+                    intensity: 40000.0,
+                    radius: 0.1,
+                    range: 8.0,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 80,
+            ),
+            name: Some("Alcove: redwall_sandstone_floor"),
+            object: {
+                "editor_room": EditorRoom(
+                    min: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(92.0),
+                        y: Relative(0.0),
+                        z: Relative(22.0),
+                    ),
+                    max: PointRef(
+                        reference: None,
+                        point_key: "",
+                        x: Relative(5.0),
+                        y: Relative(4.0),
+                        z: Relative(4.0),
+                    ),
+                    max_base: OwnMin,
+                    surfaces: RoomSurfaces(
+                        floor: Some("redwall_sandstone_floor"),
+                        walls: Some("redwall_sandstone_floor"),
+                        ceiling: Some("plaster"),
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 81,
+            ),
+            object: {
+                "grackle_point_light": GracklePointLight(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(94.5),
+                        y: Relative(3.4),
+                        z: Relative(24.0),
+                    ),
+                    intensity: 40000.0,
+                    radius: 0.1,
+                    range: 8.0,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 82,
+            ),
+            name: Some("Alcove: steel_plate"),
+            object: {
+                "editor_room": EditorRoom(
+                    min: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(92.0),
+                        y: Relative(0.0),
+                        z: Relative(12.0),
+                    ),
+                    max: PointRef(
+                        reference: None,
+                        point_key: "",
+                        x: Relative(5.0),
+                        y: Relative(4.0),
+                        z: Relative(4.0),
+                    ),
+                    max_base: OwnMin,
+                    surfaces: RoomSurfaces(
+                        floor: Some("steel_plate"),
+                        walls: Some("steel_plate"),
+                        ceiling: Some("plaster"),
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 83,
+            ),
+            object: {
+                "grackle_point_light": GracklePointLight(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(94.5),
+                        y: Relative(3.4),
+                        z: Relative(14.0),
+                    ),
+                    intensity: 40000.0,
+                    radius: 0.1,
+                    range: 8.0,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 84,
+            ),
+            name: Some("Alcove: tiles_white"),
+            object: {
+                "editor_room": EditorRoom(
+                    min: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(98.0),
+                        y: Relative(0.0),
+                        z: Relative(22.0),
+                    ),
+                    max: PointRef(
+                        reference: None,
+                        point_key: "",
+                        x: Relative(5.0),
+                        y: Relative(4.0),
+                        z: Relative(4.0),
+                    ),
+                    max_base: OwnMin,
+                    surfaces: RoomSurfaces(
+                        floor: Some("tiles_white"),
+                        walls: Some("tiles_white"),
+                        ceiling: Some("plaster"),
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 85,
+            ),
+            object: {
+                "grackle_point_light": GracklePointLight(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(100.5),
+                        y: Relative(3.4),
+                        z: Relative(24.0),
+                    ),
+                    intensity: 40000.0,
+                    radius: 0.1,
+                    range: 8.0,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 86,
+            ),
+            name: Some("Alcove: tread_plate"),
+            object: {
+                "editor_room": EditorRoom(
+                    min: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(98.0),
+                        y: Relative(0.0),
+                        z: Relative(12.0),
+                    ),
+                    max: PointRef(
+                        reference: None,
+                        point_key: "",
+                        x: Relative(5.0),
+                        y: Relative(4.0),
+                        z: Relative(4.0),
+                    ),
+                    max_base: OwnMin,
+                    surfaces: RoomSurfaces(
+                        floor: Some("tread_plate"),
+                        walls: Some("tread_plate"),
+                        ceiling: Some("plaster"),
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 87,
+            ),
+            object: {
+                "grackle_point_light": GracklePointLight(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(100.5),
+                        y: Relative(3.4),
+                        z: Relative(14.0),
+                    ),
+                    intensity: 40000.0,
+                    radius: 0.1,
+                    range: 8.0,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 88,
+            ),
+            name: Some("Alcove: weathered_wood"),
+            object: {
+                "editor_room": EditorRoom(
+                    min: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(104.0),
+                        y: Relative(0.0),
+                        z: Relative(22.0),
+                    ),
+                    max: PointRef(
+                        reference: None,
+                        point_key: "",
+                        x: Relative(5.0),
+                        y: Relative(4.0),
+                        z: Relative(4.0),
+                    ),
+                    max_base: OwnMin,
+                    surfaces: RoomSurfaces(
+                        floor: Some("weathered_wood"),
+                        walls: Some("weathered_wood"),
+                        ceiling: Some("plaster"),
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 89,
+            ),
+            object: {
+                "grackle_point_light": GracklePointLight(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(106.5),
+                        y: Relative(3.4),
+                        z: Relative(24.0),
+                    ),
+                    intensity: 40000.0,
+                    radius: 0.1,
+                    range: 8.0,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 90,
+            ),
+            name: Some("Alcove: wood_grain_laminate"),
+            object: {
+                "editor_room": EditorRoom(
+                    min: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(104.0),
+                        y: Relative(0.0),
+                        z: Relative(12.0),
+                    ),
+                    max: PointRef(
+                        reference: None,
+                        point_key: "",
+                        x: Relative(5.0),
+                        y: Relative(4.0),
+                        z: Relative(4.0),
+                    ),
+                    max_base: OwnMin,
+                    surfaces: RoomSurfaces(
+                        floor: Some("wood_grain_laminate"),
+                        walls: Some("wood_grain_laminate"),
+                        ceiling: Some("plaster"),
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 91,
+            ),
+            object: {
+                "grackle_point_light": GracklePointLight(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(106.5),
+                        y: Relative(3.4),
+                        z: Relative(14.0),
+                    ),
+                    intensity: 40000.0,
+                    radius: 0.1,
+                    range: 8.0,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 92,
             ),
             object: {
                 "grackle_point_light": GracklePointLight(
@@ -2013,7 +2527,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 74,
+                _id: 93,
             ),
             object: {
                 "grackle_point_light": GracklePointLight(
@@ -2034,7 +2548,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 75,
+                _id: 94,
             ),
             object: {
                 "grackle_point_light": GracklePointLight(
@@ -2055,7 +2569,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 76,
+                _id: 95,
             ),
             object: {
                 "grackle_point_light": GracklePointLight(
@@ -2076,7 +2590,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 77,
+                _id: 96,
             ),
             object: {
                 "grackle_point_light": GracklePointLight(
@@ -2097,7 +2611,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 78,
+                _id: 97,
             ),
             object: {
                 "grackle_point_light": GracklePointLight(
@@ -2118,7 +2632,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 79,
+                _id: 98,
             ),
             object: {
                 "grackle_point_light": GracklePointLight(
@@ -2139,7 +2653,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 80,
+                _id: 99,
             ),
             object: {
                 "grackle_point_light": GracklePointLight(
@@ -2160,7 +2674,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 81,
+                _id: 100,
             ),
             object: {
                 "grackle_point_light": GracklePointLight(
@@ -2181,7 +2695,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 82,
+                _id: 101,
             ),
             object: {
                 "grackle_point_light": GracklePointLight(
@@ -2202,7 +2716,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 83,
+                _id: 102,
             ),
             object: {
                 "grackle_point_light": GracklePointLight(
@@ -2223,7 +2737,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 84,
+                _id: 103,
             ),
             object: {
                 "grackle_point_light": GracklePointLight(
@@ -2244,7 +2758,7 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 85,
+                _id: 104,
             ),
             object: {
                 "grackle_point_light": GracklePointLight(
@@ -2265,7 +2779,70 @@ Blueprint(
         ),
         Feature(
             id: FeatureId(
-                _id: 86,
+                _id: 105,
+            ),
+            object: {
+                "grackle_point_light": GracklePointLight(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(94.5),
+                        y: Relative(4.4),
+                        z: Relative(19.0),
+                    ),
+                    intensity: 30000.0,
+                    radius: 0.1,
+                    range: 9.0,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 106,
+            ),
+            object: {
+                "grackle_point_light": GracklePointLight(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(100.5),
+                        y: Relative(4.4),
+                        z: Relative(19.0),
+                    ),
+                    intensity: 30000.0,
+                    radius: 0.1,
+                    range: 9.0,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 107,
+            ),
+            object: {
+                "grackle_point_light": GracklePointLight(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(106.5),
+                        y: Relative(4.4),
+                        z: Relative(19.0),
+                    ),
+                    intensity: 30000.0,
+                    radius: 0.1,
+                    range: 9.0,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 108,
             ),
             name: Some("Gallery Camera"),
             object: {
@@ -2275,11 +2852,11 @@ Blueprint(
                             _id: 0,
                         )),
                         point_key: "",
-                        x: Relative(92.0),
+                        x: Relative(110.0),
                         y: Relative(4.0),
                         z: Relative(19.0),
                     ),
-                    rotation: Vec3(-0.04874185, 1.5707964, 0.0),
+                    rotation: Vec3(-0.039978687, 1.5707964, 0.0),
                     fov: 90.0,
                     order: 1000,
                     viewers: Viewers(

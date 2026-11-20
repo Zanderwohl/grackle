@@ -38,11 +38,28 @@ fn main() {
         ("painted_brick_green", painted_brick(Coat::GREEN)),
         ("corrugated_steel", corrugated_steel()),
         ("wooden_fence", wooden_fence()),
+        ("pine_brown", pine(Pine::BROWN, 300)),
+        ("pine_honey", pine(Pine::HONEY, 310)),
+        ("pine_pale", pine(Pine::PALE, 320)),
+        ("pine_silvering", pine(Pine::SILVERING, 330)),
+        ("pine_gray", pine(Pine::GRAY, 340)),
         ("weathered_wood", weathered_wood()),
         ("hardwood_floor", hardwood(None)),
         ("hardwood_floor_worn", hardwood(Some(Wear { seed: 155 }))),
         ("wood_grain_laminate", laminate()),
         ("linoleum_tiles", linoleum()),
+        ("linoleum_gray", checkered_linoleum(6, Coat::GRAY_CHECKER)),
+        ("linoleum_orange", checkered_linoleum(6, Coat::ORANGE.checker())),
+        ("linoleum_red", checkered_linoleum(6, Coat::RED.checker())),
+        ("linoleum_blue", checkered_linoleum(6, Coat::BLUE.checker())),
+        ("linoleum_yellow", checkered_linoleum(6, Coat::YELLOW.checker())),
+        ("linoleum_green", checkered_linoleum(6, Coat::GREEN.checker())),
+        ("linoleum_large_gray", checkered_linoleum(4, Coat::GRAY_CHECKER)),
+        ("linoleum_large_orange", checkered_linoleum(4, Coat::ORANGE.checker())),
+        ("linoleum_large_red", checkered_linoleum(4, Coat::RED.checker())),
+        ("linoleum_large_blue", checkered_linoleum(4, Coat::BLUE.checker())),
+        ("linoleum_large_yellow", checkered_linoleum(4, Coat::YELLOW.checker())),
+        ("linoleum_large_green", checkered_linoleum(4, Coat::GREEN.checker())),
         ("osb", osb()),
         ("dirt_path", dirt_path()),
         ("desert_sand", desert_sand(false)),
@@ -712,6 +729,32 @@ impl Coat {
     const BLUE: Coat = Coat { lightness: 0.56, chroma: 0.120, hue: 252.0 };
     const YELLOW: Coat = Coat { lightness: 0.80, chroma: 0.135, hue: 90.0 };
     const GREEN: Coat = Coat { lightness: 0.60, chroma: 0.120, hue: 148.0 };
+    /// The two tiles of the gray checkered vinyl floor.
+    const GRAY_CHECKER: (Coat, Coat) = (
+        Coat { lightness: 0.88, chroma: 0.006, hue: 250.0 },
+        Coat { lightness: 0.85, chroma: 0.006, hue: 250.0 },
+    );
+
+    const fn lighter(self, by: f32) -> Coat {
+        Coat { lightness: self.lightness + by, ..self }
+    }
+
+    /// `by` of the way to white: lightness toward 1 and chroma toward 0.
+    const fn toward_white(self, by: f32) -> Coat {
+        Coat { lightness: self.lightness + (1.0 - self.lightness) * by, chroma: self.chroma * (1.0 - by), ..self }
+    }
+
+    /// The two tiles of a checkered vinyl floor in this color: a pale pastel, and that a little
+    /// lighter and paler again.
+    const fn checker(self) -> (Coat, Coat) {
+        let base = self.toward_white(0.55).paler(0.75);
+        (base, base.paler(0.8).lighter(0.03))
+    }
+
+    /// Chroma scaled by `by`.
+    const fn paler(self, by: f32) -> Coat {
+        Coat { chroma: self.chroma * by, ..self }
+    }
 }
 
 /// The red brick's bond under coats of satin latex: the paint has filled the grit and pits and
@@ -917,6 +960,125 @@ fn corrugated_steel() -> Graph {
     })
 }
 
+/// Pine's figure, unbroken across the texture tile: each layer is 0 to 1.
+struct PineFigure {
+    /// The dark late wood of each growth ring.
+    late_wood: LayerId,
+    knot_core: LayerId,
+    /// The rings bent dark round a knot.
+    knot_swirl: LayerId,
+    fibers: LayerId,
+    splits: LayerId,
+}
+
+/// Growth-ring lines running along `v`, `lines` of them across the texture tile, wandering with
+/// noise stretched along them and bent round knots. `u` plus the wander, through a whole number of
+/// cycles, so the lines tile. Takes seeds `seed` to `seed + 3`.
+fn pine_figure(g: &mut Graph, u: LayerId, lines: u32, seed: u32) -> PineFigure {
+    let count = lines as f32;
+    let figure_noise = g.add_unique("figure noise", tiling_fbm(seed, 4, 3)).unwrap();
+    let figure = stretched(g, "figure", figure_noise, [4.0, 1.0]);
+    let wander = scaled(g, "wander", figure, 0.0, 3.0 / count);
+    let wandering = mix(g, "wandering", u, wander, BlendMode::Add);
+    let knot_spots = g.add_unique("knot spots", tiling_fbm(seed + 1, 8, 2)).unwrap();
+    let knot_noise = stretched(g, "knot noise", knot_spots, [2.0, 1.0]);
+    let knot_swirl = remap(g, "knot swirl", knot_noise, 0.70, 0.84);
+    let swirl = scaled(g, "swirl", knot_swirl, 0.0, 2.0 / count);
+    let bent = mix(g, "bent", wandering, swirl, BlendMode::Add);
+    let rings = wave(g, "rings", bent, WaveShape::Triangle, count, 0.0);
+    let late_wood = remap(g, "late wood", rings, 0.70, 0.95);
+    let knot_core = remap(g, "knot core", knot_noise, 0.82, 0.84);
+    let fiber_noise = g.add_unique("fiber noise", tiling_fbm(seed + 2, 8, 4)).unwrap();
+    let fibers = stretched(g, "fibers", fiber_noise, [16.0, 1.0]);
+    let split_noise = g
+        .add_unique(
+            "split noise",
+            LayerKind::Noise(Noise {
+                dims: NoiseDims::D2,
+                seed_offset: seed + 3,
+                frequency: 4.0,
+                range: NoiseRange::Unsigned,
+                output: NoiseOutput::Grayscale,
+                kernel: NoiseKernel::Value,
+                period: [4, 4, 0],
+                fractal: Fractal { octaves: 3, lacunarity: 2.0, gain: 0.5, mode: FractalMode::Ridged, normalize: true },
+            }),
+        )
+        .unwrap();
+    let split_lines = stretched(g, "split lines", split_noise, [24.0, 1.0]);
+    let splits = remap(g, "splits", split_lines, 0.93, 0.98);
+    PineFigure { late_wood, knot_core, knot_swirl, fibers, splits }
+}
+
+/// A pine board's tone, in Oklch: the five the fence's boards are drawn between.
+#[derive(Clone, Copy)]
+struct Pine {
+    lightness: f32,
+    chroma: f32,
+    hue: f32,
+}
+
+impl Pine {
+    const BROWN: Pine = Pine { lightness: 0.50, chroma: 0.050, hue: 62.0 };
+    const HONEY: Pine = Pine { lightness: 0.62, chroma: 0.065, hue: 72.0 };
+    const PALE: Pine = Pine { lightness: 0.70, chroma: 0.070, hue: 80.0 };
+    /// Weathering toward gray.
+    const SILVERING: Pine = Pine { lightness: 0.60, chroma: 0.030, hue: 78.0 };
+    const GRAY: Pine = Pine { lightness: 0.56, chroma: 0.015, hue: 80.0 };
+
+    fn color(self) -> Color {
+        oklcha(self.lightness, self.chroma, self.hue, 1.0)
+    }
+
+    fn shade(self, dl: f32) -> Color {
+        oklcha(self.lightness + dl, self.chroma, self.hue, 1.0)
+    }
+}
+
+/// One of the fence's pine tones as an unbroken surface: no gaps, nails or board edges, so the
+/// shape it is painted on is the shape of the board. Growth rings about 24 mm apart run along `v`,
+/// knotty and split here and there, with the grain raised by weathering.
+fn pine(tone: Pine, seed: u32) -> Graph {
+    let mut g = empty();
+    let u = coordinate(&mut g, Axis::U);
+    let PineFigure { late_wood, knot_core, knot_swirl, fibers, splits } = pine_figure(&mut g, u, 84, seed);
+
+    // A broad drift in tone along the grain, so a long piece is not one flat color.
+    let drift_noise = g.add_unique("drift noise", tiling_fbm(seed + 4, 2, 3)).unwrap();
+    let drift = stretched(&mut g, "drift", drift_noise, [4.0, 1.0]);
+    let (dim, bright) = noisy_pair(tone.shade(-0.04), tone.shade(0.04));
+    let lumber = mapped(&mut g, "lumber", drift, &[(0.25, dim), (0.75, bright)]);
+    // The late wood is the same wood darker, so a gray board's rings are gray too.
+    let late = solid(&mut g, "late", oklcha(tone.lightness * 0.8, tone.chroma * 0.9, tone.hue - 6.0, 1.0));
+    let fiber_share = scaled(&mut g, "fiber share", fibers, 0.0, 0.25);
+    let fibered = blend(&mut g, "fibered", lumber, late, fiber_share);
+    let ring_share = scaled(&mut g, "ring share", late_wood, 0.0, 0.45);
+    let grained = blend(&mut g, "grained", fibered, late, ring_share);
+    let knot_rim_share = scaled(&mut g, "knot rim share", knot_swirl, 0.0, 0.35);
+    let knotty = blend(&mut g, "knotty", grained, late, knot_rim_share);
+    let knot = solid(&mut g, "knot", oklcha(tone.lightness * 0.6, tone.chroma, tone.hue - 12.0, 1.0));
+    let knotted = blend(&mut g, "knotted", knotty, knot, knot_core);
+    let crack = solid(&mut g, "crack", oklcha(0.20, 0.020, 60.0, 1.0));
+    let color = blend(&mut g, "color", knotted, crack, splits);
+
+    let roughness = scaled(&mut g, "roughness", fibers, 0.82, 0.95);
+
+    let raised = scaled(&mut g, "raised grain", late_wood, 0.0, 0.25);
+    let fuzz = scaled(&mut g, "fuzz", fibers, 0.0, 0.15);
+    let base = solid(&mut g, "base", gray(0.5));
+    let grained_top = mix(&mut g, "grained top", base, raised, BlendMode::Add);
+    let fuzzy = mix(&mut g, "fuzzy", grained_top, fuzz, BlendMode::Add);
+    let crack_depth = scaled(&mut g, "crack depth", splits, 0.0, 0.4);
+    let height = mix(&mut g, "height", fuzzy, crack_depth, BlendMode::Subtract);
+    let normal = normal_of(&mut g, height, 0.004);
+    finish(g, Output {
+        color: Some(color),
+        roughness: ScalarInput::Layer(roughness),
+        metallic: ScalarInput::Const(0.0),
+        normal: Some(normal),
+    })
+}
+
 /// A privacy fence of cheap pine boards standing side by side down `v`: each board its own tone,
 /// some weathered gray, knotty, split here and there, cupped, with a hairline gap between boards
 /// and two rusting nails per board at each of two rails.
@@ -940,41 +1102,8 @@ fn wooden_fence() -> Graph {
     let draw = g.add_unique("draw", lattice(80, BOARDS)).unwrap();
     let lot = g.add_unique("lot", LayerKind::Map(Map { value: Some(column), palette: Some(draw) })).unwrap();
 
-    // The figure: lines about six to a board, running down it, wandering with noise stretched
-    // down the board and bent round the knots. `u` plus the wander, through a whole number of
-    // cycles, so the lines tile.
-    const LINES: f32 = 6.0;
-    let figure_noise = g.add_unique("figure noise", tiling_fbm(81, 4, 3)).unwrap();
-    let figure = stretched(&mut g, "figure", figure_noise, [4.0, 1.0]);
-    let wander = scaled(&mut g, "wander", figure, 0.0, 3.0 / (LINES * boards));
-    let wandering = mix(&mut g, "wandering", u, wander, BlendMode::Add);
-    let knot_spots = g.add_unique("knot spots", tiling_fbm(82, 8, 2)).unwrap();
-    let knot_noise = stretched(&mut g, "knot noise", knot_spots, [2.0, 1.0]);
-    let knot_swirl = remap(&mut g, "knot swirl", knot_noise, 0.70, 0.84);
-    let swirl = scaled(&mut g, "swirl", knot_swirl, 0.0, 2.0 / (LINES * boards));
-    let bent = mix(&mut g, "bent", wandering, swirl, BlendMode::Add);
-    let rings = wave(&mut g, "rings", bent, WaveShape::Triangle, LINES * boards, 0.0);
-    let late_wood = remap(&mut g, "late wood", rings, 0.70, 0.95);
-    let knot_core = remap(&mut g, "knot core", knot_noise, 0.82, 0.84);
-    let fiber_noise = g.add_unique("fiber noise", tiling_fbm(83, 8, 4)).unwrap();
-    let fibers = stretched(&mut g, "fibers", fiber_noise, [16.0, 1.0]);
-    let split_noise = g
-        .add_unique(
-            "split noise",
-            LayerKind::Noise(Noise {
-                dims: NoiseDims::D2,
-                seed_offset: 84,
-                frequency: 4.0,
-                range: NoiseRange::Unsigned,
-                output: NoiseOutput::Grayscale,
-                kernel: NoiseKernel::Value,
-                period: [4, 4, 0],
-                fractal: Fractal { octaves: 3, lacunarity: 2.0, gain: 0.5, mode: FractalMode::Ridged, normalize: true },
-            }),
-        )
-        .unwrap();
-    let split_lines = stretched(&mut g, "split lines", split_noise, [24.0, 1.0]);
-    let splits = remap(&mut g, "splits", split_lines, 0.93, 0.98);
+    // About six lines to a board.
+    let PineFigure { late_wood, knot_core, knot_swirl, fibers, splits } = pine_figure(&mut g, u, 6 * BOARDS, 81);
     // Shifted by the board's own value; the same at a tile's two edges, since the id wraps.
     let shift = |g: &mut Graph, name: &str, source: LayerId| {
         g.add_unique(
@@ -998,11 +1127,11 @@ fn wooden_fence() -> Graph {
     let cup = scaled(&mut g, "cup", across_gap, 0.0, 0.10);
 
     let lumber = mapped(&mut g, "lumber", lot, &[
-        (0.0, oklcha(0.50, 0.050, 62.0, 1.0)),
-        (0.35, oklcha(0.62, 0.065, 72.0, 1.0)),
-        (0.65, oklcha(0.70, 0.070, 80.0, 1.0)),
-        (0.85, oklcha(0.60, 0.030, 78.0, 1.0)),
-        (1.0, oklcha(0.56, 0.015, 80.0, 1.0)),
+        (0.0, Pine::BROWN.color()),
+        (0.35, Pine::HONEY.color()),
+        (0.65, Pine::PALE.color()),
+        (0.85, Pine::SILVERING.color()),
+        (1.0, Pine::GRAY.color()),
     ]);
     let fiber_share = scaled(&mut g, "fiber share", fibers, 0.0, 0.25);
     let late = solid(&mut g, "late", oklcha(0.42, 0.050, 58.0, 1.0));
@@ -1705,36 +1834,9 @@ fn laminate() -> Graph {
 /// white base flecked with gray, charcoal, beige and black chips in drifts, each tile a shade off
 /// its neighbors, tight butt joints with dirt in them, and a waxed finish scuffed dull in places.
 fn linoleum() -> Graph {
-    const TILES: u32 = 7;
-    let count = TILES as f32;
-    let cycle = TILE_MM / count;
     let mut g = empty();
     let zero = solid(&mut g, "zero", gray(0.0));
-    let u = coordinate(&mut g, Axis::U);
-    let v = coordinate(&mut g, Axis::V);
-    let into_column = wave(&mut g, "into column", u, WaveShape::Sawtooth, count, 0.0);
-    let column_step = scaled(&mut g, "column step", into_column, 0.0, 1.0 / count);
-    let column = mix(&mut g, "column", u, column_step, BlendMode::Subtract);
-    let into_row = wave(&mut g, "into row", v, WaveShape::Sawtooth, count, 0.0);
-    let row_step = scaled(&mut g, "row step", into_row, 0.0, 1.0 / count);
-    let row_start = mix(&mut g, "row start", v, row_step, BlendMode::Subtract);
-    let row = wave(&mut g, "row", row_start, WaveShape::Sawtooth, 1.0, 0.0);
-    let row_share = scaled(&mut g, "row share", row, 0.0, 1.0 / count);
-    let id_sum = mix(&mut g, "id sum", column, row_share, BlendMode::Add);
-    let id = wave(&mut g, "id", id_sum, WaveShape::Sawtooth, 1.0, 0.0);
-    let lot = lot_of(&mut g, "lot", id, TILES * TILES, 170);
-
-    let at = |mm: f32| 1.0 - 2.0 * mm / cycle;
-    let across_u = wave(&mut g, "across u", u, WaveShape::Triangle, count, 0.25);
-    let across_v = wave(&mut g, "across v", v, WaveShape::Triangle, count, 0.25);
-    // A butt joint is under a millimeter; drawn that thin it would catch a texel on one seam and
-    // miss the next, so it is spread soft over a texel either side.
-    let joint_u = remap(&mut g, "joint u", across_u, at(4.0), at(0.0));
-    let joint_v = remap(&mut g, "joint v", across_v, at(4.0), at(0.0));
-    let joint = pick(&mut g, "joint", joint_u, joint_v, MinMaxMode::Max);
-    let edge_u = remap(&mut g, "edge u", across_u, at(8.0), at(1.0));
-    let edge_v = remap(&mut g, "edge v", across_v, at(8.0), at(1.0));
-    let edge = pick(&mut g, "edge", edge_u, edge_v, MinMaxMode::Max);
+    let VinylGrid { lot, joint, edge, .. } = vinyl_grid(&mut g, 7, 170);
 
     let base = mapped(&mut g, "base", lot, &[
         (0.0, oklcha(0.88, 0.014, 88.0, 1.0)),
@@ -1782,6 +1884,129 @@ fn linoleum() -> Graph {
     let roughness = blend(&mut g, "roughness", wax, joint_rough, joint);
 
     let ripple = g.add_unique("ripple", tiling_fbm(178, 32, 2)).unwrap();
+    let waves = scaled(&mut g, "waves", ripple, 0.0, 0.04);
+    let curl = scaled(&mut g, "curl", lot, 0.75, 0.80);
+    let top = mix(&mut g, "top", curl, waves, BlendMode::Add);
+    let face = remap(&mut g, "face", edge, 0.6, 0.0);
+    let height = blend(&mut g, "height", zero, top, face);
+    let normal = normal_of(&mut g, height, 0.001);
+    finish(g, Output {
+        color: Some(color),
+        roughness: ScalarInput::Layer(roughness),
+        metallic: ScalarInput::Const(0.0),
+        normal: Some(normal),
+    })
+}
+
+/// Square vinyl tiles laid square across the texture tile.
+struct VinylGrid {
+    u: LayerId,
+    v: LayerId,
+    /// Each tile's own value in `[0, 1)`.
+    lot: LayerId,
+    /// 1 in a butt joint, softened over a texel either side.
+    joint: LayerId,
+    /// 1 within a few millimeters of a joint, where dirt gathers and the tile's edge turns down.
+    edge: LayerId,
+}
+
+fn vinyl_grid(g: &mut Graph, tiles: u32, seed: u32) -> VinylGrid {
+    let count = tiles as f32;
+    let cycle = TILE_MM / count;
+    let u = coordinate(g, Axis::U);
+    let v = coordinate(g, Axis::V);
+    let into_column = wave(g, "into column", u, WaveShape::Sawtooth, count, 0.0);
+    let column_step = scaled(g, "column step", into_column, 0.0, 1.0 / count);
+    let column = mix(g, "column", u, column_step, BlendMode::Subtract);
+    let into_row = wave(g, "into row", v, WaveShape::Sawtooth, count, 0.0);
+    let row_step = scaled(g, "row step", into_row, 0.0, 1.0 / count);
+    let row_start = mix(g, "row start", v, row_step, BlendMode::Subtract);
+    let row = wave(g, "row", row_start, WaveShape::Sawtooth, 1.0, 0.0);
+    let row_share = scaled(g, "row share", row, 0.0, 1.0 / count);
+    let id_sum = mix(g, "id sum", column, row_share, BlendMode::Add);
+    let id = wave(g, "id", id_sum, WaveShape::Sawtooth, 1.0, 0.0);
+    let lot = lot_of(g, "lot", id, tiles * tiles, seed);
+
+    let at = |mm: f32| 1.0 - 2.0 * mm / cycle;
+    let across_u = wave(g, "across u", u, WaveShape::Triangle, count, 0.25);
+    let across_v = wave(g, "across v", v, WaveShape::Triangle, count, 0.25);
+    // A butt joint is under a millimeter; drawn that thin it would catch a texel on one seam and
+    // miss the next, so it is spread soft over a texel either side.
+    let joint_u = remap(g, "joint u", across_u, at(4.0), at(0.0));
+    let joint_v = remap(g, "joint v", across_v, at(4.0), at(0.0));
+    let joint = pick(g, "joint", joint_u, joint_v, MinMaxMode::Max);
+    let edge_u = remap(g, "edge u", across_u, at(8.0), at(1.0));
+    let edge_v = remap(g, "edge v", across_v, at(8.0), at(1.0));
+    let edge = pick(g, "edge", edge_u, edge_v, MinMaxMode::Max);
+    VinylGrid { u, v, lot, joint, edge }
+}
+
+/// Vinyl composition tile in two close shades of one color laid as a checkerboard, `tiles` to a
+/// two-meter tile (6 is 333 mm, about 13"; 4 is 500 mm, about 20"): each tile clouded and finely
+/// flecked with lighter and darker chips of its own color, a shade off its neighbors, with dirt in
+/// the joints and a waxed finish scuffed dull in places. `light` is the lighter or more saturated
+/// of the two.
+fn checkered_linoleum(tiles: u32, (light, dark): (Coat, Coat)) -> Graph {
+    assert!(tiles % 2 == 0, "an odd count puts two tiles of one shade side by side at the texture's edge");
+    let mut g = empty();
+    let zero = solid(&mut g, "zero", gray(0.0));
+    let VinylGrid { u, v, lot, joint, edge } = vinyl_grid(&mut g, tiles, 180);
+
+    // Square waves of half the tile frequency are 1 on alternate columns and rows; their
+    // exclusive or, a + b - 2ab, is 1 on alternate tiles.
+    let half = tiles as f32 / 2.0;
+    let odd_column = wave(&mut g, "odd column", u, WaveShape::Square, half, 0.0);
+    let odd_row = wave(&mut g, "odd row", v, WaveShape::Square, half, 0.0);
+    let either = mix(&mut g, "either", odd_column, odd_row, BlendMode::Add);
+    let both = mix(&mut g, "both", odd_column, odd_row, BlendMode::Multiply);
+    let once = mix(&mut g, "once", either, both, BlendMode::Subtract);
+    let checker = mix(&mut g, "checker", once, both, BlendMode::Subtract);
+
+    let shade = |coat: Coat, dl: f32| oklcha(coat.lightness + dl, coat.chroma, coat.hue, 1.0);
+    let cloud = g.add_unique("cloud", tiling_fbm(181, 8, 4)).unwrap();
+    let cloud_tile = shifted(&mut g, "tile cloud", cloud, lot, 0.25);
+    let cloud_share = solid(&mut g, "cloud share", gray(0.5));
+    let mottled_shade = |g: &mut Graph, name: &str, coat: Coat| {
+        let tile = mapped(g, &format!("{name} tile"), lot, &[(0.0, shade(coat, -0.015)), (1.0, shade(coat, 0.015))]);
+        let (dim, bright) = noisy_pair(shade(coat, -0.05), shade(coat, 0.05));
+        let clouded = mapped(g, &format!("{name} clouded"), cloud_tile, &[(0.25, dim), (0.75, bright)]);
+        blend(g, &format!("{name} mottled"), tile, clouded, cloud_share)
+    };
+    let dark_mottled = mottled_shade(&mut g, "dark", dark);
+    let light_mottled = mottled_shade(&mut g, "light", light);
+    let mottled = blend(&mut g, "mottled", dark_mottled, light_mottled, checker);
+    let drift_noise = g.add_unique("drift", tiling_fbm(182, 16, 3)).unwrap();
+    let drift_tile = shifted(&mut g, "tile drift", drift_noise, lot, 0.2);
+    let drift = scaled(&mut g, "drift amount", drift_tile, 0.0, 0.10);
+    let chip = |g: &mut Graph, name: &str, seed: u32, frequency: u32, lo: f32, hi: f32| {
+        let noise = g.add_unique(format!("{name} noise"), tiling_fbm(seed, frequency, 2)).unwrap();
+        let tile_noise = shifted(g, &format!("tile {name}"), noise, lot, 0.05);
+        let drifted = mix(g, &format!("drifted {name}"), tile_noise, drift, BlendMode::Add);
+        remap(g, name, drifted, lo, hi)
+    };
+    let pale_chips = chip(&mut g, "pale chips", 183, 128, 0.86, 0.90);
+    let deep_chips = chip(&mut g, "deep chips", 184, 160, 0.88, 0.92);
+    // Halfway to white rather than a fixed step lighter: on a tile already near white, a step
+    // past L = 1 converts to sRGB as pink.
+    let pale = oklcha(light.lightness + (1.0 - light.lightness) * 0.5, light.chroma * 0.5, light.hue, 1.0);
+    let pale_chip = solid(&mut g, "pale chip", pale);
+    let deep_chip = solid(&mut g, "deep chip", shade(dark, -0.14));
+    let paled = blend(&mut g, "paled", mottled, pale_chip, pale_chips);
+    let flecked = blend(&mut g, "flecked", paled, deep_chip, deep_chips);
+    let grime = solid(&mut g, "grime", oklcha(dark.lightness * 0.75, 0.030, 80.0, 1.0));
+    let edge_grime = scaled(&mut g, "edge grime", edge, 0.0, 0.25);
+    let edged = blend(&mut g, "edged", flecked, grime, edge_grime);
+    let gap = solid(&mut g, "gap", oklcha(0.35, 0.020, 75.0, 1.0));
+    let joint_share = scaled(&mut g, "joint share", joint, 0.0, 0.55);
+    let color = blend(&mut g, "color", edged, gap, joint_share);
+
+    let scuff_noise = g.add_unique("scuff noise", tiling_fbm(187, 4, 5)).unwrap();
+    let (waxed, dull) = noisy(0.25, 0.55);
+    let wax = scaled(&mut g, "wax", scuff_noise, waxed, dull);
+    let joint_rough = solid(&mut g, "joint roughness", gray(0.8));
+    let roughness = blend(&mut g, "roughness", wax, joint_rough, joint);
+
+    let ripple = g.add_unique("ripple", tiling_fbm(188, 32, 2)).unwrap();
     let waves = scaled(&mut g, "waves", ripple, 0.0, 0.04);
     let curl = scaled(&mut g, "curl", lot, 0.75, 0.80);
     let top = mix(&mut g, "top", curl, waves, BlendMode::Add);
@@ -2055,10 +2280,21 @@ fn profile(g: &mut Graph, name: &str, along: LayerId, seed: u32, frequency: u32,
     g.add_unique(name, LayerKind::Map(Map { value: Some(at), palette: Some(draw) })).unwrap()
 }
 
+/// The most stops texture-graph's GPU baker takes in one ramp; a ramp with more panics there.
+const MAX_RAMP_STOPS: usize = 16;
+
 /// `value` cut into hard-edged bands: `colors[i]` below `edges[i]` and above the edge before it.
+/// Too many bands for one ramp are cut at the middle edge into two, chosen between by a step.
 fn banded(g: &mut Graph, name: &str, value: LayerId, edges: &[f32], colors: &[Color]) -> LayerId {
     assert_eq!(colors.len(), edges.len() + 1);
     const SOFT: f32 = 0.003;
+    if 2 * edges.len() + 2 > MAX_RAMP_STOPS {
+        let middle = edges.len() / 2;
+        let below = banded(g, &format!("{name} below"), value, &edges[..middle], &colors[..=middle]);
+        let above = banded(g, &format!("{name} above"), value, &edges[middle + 1..], &colors[middle + 1..]);
+        let step = remap(g, &format!("{name} step"), value, edges[middle] - SOFT, edges[middle] + SOFT);
+        return blend(g, name, below, above, step);
+    }
     let mut stops = vec![(0.0, colors[0])];
     for (i, &edge) in edges.iter().enumerate() {
         stops.push((edge - SOFT, colors[i]));
