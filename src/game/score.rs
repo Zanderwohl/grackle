@@ -424,6 +424,7 @@ fn spawn_the_scoreboard(mut commands: Commands, existing: Query<(), With<Scorebo
     commands.spawn((
         Scoreboard,
         crate::game::hud::GameHud,
+        crate::game::postcards::KeptClear,
         Node {
             position_type: PositionType::Absolute,
             left: Val::Px(MARGIN),

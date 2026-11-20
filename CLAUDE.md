@@ -1955,7 +1955,7 @@ draws whatever the mesh's render layers, so it lit every wall unshadowed and
 washed the lightmaps out.
 
 **Postcards are the last bake** ([`src/tool/postcard_bake.rs`](src/tool/postcard_bake.rs)):
-photographs of the map at 2160×1440 whatever the window's size, with no HUD, one through each
+photographs of the map rendered at 1152×768 whatever the window's size and halved to 576×384 — the size a card prints its picture at, so nothing resamples it again — with no HUD, one through each
 spectator camera at its own vertical field of view and one orthographic from straight above, turned
 in 5° steps to whichever angle lets the rooms' and blocks' corners fill the most of the 3:2 frame.
 They go to `cache/postcards/{hash}/`, named by `PostcardChoice::file_stem` (`top.png`,
@@ -1966,8 +1966,8 @@ halfbright pictures, taken without sunlight, are filed apart. Pack content is no
 the hash: delete the folder after editing a material. Taken only in the map editor and never while
 rolled back, once rooms and sunlight are up to date (or skipped) and the map has been still for the
 settle wait, by one camera re-aimed per shot, with spawn-point bodies hidden while it shoots.
-**Only the authority takes them**; any machine reads a set already on disk, and the set read or
-taken most recently is kept shrunk to 200 px high (`CapturedPostcards`) until another replaces it,
+**Only the authority takes them**, and sends the chosen ones to clients (below); any machine reads a set already on disk, and the set read or
+taken most recently is kept (`CapturedPostcards`), until another replaces it,
 and evicted when another map is opened (`FeatureTimeline::adoptions`, bumped by every `adopt`) or
 the `NetRole` changes. A set is baked only once its write lands; a write that fails, or a sitting
 whose captures never come back, gives up on that hash until the map changes or a bake is asked for.
@@ -1978,6 +1978,40 @@ one tile wide (`PickerKind::captioned`) offering every postcard the map would ha
 picture or a gray "Not generated" placeholder (`Choice::placeholder`). Its
 own checkbox in the Bakes panel, on by default; a round never waits for it. `PostcardBakePlugin` is
 added in `main.rs`, since it renders.
+
+**The chosen postcards are on the HUD** while nobody is fighting — the pre-game, between rounds,
+and while the team picker is up ([`src/game/postcards.rs`](src/game/postcards.rs)); when none of those holds they fly out off the bottom (easeInQuart, a quarter second apart). Up to
+three are laid out tilted — 4° at the tallest to 20° at the smallest, up to 8° more toward the
+bottom of the window, never past 30° — in the space left by every visible node marked
+`KeptClear` — the pickers' panels, the scoreboards and the banner's lines. A new piece of
+pre-game UI is marked too, or a card may land on it. The kill feed is not: cards draw over the HUD
+and under the pickers, since a feed line coming and going moved them. Cards are placed as large as
+fit, up to a third of the window high, each as near its zone's anchor as it can be. The cards are
+`PrintedPostcards` (below), replaced only as a whole set, and a new set flies in from below the
+screen (easeOutQuart, each card a quarter second after the one before), on a clock that moves at most
+a twentieth of a second a frame so a hitch slows a flight rather than skipping it; and each card stays one entity
+that moves to its place in a new layout (easeInOutQuart), again a quarter second apart. A layout is redone for every new window
+size once the window has held it for 0.3 s — always, so cards a small window had no room for, which
+wait below the screen, come back — and, with the window still, when a card stops fitting or what is
+kept clear changes while a card waits for room (`lays_out_again`). `PostcardHudPlugin` is added in
+`main.rs` beside the bake.
+
+**A card is printed, not drawn** ([`src/common/postcard_print.rs`](src/common/postcard_print.rs)):
+`Postcard::blank` is 768×512 grained off-white paper, and `print` presses any picture into an
+`Area` of it as a layer, desaturated a little, speckled, unevenly inked and multiplied onto what is
+there, so the paper shows through every layer and ink is never black. `postcard` is the usual card:
+the `outline` layer, then a 3:2 picture an eighth of the card in from every side. The noise is a
+hash of each pixel's place and the layer's number, so every machine prints the same card.
+
+**The authority prints the cards and sends them** ([`src/common/postcard_sync.rs`](src/common/postcard_sync.rs)):
+whenever its kept set or the choice changes it prints the chosen postcards on the async compute pool,
+a task per card (a fifth of a second a card unoptimized; the paper and outline, the same on every
+card, are printed once), and keeps them as `PrintedPostcards` once every card is done. A listen
+server sends the cards as PNGs to everyone when they change and the whole set to each client that
+joins, so a client holds them before any round starts. The client decodes them on the pool too,
+refusing one over 4 MiB or not 768×512, replaces its `PrintedPostcards` once all are decoded, and
+drops them when its role changes. A client prints nothing and its HUD never shows its own disk's
+pictures.
 
 **Every bake reports the same way**
 ([`src/tool/bake_job.rs`](src/tool/bake_job.rs)): a `BakeStatus` per

@@ -319,7 +319,7 @@ fn show_or_hide(
             BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.45)),
         ))
         .with_children(|root| {
-            root.spawn((menu_panel(), PickerPanel)).with_children(|menu| {
+            root.spawn((menu_panel(), PickerPanel, crate::game::postcards::KeptClear)).with_children(|menu| {
                 menu.spawn(menu_title(font, crate::get!("class.picker.title")));
                 menu.spawn(Node { flex_direction: FlexDirection::Row, column_gap: Val::Px(BUTTON_GAP), ..default() })
                     .with_children(|row| {
