@@ -265,7 +265,7 @@ fn toggle_mode(
             );
             return;
         }
-        AppMode::Onboarding => return,
+        AppMode::Onboarding | AppMode::MainMenu => return,
     });
 }
 

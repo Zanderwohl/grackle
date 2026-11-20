@@ -1,9 +1,10 @@
-//! A HUD panel sized to its text: the leaning quadrilateral of [`leaning_panel`] behind a column
+//! A HUD panel sized to its text: the leaning quadrilateral of [`leaning_panel`](crate::game::hud::leaning_panel) behind a column
 //! of lines, painted in a [`Swatch`], each [`PlateText`] line in whichever of black and white
 //! stands out on it ([`Swatch::text`]).
 //!
 //! Spawn [`plate`] with [`plate_text`] children and any [`PlateIcon`] images, and set
-//! [`Plate::swatch`] to recolor it. After layout, [`paint_the_plates`] gives the plate its panel
+//! [`Plate::swatch`] to recolor it. Plates (buttons among them) that are children of a
+//! [`plate_row`] are joined side to side into one group. After layout, [`paint_the_plates`] gives the plate its panel
 //! (the first child) and repaints it when the plate's size or swatch changes. Its lines and panel stay hidden until the panel has been
 //! through layout, so a new plate never shows text with no panel behind it. The plate's own
 //! `Visibility` is never touched: it belongs to whoever spawned it.
@@ -12,7 +13,7 @@ use bevy::prelude::*;
 
 use crate::common::swatch::Swatch;
 use crate::common::ui_shape::{Corner, ShapeMaterial};
-use crate::game::hud::{hud_text, leaning_panel, panel_style, LEAN, ZONE_DROP, ZONE_STROKE};
+use crate::game::hud::{hud_text, lean_across, leaning_corners, leaning_panel_each, panel_style, LEAN, ZONE_DROP, ZONE_STROKE};
 
 /// Logical pixels inside the panel's box. The far sides are wider by the drop shadow, which
 /// centers the text on the panel rather than on panel and shadow.
@@ -32,7 +33,7 @@ pub struct PlatePlugin;
 
 impl Plugin for PlatePlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(PostUpdate, (paint_the_plates, follow_the_lean).after(bevy::ui::UiSystems::Layout));
+        app.add_systems(PostUpdate, (join_the_rows, (paint_the_plates, follow_the_lean)).chain().after(bevy::ui::UiSystems::Layout));
     }
 }
 
@@ -41,15 +42,45 @@ impl Plugin for PlatePlugin {
 pub struct Plate {
     pub swatch: Swatch,
     pub leans_right: bool,
-    /// The size and colors the panel was built for.
-    drawn: Option<(Vec2, Swatch)>,
+    /// Written by [`join_the_rows`] for a plate in a [`plate_row`].
+    joins: Joins,
+    /// The size, colors and joins the panel was built for.
+    drawn: Option<(Vec2, Swatch, Joins)>,
     shown: bool,
 }
 
 impl Plate {
     pub fn new(swatch: Swatch) -> Self {
-        Self { swatch, leans_right: true, drawn: None, shown: false }
+        Self { swatch, leans_right: true, joins: Joins::default(), drawn: None, shown: false }
     }
+}
+
+/// Which slanted sides a plate shares with a neighbor, whose corners are left square.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct Joins {
+    left: bool,
+    right: bool,
+}
+
+/// Its neighboring plate children share their slanted sides, with square corners there. They must
+/// lean the same way; the row stretches them to one height, which keeps the sides parallel.
+#[derive(Component, Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[require(Node)]
+pub struct PlateRow;
+
+/// Give it plate or plate button children. To place it, spawn `(PlateRow, Node { right, bottom, ..plate_row_node() })`.
+pub fn plate_row() -> impl Bundle {
+    (PlateRow, plate_row_node())
+}
+
+pub fn plate_row_node() -> Node {
+    Node { flex_direction: FlexDirection::Row, align_items: AlignItems::Stretch, ..default() }
+}
+
+/// How far a plate in a row is pulled left over the plate before it, in logical pixels, for plates
+/// `height` tall: past its own stroke, the other's stroke and drop, and the slant across it.
+fn overlap(height: f32) -> f32 {
+    2.0 * ZONE_STROKE + ZONE_DROP.x + lean_across(height)
 }
 
 /// A line whose color follows its plate's swatch.
@@ -140,12 +171,23 @@ fn paint_the_plates(
 
         // Within half a pixel the panel already drawn still fits; layout's sizes jitter by fractions.
         let swatch = plate.swatch;
-        let fits = plate.drawn.is_some_and(|(drawn, painted)| painted == swatch && (drawn - size).abs().max_element() <= 0.5);
+        let joins = plate.joins;
+        let fits = plate.drawn.is_some_and(|(drawn, painted, joined)| painted == swatch && joined == joins && (drawn - size).abs().max_element() <= 0.5);
         if !fits && let Some(materials) = materials.as_deref_mut() {
-            let outline = leaning_panel(size, plate.leans_right, Corner::squircle(16.0), Corner::squircle(6.0));
+            let mut corners = leaning_corners(plate.leans_right, Corner::squircle(16.0), Corner::squircle(6.0));
+            // Clockwise from the top left, so the left side is the first and last.
+            if joins.left {
+                corners[0] = Corner::SHARP;
+                corners[3] = Corner::SHARP;
+            }
+            if joins.right {
+                corners[1] = Corner::SHARP;
+                corners[2] = Corner::SHARP;
+            }
+            let outline = leaning_panel_each(size, plate.leans_right, corners);
             let material = materials.add(ShapeMaterial::from_path(&outline, size, panel_style(&swatch)));
             commands.entity(panel).insert(MaterialNode(material));
-            plate.drawn = Some((size, swatch));
+            plate.drawn = Some((size, swatch, joins));
         }
 
         // The panel spawned this frame has yet to be laid out.
@@ -155,6 +197,37 @@ fn paint_the_plates(
                 if let Ok(mut visibility) = hidden.get_mut(child) {
                     *visibility = Visibility::Inherited;
                 }
+            }
+        }
+    }
+}
+
+/// Measured after layout, since the slant depends on each plate's height; the margins land in the
+/// next frame's layout, while a new plate is still hidden. Only children next to each other in the
+/// row join, so anything else between two plates keeps them apart.
+fn join_the_rows(
+    rows: Query<&Children, With<PlateRow>>,
+    mut plates: Query<(&mut Plate, &mut Node, &ComputedNode)>,
+) {
+    for children in &rows {
+        let children: Vec<Entity> = children.iter().collect();
+        for (index, &child) in children.iter().enumerate() {
+            let is_plate = |at: Option<&Entity>| at.is_some_and(|entity| plates.contains(*entity));
+            let joins = Joins {
+                left: index > 0 && is_plate(children.get(index - 1)),
+                right: is_plate(children.get(index + 1)),
+            };
+            let Ok((mut plate, mut node, computed)) = plates.get_mut(child) else { continue };
+            if plate.joins != joins {
+                plate.joins = joins;
+            }
+            let height = computed.size().y * computed.inverse_scale_factor();
+            let left = match joins.left {
+                true => Val::Px(-overlap(height).round()),
+                false => Val::ZERO,
+            };
+            if node.margin.left != left {
+                node.margin.left = left;
             }
         }
     }
@@ -208,6 +281,45 @@ mod tests {
         assert_eq!(shown(&world), [Visibility::Inherited; 2]);
         assert_eq!(world.get::<Visibility>(plate), Some(&Visibility::Inherited), "the plate's own visibility was touched");
         assert_eq!(world.get::<Children>(plate).unwrap().len(), 2, "a second panel");
+    }
+
+    /// Breaks if plates in a row are not pulled together by the slant and both strokes, keep round
+    /// corners where they meet, or the ends lose theirs.
+    #[test]
+    fn plates_in_a_row_are_joined_at_their_slanted_sides() {
+        let mut world = World::new();
+        let height = 60.0;
+        let sized = ComputedNode { size: Vec2::new(100.0, height), inverse_scale_factor: 1.0, ..default() };
+        let members: Vec<Entity> = (0..3).map(|_| world.spawn((plate(Swatch::neutral()), sized)).id()).collect();
+        world.spawn(plate_row()).add_children(&members);
+
+        world.run_system_once(join_the_rows).unwrap();
+        let joins = |entity| world.get::<Plate>(entity).unwrap().joins;
+        let margin = |entity| world.get::<Node>(entity).unwrap().margin.left;
+        assert_eq!(joins(members[0]), Joins { left: false, right: true });
+        assert_eq!(joins(members[1]), Joins { left: true, right: true });
+        assert_eq!(joins(members[2]), Joins { left: true, right: false });
+        assert_eq!(margin(members[0]), Val::ZERO, "the first plate moved");
+        // The next plate's top left lands on this one's top right.
+        let expected = 2.0 * ZONE_STROKE + ZONE_DROP.x + LEAN * (height - 2.0 * ZONE_STROKE - ZONE_DROP.y);
+        assert_eq!(margin(members[1]), Val::Px(-expected.round()));
+        assert_eq!(margin(members[2]), Val::Px(-expected.round()));
+    }
+
+    /// Breaks if two plates with something else between them are joined or pulled together.
+    #[test]
+    fn only_neighboring_plates_in_a_row_join() {
+        let mut world = World::new();
+        let sized = ComputedNode { size: Vec2::new(100.0, 60.0), inverse_scale_factor: 1.0, ..default() };
+        let first = world.spawn((plate(Swatch::neutral()), sized)).id();
+        let spacer = world.spawn(Node::default()).id();
+        let second = world.spawn((plate(Swatch::neutral()), sized)).id();
+        world.spawn(plate_row()).add_children(&[first, spacer, second]);
+
+        world.run_system_once(join_the_rows).unwrap();
+        assert_eq!(world.get::<Plate>(first).unwrap().joins, Joins::default());
+        assert_eq!(world.get::<Plate>(second).unwrap().joins, Joins::default());
+        assert_eq!(world.get::<Node>(second).unwrap().margin.left, Val::ZERO);
     }
 
     /// Breaks if a child above the middle of a right-leaning plate is not moved right, one below

@@ -69,16 +69,20 @@ impl KillIcons {
     /// `name`'s image, else the skull's, else `None`.
     pub fn get(&mut self, name: &str, read: impl Fn(&str) -> Option<Vec<u8>>, images: &mut Assets<Image>) -> Option<Handle<Image>> {
         for candidate in [name, SKULL] {
-            let image = self.images.entry(candidate.to_owned()).or_insert_with(|| {
-                let bytes = read(&format!("icons/{candidate}.svg"))?;
-                rasterize(&bytes).map(|image| images.add(image)).inspect_err(|e| warn!("icons/{candidate}.svg: {e}")).ok()
-            });
+            let image = self.images.entry(candidate.to_owned()).or_insert_with(|| load(candidate, &read, images));
             if let Some(image) = image {
                 return Some(image.clone());
             }
         }
         None
     }
+}
+
+/// `icons/{name}.svg` from the packs `read` reaches, rasterized, or `None` with a warning when it
+/// is there but does not draw.
+pub fn load(name: &str, read: impl Fn(&str) -> Option<Vec<u8>>, images: &mut Assets<Image>) -> Option<Handle<Image>> {
+    let bytes = read(&format!("icons/{name}.svg"))?;
+    rasterize(&bytes).map(|image| images.add(image)).inspect_err(|e| warn!("icons/{name}.svg: {e}")).ok()
 }
 
 /// White where the SVG is, so `ImageNode::color` is the color it is drawn in.

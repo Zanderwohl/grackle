@@ -59,7 +59,8 @@ impl Plugin for MatchStatePlugin {
                 // told, and there may be no change coming.
                 tell_new_clients,
                 follow_the_server,
-                back_to_the_map_editor_when_networked,
+                // After, so a client that left for a mode not offered networked is solo by then.
+                back_to_the_map_editor_when_networked.after(crate::common::net::apply_net_requests),
             ),
         );
     }

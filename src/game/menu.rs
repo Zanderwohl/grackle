@@ -16,10 +16,14 @@ const MENU_DARKEN: f32 = -0.3;
 /// Logical pixels each side, past the drop. The slant takes about 22 px of it at mid-height.
 const MENU_SIDE: f32 = 44.0;
 
+pub fn panel_swatch() -> Swatch {
+    Swatch::neutral().lightened(MENU_DARKEN)
+}
+
 /// The dark plate a menu's title and buttons stand on.
 pub fn menu_panel() -> impl Bundle {
     (
-        Plate::new(Swatch::neutral().lightened(MENU_DARKEN)),
+        Plate::new(panel_swatch()),
         Node {
             padding: UiRect {
                 left: Val::Px(ZONE_STROKE + MENU_SIDE),

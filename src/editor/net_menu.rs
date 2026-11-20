@@ -40,7 +40,7 @@ impl Default for ConnectDialog {
 }
 
 impl ConnectDialog {
-    fn show(&mut self, mode: ConnectMode) {
+    pub fn show(&mut self, mode: ConnectMode) {
         // Not reset when already open in this mode, so a half-typed address survives.
         if !self.open || self.mode != mode {
             self.endpoint = match mode {
@@ -79,7 +79,7 @@ impl Plugin for NetMenuPlugin {
         app.init_resource::<ConnectDialog>()
             .add_systems(
                 EguiPrimaryContextPass,
-                connect_dialog.run_if(in_state(AppMode::Editor)),
+                connect_dialog.run_if(in_state(AppMode::Editor).or_else(in_state(AppMode::MainMenu))),
             );
     }
 }
@@ -142,6 +142,9 @@ fn connect_dialog(
     egui::Window::new(title)
         .collapsible(false)
         .resizable(false)
+        // Where it opens; egui remembers wherever it is dragged after that.
+        .pivot(egui::Align2::CENTER_CENTER)
+        .default_pos(ctx.viewport_rect().center())
         .open(&mut open)
         .show(ctx, |ui| {
             ui.label(match dialog.mode {

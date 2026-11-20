@@ -3,7 +3,7 @@
 //! and Close with changes asks first.
 //!
 //! A floating window, because every mode opens it and the dock belongs to the
-//! map editor. While it is open no action fires but a screenshot ([`Quiet`]).
+//! map editor. In the main menu the same contents fill the screen over Accept, Revert and Apply. While it is open no action fires but a screenshot ([`Quiet`]).
 
 use bevy::input::keyboard::KeyboardInput;
 use bevy::input::InputSystems;
@@ -25,6 +25,13 @@ use crate::common::lang::{self, Language};
 use crate::get;
 
 const WINDOW_ID: &str = "settings_window";
+const PAGE_ID: &str = "settings_page";
+/// Around the full-screen page, which has no window border to keep it off the screen's edges.
+const PAGE_MARGIN: i8 = 24;
+
+fn page_layer() -> egui::LayerId {
+    egui::LayerId::new(egui::Order::Background, Id::new(PAGE_ID))
+}
 
 /// Also its size on a first open; egui remembers a resize.
 const MIN_SIZE: egui::Vec2 = egui::vec2(520.0, 560.0);
@@ -213,13 +220,28 @@ impl SettingsWindow {
         self.open = false;
     }
 
-    fn show(&mut self, ctx: &egui::Context, now: &mut InForce, held: Held, packs: Credited) {
+    /// `full_screen` is the main menu's page: Accept, Revert and Apply in place of Apply and Close.
+    /// Escape with changes asks there as Close does.
+    fn show(&mut self, ctx: &egui::Context, now: &mut InForce, held: Held, packs: Credited, full_screen: bool) {
         if !self.open {
             return;
         }
+        let close_requested = match full_screen {
+            true => {
+                self.show_as_page(ctx, now, held, packs);
+                false
+            }
+            false => self.show_as_window(ctx, now, held, packs),
+        };
+        if close_requested {
+            self.close(now);
+        }
+        self.ask_about_unsaved(ctx, now);
+    }
+
+    fn show_as_window(&mut self, ctx: &egui::Context, now: &mut InForce, held: Held, packs: Credited) -> bool {
         let mut close_requested = false;
         let unsaved = self.has_unsaved_changes(now);
-
         egui::Window::new(get!("settings.window_title"))
             .id(Id::new(WINDOW_ID))
             .collapsible(false)
@@ -232,10 +254,7 @@ impl SettingsWindow {
                 egui::Panel::bottom("settings_footer")
                     .frame(egui::Frame::NONE.inner_margin(egui::Margin { top: GAP, ..Default::default() }))
                     .show(ui, |ui| {
-                        if let Some(problem) = &self.problem {
-                            ui.colored_label(ui.visuals().error_fg_color, problem);
-                            ui.add_space(5.0);
-                        }
+                        self.show_problem(ui);
                         ui.horizontal(|ui| {
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                 if ui.button(get!("settings.close")).clicked() {
@@ -247,48 +266,115 @@ impl SettingsWindow {
                             });
                         });
                     });
+                self.contents(ui, held, packs);
+            });
+        close_requested
+    }
 
-                egui::Panel::left("settings_pages")
-                    .resizable(false)
-                    .exact_size(ui.available_width() / 3.0)
-                    .frame(egui::Frame::NONE.inner_margin(egui::Margin { right: GAP, ..Default::default() }))
+    fn show_as_page(&mut self, ctx: &egui::Context, now: &mut InForce, held: Held, packs: Credited) {
+        let unsaved = self.has_unsaved_changes(now);
+        let mut page_ui = Ui::new(
+            ctx.clone(),
+            Id::new(PAGE_ID),
+            egui::UiBuilder::new().layer_id(page_layer()).max_rect(ctx.viewport_rect()),
+        );
+        egui::CentralPanel::default()
+            .frame(egui::Frame::central_panel(&ctx.global_style()).inner_margin(PAGE_MARGIN))
+            .show(&mut page_ui, |ui| {
+                egui::Panel::top("settings_page_header")
+                    .frame(egui::Frame::NONE.inner_margin(egui::Margin { bottom: GAP, ..Default::default() }))
                     .show(ui, |ui| {
-                        ui.with_layout(egui::Layout::top_down_justified(egui::Align::LEFT), |ui| {
-                            for page in Page::ALL {
-                                if ui.selectable_value(&mut self.page, page, page.name()).changed() {
-                                    self.sheet.stop();
+                        ui.heading(get!("settings.window_title"));
+                    });
+                egui::Panel::bottom("settings_page_footer")
+                    .frame(egui::Frame::NONE.inner_margin(egui::Margin { top: GAP, ..Default::default() }))
+                    .show(ui, |ui| {
+                        self.show_problem(ui);
+                        ui.horizontal(|ui| {
+                            // Right to left, so Accept, Revert, Apply read left to right.
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if ui.add_enabled(unsaved, egui::Button::new(get!("settings.apply"))).clicked() {
+                                    self.apply(now);
                                 }
-                            }
+                                if ui.add_enabled(unsaved, egui::Button::new(get!("settings.revert"))).clicked() {
+                                    self.revert(now);
+                                }
+                                // Nothing to save, so leaving is all it would do.
+                                let leave = match unsaved {
+                                    true => get!("settings.accept"),
+                                    false => get!("settings.back"),
+                                };
+                                if ui.button(leave).clicked() {
+                                    self.accept(now);
+                                }
+                            });
                         });
                     });
+                self.contents(ui, held, packs);
+            });
+    }
 
-                egui::CentralPanel::default()
-                    .frame(egui::Frame::NONE.inner_margin(egui::Margin { left: GAP, ..Default::default() }))
-                    .show(ui, |ui| {
-                        if self.page == Page::Fonts {
-                            // Its own scroll area, so the sample stays in view.
-                            let sample = self.sample.get_or_insert_with(|| get!("settings.fonts.sample"));
-                            fonts_page(ui, sample, packs.fonts);
-                            return;
+    /// A failed save keeps the page up with the problem showing.
+    fn accept(&mut self, now: &mut InForce) {
+        self.apply(now);
+        if self.problem.is_none() {
+            self.sheet.stop();
+            self.open = false;
+        }
+    }
+
+    fn revert(&mut self, now: &InForce) {
+        self.draft = now.settings.clone();
+        self.keys_draft = now.keymap.clone();
+        self.player_draft = now.player.as_deref().cloned();
+        self.sheet.stop();
+        self.problem = None;
+    }
+
+    fn show_problem(&self, ui: &mut Ui) {
+        if let Some(problem) = &self.problem {
+            ui.colored_label(ui.visuals().error_fg_color, problem);
+            ui.add_space(5.0);
+        }
+    }
+
+    /// The page list and the page, without the buttons that close them.
+    fn contents(&mut self, ui: &mut Ui, held: Held, packs: Credited) {
+        egui::Panel::left("settings_pages")
+            .resizable(false)
+            .exact_size(ui.available_width() / 3.0)
+            .frame(egui::Frame::NONE.inner_margin(egui::Margin { right: GAP, ..Default::default() }))
+            .show(ui, |ui| {
+                ui.with_layout(egui::Layout::top_down_justified(egui::Align::LEFT), |ui| {
+                    for page in Page::ALL {
+                        if ui.selectable_value(&mut self.page, page, page.name()).changed() {
+                            self.sheet.stop();
                         }
-                        egui::ScrollArea::vertical().id_salt(self.page).auto_shrink(false).show(ui, |ui| {
-                            match self.page {
-                                Page::General => self.general(ui),
-                                Page::Graphics => self.graphics(ui),
-                                Page::Sound => self.sound(ui),
-                                Page::Shortcuts => self.sheet.show(ui, &mut self.keys_draft, held),
-                                Page::Developer => self.developer(ui),
-                                Page::Attribution => credits::credits(ui, packs.music, packs.fonts),
-                                Page::Fonts => {}
-                            }
-                        });
-                    });
+                    }
+                });
             });
 
-        if close_requested {
-            self.close(now);
-        }
-        self.ask_about_unsaved(ctx, now);
+        egui::CentralPanel::default()
+            .frame(egui::Frame::NONE.inner_margin(egui::Margin { left: GAP, ..Default::default() }))
+            .show(ui, |ui| {
+                if self.page == Page::Fonts {
+                    // Its own scroll area, so the sample stays in view.
+                    let sample = self.sample.get_or_insert_with(|| get!("settings.fonts.sample"));
+                    fonts_page(ui, sample, packs.fonts);
+                    return;
+                }
+                egui::ScrollArea::vertical().id_salt(self.page).auto_shrink(false).show(ui, |ui| {
+                    match self.page {
+                        Page::General => self.general(ui),
+                        Page::Graphics => self.graphics(ui),
+                        Page::Sound => self.sound(ui),
+                        Page::Shortcuts => self.sheet.show(ui, &mut self.keys_draft, held),
+                        Page::Developer => self.developer(ui),
+                        Page::Attribution => credits::credits(ui, packs.music, packs.fonts),
+                        Page::Fonts => {}
+                    }
+                });
+            });
     }
 
     fn general(&mut self, ui: &mut Ui) {
@@ -583,7 +669,7 @@ fn draw_settings(
     }
     if window.is_open() {
         let packs = Credited { music: &music, fonts: &pack_fonts };
-        window.show(ctx, &mut now, Held::of(&keys), packs);
+        window.show(ctx, &mut now, Held::of(&keys), packs, shown_full_screen(current));
         if std::mem::take(&mut window.keys_applied) {
             keymap.set_changed();
         }
@@ -601,6 +687,11 @@ fn draw_settings(
     });
 }
 
+/// The main menu has no window to float over, so there the window is the whole screen.
+fn shown_full_screen(mode: Option<AppMode>) -> bool {
+    mode == Some(AppMode::MainMenu)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -608,6 +699,10 @@ mod tests {
 
     /// Each text painted, with its rect.
     fn frame(ctx: &egui::Context, window: &mut SettingsWindow) -> Vec<(String, Rect)> {
+        frame_as(ctx, window, false)
+    }
+
+    fn frame_as(ctx: &egui::Context, window: &mut SettingsWindow, full_screen: bool) -> Vec<(String, Rect)> {
         let input = RawInput {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(1200.0, 900.0))),
             ..Default::default()
@@ -619,9 +714,13 @@ mod tests {
             let ctx = ui.ctx().clone();
             let (music, fonts) = (MusicLibrary::default(), PackFonts::default());
             let mut now = InForce { settings: &mut settings, keymap: &mut keymap, player: Some(&mut player) };
-            window.show(&ctx, &mut now, Held::default(), Credited { music: &music, fonts: &fonts });
+            window.show(&ctx, &mut now, Held::default(), Credited { music: &music, fonts: &fonts }, full_screen);
+            let layer = match full_screen {
+                true => page_layer(),
+                false => egui::LayerId::new(egui::Order::Middle, Id::new(WINDOW_ID)),
+            };
             ctx.graphics(|graphics| {
-                let Some(list) = graphics.get(egui::LayerId::new(egui::Order::Middle, Id::new(WINDOW_ID))) else { return };
+                let Some(list) = graphics.get(layer) else { return };
                 for entry in list.all_entries() {
                     if let egui::Shape::Text(text) = &entry.shape {
                         texts.push((text.galley.text().to_owned(), entry.shape.visual_bounding_rect()));
@@ -676,6 +775,65 @@ mod tests {
             }
             assert!((apply.top() - close.top()).abs() < 1.0, "Apply and Close are not on one row");
         }
+    }
+
+    /// Fails if the main menu's page shows the window's Close, loses its own bar or a page, or
+    /// names its first button wrongly for whether anything changed.
+    #[test]
+    fn the_full_screen_page_has_accept_revert_and_apply_below_it() {
+        let ctx = egui::Context::default();
+        let mut window = SettingsWindow::default();
+        let (mut settings, mut keymap, mut player) = (Settings::default(), Keymap::default(), PlayerSettings::default());
+        window.open(&ctx, &InForce { settings: &mut settings, keymap: &mut keymap, player: Some(&mut player) });
+        let mut texts = Vec::new();
+        for _ in 0..5 {
+            texts = frame_as(&ctx, &mut window, true);
+        }
+        assert!(find(&texts, &get!("settings.back")).is_some(), "an unchanged page does not offer Back");
+        assert!(find(&texts, &get!("settings.accept")).is_none(), "an unchanged page offers Accept");
+
+        window.player_draft.as_mut().unwrap().name = "Ada".into();
+        for _ in 0..2 {
+            texts = frame_as(&ctx, &mut window, true);
+        }
+        assert!(find(&texts, &get!("settings.back")).is_none(), "a changed page still offers Back");
+        let language = find(&texts, &get!("settings.general.language")).expect("the General page is missing");
+        let mut lefts = Vec::new();
+        for wanted in [get!("settings.accept"), get!("settings.revert"), get!("settings.apply")] {
+            let button = find(&texts, &wanted).unwrap_or_else(|| panic!("{wanted} is missing"));
+            assert!(button.top() > language.bottom() && button.bottom() < 900.0, "{wanted} is not below the page");
+            lefts.push(button.left());
+        }
+        assert!(lefts.windows(2).all(|pair| pair[0] < pair[1]), "not Accept, Revert, Apply from the left");
+        assert!(find(&texts, &get!("settings.close")).is_none(), "the page shows Close");
+    }
+
+    /// Fails if the main menu gets the floating window, or another mode the full-screen page.
+    #[test]
+    fn only_the_main_menu_shows_settings_full_screen() {
+        use strum::IntoEnumIterator;
+        for mode in AppMode::iter() {
+            assert_eq!(shown_full_screen(Some(mode)), mode == AppMode::MainMenu, "{mode:?}");
+        }
+        assert!(!shown_full_screen(None));
+    }
+
+    /// Fails if Revert keeps the edit or closes the page, or Accept leaves it up or drops the edit.
+    #[test]
+    fn revert_stays_with_what_is_in_force_and_accept_applies_and_closes() {
+        let ctx = egui::Context::default();
+        let (mut settings, mut keymap, mut player) = (Settings::default(), Keymap::default(), PlayerSettings::default());
+        let mut window = SettingsWindow::default();
+        let mut now = InForce { settings: &mut settings, keymap: &mut keymap, player: Some(&mut player) };
+        window.open(&ctx, &now);
+        window.player_draft.as_mut().unwrap().name = "Ada".into();
+        window.revert(&now);
+        assert!(window.open && !window.has_unsaved_changes(&now));
+
+        window.player_draft.as_mut().unwrap().name = "Ada".into();
+        window.accept(&mut now);
+        assert!(!window.open, "Accept left the page up");
+        assert_eq!(now.player.as_deref().unwrap().name, "Ada");
     }
 
     /// Fails if the Shortcuts page leaves out an action, so it cannot be rebound.
