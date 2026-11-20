@@ -90,9 +90,24 @@ pub const ASSET_ROOT: &str = "assets";
 /// overrides the shipped one, and gitignored.
 pub const USER_PACK: &str = "assets/user";
 
-/// Made up front so a save dialog for a new document has somewhere to open.
-const USER_PACK_FOLDERS: [&str; 2] =
-    [crate::constants::BLUEPRINTS_DIR, crate::prop::document::PROPS_DIR];
+/// Made up front so a save dialog for a new document has somewhere to open, and so somebody adding
+/// pictures can see where they go.
+const USER_PACK_FOLDERS: [&str; 3] = [
+    crate::constants::BLUEPRINTS_DIR,
+    crate::prop::document::PROPS_DIR,
+    crate::constants::TITLE_BACKGROUNDS_DIR,
+];
+
+/// `relative`, a file in `pack`, as the `AssetServer` names it from [`ASSET_ROOT`]; `None` for a
+/// pack outside it.
+pub fn asset_path(pack: &Path, relative: &str) -> Option<String> {
+    let pack = pack.strip_prefix(ASSET_ROOT).ok()?;
+    let pack = pack.to_str()?.replace('\\', "/");
+    Some(match pack.is_empty() {
+        true => relative.to_owned(),
+        false => format!("{pack}/{relative}"),
+    })
+}
 
 /// Authoring side only: the runtime never writes a pack.
 pub fn create_the_user_pack() {

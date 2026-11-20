@@ -3,7 +3,7 @@
 //! Its nodes target the egui context camera, the one camera live outside the viewport modes (see
 //! [`crate::anim::timeline`]). egui draws over Bevy UI but does not stop Bevy's picking, so while the
 //! connect dialog, the Settings page or the Quit question is up a [`Blocker`] covers the menu and
-//! takes the pointer.
+//! takes the pointer. Its background is [`crate::title_background`]'s.
 
 use std::collections::HashMap;
 
@@ -46,6 +46,7 @@ impl Plugin for MainMenuPlugin {
             .init_resource::<ServerBrowser>()
             .add_message::<AppExit>()
             .add_observer(choose)
+            .add_plugins(crate::title_background::TitleBackgroundPlugin)
             .add_systems(
                 Update,
                 (
@@ -152,7 +153,13 @@ fn spawn_the_menu(commands: &mut Commands, camera: Option<Entity>, font: &Handle
         justify_content: JustifyContent::Center,
         ..default()
     };
-    let mut root = commands.spawn((MainMenuRoot, GlobalZIndex(MENU_LAYER), full_screen.clone(), BackgroundColor(BACKGROUND)));
+    let mut root = commands.spawn((
+        MainMenuRoot,
+        crate::title_background::WantsTitleBackground,
+        GlobalZIndex(MENU_LAYER),
+        full_screen.clone(),
+        BackgroundColor(BACKGROUND),
+    ));
     if let Some(camera) = camera {
         root.insert(UiTargetCamera(camera));
     }

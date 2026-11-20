@@ -143,12 +143,7 @@ impl MusicLibrary {
 impl Track {
     /// For the `AssetServer`, whose root is `assets/`; `None` for a pack outside it.
     pub fn asset_path(&self) -> Option<String> {
-        let pack = self.pack.strip_prefix(crate::common::assets::ASSET_ROOT).ok()?;
-        let pack = pack.to_str()?.replace('\\', "/");
-        Some(match pack.is_empty() {
-            true => self.path.clone(),
-            false => format!("{pack}/{}", self.path),
-        })
+        crate::common::assets::asset_path(&self.pack, &self.path)
     }
 }
 

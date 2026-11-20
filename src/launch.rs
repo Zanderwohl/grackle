@@ -6,7 +6,7 @@ use bevy::window::{ExitCondition, PresentMode};
 use bevy_egui::EguiPlugin;
 use bevy_vector_shapes::prelude::*;
 use crate::{get, startup};
-use crate::common::round_settings::{BotsAtStartup, RoundSettingsFilePlugin, ServerConfig, USER_SERVER_CONFIG};
+use crate::common::round_settings::{BotsAtStartup, RoundSettingsFilePlugin, ServerConfig, ServerFiles};
 use crate::editor::editable::StartupMap;
 use crate::game::rounds::QuitAfterRounds;
 use crate::game::spectate::StartSpectating;
@@ -69,7 +69,8 @@ pub fn run(binary: Binary) {
             std::process::exit(1);
         });
     let (settings, settings_problem) = Settings::load();
-    let (server, server_problems) = ServerConfig::resolve(editor_params.server_config.as_deref(), std::path::Path::new(USER_SERVER_CONFIG));
+    let server_files = ServerFiles::new(editor_params.server_config.clone(), editor_params.server_profile.clone(), &default_packs());
+    let (server, server_problems) = ServerConfig::resolve(&server_files);
     // Falls back to en-US rather than exiting: a bad `--lang` should not stop
     // the editor from opening.
     let lang = editor_params.lang.clone().or_else(|| settings.language.clone());
@@ -147,7 +148,7 @@ pub fn run(binary: Binary) {
             SkeletonPlugin,
             (PerfPlugin, crate::common::screenshot::ScreenshotPlugin, SettingsPlugin, FontsPlugin, crate::common::music::MusicPlugin, crate::common::icons::IconsPlugin, UiShapePlugin, crate::common::player_settings::PlayerSettingsPlugin { profile: editor_params.profile }),
             ))
-        .add_plugins(RoundSettingsFilePlugin { path: USER_SERVER_CONFIG.into() })
+        .add_plugins(RoundSettingsFilePlugin { path: server_files.saved.clone(), seed: server_files.shipped.clone() })
         .add_plugins((crate::main_menu::MainMenuPlugin, crate::common::lan_discovery::LanDiscoveryPlugin, crate::server_browser::ServerBrowserPlugin))
         .add_plugins(crate::onboarding::OnboardingPlugin { skip: editor_params.chooses_where_to_start(), home: binary.home() })
         .add_systems(Startup, move || {
