@@ -28,7 +28,7 @@ reason a BSP polygon in the prop kernel does not.
 ### Materials are texture-graphs, in meters
 
 A material is a `.tgraph` ([texture-graph](../../texture-graph)) under a pack's
-`materials/`, beside `weapons.toml`, named rather than embedded. Its scale is
+`materials/`, beside `weapons/{key}.toml`, named rather than embedded. Its scale is
 stated in meters — a brick is 0.215 m by 0.065 m — never in texels per unit, so
 there is no scale to retune per face.
 

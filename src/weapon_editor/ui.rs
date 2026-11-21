@@ -3,6 +3,7 @@
 //! under the middle, which [`super::range`]'s cameras draw into.
 
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use bevy::prelude::*;
 use bevy_egui::egui::{self, Id, LayerId, Ui, UiBuilder};
@@ -11,16 +12,16 @@ use egui_dock::{DockArea, DockState, TabViewer};
 use super::form::{edit_struct, unit_key, Form, FormMemory};
 use super::preview::{damage_over_distance, pellet_pattern};
 use super::range::RangeShow;
-use super::{save_the_draft, KeyProblem, PublishedCatalog, WeaponEditor};
+use super::{save_one, save_the_draft, KeyProblem, PublishedCatalog, WeaponEditor};
 use crate::common::app_mode::{mode_menu, AppMode};
 use crate::common::assets::{default_packs, Assets};
 use crate::common::class::Class;
 use crate::common::edit_menu::{edit_menu, EditAction, EditAvailability};
-use crate::common::file_menu::{file_menu, FileAction};
+use crate::common::file_menu::{dialog_directory, file_menu, FileAction, DOCUMENT};
 use crate::common::net::NetRole;
 use crate::common::shortcuts::chords;
 use crate::common::weapon::{Mounted, Unit, WeaponAction, BUCKETS};
-use crate::common::weapon_file::read_pack_weapons;
+use crate::common::weapon_file::{read_pack_weapon, read_pack_weapons, weapon_file, weapon_path, WEAPONS_DIR, WEAPON_EXTENSION};
 use crate::editor::editable::FeatureTimeline;
 use crate::get;
 use crate::prop::document::{load, PropDoc, PropEditor};
@@ -32,6 +33,7 @@ impl Plugin for WeaponUiPlugin {
     fn build(&self, app: &mut App) {
         crate::common::keybind::ensure(app);
         app.init_resource::<WeaponPanels>()
+            .init_resource::<WeaponFileDialog>()
             // A prop saved in another mode is read again.
             .add_systems(OnEnter(AppMode::Weapon), |mut panels: ResMut<WeaponPanels>| panels.browser.model = None)
             .add_systems(bevy_egui::EguiPrimaryContextPass, panels.run_if(in_state(AppMode::Weapon)))
@@ -39,9 +41,17 @@ impl Plugin for WeaponUiPlugin {
     }
 }
 
-/// The catalog is every pack's file at once, so there is no New, Open or Save As: a save writes
-/// each weapon back to the file it came from.
-const FILE_ACTIONS: &[FileAction] = &[FileAction::Save, FileAction::Quit];
+/// Collected on a later frame from the dialog's thread.
+enum DialogResult {
+    Open(PathBuf),
+    /// The weapon at `pack` and `key` when Save As was asked, and where it goes.
+    SaveAs { pack: PathBuf, key: String, path: PathBuf },
+}
+
+#[derive(Resource, Clone, Default)]
+pub struct WeaponFileDialog {
+    result: Arc<Mutex<Option<DialogResult>>>,
+}
 
 const THUMBNAIL: f32 = 24.0;
 
@@ -118,6 +128,7 @@ fn panels(
     mut editor: ResMut<WeaponEditor>,
     mut panels: ResMut<WeaponPanels>,
     mut published: ResMut<PublishedCatalog>,
+    dialog: Res<WeaponFileDialog>,
     mut memory: ResMut<FormMemory>,
     mut prop_editor: ResMut<PropEditor>,
     mut show: ResMut<RangeShow>,
@@ -138,12 +149,14 @@ fn panels(
     let mut requests = Requests::default();
     egui::Panel::top("weapon_menu_bar").resizable(false).show(&mut window_ui, |ui| {
         egui::MenuBar::new().ui(ui, |ui| {
-            file_menu(ui, FILE_ACTIONS, &mut requests.file);
+            file_menu(ui, DOCUMENT, &mut requests.file);
             edit_menu(ui, edit_availability(&editor), &mut requests.edit);
             // This system is gated on `AppMode::Weapon`.
             mode_menu(ui, AppMode::Weapon, role.as_deref(), &mut requests.mode);
             ui.separator();
-            ui.label(crate::common::weapon_file::WEAPONS_FILE);
+            if let Some(weapon) = editor.selected.and_then(|index| editor.weapons.get(index)) {
+                ui.label(format!("{}/{}", pack_name(&weapon.pack), weapon_file(&weapon.key)));
+            }
             if editor.dirty() {
                 ui.label("*");
             }
@@ -208,13 +221,118 @@ fn panels(
     if let Some(mode) = requests.mode.or(open_mode) {
         next_mode.set(mode);
     }
-    match requests.file {
-        Some(FileAction::Save) => save_the_draft(&mut editor, &assets, &mut published),
-        Some(FileAction::Quit) => {
-            info!("Quitting, as asked");
-            exit.write(AppExit::Success);
+    if requests.file == Some(FileAction::Quit) {
+        info!("Quitting, as asked");
+        exit.write(AppExit::Success);
+    } else if requests.file.is_some() {
+        handle_files(requests.file, &mut editor, &mut panels.browser, &mut published, &assets, &dialog);
+    }
+}
+
+/// New, Open, Save and Save As, for the menu and the chords alike. Called every frame from
+/// [`weapon_shortcuts`] too, to collect a dialog's answer.
+fn handle_files(
+    action: Option<FileAction>,
+    editor: &mut WeaponEditor,
+    browser: &mut Browser,
+    published: &mut PublishedCatalog,
+    assets: &Assets,
+    dialog: &WeaponFileDialog,
+) {
+    if let Some(result) = dialog.result.lock().unwrap().take() {
+        match result {
+            DialogResult::Open(path) => open_file(editor, assets, &path),
+            DialogResult::SaveAs { pack, key, path } => save_as(editor, published, &pack, &key, &path),
+        }
+    }
+    let selected = editor.selected.and_then(|index| editor.weapons.get(index)).map(|weapon| (weapon.pack.clone(), weapon.key.clone()));
+    // Only asked for a dialog: it reads the disk, and this runs every frame.
+    let from = || selected.as_ref().and_then(|(pack, key)| dialog_directory(Some(&weapon_path(pack, key)), WEAPONS_DIR));
+    let filter = get!("weapon_editor.file_filter");
+    match action {
+        // A weapon's key is its file's name, so a new one is asked for its key in the browser.
+        Some(FileAction::New) => {
+            browser.naming = Some((Naming::New, String::new()));
+            browser.deleting = false;
+        }
+        Some(FileAction::Save) => save_the_draft(editor, assets, published),
+        Some(FileAction::SaveAs) => {
+            let from = from();
+            let Some((pack, key)) = selected else {
+                warn!("Save As saves the selected weapon, and none is selected");
+                return;
+            };
+            let slot = dialog.result.clone();
+            std::thread::spawn(move || {
+                let mut chooser = rfd::AsyncFileDialog::new()
+                    .add_filter(filter, &[WEAPON_EXTENSION])
+                    .set_file_name(format!("{key}.{WEAPON_EXTENSION}"));
+                if let Some(from) = from {
+                    chooser = chooser.set_directory(from);
+                }
+                if let Some(handle) = pollster::block_on(chooser.save_file()) {
+                    *slot.lock().unwrap() = Some(DialogResult::SaveAs { pack, key, path: handle.path().to_path_buf() });
+                }
+            });
+        }
+        Some(FileAction::Open) => {
+            let slot = dialog.result.clone();
+            let from = from().or_else(|| dialog_directory(None, WEAPONS_DIR));
+            std::thread::spawn(move || {
+                let mut chooser = rfd::AsyncFileDialog::new().add_filter(filter, &[WEAPON_EXTENSION]);
+                if let Some(from) = from {
+                    chooser = chooser.set_directory(from);
+                }
+                if let Some(handle) = pollster::block_on(chooser.pick_file()) {
+                    *slot.lock().unwrap() = Some(DialogResult::Open(handle.path().to_path_buf()));
+                }
+            });
         }
         _ => {}
+    }
+}
+
+/// The pack and key a weapon file at `path` is: `{pack}/weapons/{key}.toml`, the pack named as the
+/// draft names it when it is one of `packs`.
+fn locate(path: &Path, packs: &[PathBuf]) -> Result<(PathBuf, String), String> {
+    let folder = path.parent().filter(|folder| folder.file_name().is_some_and(|name| name == WEAPONS_DIR));
+    let (Some(folder), true) = (folder, path.extension().is_some_and(|extension| extension == WEAPON_EXTENSION)) else {
+        return Err(format!("{} is not in a pack's {WEAPONS_DIR} folder as a .{WEAPON_EXTENSION} file", path.display()));
+    };
+    let key = path.file_stem().and_then(|stem| stem.to_str()).ok_or_else(|| format!("{} has no name", path.display()))?;
+    let pack = folder.parent().unwrap_or(Path::new(""));
+    let same = |of: &Path| match (std::fs::canonicalize(of), std::fs::canonicalize(pack)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => of == pack,
+    };
+    let pack = packs.iter().find(|of| same(of)).cloned().unwrap_or_else(|| pack.to_path_buf());
+    Ok((pack, key.to_owned()))
+}
+
+fn open_file(editor: &mut WeaponEditor, assets: &Assets, path: &Path) {
+    let (pack, key) = match locate(path, &editor.packs()) {
+        Ok(found) => found,
+        Err(e) => return error!("Opening a weapon: {e}"),
+    };
+    if let Some(weapon) = read_pack_weapon(assets, &pack, &key) {
+        editor.adopt(weapon);
+        info!("Opened {}", path.display());
+    }
+}
+
+fn save_as(editor: &mut WeaponEditor, published: &mut PublishedCatalog, pack: &Path, key: &str, path: &Path) {
+    let (to_pack, to_key) = match locate(path, &editor.packs()) {
+        Ok(found) => found,
+        Err(e) => return error!("Saving a weapon: {e}"),
+    };
+    if editor.key_problem(&to_key, None) == Some(KeyProblem::Malformed) {
+        return error!("Saving a weapon: {to_key} {}", get!("weapon_editor.key.malformed"));
+    }
+    let Some(index) = editor.weapons.iter().position(|weapon| weapon.pack == pack && weapon.key == key) else {
+        return error!("Saving a weapon: {key} is no longer in the draft");
+    };
+    if editor.save_as(index, to_pack.clone(), &to_key).is_some() {
+        save_one(editor, &to_pack, &to_key, published);
     }
 }
 
@@ -695,8 +813,10 @@ fn drawings(ui: &mut Ui, mounted: &Mounted) {
 fn weapon_shortcuts(
     actions: Res<crate::common::keybind::Actions>,
     mut editor: ResMut<WeaponEditor>,
+    mut panels: ResMut<WeaponPanels>,
     mut published: ResMut<PublishedCatalog>,
     assets: Res<Assets>,
+    dialog: Res<WeaponFileDialog>,
 ) {
     let chords = chords(&actions);
     handle_edit(
@@ -708,10 +828,7 @@ fn weapon_shortcuts(
         &mut editor,
         &assets,
     );
-    // Save As has nowhere else to save to, so it is a save too.
-    if chords.save || chords.save_as {
-        save_the_draft(&mut editor, &assets, &mut published);
-    }
+    handle_files(FileAction::from_chords(chords), &mut editor, &mut panels.browser, &mut published, &assets, &dialog);
 }
 
 fn handle_edit(action: Option<EditAction>, editor: &mut WeaponEditor, assets: &Assets) {

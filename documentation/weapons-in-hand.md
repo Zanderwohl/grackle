@@ -145,7 +145,7 @@ other.
 ### Animations live with the weapon, and go last in the file
 
 A hold is geometry and lives on the prop; **an animation is behavior and lives
-on the weapon**, in `weapons.toml`, where a weapon's timing already is —
+on the weapon**, in `weapons/{key}.toml`, where a weapon's timing already is —
 `Magazine.reload` is there now. An animation is expressed as a deviation from
 the hold, so the two stay in their own layers.
 
@@ -155,7 +155,7 @@ written after it, so a `[[weapons.rocket_launcher.animations]]` followed by
 `name_key` would silently make that a property of the animation. Anything
 frequently hand-edited has to come first, and the animations go at the bottom.
 
-Nothing enforces it. `weapons.toml` is read by code and never written by it
+Nothing enforces it. `weapons/{key}.toml` is read by code and never written by it
 (the only things this repo serializes are props and lang files), so the order
 is a convention a person keeps — which is exactly why it is written down here
 and in the file's own header.
@@ -320,7 +320,7 @@ this codebase keeps naming.
 
 **What shape is an animation?** The hold is two points, and a pose deviating
 from it is presumably a few more. A reload is a *sequence*, though, and neither
-the prop format nor `weapons.toml` has any notion of time in it — so whatever
+the prop format nor `weapons/{key}.toml` has any notion of time in it — so whatever
 this turns out to be is the first thing in the project to need keyframes.
 Deliberately deferred until stage 6 is actually in front of us.
 

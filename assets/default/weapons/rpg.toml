@@ -1,0 +1,16 @@
+# The TF2C-style RPG: the rocket launcher's rocket, but it falls — one number
+# apart, which is the point of the spec being numbers rather than a type.
+#
+# One in the clip, so the arc is a shot you commit to rather than one of four.
+# The reload is the weapon: everything about it is arranged so that a miss
+# costs you a second and a half. Half the splash at the edge, as every
+# explosive's, and no falloff: a long lob that lands is paid in full.
+
+name_key = "weapon.names.rpg"
+bucket = 2
+deploy = 0.7
+model = "rpg"
+icon = "kill_rpg"
+magazine = { clip = 1, reserve = 8, reload = 1.5 }
+primary = { cadence = { kind = "semi", interval = 0.8 }, cost = { kind = "ammo", rounds = 1 }, action = { kind = "projectile", initial_speed = 34.0, gravity_factor = 1.0, air_resistance = 0.0, spin_rate = 0.0, max_bounces = 0, restitution = 0.0, max_lifetime = 8.0, explodes_at_last_bounce = true, explodes_at_lifetime_end = false, explosion_radius = 3.2, damage = 110, splash_at_edge = 0.5, knockback = 11.0, radius = 0.14, trail = "cloud" } }
+secondary = { cadence = { kind = "semi" }, cost = { kind = "free" }, action = { kind = "none" } }

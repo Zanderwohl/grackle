@@ -107,7 +107,7 @@ impl Default for ProjectileSpec {
     }
 }
 
-/// Test fixtures; the game reads its projectiles from `weapons.toml`.
+/// Test fixtures; the game reads its projectiles from `weapons/{key}.toml`.
 #[cfg(test)]
 impl ProjectileSpec {
     pub const ROCKET: Self = Self {

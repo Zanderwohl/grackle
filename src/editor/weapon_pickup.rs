@@ -2,7 +2,7 @@
 //! [documentation/arena.md](../../documentation/arena.md).
 //!
 //! The map names the weapon, not a model: the weapon already names its own,
-//! so a pickup cannot disagree with `weapons.toml` about what a rifle looks
+//! so a pickup cannot disagree with `weapons/{key}.toml` about what a rifle looks
 //! like. What stands in the world is [`crate::game::world_prop`]'s.
 
 use bevy::platform::collections::HashMap;
@@ -48,7 +48,7 @@ pub struct WeaponPickup {
     /// Radians.
     #[serde(default)]
     yaw: f32,
-    /// As `weapons.toml` names it. One nobody defines gives nothing and draws
+    /// As `weapons/{key}.toml` names it. One nobody defines gives nothing and draws
     /// nothing.
     #[serde(default)]
     weapon: String,

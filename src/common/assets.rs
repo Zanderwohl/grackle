@@ -1,8 +1,9 @@
 //! Where a pack's files come from.
 //!
-//! One trait with one method, deliberately not `list`: nothing behind a
-//! `fetch` can enumerate a directory, and a manifest would be a second
-//! description of the pack. A loader that needs several files names them.
+//! One trait with two methods: `read` a file, and `list` a folder's files.
+//! Nothing behind a `fetch` can enumerate a directory, so a browser build
+//! answers `list` from a manifest written with the pack; loaders that know
+//! their file names (`loadouts.toml`) still name them.
 //!
 //! [`NativeFiles`] is the only `std::fs` in the runtime path besides the
 //! native-only thumbnail cache; the browser build replaces it.
@@ -34,6 +35,10 @@ pub trait AssetSource: Send + Sync + 'static {
     /// Missing is an `Err` rather than `Ok(None)` so every caller gets the
     /// message naming the file.
     fn read(&self, pack: &Path, relative: &str) -> Result<Vec<u8>, AssetError>;
+
+    /// The names of the files directly in `pack/folder`, in any order; empty when there is no
+    /// such folder.
+    fn list(&self, pack: &Path, folder: &str) -> Vec<String>;
 }
 
 /// `std::fs`, relative to the working directory, so binaries run from the
@@ -52,6 +57,16 @@ impl AssetSource for NativeFiles {
             Err(e) => Err(AssetError::Unreadable(format!("{named}: {e}"))),
         }
     }
+
+    fn list(&self, pack: &Path, folder: &str) -> Vec<String> {
+        let Ok(entries) = std::fs::read_dir(pack.join(folder)) else { return Vec::new() };
+        entries
+            .filter_map(Result::ok)
+            // `path().is_file()` rather than the entry's type, which does not follow a symlink.
+            .filter(|entry| entry.path().is_file())
+            .filter_map(|entry| entry.file_name().into_string().ok())
+            .collect()
+    }
 }
 
 /// The source this process reads packs through. Boxed rather than a type
@@ -68,6 +83,18 @@ impl Default for Assets {
 impl Assets {
     pub fn read(&self, pack: &Path, relative: &str) -> Result<Vec<u8>, AssetError> {
         self.0.read(pack, relative)
+    }
+
+    pub fn stems(&self, pack: &Path, folder: &str, extension: &str) -> Vec<String> {
+        let suffix = format!(".{extension}");
+        let mut stems: Vec<String> = self
+            .0
+            .list(pack, folder)
+            .into_iter()
+            .filter_map(|name| name.strip_suffix(&suffix).filter(|stem| !stem.is_empty()).map(str::to_owned))
+            .collect();
+        stems.sort();
+        stems
     }
 
     /// The highest-priority pack's copy, so a pack overriding a file wins.
@@ -92,9 +119,10 @@ pub const USER_PACK: &str = "assets/user";
 
 /// Made up front so a save dialog for a new document has somewhere to open, and so somebody adding
 /// pictures can see where they go.
-const USER_PACK_FOLDERS: [&str; 3] = [
+const USER_PACK_FOLDERS: [&str; 4] = [
     crate::constants::BLUEPRINTS_DIR,
     crate::prop::document::PROPS_DIR,
+    crate::common::weapon_file::WEAPONS_DIR,
     crate::constants::TITLE_BACKGROUNDS_DIR,
 ];
 

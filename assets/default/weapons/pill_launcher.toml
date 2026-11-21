@@ -1,0 +1,21 @@
+# The demoman's: pills that arc, tumble, bounce off a wall and go off on their
+# fuse — or the instant they land on somebody, since a direct hit detonates
+# whatever the spec says.
+#
+# Two bounces rather than four, because a pill's fuse is meant to be the thing
+# that ends it and a pill still rattling round a corner after four walls is a
+# sticky. A real stickybomb launcher wants an action nothing has yet: one that
+# sets bombs down and detonates them when told, rather than on a timer.
+#
+# Reloaded one round at a time, so firing out of a half-full clip is a choice;
+# the first takes 1.24 s, each after it 0.6. Half the splash at the 2.8 m edge,
+# and no ramp-up or falloff, as TF2's grenades.
+
+name_key = "weapon.names.pill_launcher"
+bucket = 2
+deploy = 0.5
+model = "pill_launcher"
+icon = "kill_grenade"
+magazine = { clip = 4, reserve = 16, reload = 0.6, reload_one_at_a_time = true, first_reload = 1.24 }
+primary = { cadence = { kind = "semi", interval = 0.6 }, cost = { kind = "ammo", rounds = 1 }, action = { kind = "projectile", initial_speed = 23.0, gravity_factor = 1.0, air_resistance = 0.1, spin_rate = 12.0, max_bounces = 2, restitution = 0.45, max_lifetime = 2.3, explodes_at_last_bounce = true, explodes_at_lifetime_end = true, explosion_radius = 2.8, damage = 100, splash_at_edge = 0.5, knockback = 10.0, radius = 0.14 } }
+secondary = { cadence = { kind = "semi" }, cost = { kind = "free" }, action = { kind = "none" } }

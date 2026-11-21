@@ -26,7 +26,7 @@ pub enum AppMode {
     Animation,
     /// A texture-graph: a surface for the map, edited on its own.
     Material,
-    /// Every pack's `weapons.toml`.
+    /// Every pack's weapons, a file each under `weapons/`.
     Weapon,
     /// One pack's strings for one language.
     Lang,

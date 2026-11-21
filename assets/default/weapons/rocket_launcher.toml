@@ -1,0 +1,14 @@
+# TF2's: 90 at the center of the blast, which is also what a rocket landing on
+# somebody does, falling to half at the 2.8 m edge. To others, 125% with the
+# shooter beside the blast, full at 5 m and 52.8% at 10 m and beyond, as the
+# shotgun's lines run; your own blast is never scaled by distance. The first
+# rocket of a reload takes 0.92 s, each after it 0.8.
+
+name_key = "weapon.names.rocket_launcher"
+bucket = 2
+deploy = 0.5
+model = "rocket_launcher"
+icon = "kill_rocket"
+magazine = { clip = 4, reserve = 20, reload = 0.8, reload_one_at_a_time = true, first_reload = 0.92 }
+primary = { cadence = { kind = "semi", interval = 0.8 }, cost = { kind = "ammo", rounds = 1 }, action = { kind = "projectile", initial_speed = 20.0, gravity_factor = 0.0, air_resistance = 0.0, spin_rate = 0.0, max_bounces = 0, restitution = 0.0, max_lifetime = 8.0, explodes_at_last_bounce = true, explodes_at_lifetime_end = false, explosion_radius = 2.8, damage = 90, splash_at_edge = 0.5, ramp_up = { near = 0.0, far = 5.0, scale = 1.25 }, falloff = { near = 5.0, far = 10.0, scale = 0.528 }, knockback = 9.0, radius = 0.12, trail = "cloud" } }
+secondary = { cadence = { kind = "semi" }, cost = { kind = "free" }, action = { kind = "none" } }

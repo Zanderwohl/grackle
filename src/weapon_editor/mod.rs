@@ -1,5 +1,5 @@
-//! The weapon editor: every pack's `weapons.toml` as one document, edited in memory and written
-//! back in place. The plan, with what is left, is
+//! The weapon editor: every pack's weapons, one file each (`weapons/{key}.toml`), as one draft,
+//! edited in memory and each written back to its own file in place. The plan, with what is left, is
 //! [documentation/weapon-editor.md](../../documentation/weapon-editor.md).
 //!
 //! While the mode is open the game's [`WeaponCatalog`] is the draft, so everything that fires a
@@ -27,25 +27,56 @@ use crate::editor::multicam::Multicam;
 
 const UNDO_DEPTH: usize = 256;
 
-/// The weapons, and the renames to carry into the loadouts when the draft is saved.
-type Snapshot = (Vec<PackWeapon>, Vec<(String, String)>);
+/// The weapons, and the renames since the last save.
+type Snapshot = (Vec<PackWeapon>, Vec<Rename>);
+
+/// A weapon's key changed from `from` to `to`, which on save moves its file in each pack.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Rename {
+    pub from: String,
+    pub to: String,
+    pub loadouts: bool,
+}
+
+fn loadout_renames(renames: &[Rename]) -> Vec<(String, String)> {
+    renames.iter().filter(|rename| rename.loadouts).map(|rename| (rename.from.clone(), rename.to.clone())).collect()
+}
+
+fn renamed(key: &str, renames: &[Rename]) -> String {
+    let mut key = key.to_owned();
+    for rename in renames {
+        if rename.from == key {
+            key = rename.to.clone();
+        }
+    }
+    key
+}
+
+/// One weapon file's change since it was read or saved.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FileChange {
+    pub pack: PathBuf,
+    pub key: String,
+    /// `None` deletes the file.
+    pub now: Option<WeaponEntry>,
+    /// What the file holds; `None` for one not written yet.
+    pub was: Option<WeaponEntry>,
+}
 
 /// Every pack's weapons, lowest priority first, grouped by pack. A catalog is a few kilobytes, so
 /// undo is whole-draft snapshots, as the other editors' is.
 #[derive(Resource, Debug, Default)]
 pub struct WeaponEditor {
     pub weapons: Vec<PackWeapon>,
-    /// Weapon renames the loadouts should follow, `(from, to)` in order. In the draft, so undoing a
-    /// rename undoes this too; applied to the loadout files on save.
-    pub renames: Vec<(String, String)>,
+    /// Since the last save, in order. In the draft, so undoing a rename undoes this too.
+    pub renames: Vec<Rename>,
     pub selected: Option<usize>,
     undo: Vec<Snapshot>,
     redo: Vec<Snapshot>,
     checkpoint: Snapshot,
     /// As last read or saved, which dirty is measured from.
     clean: Snapshot,
-    /// `clean != checkpoint`, kept by [`WeaponEditor::compare_with_clean`] whenever either moves,
-    /// since the panels ask every frame and the comparison walks every weapon.
+    /// Cached by [`WeaponEditor::compare_with_clean`], since the panels ask every frame.
     dirty: bool,
     unsettled: bool,
     /// Read from disk the first time the mode opens; an unsaved draft survives leaving it.
@@ -65,7 +96,7 @@ impl WeaponEditor {
     }
 
     fn compare_with_clean(&mut self) {
-        self.dirty = self.clean != self.checkpoint;
+        self.dirty = !self.changed_files().is_empty() || self.clean.1 != self.checkpoint.1;
     }
 
     pub fn can_undo(&self) -> bool {
@@ -166,17 +197,13 @@ impl WeaponEditor {
         self.compare_with_clean();
     }
 
-    /// `pack` now holds what the checkpoint says it does. Per pack, so a save that wrote one pack
-    /// and failed on another is not dirty about the one it wrote.
-    pub fn mark_saved(&mut self, pack: &std::path::Path) {
-        self.clean.0 = self
-            .packs()
-            .iter()
-            .flat_map(|of| {
-                let from = if of == pack { &self.checkpoint.0 } else { &self.clean.0 };
-                from.iter().filter(move |weapon| &weapon.pack == of).cloned()
-            })
-            .collect();
+    /// Per file, so a save that wrote one file and failed on another is not dirty about the first.
+    pub fn mark_saved(&mut self, pack: &std::path::Path, key: &str) {
+        let at = |weapon: &PackWeapon| weapon.pack == pack && weapon.key == key;
+        self.clean.0.retain(|weapon| !at(weapon));
+        if let Some(weapon) = self.checkpoint.0.iter().find(|weapon| at(weapon)) {
+            self.clean.0.push(weapon.clone());
+        }
         self.compare_with_clean();
     }
 
@@ -195,7 +222,7 @@ impl WeaponEditor {
     /// Why `key` cannot name a new weapon, or a weapon renamed (`except` is the one being renamed,
     /// whose overrides in other packs share its key and go with it).
     pub fn key_problem(&self, key: &str, except: Option<usize>) -> Option<KeyProblem> {
-        if key.is_empty() || !key.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_') {
+        if !crate::common::weapon_file::is_weapon_key(key) {
             return Some(KeyProblem::Malformed);
         }
         let id = WeaponId::of(key);
@@ -267,9 +294,7 @@ impl WeaponEditor {
         for weapon in self.weapons.iter_mut().filter(|weapon| weapon.key == from) {
             weapon.key = key.to_owned();
         }
-        if in_loadouts {
-            self.renames.push((from, key.to_owned()));
-        }
+        self.renames.push(Rename { from, to: key.to_owned(), loadouts: in_loadouts });
         self.edited();
     }
 
@@ -285,7 +310,7 @@ impl WeaponEditor {
     pub fn loadouts_naming(&self, index: usize) -> Vec<(PathBuf, String, crate::common::weapon::Slot)> {
         self.weapons
             .get(index)
-            .map(|weapon| self.loadouts.renamed(&self.renames).naming(&weapon.key))
+            .map(|weapon| self.loadouts.renamed(&loadout_renames(&self.renames)).naming(&weapon.key))
             .unwrap_or_default()
     }
 
@@ -300,23 +325,79 @@ impl WeaponEditor {
         packs
     }
 
-    /// Each pack that changed since it was read or saved, with what it holds now and held then.
-    #[allow(clippy::type_complexity)]
-    pub fn changed_packs(&self) -> Vec<(PathBuf, Vec<(String, WeaponEntry)>, Vec<(String, WeaponEntry)>)> {
-        let of = |weapons: &[PackWeapon], pack: &PathBuf| -> Vec<(String, _)> {
-            weapons
-                .iter()
-                .filter(|weapon| &weapon.pack == pack)
-                .map(|weapon| (weapon.key.clone(), weapon.entry.clone()))
-                .collect()
-        };
-        self.packs()
-            .into_iter()
-            .filter_map(|pack| {
-                let (now, was) = (of(&self.checkpoint.0, &pack), of(&self.clean.0, &pack));
-                (now != was).then_some((pack, now, was))
-            })
-            .collect()
+    pub fn changed_files(&self) -> Vec<FileChange> {
+        use std::collections::BTreeMap;
+        fn by_file(weapons: &[PackWeapon]) -> BTreeMap<(&PathBuf, &str), &WeaponEntry> {
+            weapons.iter().map(|weapon| ((&weapon.pack, weapon.key.as_str()), &weapon.entry)).collect()
+        }
+        let (now, was) = (by_file(&self.checkpoint.0), by_file(&self.clean.0));
+        let mut changes = Vec::new();
+        let mut seen = std::collections::BTreeSet::new();
+        for weapon in self.checkpoint.0.iter().chain(&self.clean.0) {
+            let file = (&weapon.pack, weapon.key.as_str());
+            if !seen.insert(file) {
+                continue;
+            }
+            let (now, was) = (now.get(&file).copied(), was.get(&file).copied());
+            if now != was {
+                changes.push(FileChange { pack: weapon.pack.clone(), key: weapon.key.clone(), now: now.cloned(), was: was.cloned() });
+            }
+        }
+        changes
+    }
+
+    /// The file a new `key` in `pack` was renamed from, what it holds, and whether this save
+    /// deletes it; it stays when a new weapon has taken its key.
+    fn renamed_from<'a>(&self, changes: &'a [FileChange], pack: &PathBuf, key: &str) -> Option<(&'a str, &'a WeaponEntry, bool)> {
+        changes.iter().find_map(|change| match &change.was {
+            Some(was) if &change.pack == pack && change.key != key && renamed(&change.key, &self.checkpoint.1) == key => {
+                Some((change.key.as_str(), was, change.now.is_none()))
+            }
+            _ => None,
+        })
+    }
+
+    /// The weapon at `index`, as edited, becomes `key` in `pack`; the original goes back to what its
+    /// file holds. Clears the history: an undo would take away a weapon whose file is on disk, and
+    /// the next save would delete it.
+    pub fn save_as(&mut self, index: usize, pack: PathBuf, key: &str) -> Option<usize> {
+        self.checkpoint_when_idle(true);
+        let weapon = self.weapons.get(index)?.clone();
+        if weapon.pack == pack && weapon.key == key {
+            return Some(index);
+        }
+        let original = self.clean.0.iter().find(|clean| clean.pack == weapon.pack && clean.key == weapon.key).cloned();
+        self.weapons.remove(index);
+        if let Some(original) = original {
+            self.weapons.insert(index, original);
+        }
+        // Overwritten.
+        self.weapons.retain(|other| !(other.pack == pack && other.key == key));
+        let at = self.insert(PackWeapon { pack, key: key.to_owned(), entry: weapon.entry });
+        self.checkpoint_when_idle(true);
+        self.undo.clear();
+        self.redo.clear();
+        Some(at)
+    }
+
+    /// A weapon file read from outside the draft, as saved; one the draft already has is selected.
+    pub fn adopt(&mut self, weapon: PackWeapon) -> usize {
+        if let Some(at) = self.weapons.iter().position(|other| other.pack == weapon.pack && other.key == weapon.key) {
+            self.selected = Some(at);
+            return at;
+        }
+        self.checkpoint_when_idle(true);
+        let at = self.insert(weapon.clone());
+        // In every snapshot rather than an undo step, so no undo takes away a file that is on disk.
+        for snapshot in self.undo.iter_mut().chain(self.redo.iter_mut()) {
+            snapshot.0.push(weapon.clone());
+        }
+        self.checkpoint.0.push(weapon.clone());
+        self.clean.0.push(weapon);
+        self.unsettled = false;
+        self.generation += 1;
+        self.compare_with_clean();
+        at
     }
 }
 
@@ -365,7 +446,7 @@ fn play_the_draft(mut editor: ResMut<WeaponEditor>, mut catalog: ResMut<WeaponCa
 
 fn play(editor: &mut WeaponEditor, catalog: &mut WeaponCatalog) {
     editor.played = Some(editor.generation);
-    *catalog = catalog_with(&editor.weapons, &editor.loadouts.renamed(&editor.renames));
+    *catalog = catalog_with(&editor.weapons, &editor.loadouts.renamed(&loadout_renames(&editor.renames)));
     editor.problems = problems(&editor.weapons);
 }
 
@@ -375,46 +456,126 @@ fn put_back_the_published(mut catalog: ResMut<WeaponCatalog>, mut published: Res
     }
 }
 
-/// A pack that fails to write stays dirty, so nothing reads as saved that is not.
+/// A file that fails to write stays dirty, so nothing reads as saved that is not.
 pub fn save_the_draft(
     editor: &mut WeaponEditor,
     assets: &crate::common::assets::Assets,
     published: &mut PublishedCatalog,
 ) {
     editor.checkpoint_when_idle(true);
-    let mut wrote_every_pack = true;
-    for (pack, weapons, was) in editor.changed_packs() {
-        match save::save_pack(&pack, &weapons, &was) {
+    let changes = editor.changed_files();
+    let mut wrote_every_file = true;
+    let mut kept: Vec<(PathBuf, String)> = Vec::new();
+    // Writes before deletions, and new files before changed ones, so a rename starts from its old
+    // file before a new weapon under the old key rewrites it.
+    let writes = changes.iter().filter(|change| change.now.is_some() && change.was.is_none());
+    let writes = writes.chain(changes.iter().filter(|change| change.now.is_some() && change.was.is_some()));
+    for change in writes {
+        if let Err(from) = save_file(editor, &changes, change, false) {
+            wrote_every_file = false;
+            // Its content is in no file yet, so the file it was renamed from stays.
+            kept.extend(from.map(|key| (change.pack.clone(), key)));
+        }
+    }
+    // Recomputed: a renamed weapon's old file was marked saved when it was moved.
+    for change in editor.changed_files().into_iter().filter(|change| change.now.is_none()) {
+        let Some(was) = &change.was else { continue };
+        if kept.iter().any(|(pack, key)| *pack == change.pack && *key == change.key) {
+            continue;
+        }
+        match save::delete_weapon(&change.pack, &change.key, was) {
             Ok(()) => {
-                info!("Saved {} weapons to {}", weapons.len(), pack.display());
-                editor.mark_saved(&pack);
+                info!("Deleted {}", crate::common::weapon_file::weapon_path(&change.pack, &change.key).display());
+                editor.mark_saved(&change.pack, &change.key);
             }
             Err(e) => {
-                error!("Saving weapons: {e}");
-                wrote_every_pack = false;
+                error!("Deleting a weapon: {e}");
+                wrote_every_file = false;
             }
         }
     }
     // Only once the weapons they rename are on disk, or a loadout would name a key no file has.
-    let renames = editor.checkpoint.1.clone();
-    if wrote_every_pack && !renames.is_empty() {
+    let renames = loadout_renames(&editor.checkpoint.1);
+    if wrote_every_file {
         let mut renamed_everywhere = true;
-        for pack in editor.packs() {
-            match save::rename_in_pack(&pack, &renames) {
-                Ok(true) => info!("Renamed weapons in {}'s loadouts", pack.display()),
-                Ok(false) => {}
-                Err(e) => {
-                    error!("Renaming weapons in loadouts: {e}");
-                    renamed_everywhere = false;
+        if !renames.is_empty() {
+            for pack in editor.packs() {
+                match save::rename_in_pack(&pack, &renames) {
+                    Ok(true) => info!("Renamed weapons in {}'s loadouts", pack.display()),
+                    Ok(false) => {}
+                    Err(e) => {
+                        error!("Renaming weapons in loadouts: {e}");
+                        renamed_everywhere = false;
+                    }
                 }
             }
+            editor.loadouts = read_loadouts(assets, &editor.packs());
         }
         if renamed_everywhere {
-            editor.loadouts = read_loadouts(assets, &editor.packs());
             editor.forget_renames();
         }
     }
-    published.0 = Some(catalog_with(&editor.clean.0, &editor.loadouts.renamed(&editor.clean.1)));
+    publish(editor, published);
+}
+
+/// On a failure, which is logged, the key of the file it was renamed from, if that file must stay.
+/// `overwrite` is for a Save As whose dialog already asked.
+fn save_file(
+    editor: &mut WeaponEditor,
+    changes: &[FileChange],
+    change: &FileChange,
+    overwrite: bool,
+) -> Result<(), Option<String>> {
+    let Some(now) = &change.now else { return Ok(()) };
+    // A rename's old file is only its starting point when the new one is not there yet.
+    let from = match change.was {
+        None => editor.renamed_from(changes, &change.pack, &change.key),
+        Some(_) => None,
+    };
+    let on_disk = overwrite.then(|| save::on_disk(&change.pack, &change.key));
+    let expected = match &on_disk {
+        Some(on_disk) => on_disk.as_ref(),
+        None => change.was.as_ref(),
+    };
+    let path = crate::common::weapon_file::weapon_path(&change.pack, &change.key);
+    match save::save_weapon(&change.pack, &change.key, now, expected, from) {
+        Ok(deleted) => {
+            info!("Saved {}", path.display());
+            editor.mark_saved(&change.pack, &change.key);
+            match (from, deleted) {
+                (Some((old, _, true)), Ok(())) => {
+                    let pack = change.pack.clone();
+                    editor.mark_saved(&pack, old);
+                    Ok(())
+                }
+                // The old file is left to the deletions, which try it again.
+                (_, Err(e)) => {
+                    error!("Saving a weapon: {e}");
+                    Err(None)
+                }
+                _ => Ok(()),
+            }
+        }
+        Err(e) => {
+            error!("Saving a weapon: {e}");
+            Err(from.map(|(key, _, _)| key.to_owned()))
+        }
+    }
+}
+
+/// Writes only `key`'s file in `pack`, for Save As.
+pub fn save_one(editor: &mut WeaponEditor, pack: &std::path::Path, key: &str, published: &mut PublishedCatalog) {
+    editor.checkpoint_when_idle(true);
+    let changes = editor.changed_files();
+    if let Some(change) = changes.iter().find(|change| change.pack == pack && change.key == key) {
+        let _ = save_file(editor, &[], change, true);
+    }
+    publish(editor, published);
+}
+
+/// What leaving the mode puts back: the files as they now stand.
+fn publish(editor: &WeaponEditor, published: &mut PublishedCatalog) {
+    published.0 = Some(catalog_with(&editor.clean.0, &editor.loadouts.renamed(&loadout_renames(&editor.clean.1))));
 }
 
 /// `--weapon`. A resource rather than an initial state, so entering goes through
@@ -481,28 +642,85 @@ mod tests {
     }
 
     #[test]
-    fn only_a_changed_pack_is_written() {
+    fn only_a_changed_file_is_written() {
         let mut editor = opened();
-        assert!(editor.changed_packs().is_empty());
+        assert!(editor.changed_files().is_empty());
         editor.weapons[0].entry.deploy += 1.0;
         editor.edited();
         editor.checkpoint_when_idle(true);
-        let changed = editor.changed_packs();
+        let changed = editor.changed_files();
         assert_eq!(changed.len(), 1);
-        assert_eq!(changed[0].0, editor.weapons[0].pack);
+        assert_eq!((&changed[0].pack, &changed[0].key), (&editor.weapons[0].pack, &editor.weapons[0].key));
     }
 
     #[test]
-    fn a_pack_that_saved_is_clean_though_another_failed() {
+    fn a_file_that_saved_is_clean_though_another_failed() {
         let mut editor = opened();
-        let pack = editor.weapons[0].pack.clone();
+        let (pack, key) = (editor.weapons[0].pack.clone(), editor.weapons[0].key.clone());
         editor.weapons[0].entry.deploy += 1.0;
+        editor.weapons[1].entry.deploy += 1.0;
         editor.edited();
         editor.checkpoint_when_idle(true);
-        editor.mark_saved(std::path::Path::new("assets/nowhere"));
-        assert!(editor.dirty(), "a pack nobody wrote reads as saved");
-        editor.mark_saved(&pack);
+        editor.mark_saved(&pack, &key);
+        assert!(editor.dirty(), "a file nobody wrote reads as saved");
+        let (pack, key) = (editor.weapons[1].pack.clone(), editor.weapons[1].key.clone());
+        editor.mark_saved(&pack, &key);
         assert!(!editor.dirty());
+    }
+
+    #[test]
+    fn a_rename_is_a_new_file_moved_from_the_old_one() {
+        let mut editor = opened();
+        let pistol = editor.weapons.iter().position(|weapon| weapon.key == "pistol").expect("a pistol ships");
+        let pack = editor.weapons[pistol].pack.clone();
+        editor.rename(pistol, "sidearm", false);
+        editor.checkpoint_when_idle(true);
+        let changes = editor.changed_files();
+        assert_eq!(changes.len(), 2, "{changes:?}");
+        let new = changes.iter().find(|change| change.key == "sidearm").expect("the new file");
+        assert!(new.was.is_none());
+        assert_eq!(editor.renamed_from(&changes, &pack, "sidearm").map(|(key, _, deleted)| (key, deleted)), Some(("pistol", true)));
+        editor.new_weapon(pack.clone(), "pistol");
+        editor.checkpoint_when_idle(true);
+        let changes = editor.changed_files();
+        assert_eq!(
+            editor.renamed_from(&changes, &pack, "sidearm").map(|(key, _, deleted)| (key, deleted)),
+            Some(("pistol", false)),
+            "a rename lost its old file to a new weapon under the old key"
+        );
+    }
+
+    #[test]
+    fn save_as_leaves_the_original_as_its_file_holds_it() {
+        let mut editor = opened();
+        let pistol = editor.weapons.iter().position(|weapon| weapon.key == "pistol").expect("a pistol ships");
+        let saved = editor.weapons[pistol].clone();
+        editor.weapons[pistol].entry.deploy = 3.0;
+        editor.edited();
+        let at = editor.save_as(pistol, the_user_pack(), "sidearm").expect("saves as");
+        assert_eq!(editor.weapons[at].key, "sidearm");
+        assert_eq!(editor.weapons[at].entry.deploy, 3.0);
+        assert_eq!(editor.selected, Some(at));
+        assert!(editor.weapons.contains(&saved), "the original did not go back to its file");
+        let changes = editor.changed_files();
+        assert_eq!(changes.len(), 1, "{changes:?}");
+        assert_eq!(changes[0].key, "sidearm");
+    }
+
+    #[test]
+    fn an_adopted_file_is_not_dirty() {
+        let mut editor = opened();
+        let mut weapon = editor.weapons[0].clone();
+        weapon.pack = PathBuf::from("elsewhere");
+        let at = editor.adopt(weapon.clone());
+        assert_eq!(editor.weapons[at], weapon);
+        assert!(!editor.dirty());
+        assert_eq!(editor.adopt(weapon.clone()), at, "adopted twice");
+        editor.weapons[0].entry.deploy += 1.0;
+        editor.edited();
+        editor.undo();
+        assert!(editor.weapons.contains(&weapon), "an undo took away the opened file");
+        assert!(editor.changed_files().is_empty(), "a save would delete the opened file");
     }
 
     fn the_user_pack() -> PathBuf {
@@ -585,6 +803,7 @@ mod tests {
         editor.undo();
         assert_eq!(editor.weapons[pistol].key, "pistol");
         assert!(editor.renames.is_empty());
+        assert!(!editor.dirty());
     }
 
     #[test]

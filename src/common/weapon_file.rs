@@ -5,9 +5,9 @@
 //! A client's startup catalog is replaced by the server's on connect (see
 //! [`crate::common::pack_sync`]).
 //!
-//! Reads go through [`AssetSource`] so wasm has one thing to replace, and are
-//! one file per kind of thing because nothing behind a `fetch` can list a
-//! directory.
+//! Each weapon is its own file, `weapons/{key}.toml` in a pack, its key the
+//! file's stem; the loadouts are one `loadouts.toml` per pack. Reads go
+//! through [`Assets`] so wasm has one thing to replace.
 //!
 //! A bad file or entry is logged and skipped, never fatal, so the failure is
 //! a visibly missing weapon rather than a panic on a listen server.
@@ -24,19 +24,24 @@ use crate::common::weapon::{
     Loadout, Magazine, Mounted, Slot, SlotChoices, Weapon, WeaponCatalog, WeaponId, BUCKETS,
 };
 
-pub const WEAPONS_FILE: &str = "weapons.toml";
+pub const WEAPONS_DIR: &str = "weapons";
+pub const WEAPON_EXTENSION: &str = "toml";
 pub const LOADOUTS_FILE: &str = "loadouts.toml";
 
-/// `BTreeMap`, not `HashMap`: the catalog is filled in this order and
-/// compared for equality to decide whether to send it, and hash order made two
-/// reads of one file compare unequal.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct WeaponFile {
-    weapons: BTreeMap<String, WeaponEntry>,
+pub fn is_weapon_key(key: &str) -> bool {
+    !key.is_empty() && key.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
 }
 
-/// [`Weapon`] minus the id, which is the key. Public for the weapon editor,
-/// which edits these and writes them back.
+pub fn weapon_file(key: &str) -> String {
+    format!("{WEAPONS_DIR}/{key}.{WEAPON_EXTENSION}")
+}
+
+pub fn weapon_path(pack: &Path, key: &str) -> PathBuf {
+    pack.join(weapon_file(key))
+}
+
+/// [`Weapon`] minus the id and key, which is the file's stem. Public for the
+/// weapon editor, which edits these and writes them back.
 ///
 /// Field order is the order a new entry is written in, which is the shipped
 /// file's.
@@ -132,26 +137,42 @@ pub fn icon_exists(assets: &Assets, icon: &str) -> bool {
 }
 
 /// Every pack's weapons as written, lowest priority first and in key order
-/// within a pack.
+/// within a pack. Key order, not listing order: the catalog is compared for
+/// equality to decide whether to send it.
 pub fn read_pack_weapons(assets: &Assets, packs: &[PathBuf]) -> Vec<PackWeapon> {
     let mut weapons = Vec::new();
     for pack in packs {
-        let Some(text) = read(assets, pack, WEAPONS_FILE) else { continue };
-        match parse_weapons(&text) {
-            Ok(entries) => weapons.extend(entries.into_iter().map(|(key, entry)| PackWeapon {
-                pack: pack.clone(),
-                key,
-                entry,
-            })),
-            Err(e) => error!("{}/{WEAPONS_FILE} will not parse: {e}", pack.display()),
+        for key in assets.stems(pack, WEAPONS_DIR, WEAPON_EXTENSION) {
+            if !is_weapon_key(&key) {
+                error!(
+                    "{}: a weapon's file is named by its key, lowercase letters, digits and underscores; ignoring it",
+                    weapon_path(pack, &key).display()
+                );
+                continue;
+            }
+            if let Some(weapon) = read_pack_weapon(assets, pack, &key) {
+                weapons.push(weapon);
+            }
         }
     }
     weapons
 }
 
-pub fn parse_weapons(text: &str) -> Result<Vec<(String, WeaponEntry)>, String> {
-    let file: WeaponFile = toml::from_str(text).map_err(|e| e.to_string())?;
-    Ok(file.weapons.into_iter().collect())
+/// `None`, logged, when the file is missing or will not parse.
+pub fn read_pack_weapon(assets: &Assets, pack: &Path, key: &str) -> Option<PackWeapon> {
+    let file = weapon_file(key);
+    let text = read(assets, pack, &file)?;
+    match parse_weapon(&text) {
+        Ok(entry) => Some(PackWeapon { pack: pack.to_path_buf(), key: key.to_owned(), entry }),
+        Err(e) => {
+            error!("{}/{file} will not parse: {e}", pack.display());
+            None
+        }
+    }
+}
+
+pub fn parse_weapon(text: &str) -> Result<WeaponEntry, String> {
+    toml::from_str(text).map_err(|e| e.to_string())
 }
 
 /// Every pack's loadouts as written, read once so a catalog can be rebuilt
@@ -217,7 +238,7 @@ pub fn catalog_with(weapons: &[PackWeapon], loadouts: &LoadoutFiles) -> WeaponCa
     let mut catalog = WeaponCatalog::default();
     for weapon in weapons {
         match problem(&catalog, weapon) {
-            Some(why) => error!("{}/{WEAPONS_FILE}: {why}; ignoring it", weapon.pack.display()),
+            Some(why) => error!("{}: {why}; ignoring it", weapon_path(&weapon.pack, &weapon.key).display()),
             None => catalog.insert(weapon.entry.clone().into_weapon(&weapon.key)),
         }
     }
@@ -586,18 +607,49 @@ mod tests {
         assert_eq!(choices.permitted, vec![WeaponId::of("sniper_rifle")]);
     }
 
-    /// Fails on a hash collision between shipped weapon names.
+    /// Fails on a hash collision between shipped weapon names, or a shipped file that will not
+    /// parse.
     #[test]
     fn no_two_shipped_weapons_share_an_id() {
         let catalog = the_default_pack();
-        let text = std::fs::read_to_string("assets/default/weapons.toml").unwrap();
-        let file: WeaponFile = toml::from_str(&text).unwrap();
+        let files = Assets::default().stems(Path::new("assets/default"), WEAPONS_DIR, WEAPON_EXTENSION);
 
         assert_eq!(
             catalog.weapons.len(),
-            file.weapons.len(),
-            "a weapon in the file is missing from the catalog, which is a collision"
+            files.len(),
+            "a weapon file is missing from the catalog, which is a collision or a parse error"
         );
+    }
+
+    /// Fails if a weapon a map or the loadouts name by key stops loading under that key.
+    #[test]
+    fn every_weapon_keeps_the_key_maps_name_it_by() {
+        let catalog = the_default_pack();
+        for key in
+            ["sniper_rifle", "rocket_launcher", "rpg", "pill_launcher", "pistol", "shotgun", "flamethrower", "medi_wrench"]
+        {
+            assert!(catalog.get(WeaponId::of(key)).is_some(), "no weapon is called {key}");
+        }
+    }
+
+    #[test]
+    fn a_later_packs_file_retunes_the_weapon() {
+        use crate::common::music::tests::MemoryFiles;
+        let shipped = std::fs::read_to_string("assets/default/weapons/pistol.toml").unwrap();
+        let retuned = shipped.replace("deploy = 0.35", "deploy = 2.0");
+        let assets = Assets(Box::new(MemoryFiles(
+            [
+                ("low/weapons/pistol.toml".to_owned(), shipped.into_bytes()),
+                ("high/weapons/pistol.toml".to_owned(), retuned.into_bytes()),
+                ("high/weapons/notes.txt".to_owned(), b"not a weapon".to_vec()),
+            ]
+            .into(),
+        )));
+        let packs = [PathBuf::from("low"), PathBuf::from("high")];
+        let weapons = read_pack_weapons(&assets, &packs);
+        assert_eq!(weapons.len(), 2);
+        let catalog = catalog_with(&weapons, &LoadoutFiles::default());
+        assert_eq!(catalog.get(WeaponId::of("pistol")).unwrap().deploy, 2.0);
     }
 
     /// Fails if a shipped projectile that bounces has a trail, or the rocket launcher or the RPG
