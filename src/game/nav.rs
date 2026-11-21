@@ -891,7 +891,7 @@ mod tests {
         Volume::air(Room::new(min, max))
     }
 
-    /// The rocket launcher as `weapons.toml` ships it, for the leaps that need one.
+    /// The rocket launcher as `weapons/{key}.toml` ships it, for the leaps that need one.
     fn launcher() -> Launcher {
         Launcher { weapon: WeaponId::of("rocket_launcher"), rocket: ProjectileSpec::ROCKET }
     }

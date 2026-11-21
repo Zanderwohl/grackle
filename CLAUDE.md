@@ -259,7 +259,7 @@ shape is a new producer and not a rewrite of every consumer — see
 | `src/game/` | Playing the open map: `AppMode` swap, player body, collision, weapons, damage, ragdolls, placed props, hats. |
 | `src/prop/` | The prop editor: a CSG kernel, the modeling feature list, and the mode around it. |
 | `src/material/` | The material editor: texture-graph's panels as an authoring mode. See "Editing a material". |
-| `src/weapon_editor/` | The weapon editor: every pack's `weapons.toml`, edited and written back in place. See "Editing a weapon". |
+| `src/weapon_editor/` | The weapon editor: every pack's weapon files (`weapons/{key}.toml`), edited and written back in place. See "Editing a weapon". |
 | `src/lang_editor/` | The lang editor: a pack's strings for one language. See "Editing a lang file". |
 | `src/common/` | Shared: i18n, geometry, rays, gamemodes, items. |
 | `src/unlock/` | The crate-drop prototype. Orthogonal — see above. |
@@ -732,7 +732,7 @@ machine gets, so spectators and every mode see it. "Killer [icon] victim" or "ki
 painted in the killer's color; "assist finished off [icon] victim" (killed by themself or the map, with help),
 "[icon] victim died" and, from the explode key (`How::Exploded`), "[icon] victim exploded" are cream. Those three
 are arrays of wordings in the lang file, one picked per line by a seed drawn when the line is made. The icon is what killed ([`src/game/kill_icon.rs`](src/game/kill_icon.rs)): a
-weapon's `icon` in `weapons.toml`, a white SVG under `icons/` rasterized at runtime, else the flame for
+weapon's `icon` in `weapons/{key}.toml`, a white SVG under `icons/` rasterized at runtime, else the flame for
 afterburn, the explosion for splash, `kill_headshot` for a headshot and the skull for the map, a suicide or a weapon with none. Each line is a **`Plate`** ([`src/game/plate.rs`](src/game/plate.rs)):
 a node with `PlateText` children, given its leaning panel after layout, repainted when its size
 or `swatch` changes, its text black or white by `Swatch::text`. Its lines and panel stay hidden
@@ -869,7 +869,7 @@ holds is a property of the class, which is read off disk; see "What a weapon is"
 ## Modeling a prop
 
 A **prop** is geometry with a life of its own — a weapon first of all — and it
-is deliberately *not* map content: it lives in a pack beside `weapons.toml`,
+is deliberately *not* map content: it lives in a pack beside `weapons/`,
 is named rather than embedded, and one model serves a weapon a class carries,
 a prop a mapper places, and whatever comes next. `src/prop/` is the editor for
 one, from the menu bar's **Mode** pulldown or `--prop`.
@@ -897,7 +897,7 @@ and each is a decision rather than a shortcut:
   file — is one the map now pays too, having moved onto the same model.
 - **The file is flat text.** A prop is read by the *game*, so it has to reach
   a browser tab. It goes through `AssetSource` like
-  `weapons.toml`, the kernel is hand-written, and the only `std::fs` is on the
+  `weapons/{key}.toml`, the kernel is hand-written, and the only `std::fs` is on the
   saving side.
 - **Numbers are written the way they were typed.** `src/prop/nice_f32.rs`
   widens an `f32` through its own shortest decimal, so a file says `0.05`
@@ -1372,7 +1372,7 @@ about.
 **A message carrying an internally tagged enum cannot cross the wire.**
 Lightyear encodes with postcard, which refuses `deserialize_any` — what
 `#[serde(tag = "kind")]` needs to read itself back — and that tagging is
-exactly what makes `weapons.toml` and a `.gpp` readable. So
+exactly what makes `weapons/{key}.toml` and a `.gpp` readable. So
 [`pack_sync`](src/common/pack_sync.rs) sends the catalog as JSON bytes
 and [`prop::sync`](src/prop/sync.rs) sends a model as the text its file holds,
 the way [`map_sync`](src/common/map_sync.rs) already sent bytes for its own
@@ -1571,7 +1571,9 @@ at the origin and the figure stands under it, inverted through the same
 ## Editing a weapon
 
 `AppMode::Weapon` ([`src/weapon_editor/`](src/weapon_editor/)) edits every
-pack's `weapons.toml` as one document: a Weapons browser on the left, the
+pack's weapons as one draft, a file each at `weapons/{key}.toml`, **the file's
+stem being the weapon's key** — what a map's pickup and `loadouts.toml` name it
+by: a Weapons browser on the left, the
 selected weapon on the right, and the range between them; `--weapon` opens it.
 The plan and what is left is
 [documentation/weapon-editor.md](documentation/weapon-editor.md).
@@ -1611,15 +1613,21 @@ The plan and what is left is
   (`read_pack_weapons`), and `catalog_of` and `problems` apply one rule
   (`problem`) to both the startup catalog and the draft, so the editor lists
   exactly what the loader would drop.
-- **Saving edits the file in place** (`weapon_editor::save`, `toml_edit`): an
+- **Saving edits each file in place** (`weapon_editor::save`, `toml_edit`): an
   untouched weapon is not touched, an edited one is merged three ways (the
   file's tree, what it parsed to, the edit) so only changed values move, a
-  key serde ignores is kept, a deleted weapon takes its leading comment, and
-  floats are written as their `f32`'s shortest decimal.
-  `saving_an_untouched_catalog_changes_no_bytes` is the guard. Each weapon goes
-  back to the pack it came from, and only packs that changed are written.
-- **The catalog has no file to Save As**, so File offers Save and Quit, and
-  `Ctrl+Shift+S` is a save.
+  key serde ignores is kept, and floats are written as their `f32`'s shortest
+  decimal. `saving_an_untouched_weapon_changes_no_bytes` is the guard. Only
+  files that changed are written (`WeaponEditor::changed_files`); a deleted
+  weapon deletes its file, and a renamed one is written from its old file's
+  text, so its comments carry over, before the old file goes (`Rename`). A file
+  changed on disk since it was read is refused.
+- **File offers New, Open, Save and Save As.** New asks for a key in the
+  browser, as its New button does; Open reads any `{pack}/weapons/{key}.toml`
+  into the draft and selects it; Save writes every changed file; Save As writes
+  only the selected weapon, as edited, to the chosen file — its pack and key
+  read off the path — and puts the weapon it was back to what its own file
+  holds (`WeaponEditor::save_as`).
 - **The form is reflection** ([`form.rs`](src/weapon_editor/form.rs)): a
   weapon's `Magazine` and each `Mounted` are walked as structs, enums and
   options, labeled from `weapon_editor.fields.*` and `variants.*` by name, so a
@@ -2923,13 +2931,14 @@ a handful of numbers, and the rocket launcher's two barrels, the pipe bomb and t
 TF2C-style RPG are all values of it. A grenade is a rocket that falls, spins,
 bounces and goes off on a timer.
 
-**Weapons are pack content, not map content.** `assets/default/weapons.toml`
-and `loadouts.toml`, read at `Startup` through
-[`src/common/assets.rs`](src/common/assets.rs) — one trait with one method, and
-that method is deliberately not `list`, because nothing behind a `fetch` can
-enumerate a directory and a manifest saying what one holds is a second
-description of the pack. The browser build replaces `NativeFiles` and one line
-in `GamePlugin`. There is **no second catalog written in Rust**: one that
+**Weapons are pack content, not map content.** Every pack's `weapons/*.toml`,
+a weapon per file keyed by its stem, a later pack's file of the same name
+retuning it, and `loadouts.toml`, read at `Startup` through
+[`src/common/assets.rs`](src/common/assets.rs) — a trait that reads a file and
+lists a folder. Nothing behind a `fetch` can enumerate a directory, so the
+browser build replaces `NativeFiles`, answering `list` from a manifest, and one
+line in `GamePlugin`. What each field means is
+[`assets/default/weapons/README.md`](assets/default/weapons/README.md). There is **no second catalog written in Rust**: one that
 drifted from the files would be a game that plays differently under test than
 it does in front of you.
 
@@ -3026,7 +3035,7 @@ Things worth knowing before touching `src/game/projectile.rs`:
 ### Choosing a weapon
 
 A weapon names its **bucket** — the digit that draws it, `1`–`9`, as in
-Source — and a **deploy** time, in `weapons.toml`. A bucket is the weapon's;
+Source — and a **deploy** time, in `weapons/{key}.toml`. A bucket is the weapon's;
 a `Slot` is a place in a class's loadout, and the two are deliberately not
 the same thing. Several weapons may share a bucket: pressing its digit again
 moves along them, in the order they were carried (a class's starting
@@ -3282,7 +3291,7 @@ one sheet at startup; a pack without them draws the airblast's puffs. The damage
 on `F6`.
 
 **A projectile may trail clouds** ([`src/game/rocket_trail.rs`](src/game/rocket_trail.rs)):
-`trail = "cloud"` on its spec in `weapons.toml` (the rocket launcher and the RPG). The blast's
+`trail = "cloud"` on its spec in `weapons/{key}.toml` (the rocket launcher and the RPG). The blast's
 clouds, lasting longer and burning on to white, then fading as they grow, with no gravity, left where it passed, a dozen per meter. The emitter is its own
 entity replaying the projectile's drawn path 10 cm behind it, so our own shot trails from the
 barrel; when the projectile goes it runs on to where the projectile was going a tick on, stopped
@@ -3649,7 +3658,7 @@ Two things about tracers specifically:
   the `Tracer` that draws the line and ball only while the hitboxes are shown
   (`F4`). `StreakPlugin` is added in `main.rs`, since it builds a mesh and a
   material, and joins the shared warm-up as the decals do.
-- **A hitscan action names its `trail`** in `weapons.toml`, required on every
+- **A hitscan action names its `trail`** in `weapons/{key}.toml`, required on every
   one: `"streak"` above, or `"beam"` ([`src/game/beam.rs`](src/game/beam.rs),
   the sniper rifle's): a line over the whole path in the shooter's swatch, both
   ends fixed as it arrives, fading in over 0.25 s and out over the next 1 s.

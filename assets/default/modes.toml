@@ -6,7 +6,7 @@
 # `classes`  which classes may be played, by the names `classes.toml` uses, in
 #            the order the class picker shows them. Empty or absent allows all
 #            of them. With only one, nobody is asked.
-# `loadout`  what a body starts with, by the names `weapons.toml` uses. Each
+# `loadout`  what a body starts with, by the names of their files under `weapons/`. Each
 #            lands in the slot its class's loadout permits it in. Absent is the
 #            class's own loadout.
 # `frag_limit` a mode with one keeps a scoreboard; absent is none. What ends

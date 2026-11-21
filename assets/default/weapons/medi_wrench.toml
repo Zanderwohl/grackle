@@ -1,0 +1,7 @@
+name_key = "weapon.names.medi_wrench"
+bucket = 3
+deploy = 0.4
+model = "medi_wrench"
+magazine = { reserve = 0, reload = 0.0 }
+primary = { cadence = { kind = "automatic", interval = 0.1 }, cost = { kind = "free" }, action = { kind = "heal_beam", range = 8.0, heal_per_second = 24 } }
+secondary = { cadence = { kind = "semi" }, cost = { kind = "charge", fraction = 1.0 }, action = { kind = "invulnerable", duration = 8.0, cooldown = 0.0 } }

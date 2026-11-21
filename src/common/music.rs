@@ -242,6 +242,16 @@ pub(crate) mod tests {
             let key = format!("{}/{relative}", pack.display());
             self.0.get(&key).cloned().ok_or(AssetError::NotFound(key))
         }
+
+        fn list(&self, pack: &Path, folder: &str) -> Vec<String> {
+            let prefix = format!("{}/{folder}/", pack.display());
+            self.0
+                .keys()
+                .filter_map(|key| key.strip_prefix(&prefix))
+                .filter(|name| !name.contains('/'))
+                .map(str::to_owned)
+                .collect()
+        }
     }
 
     /// Each pack's files with their text, lowest priority first.

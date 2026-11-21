@@ -1,0 +1,13 @@
+# Weak and quick, for finishing what something else started, and what arena
+# starts everybody with. Twelve in the clip, forty-eight in all, as TF2's. The
+# shotgun's lines: half again point blank, full at 5 m, half at 10 m and
+# beyond. No headshot bonus: that is the sniper rifle's.
+
+name_key = "weapon.names.pistol"
+bucket = 2
+deploy = 0.35
+model = "pistol"
+icon = "kill_pistol"
+magazine = { clip = 12, reserve = 36, reload = 1.25 }
+primary = { cadence = { kind = "semi", interval = 0.17 }, cost = { kind = "ammo", rounds = 1 }, action = { kind = "hitscan", range = 120.0, damage = 15, headshot_multiplier = 1, shove_per_damage = 0.15, shove_radius = 0.35, ramp_up = { near = 0.0, far = 5.0, scale = 1.5 }, falloff = { near = 5.0, far = 10.0, scale = 0.5 }, trail = "streak" } }
+secondary = { cadence = { kind = "semi" }, cost = { kind = "free" }, action = { kind = "none" } }

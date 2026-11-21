@@ -245,7 +245,7 @@ pub struct PropDoc {
     /// Parents first. See [`crate::prop::rig`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub bones: Vec<crate::prop::rig::PropBone>,
-    /// Fire, reload, deploy. Here rather than in `weapons.toml` because a clip
+    /// Fire, reload, deploy. Here rather than in `weapons/{key}.toml` because a clip
     /// is stated relative to the hold.
     ///
     /// Must stay the last field: a TOML array-of-tables header captures every

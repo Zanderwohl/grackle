@@ -126,7 +126,7 @@ when they die.
 
 **A new map feature, `WeaponPickup`**, not a kind on the `.gpp` `[pickup]`
 section. A pickup prop is a model with a spec, and one `.gpp` per weapon would
-be a second description of each weapon that has to agree with `weapons.toml`.
+be a second description of each weapon that has to agree with `weapons/{key}.toml`.
 The weapon already names its own model, so the map names the weapon and the
 model follows.
 
@@ -134,13 +134,13 @@ model follows.
 | --- | --- |
 | `location` | `PointRef` — where it stands on the floor, like a `Prop` |
 | `yaw` | radians |
-| `weapon` | a catalog name, as written in `weapons.toml` |
+| `weapon` | a catalog name, as written in `weapons/{key}.toml` |
 | `respawn` | seconds of game time before a taken one is back |
 | `ammo` | fraction of the weapon's reserve given to somebody who already has it |
 | `style` | `PickupStyle`, defaulting to `Tf2` (hovers and turns) |
 
 The weapon is a **name, not a `WeaponId`** on disk, because that is what the
-mapper chose and what `weapons.toml` calls it; the id is a hash of it, taken
+mapper chose and what `weapons/{key}.toml` calls it; the id is a hash of it, taken
 when the instance is stood up. A name nothing defines draws nothing and gives
 nothing, the way a bad model name does.
 
@@ -156,7 +156,7 @@ feature's panel has no world to read the catalog from, so
 puts the names into egui's temporary data each frame and the panel reads them
 back — rather than widening `FeatureTrait::editor_ui` for one feature, or
 `EditorPanels::ui`, which is at Bevy's parameter limit. That needed the name
-on the weapon: `Weapon.key` is what `weapons.toml` calls it, `id` its hash.
+on the weapon: `Weapon.key` is what `weapons/{key}.toml` calls it, `id` its hash.
 
 The **Weapon** tool places one; it is a point-placement tool like Prop's.
 

@@ -1633,6 +1633,7 @@ add_all = "Add all"
 missing = "No pack on this machine has this track"
 
 [weapon_editor]
+file_filter = "Grackle Weapon"
 primary = "Primary"
 secondary = "Secondary"
 scoped_primary = "Primary while sighted"

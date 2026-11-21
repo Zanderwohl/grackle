@@ -1,98 +1,116 @@
-//! Writing weapons back into a pack's `weapons.toml` in place, with `toml_edit`, so the comments
-//! that explain each weapon's numbers survive a save.
+//! Writing a weapon back into its own file, `weapons/{key}.toml`, in place with `toml_edit`, so the
+//! comments that explain its numbers survive a save.
 //!
 //! An edited weapon is merged three ways: the file's own tree, the entry the file parsed to, and
 //! the entry as edited. Only fields whose value changed are touched, which keeps a field a file
 //! left to its serde default out of the file, keeps keys serde does not know (and so ignores),
-//! and keeps each value's spacing. A weapon whose entry did not change is not touched at all.
+//! and keeps each value's spacing. A file whose entry did not change is not touched at all.
 
 use std::path::Path;
 
-use toml_edit::{Array, DocumentMut, InlineTable, Item, Table, TableLike, Value};
+use toml_edit::{Array, DocumentMut, InlineTable, Item, TableLike, Value};
 
-use crate::common::weapon_file::{parse_weapons, WeaponEntry, WEAPONS_FILE};
+use crate::common::weapon_file::{parse_weapon, weapon_path, WeaponEntry};
 
-/// `weapons` in any order. Refuses a file that does not parse, rather than writing over whatever
-/// somebody was halfway through.
-pub fn rewrite(original: &str, weapons: &[(String, WeaponEntry)]) -> Result<String, String> {
-    let before = match original.trim().is_empty() {
-        true => Vec::new(),
-        false => parse_weapons(original)?,
-    };
+/// `original` as it would read holding `entry`. Refuses a file that does not parse, rather than
+/// writing over whatever somebody was halfway through.
+pub fn rewrite(original: &str, entry: &WeaponEntry) -> Result<String, String> {
+    let before = parsed(original)?;
+    if before.as_ref() == Some(entry) {
+        return Ok(original.to_owned());
+    }
     let mut doc: DocumentMut = original.parse().map_err(|e: toml_edit::TomlError| e.to_string())?;
-
-    if !doc.contains_key("weapons") {
-        let mut table = Table::new();
-        table.set_implicit(true);
-        doc.insert("weapons", Item::Table(table));
-    }
-    let Some(table) = doc.get_mut("weapons").and_then(Item::as_table_like_mut) else {
-        return Err(format!("{WEAPONS_FILE}: `weapons` is not a table"));
-    };
-
-    for (key, _) in &before {
-        if !weapons.iter().any(|(kept, _)| kept == key) {
-            table.remove(key);
-        }
-    }
-
-    for (key, entry) in weapons {
-        let after = to_table(entry)?;
-        let old = before.iter().find(|(old, _)| old == key).map(|(_, entry)| entry);
-        match (old, table.get_mut(key).and_then(Item::as_table_like_mut)) {
-            (Some(old), _) if old == entry => {}
-            (Some(old), Some(existing)) => merge(existing, &to_table(old)?, &after),
-            _ => {
-                let mut new = Table::new();
-                for (field, value) in &after {
-                    new.insert(field, Item::Value(convert(value)));
-                }
-                new.decor_mut().set_prefix("\n");
-                table.insert(key, Item::Table(new));
+    let after = to_table(entry)?;
+    match &before {
+        Some(before) => merge(doc.as_table_mut(), &to_table(before)?, &after),
+        None => {
+            for (field, value) in &after {
+                doc.insert(field, Item::Value(convert(value)));
             }
         }
     }
-
     Ok(doc.to_string())
 }
 
-/// Authoring side, so `std::fs`. A missing file is written from nothing. `expected` is what the
-/// draft believes the file holds; a file changed on disk since is refused rather than written
-/// over, since `rewrite` would drop what was added and undo what was edited there.
-pub fn save_pack(
-    pack: &Path,
-    weapons: &[(String, WeaponEntry)],
-    expected: &[(String, WeaponEntry)],
-) -> Result<(), String> {
-    let path = pack.join(WEAPONS_FILE);
-    let original = match std::fs::read_to_string(&path) {
-        Ok(text) => text,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
-        Err(e) => return Err(format!("{}: {e}", path.display())),
-    };
-    if !holds(&original, expected) {
-        return Err(format!("{} changed on disk since it was read; revert to pick it up", path.display()));
+/// `None` for an empty file.
+fn parsed(text: &str) -> Result<Option<WeaponEntry>, String> {
+    match text.trim().is_empty() {
+        true => Ok(None),
+        false => parse_weapon(text).map(Some),
     }
-    let text = rewrite(&original, weapons).map_err(|e| format!("{}: {e}", path.display()))?;
-    if text == original {
-        return Ok(());
-    }
-    std::fs::create_dir_all(pack).map_err(|e| format!("{}: {e}", pack.display()))?;
-    // Written beside and renamed over, so a failed write cannot leave half a catalog.
-    let partial = path.with_extension("toml.partial");
-    std::fs::write(&partial, text).map_err(|e| format!("{}: {e}", partial.display()))?;
-    std::fs::rename(&partial, &path).map_err(|e| format!("{}: {e}", path.display()))
 }
 
-fn holds(text: &str, expected: &[(String, WeaponEntry)]) -> bool {
-    let on_disk = match text.trim().is_empty() {
-        true => Vec::new(),
-        false => match parse_weapons(text) {
-            Ok(weapons) => weapons,
-            Err(_) => return false,
-        },
+fn read_or_empty(path: &Path) -> Result<String, String> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => Ok(text),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(e) => Err(format!("{}: {e}", path.display())),
+    }
+}
+
+/// A file changed on disk since the draft read it is refused rather than written over, since the
+/// merge would drop what was added and undo what was edited there.
+fn check_unchanged(path: &Path, text: &str, expected: Option<&WeaponEntry>) -> Result<(), String> {
+    match parsed(text) {
+        Ok(on_disk) if on_disk.as_ref() == expected => Ok(()),
+        _ => Err(format!("{} changed on disk since it was read; revert to pick it up", path.display())),
+    }
+}
+
+/// Authoring side, so `std::fs`. `expected` is what the draft believes the file holds, `None` for
+/// a file it believes is not there.
+///
+/// `from` is a file this one was renamed from, `(key, expected, delete)`: its text is the starting
+/// point, so its comments carry over, and with `delete` it is deleted once the new file is
+/// written. The inner result is that deletion's: the new file is written either way.
+pub fn save_weapon(
+    pack: &Path,
+    key: &str,
+    entry: &WeaponEntry,
+    expected: Option<&WeaponEntry>,
+    from: Option<(&str, &WeaponEntry, bool)>,
+) -> Result<Result<(), String>, String> {
+    let path = weapon_path(pack, key);
+    let original = read_or_empty(&path)?;
+    check_unchanged(&path, &original, expected)?;
+    let (start, old) = match from {
+        Some((old_key, old_expected, delete)) => {
+            let old = weapon_path(pack, old_key);
+            let text = read_or_empty(&old)?;
+            check_unchanged(&old, &text, Some(old_expected))?;
+            (text, delete.then_some(old))
+        }
+        None => (original.clone(), None),
     };
-    on_disk.len() == expected.len() && expected.iter().all(|weapon| on_disk.contains(weapon))
+    let text = rewrite(&start, entry).map_err(|e| format!("{}: {e}", path.display()))?;
+    if text != original {
+        let folder = path.parent().unwrap_or(pack);
+        std::fs::create_dir_all(folder).map_err(|e| format!("{}: {e}", folder.display()))?;
+        // Written beside and renamed over, so a failed write cannot leave half a weapon.
+        let partial = path.with_extension("toml.partial");
+        std::fs::write(&partial, text).map_err(|e| format!("{}: {e}", partial.display()))?;
+        std::fs::rename(&partial, &path).map_err(|e| format!("{}: {e}", path.display()))?;
+    }
+    Ok(match old {
+        Some(old) => std::fs::remove_file(&old).map_err(|e| format!("{}: {e}", old.display())),
+        None => Ok(()),
+    })
+}
+
+/// What `key`'s file in `pack` holds now; `None` when it is missing, empty or will not parse.
+pub fn on_disk(pack: &Path, key: &str) -> Option<WeaponEntry> {
+    parsed(&read_or_empty(&weapon_path(pack, key)).ok()?).ok().flatten()
+}
+
+/// Refused, as a save is, when the file no longer holds `expected`.
+pub fn delete_weapon(pack: &Path, key: &str, expected: &WeaponEntry) -> Result<(), String> {
+    let path = weapon_path(pack, key);
+    let text = read_or_empty(&path)?;
+    if text.is_empty() {
+        return Ok(());
+    }
+    check_unchanged(&path, &text, Some(expected))?;
+    std::fs::remove_file(&path).map_err(|e| format!("{}: {e}", path.display()))
 }
 
 /// Renames in `permitted` lists and `default`s only, in order. `None` when nothing in it names one.
@@ -220,16 +238,10 @@ mod tests {
     use super::*;
     use crate::common::weapon::WeaponAction;
 
-    const SHIPPED: &str = "assets/default/weapons.toml";
-
-    fn shipped() -> (String, Vec<(String, WeaponEntry)>) {
-        let text = std::fs::read_to_string(SHIPPED).expect("the default pack ships weapons");
-        let weapons = parse_weapons(&text).expect("the shipped weapons parse");
-        (text, weapons)
-    }
-
-    fn entry<'a>(weapons: &'a mut [(String, WeaponEntry)], key: &str) -> &'a mut WeaponEntry {
-        &mut weapons.iter_mut().find(|(k, _)| k == key).expect("shipped").1
+    fn shipped(key: &str) -> (String, WeaponEntry) {
+        let text = std::fs::read_to_string(format!("assets/default/weapons/{key}.toml")).expect("the default pack ships it");
+        let entry = parse_weapon(&text).expect("the shipped weapon parses");
+        (text, entry)
     }
 
     fn changed_lines(a: &str, b: &str) -> usize {
@@ -239,88 +251,91 @@ mod tests {
     }
 
     #[test]
-    fn saving_an_untouched_catalog_changes_no_bytes() {
-        let (text, weapons) = shipped();
-        assert_eq!(rewrite(&text, &weapons).expect("rewrites"), text);
+    fn saving_an_untouched_weapon_changes_no_bytes() {
+        for key in crate::common::assets::Assets::default().stems(
+            Path::new("assets/default"),
+            crate::common::weapon_file::WEAPONS_DIR,
+            crate::common::weapon_file::WEAPON_EXTENSION,
+        ) {
+            let (text, entry) = shipped(&key);
+            assert_eq!(rewrite(&text, &entry).expect("rewrites"), text, "{key}");
+            // Through the merge too, not only the shortcut for an unchanged entry.
+            let mut doc: DocumentMut = text.parse().unwrap();
+            let table = to_table(&entry).unwrap();
+            merge(doc.as_table_mut(), &table, &table);
+            assert_eq!(doc.to_string(), text, "{key}");
+        }
     }
 
     /// Fails if a defaulted field is written out, a float is widened, or a whole entry is
     /// re-serialized for one number.
     #[test]
     fn one_edit_changes_one_line() {
-        let (text, mut weapons) = shipped();
-        let WeaponAction::Projectile(spec) = &mut entry(&mut weapons, "rocket_launcher").primary.action
-        else {
+        let (text, mut entry) = shipped("rocket_launcher");
+        let WeaponAction::Projectile(spec) = &mut entry.primary.action else {
             panic!("the rocket launcher fires a projectile");
         };
         spec.damage = 95;
         spec.initial_speed = 21.5;
-        let written = rewrite(&text, &weapons).expect("rewrites");
+        let written = rewrite(&text, &entry).expect("rewrites");
 
         assert_eq!(changed_lines(&text, &written), 1, "{written}");
         assert!(written.contains("initial_speed = 21.5,"), "the float was not written short");
-        assert_eq!(parse_weapons(&written).expect("parses"), weapons);
+        assert!(written.starts_with("# TF2's"), "the comment at the top went");
+        assert_eq!(parse_weapon(&written).expect("parses"), entry);
     }
 
     #[test]
-    fn a_deleted_weapon_takes_its_comment_with_it() {
-        let (text, mut weapons) = shipped();
-        weapons.retain(|(key, _)| key != "rpg");
-        let written = rewrite(&text, &weapons).expect("rewrites");
-
-        assert!(!written.contains("TF2C-style RPG"), "the comment above it was left behind");
-        assert!(written.contains("Every weapon in the default pack."), "the file's header went too");
-        assert_eq!(parse_weapons(&written).expect("parses"), weapons);
-    }
-
-    #[test]
-    fn a_new_weapon_is_written_after_the_rest_and_reads_back() {
-        let (text, mut weapons) = shipped();
-        let mut copy = entry(&mut weapons, "shotgun").clone();
-        copy.name_key = "weapon.names.scattergun".into();
-        copy.model = None;
-        weapons.push(("scattergun".into(), copy));
-        let written = rewrite(&text, &weapons).expect("rewrites");
-
-        assert!(written.starts_with(&text), "something above the new weapon changed");
-        assert!(written.contains("\n[weapons.scattergun]\n"));
+    fn an_empty_file_gets_a_weapon() {
+        let (_, entry) = shipped("shotgun");
+        let written = rewrite("", &entry).expect("rewrites");
+        assert!(written.starts_with("name_key = "), "{written}");
         assert!(written.contains("magazine = { clip = 6,"), "nested tables were not written inline");
-        let mut back = parse_weapons(&written).expect("parses");
-        back.sort_by(|a, b| a.0.cmp(&b.0));
-        weapons.sort_by(|a, b| a.0.cmp(&b.0));
-        assert_eq!(back, weapons);
-    }
-
-    #[test]
-    fn an_empty_file_gets_a_catalog() {
-        let (_, weapons) = shipped();
-        let written = rewrite("", &weapons[..1]).expect("rewrites");
-        assert!(!written.contains("[weapons]\n"), "the parent table was given a header");
-        assert_eq!(parse_weapons(&written).expect("parses"), weapons[..1].to_vec());
+        assert_eq!(parse_weapon(&written).expect("parses"), entry);
     }
 
     #[test]
     fn a_cleared_option_leaves_the_file_and_a_key_serde_ignores_stays() {
-        let text = "[weapons.x]\nname_key = \"k\"\nmodel = \"m\"\nnote = \"mine\"\nbucket = 1\n\
+        let text = "name_key = \"k\"\nmodel = \"m\"\nnote = \"mine\"\nbucket = 1\n\
                     deploy = 0.5\nmagazine = { reserve = 1, reload = 0.0 }\n\
                     primary = { cadence = { kind = \"semi\" }, cost = { kind = \"free\" }, action = { kind = \"none\" } }\n\
                     secondary = { cadence = { kind = \"semi\" }, cost = { kind = \"free\" }, action = { kind = \"none\" } }\n";
-        let mut weapons = parse_weapons(text).expect("parses");
-        weapons[0].1.model = None;
-        let written = rewrite(text, &weapons).expect("rewrites");
+        let mut entry = parse_weapon(text).expect("parses");
+        entry.model = None;
+        let written = rewrite(text, &entry).expect("rewrites");
         assert!(!written.contains("model"), "{written}");
         assert!(written.contains("note = \"mine\""), "{written}");
     }
 
     #[test]
     fn a_file_changed_since_it_was_read_is_noticed() {
-        let (text, weapons) = shipped();
-        assert!(holds(&text, &weapons));
-        assert!(!holds(&text, &weapons[1..]), "a weapon added on disk went unnoticed");
-        let mut edited = weapons.clone();
-        edited[0].1.deploy += 1.0;
-        assert!(!holds(&text, &edited), "a weapon edited on disk went unnoticed");
-        assert!(holds("", &[]));
+        let (text, entry) = shipped("pistol");
+        let path = Path::new("pistol.toml");
+        assert!(check_unchanged(path, &text, Some(&entry)).is_ok());
+        assert!(check_unchanged(path, &text, None).is_err(), "a file made on disk went unnoticed");
+        let mut edited = entry.clone();
+        edited.deploy += 1.0;
+        assert!(check_unchanged(path, &text, Some(&edited)).is_err(), "an edit on disk went unnoticed");
+        assert!(check_unchanged(path, "", None).is_ok());
+    }
+
+    #[test]
+    fn a_rename_keeps_the_comments_and_removes_the_old_file() {
+        let pack = std::env::temp_dir().join(format!("grackle_weapon_rename_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&pack);
+        std::fs::create_dir_all(pack.join("weapons")).unwrap();
+        let (text, mut entry) = shipped("pistol");
+        std::fs::write(weapon_path(&pack, "pistol"), &text).unwrap();
+        let was = entry.clone();
+        entry.deploy = 0.4;
+        save_weapon(&pack, "sidearm", &entry, None, Some(("pistol", &was, true))).expect("saves").expect("deletes the old file");
+        assert!(!weapon_path(&pack, "pistol").exists(), "the old file was left");
+        let written = std::fs::read_to_string(weapon_path(&pack, "sidearm")).unwrap();
+        assert!(written.starts_with("# Weak and quick"), "{written}");
+        assert_eq!(parse_weapon(&written).unwrap(), entry);
+        delete_weapon(&pack, "sidearm", &entry).expect("deletes");
+        assert!(!weapon_path(&pack, "sidearm").exists());
+        let _ = std::fs::remove_dir_all(&pack);
     }
 
     #[test]
@@ -337,6 +352,7 @@ mod tests {
 
     #[test]
     fn a_file_that_will_not_parse_is_not_written_over() {
-        assert!(rewrite("[weapons.x\n", &[]).is_err());
+        let (_, entry) = shipped("pistol");
+        assert!(rewrite("name_key = \n", &entry).is_err());
     }
 }

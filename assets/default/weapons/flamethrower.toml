@@ -1,0 +1,15 @@
+# No clip: the whole supply is loaded, and it never reloads. A puff is 125%
+# point blank, full at 2 m and half at the 6 m tip of the cone; afterburn is
+# not scaled. The secondary is the airblast: everything in a 5 m cone that may
+# be hurt is pushed 9 m/s along the aim and 4 m/s up, a hostile projectile in
+# it comes back yours at the speed it had, and a burning teammate is put out.
+# Each of those can be switched off or retuned on another weapon.
+
+name_key = "weapon.names.flamethrower"
+bucket = 1
+deploy = 0.5
+model = "flamethrower"
+icon = "kill_flamethrower"
+magazine = { reserve = 200, reload = 0.0 }
+primary = { cadence = { kind = "automatic", interval = 0.1 }, cost = { kind = "ammo", rounds = 1 }, action = { kind = "flame", range = 6.0, spread = 0.28, rays = 5, damage = 7, afterburn_duration = 6.0, afterburn_damage = 4, afterburn_interval = 0.5, ramp_up = { near = 0.0, far = 2.0, scale = 1.25 }, falloff = { near = 2.0, far = 6.0, scale = 0.5 } } }
+secondary = { cadence = { kind = "automatic", interval = 0.75 }, cost = { kind = "ammo", rounds = 20 }, action = { kind = "airblast", range = 5.0, spread = 0.5, push = 9.0, lift = 4.0, reflect = true, reflect_speed = 1.0, extinguish = true } }

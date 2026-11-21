@@ -1,6 +1,6 @@
 # Weapon editor
 
-Today `weapons.toml` is edited only as text, and seeing what an edit does means
+Weapons were once edited only as text, and seeing what an edit does means
 restarting, pressing F5 and finding somebody to shoot. This is the plan for an
 authoring mode that edits the catalog. Its centerpiece is a **range**: a small
 staged fight that loops while you tune, so the effect of a number is on screen
@@ -48,33 +48,39 @@ The mode is offered **only when not networked** (`offered_networked` false),
 as the prop and animation editors are. That also means the swapped catalog is
 never broadcast mid-edit.
 
-### Saving edits the file in place, with `toml_edit`
+### Saving edits each file in place, with `toml_edit`
 
-`weapons.toml` is mostly comments. They are the reasoning behind each weapon's
-numbers, and the file's header documents its own format. Re-serializing the
-file from serde would throw all of that away, and so would the "animations go
-at the bottom of an entry" ordering the header asks for. So the saver opens the
-file with `toml_edit` (already in the lock through `toml`; make it a direct
-dependency) and edits it in place:
+Each weapon is its own file, `weapons/{key}.toml` in a pack, and its key is the
+file's stem: what a map's pickup and `loadouts.toml` name it by. A weapon's file
+is mostly comments, the reasoning behind its numbers; what the fields mean is
+`assets/default/weapons/README.md`. Re-serializing a file from serde would throw
+the comments away, so the saver opens it with `toml_edit` and edits it in place:
 
-- An edited weapon has its values replaced **inside its existing table**, so
-  the comment above it stays, and so does the inline-table style
+- An edited weapon has only the values that changed replaced, so the comment
+  at the top stays, and so does the inline-table style
   (`primary = { cadence = …, action = { … } }`).
-- A new weapon is appended at the end of its file, written in the shipped
-  style.
-- A deleted weapon takes its leading comment with it.
+- A new weapon is a new file, written in the shipped style.
+- A deleted weapon deletes its file.
+- A renamed weapon is written to its new file starting from its old file's
+  text, so its comments carry over, and then the old file is deleted.
 - Numbers are written the shortest way that reads back exactly, as
   `src/prop/nice_f32.rs` does for props: `0.8`, not `0.800000011920929`.
 
-The test that guards this is **`saving_an_untouched_catalog_changes_no_bytes`**
-against the shipped file. A second test edits one field and checks that the
+The test that guards this is **`saving_an_untouched_weapon_changes_no_bytes`**
+against every shipped file. A second test edits one field and checks that the
 diff is one line.
 
-Each weapon is saved to the pack file it came from. A new one goes to the pack
+Each weapon is saved to the pack it came from. A new one goes to the pack
 selected in the browser, `assets/user/` by default. Editing a default-pack
-weapon writes `assets/default/weapons.toml`, which is intended, as the prop
-editor writes the shipped rocket launcher. Nothing here needs a file dialog,
-so the `rfd` problem on wasm does not grow.
+weapon writes `assets/default/weapons/{key}.toml`, which is intended, as the
+prop editor writes the shipped rocket launcher.
+
+File offers **New, Open, Save and Save As**. New asks for a key in the browser.
+Open reads any `{pack}/weapons/{key}.toml` into the draft. Save writes every
+changed file. Save As writes the selected weapon, as edited, to the file
+chosen — its pack and key read off the path — and puts the weapon it was back
+to what its own file holds. Open and Save As use `rfd`, as the other editors
+do, so they share the wasm problem those have.
 
 Note the loader's rule: **a key two packs both define is an override when both
 give the same `name_key`**, the later pack winning, and a hash collision (dropped)
@@ -283,6 +289,12 @@ local, so the switch is one transition.
 - [ ] A bounce beat (a pill off the side wall)
 - [ ] An orbit control on the stage camera, which is fixed today
 - [ ] Hit distances in the log (recorded, not shown)
+
+### One file per weapon
+- [x] `weapons.toml` split into `weapons/{key}.toml` per pack, the key the file's stem, so maps and loadouts name weapons as before
+- [x] `AssetSource::list` (`Assets::stems`), so a loader can read a folder; a browser build answers it from a manifest
+- [x] The saver writes, renames and deletes files one weapon at a time (`changed_files`, `Rename`)
+- [x] New, Open, Save and Save As in the File menu and on the chords
 
 ### Later
 - [ ] Open the lang editor at a weapon's `name_key` (after the lang editor lands)

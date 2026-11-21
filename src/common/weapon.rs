@@ -463,7 +463,7 @@ impl Magazine {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Weapon {
     pub id: WeaponId,
-    /// What `weapons.toml` calls it, which is what a map names it by; `id` is
+    /// What `weapons/{key}.toml` calls it, which is what a map names it by; `id` is
     /// its hash.
     #[serde(default)]
     pub key: String,
