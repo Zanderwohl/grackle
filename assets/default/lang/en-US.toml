@@ -1546,6 +1546,9 @@ weights = "Weights"
 knots = "Knots"
 regions = "{ count } closed regions"
 region_label = "Region { id }"
+measure = "{ length } ({ across }, { up })"
+centimeters = "{ value } cm"
+meters = "{ value } m"
 
 [prop.region]
 missing = "not enclosed"

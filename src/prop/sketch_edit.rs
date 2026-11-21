@@ -11,7 +11,9 @@
 //! dragged point one gesture.
 
 use crate::common::keybind::{Action, Actions};
+use crate::get;
 use bevy::prelude::*;
+use bevy_egui::{egui, EguiContexts, EguiPrimaryContextPass};
 
 use crate::common::app_mode::AppMode;
 use crate::editor::input::CurrentMouseInput;
@@ -306,6 +308,7 @@ impl Plugin for SketchEditPlugin {
                     .chain()
                     .run_if(in_state(AppMode::Prop)),
             )
+            .add_systems(EguiPrimaryContextPass, label_the_length.run_if(in_state(AppMode::Prop)))
             // The camera's own restore puts the map's views back; the sketch's
             // saved view is of a mode that is ending.
             .add_systems(OnExit(AppMode::Prop), |mut session: ResMut<SketchSession>, mut editor: ResMut<PropEditor>| {
@@ -892,6 +895,130 @@ fn draw_the_session(
     }
 }
 
+/// Logical pixels between the cursor and its length label, clear of the snap ring.
+const LABEL_GAP: f32 = 16.0;
+
+fn measured_from(session: &SketchSession, sketch: &Sketch) -> Option<(SketchId, Vec2)> {
+    let from = match session.tool {
+        SketchTool::Line => session.chain?,
+        SketchTool::Circle | SketchTool::Arc => match session.pending[..] {
+            [center] => center,
+            _ => return None,
+        },
+        SketchTool::Bezier | SketchTool::Nurbs => *session.pending.last()?,
+        SketchTool::Select | SketchTool::Erase => return None,
+    };
+    Some((from, sketch.point(from)?))
+}
+
+fn distance_text(meters: f32, in_meters: bool, signed: bool) -> String {
+    let (value, key, places) = match in_meters {
+        false => (meters * 100.0, "prop.sketch.centimeters", 1),
+        true => (meters, "prop.sketch.meters", 3),
+    };
+    let mut number = format!("{value:.places$}");
+    if number.contains('.') {
+        number = number.trim_end_matches('0').trim_end_matches('.').to_string();
+    }
+    if number == "-0" {
+        number = "0".to_string();
+    }
+    if signed && number != "0" && !number.starts_with('-') {
+        number.insert(0, '+');
+    }
+    get!(key, "value", number)
+}
+
+/// Legs along the sketch's own `x` and `y`, all in one unit, chosen from the
+/// rounded length.
+pub fn measure_text(delta: Vec2) -> String {
+    let length = delta.length();
+    let in_meters = (length * 1000.0).round() >= 1000.0;
+    get!(
+        "prop.sketch.measure",
+        "length",
+        distance_text(length, in_meters, false),
+        "across",
+        distance_text(delta.x, in_meters, true),
+        "up",
+        distance_text(delta.y, in_meters, true)
+    )
+}
+
+/// Sides are tried facing away from `toward`, where the measured line comes
+/// from, so the label does not cover the line. A label that fits nowhere is
+/// left partly outside `bounds` rather than over the cursor.
+pub fn place_label(cursor: Vec2, toward: Vec2, size: Vec2, bounds: Rect) -> Rect {
+    let half = size / 2.0;
+    let mut sides = [Vec2::X, Vec2::NEG_X, Vec2::NEG_Y, Vec2::Y];
+    let away = -toward.normalize_or_zero();
+    sides.sort_by(|a, b| b.dot(away).total_cmp(&a.dot(away)));
+    let push_in = |min: Vec2| min.max(bounds.min).min((bounds.max - size).max(bounds.min));
+    let rect_on = |side: Vec2| {
+        let min = cursor + side * (half + Vec2::splat(LABEL_GAP)) - half;
+        let slid = push_in(min);
+        // Across the side only, so it keeps its gap from the cursor.
+        let min = if side.x == 0.0 { Vec2::new(slid.x, min.y) } else { Vec2::new(min.x, slid.y) };
+        Rect::from_corners(min, min + size)
+    };
+    let inside = |rect: Rect| {
+        let overlap = rect.intersect(bounds);
+        if overlap.is_empty() { 0.0 } else { overlap.size().x * overlap.size().y }
+    };
+    let whole = size.x * size.y;
+    if let Some(rect) = sides.iter().map(|side| rect_on(*side)).find(|rect| inside(*rect) >= whole - 1e-3) {
+        return rect;
+    }
+    sides.iter().map(|side| rect_on(*side)).max_by(|a, b| inside(*a).total_cmp(&inside(*b))).unwrap()
+}
+
+fn label_the_length(
+    session: Res<SketchSession>,
+    editor: Res<PropEditor>,
+    build: Res<PropBuild>,
+    mouse: Res<CurrentMouseInput>,
+    cameras: Query<(&Camera, &GlobalTransform), With<Multicam>>,
+    mut contexts: EguiContexts,
+) {
+    let (Some(cursor), Some(id)) = (session.cursor, session.editing) else { return };
+    // Not `live`, which clones the sketch.
+    let Some(sketch) = sketch_of(editor.doc(), id) else { return };
+    let Some(placed) = build.evaluated.sketches.iter().find(|placed| placed.id == id) else { return };
+    let Some((anchor, from)) = measured_from(&session, sketch) else { return };
+    if cursor.point == Some(anchor) {
+        return;
+    }
+    let Some((camera, view)) = mouse.in_camera.and_then(|camera| cameras.get(camera).ok()) else { return };
+    let (Ok(at), Ok(start)) = (
+        camera.world_to_viewport(view, placed.world(cursor.at)),
+        camera.world_to_viewport(view, placed.world(from)),
+    ) else {
+        return;
+    };
+    let Some(bounds) = camera.logical_viewport_rect() else { return };
+    let Ok(ctx) = contexts.ctx_mut() else { return };
+    // Bevy's logical pixels are egui points times its zoom.
+    let zoom = ctx.zoom_factor();
+    let (at, start) = (at / zoom, start / zoom);
+    let bounds = Rect::from_corners(bounds.min / zoom, bounds.max / zoom);
+
+    let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("sketch_length")));
+    let galley = painter.layout_no_wrap(
+        measure_text(cursor.at - from),
+        egui::FontId::proportional(13.0),
+        {
+            let [r, g, b, _] = POINT.to_srgba().to_u8_array();
+            egui::Color32::from_rgb(r, g, b)
+        },
+    );
+    let padding = Vec2::new(6.0, 3.0);
+    let size = Vec2::new(galley.size().x, galley.size().y) + padding * 2.0;
+    let rect = place_label(at, start - at, size, bounds);
+    let rect = egui::Rect::from_min_max(egui::pos2(rect.min.x, rect.min.y), egui::pos2(rect.max.x, rect.max.y));
+    painter.rect_filled(rect, 3.0, egui::Color32::from_black_alpha(190));
+    painter.galley(rect.min + egui::vec2(padding.x, padding.y), galley, egui::Color32::PLACEHOLDER);
+}
+
 /// A curve tool's control points so far, joined by dashes.
 fn hull(gizmos: &mut Gizmos, placed: &PlacedSketch, points: &[Vec2], marker: f32) {
     for step in points.windows(2) {
@@ -1015,6 +1142,51 @@ mod tests {
 
     fn snapped(at: Vec2, point: Option<SketchId>) -> Snapped {
         Snapped { at, point }
+    }
+
+    #[test]
+    fn the_measure_reads_its_length_then_its_legs() {
+        assert_eq!(measure_text(Vec2::new(0.3, -0.4)), "50 cm (+30 cm, -40 cm)");
+        assert_eq!(measure_text(Vec2::new(0.005, 0.0)), "0.5 cm (+0.5 cm, 0 cm)");
+        assert_eq!(measure_text(Vec2::new(1.2, 0.0)), "1.2 m (+1.2 m, 0 m)");
+        assert_eq!(measure_text(Vec2::new(1.12, 0.5)), "1.227 m (+1.12 m, +0.5 m)");
+        assert_eq!(measure_text(Vec2::new(0.99996, 0.0)), "1 m (+1 m, 0 m)");
+    }
+
+    #[test]
+    fn each_tool_measures_from_its_own_point() {
+        let mut sketch = Sketch::default();
+        let (a, b) = (sketch.add_point(Vec2::ZERO), sketch.add_point(Vec2::X));
+        let from = |tool, chain, pending: Vec<SketchId>| {
+            let session = SketchSession { tool, chain, pending, ..default() };
+            measured_from(&session, &sketch).map(|(id, _)| id)
+        };
+        assert_eq!(from(SketchTool::Line, Some(b), vec![]), Some(b));
+        assert_eq!(from(SketchTool::Line, None, vec![]), None);
+        assert_eq!(from(SketchTool::Circle, None, vec![a]), Some(a));
+        assert_eq!(from(SketchTool::Arc, None, vec![a]), Some(a));
+        assert_eq!(from(SketchTool::Arc, None, vec![a, b]), None, "an arc's start is down: it winds, not measures");
+        assert_eq!(from(SketchTool::Bezier, None, vec![a, b]), Some(b));
+        assert_eq!(from(SketchTool::Nurbs, None, vec![]), None);
+        assert_eq!(from(SketchTool::Select, Some(b), vec![a]), None);
+    }
+
+    #[test]
+    fn the_label_stays_off_the_line_and_on_screen() {
+        let bounds = Rect::new(0.0, 0.0, 800.0, 600.0);
+        let size = Vec2::new(120.0, 20.0);
+        // Drawn from the left: the label goes right.
+        let rect = place_label(Vec2::new(400.0, 300.0), Vec2::NEG_X, size, bounds);
+        assert!(rect.min.x > 400.0);
+        // At the right edge: above or below, not back over the line.
+        let rect = place_label(Vec2::new(790.0, 300.0), Vec2::NEG_X, size, bounds);
+        assert!(bounds.contains(rect.min) && bounds.contains(rect.max));
+        assert!(rect.max.y < 300.0 || rect.min.y > 300.0);
+        // Wider than the viewport: slid to its edge, but kept off the cursor.
+        let cursor = Vec2::new(5.0, 5.0);
+        let rect = place_label(cursor, Vec2::ONE, Vec2::new(900.0, 20.0), bounds);
+        assert_eq!(rect.min.x, 0.0);
+        assert!(!rect.contains(cursor));
     }
 
     #[test]
