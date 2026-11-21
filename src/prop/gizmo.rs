@@ -45,11 +45,11 @@ const PICK_SLACK: f32 = 1.8;
 const MIN_GIZMO_SCALE: f32 = 0.02;
 
 /// X, Y, Z.
-const AXIS_COLORS: [Color; 3] =
+pub(crate) const AXIS_COLORS: [Color; 3] =
     [Color::srgb(0.9, 0.3, 0.3), Color::srgb(0.3, 0.9, 0.3), Color::srgb(0.4, 0.5, 1.0)];
 
 /// The handle under the pointer, or being dragged.
-const HIGHLIGHT: Color = Color::srgb(1.0, 0.95, 0.6);
+pub(crate) const HIGHLIGHT: Color = Color::srgb(1.0, 0.95, 0.6);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Handle {
@@ -117,12 +117,14 @@ impl Plugin for PropGizmoPlugin {
         app.init_resource::<GizmoGrab>()
             .init_resource::<HoldHandles>()
             .init_resource::<HoveredPick>()
+            .init_resource::<crate::prop::stand_in::StandInGrab>()
+            .init_resource::<crate::prop::stand_in::Modeling>()
             // Picking after dragging, so a press that grabbed a handle does not
             // also re-select.
             .add_systems(
                 Update,
                 // Not while sketching: a click then belongs to the sketch.
-                (drag_the_selected, pick_in_the_viewport)
+                (crate::prop::stand_in::drag_the_stand_in, drag_the_selected, pick_in_the_viewport)
                     .chain()
                     .run_if(in_state(AppMode::Prop))
                     .run_if(crate::prop::sketch_edit::not_sketching),
@@ -236,6 +238,7 @@ fn drag_the_selected(
     choice: Res<ScaleFigure>,
     figures: Query<(&Skeleton, &Pose, &Transform, &FigureReach), With<ScaleFigureMarker>>,
     build: Res<crate::prop::view::PropBuild>,
+    stand_in: Res<crate::prop::stand_in::StandInGrab>,
     mut gizmos: Gizmos,
 ) {
     if hold_handles.0 {
@@ -290,6 +293,7 @@ fn drag_the_selected(
         .map(|(handle, _)| handle);
 
     if grab.held.is_none()
+        && !stand_in.busy()
         && mouse.just_pressed
         && mouse.pressed == Some(MouseButton::Left)
         && let Some(handle) = nearest
@@ -373,8 +377,9 @@ fn pick_in_the_viewport(
     hold_handles: Res<HoldHandles>,
     build: Res<crate::prop::view::PropBuild>,
     cameras: Query<(&Camera, &GlobalTransform), With<Multicam>>,
+    stand_in: Res<crate::prop::stand_in::StandInGrab>,
 ) {
-    let under = (!hold_handles.0 && grab.held.is_none())
+    let under = (!hold_handles.0 && grab.held.is_none() && !stand_in.busy())
         .then(|| {
             let ray = mouse.world_pos?;
             let (camera, at) = cameras.get(mouse.in_camera?).ok()?;
@@ -863,6 +868,7 @@ mod tests {
         world.init_resource::<GizmoGrab>();
         world.insert_resource(HoldHandles(hold_handles));
         world.insert_resource(ScaleFigure(None));
+        world.init_resource::<crate::prop::stand_in::StandInGrab>();
         (world, placement)
     }
 

@@ -20,6 +20,7 @@
 //! | [`feature`] | The feature list and the evaluator that replays it. |
 //! | [`document`] | The document, undo, and the file format. |
 //! | [`figure`] | The body standing behind the prop, for scale. |
+//! | [`stand_in`] | A body placed by hand beside the prop, for scale. |
 //! | [`view`] | Putting the result in the editor's viewports. |
 //! | [`camera`] | Orbiting, panning and zooming in those viewports. |
 //! | [`gizmo`] | Moving and sizing the selected feature by dragging it. |
@@ -70,6 +71,7 @@ pub mod sketch_edit;
 pub mod skin;
 pub mod slot;
 pub mod solid;
+pub mod stand_in;
 pub mod sync;
 pub mod surface;
 pub mod thumbnail;
@@ -96,6 +98,7 @@ impl Plugin for PropEditorPlugin {
                 view::PropViewPlugin,
                 camera::PropCameraPlugin,
                 gizmo::PropGizmoPlugin,
+                stand_in::StandInPlugin,
                 plane::PropPlanePlugin,
                 sketch_edit::SketchEditPlugin,
                 ui::PropUiPlugin,

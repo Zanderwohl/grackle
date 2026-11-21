@@ -1090,13 +1090,26 @@ appears.
 
 **The reference figure** ([`figure.rs`](src/prop/figure.rs)) is a body standing
 holding the prop, off by default — a `ScaleFigure` resource of `Option<Class>`,
-picked from the **View** menu, and always up in the Fit workspace. A weapon is modeled in meters and nothing in an
+in the Model workspace the prop's stand-in record on a held prop or a hat (see
+below), and always up in the Fit workspace. A weapon is modeled in meters and nothing in an
 empty viewport says how big a meter is; the question being asked is never "how
 long is this" but "does this look right in somebody's hands". It is a rig with
 a `Pose` and deliberately **no `SkeletonAnimator`** — the pose is set once and
 nothing else may write it, the rule a corpse already follows — so the ungated
 `BodyMeshPlugin` dresses it from the same cached meshes as every other body of
 that build. A reference figure is not a second kind of body.
+
+**The stand-in** ([`stand_in.rs`](src/prop/stand_in.rs)) is the Model
+workspace's **Stand-in** tab: whether a body is shown and its class, saved in
+the prop as `[stand_in]` so it comes back as it was left, and read by nothing
+outside the prop editor. On a held prop or a hat that body is the reference
+figure, holding or wearing it (`model_figure`, written each frame by the
+panels). On a placed prop it is a body in its rest pose (an A-pose on the
+humanoid) standing where it is put — the record's feet and turn, edited in the
+tab or dragged by three move arrows at its feet and a ring round them. Moving it is an undo step
+but no rebuild, since the rebuild compares features. Its handles go before a
+feature's and picking's, which stand back while one is under the pointer
+(`StandInGrab::busy`).
 
 Three things about it are worth knowing before retuning the pose:
 

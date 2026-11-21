@@ -83,6 +83,7 @@ enum PropTab {
     Features,
     Inspector,
     Bones,
+    StandIn,
     Hold,
     Problems,
 }
@@ -103,8 +104,6 @@ pub struct PropPanels {
     right_fit: DockState<PropTab>,
     bottom: DockState<PropTab>,
     workspace: Workspace,
-    /// The reference figure Model had before Fit stood a body up.
-    model_figure: Option<Class>,
     /// The class Fit last showed, restored on returning to Fit.
     fit_class: Option<Class>,
     menu_bar_height: f32,
@@ -117,11 +116,10 @@ impl Default for PropPanels {
     fn default() -> Self {
         Self {
             left: DockState::new(vec![PropTab::Features]),
-            right_model: DockState::new(vec![PropTab::Inspector, PropTab::Bones]),
+            right_model: DockState::new(vec![PropTab::Inspector, PropTab::Bones, PropTab::StandIn]),
             right_fit: DockState::new(vec![PropTab::Hold]),
             bottom: DockState::new(vec![PropTab::Problems]),
             workspace: Workspace::Model,
-            model_figure: None,
             fit_class: None,
             menu_bar_height: 0.0,
             left_width: 260.0,
@@ -132,24 +130,21 @@ impl Default for PropPanels {
 }
 
 impl PropPanels {
-    /// Fit always has a body; Model gets back the figure it had. Writes only
-    /// on a difference, since a changed `ScaleFigure` rebuilds the rig.
+    /// Fit always has a body; Model's comes from the prop's stand-in, written
+    /// each frame by [`panels`]. Writes only on a difference, since a changed
+    /// `ScaleFigure` rebuilds the rig.
     fn switch_to(&mut self, to: Workspace, figure: &mut ScaleFigure) {
         if self.workspace == to {
             return;
         }
-        let wanted = match to {
+        match to {
             Workspace::Fit => {
-                self.model_figure = figure.0;
-                Some(self.fit_class.or(figure.0).unwrap_or(Class::Mercenary))
+                let wanted = Some(self.fit_class.or(figure.0).unwrap_or(Class::Mercenary));
+                if figure.0 != wanted {
+                    figure.0 = wanted;
+                }
             }
-            Workspace::Model => {
-                self.fit_class = figure.0;
-                self.model_figure
-            }
-        };
-        if figure.0 != wanted {
-            figure.0 = wanted;
+            Workspace::Model => self.fit_class = figure.0,
         }
         self.workspace = to;
     }
@@ -197,6 +192,7 @@ impl<'a> TabViewer for PropTabs<'a> {
             PropTab::Features => "prop_features",
             PropTab::Inspector => "prop_inspector",
             PropTab::Bones => "prop_bones",
+            PropTab::StandIn => "prop_stand_in",
             PropTab::Hold => "prop_hold",
             PropTab::Problems => "prop_problems",
         })
@@ -207,6 +203,7 @@ impl<'a> TabViewer for PropTabs<'a> {
             PropTab::Features => get!("prop.panels.features").into(),
             PropTab::Inspector => get!("prop.panels.inspector").into(),
             PropTab::Bones => get!("prop.panels.bones").into(),
+            PropTab::StandIn => get!("prop.panels.stand_in").into(),
             PropTab::Hold => match self.editor.doc().archetype {
                 Archetype::Hat => get!("prop.panels.hat").into(),
                 _ => get!("prop.panels.hold").into(),
@@ -227,6 +224,7 @@ impl<'a> TabViewer for PropTabs<'a> {
                 None => inspector(ui, self.editor, self.build, self.plane, self.requests, self.tool),
             },
             PropTab::Bones => bones_ui(ui, self.editor, self.build),
+            PropTab::StandIn => stand_in_ui(ui, self.editor),
             PropTab::Hold => match self.editor.doc().archetype {
                 Archetype::Held => {
                     let front = self.build.bounds().map(front_of);
@@ -253,6 +251,11 @@ impl Plugin for PropUiPlugin {
                 panels.run_if(in_state(AppMode::Prop)),
             )
             .add_systems(Update, prop_shortcuts.run_if(in_state(AppMode::Prop)))
+            // Before the figure is stood up on entry, or another mode's choice stands a frame.
+            .add_systems(
+                OnEnter(AppMode::Prop),
+                figure_on_entry.before(crate::prop::view::PropSceneSystems::Build),
+            )
             // Left in, the animation editor would build the prop missing its
             // last features. `OnExit` runs before the next mode's `OnEnter`.
             .add_systems(OnExit(AppMode::Prop), |mut editor: ResMut<PropEditor>| {
@@ -278,6 +281,13 @@ struct Previews<'w> {
 
 /// Bundled to keep [`panels`] inside Bevy's parameter limit.
 #[derive(bevy::ecs::system::SystemParam)]
+struct Handles<'w> {
+    hold: ResMut<'w, HoldHandles>,
+    modeling: ResMut<'w, crate::prop::stand_in::Modeling>,
+}
+
+/// Bundled to keep [`panels`] inside Bevy's parameter limit.
+#[derive(bevy::ecs::system::SystemParam)]
 struct Picking<'w> {
     plane: ResMut<'w, PickedPlane>,
     tool: ResMut<'w, ActiveTool>,
@@ -291,7 +301,7 @@ fn panels(
     build: Res<PropBuild>,
     mut picking: Picking,
     mut figure: ResMut<ScaleFigure>,
-    mut handles: ResMut<HoldHandles>,
+    mut handles: Handles,
     mut previews: Previews,
     mut multicam: ResMut<MulticamState>,
     windows: Query<&Window, With<PrimaryWindow>>,
@@ -341,7 +351,6 @@ fn panels(
             egui::MenuBar::new().ui(ui, |ui| {
                 file_menu(ui, crate::common::file_menu::DOCUMENT, &mut tabs.requests.file);
                 edit_menu(ui, edit_availability(tabs.editor), &mut tabs.requests.edit);
-                view_menu(ui, workspace, tabs.figure);
                 // This system is gated on `AppMode::Prop`.
                 mode_menu(
                     ui,
@@ -486,8 +495,15 @@ fn panels(
     // Derived from the workspace every frame, never ticked.
     let fitting = layout.workspace == Workspace::Fit
         && matches!(editor.doc().archetype, Archetype::Held | Archetype::Hat);
-    if handles.0 != fitting {
-        handles.0 = fitting;
+    if handles.hold.0 != fitting {
+        handles.hold.0 = fitting;
+    }
+    let modeling = layout.workspace == Workspace::Model;
+    if handles.modeling.0 != modeling {
+        handles.modeling.0 = modeling;
+    }
+    if modeling {
+        figure_for_the_model(&editor, &mut figure);
     }
 
     if let Some(selected) = requests.frame {
@@ -2381,16 +2397,69 @@ fn hat_fit(ui: &mut Ui, editor: &mut PropEditor, figure: ScaleFigure) {
     }
 }
 
-/// Fit does not offer "nobody".
-fn view_menu(ui: &mut Ui, workspace: Workspace, figure: &mut ScaleFigure) {
-    ui.menu_button(get!("prop.menu.view"), |ui| {
-        ui.label(egui::RichText::new(get!("prop.scene.figure")).weak());
-        if workspace == Workspace::Model {
-            ui.selectable_value(&mut figure.0, None, get!("prop.scene.no_figure"));
+/// Written only on a difference: a changed `ScaleFigure` rebuilds the rig.
+fn figure_for_the_model(editor: &PropEditor, figure: &mut ResMut<ScaleFigure>) {
+    let wanted = crate::prop::stand_in::model_figure(editor.doc());
+    if figure.0 != wanted {
+        figure.0 = wanted;
+    }
+}
+
+fn figure_on_entry(layout: Res<PropPanels>, editor: Res<PropEditor>, mut figure: ResMut<ScaleFigure>) {
+    if layout.workspace == Workspace::Model {
+        figure_for_the_model(&editor, &mut figure);
+    }
+}
+
+/// Turning it off keeps the class and the place, so turning it back on puts it where it was.
+fn stand_in_ui(ui: &mut Ui, editor: &mut PropEditor) {
+    use crate::prop::stand_in::StandIn;
+    let placed = editor.doc().archetype.is_placed();
+    let saved = editor.doc().stand_in;
+    let mut edited = saved.unwrap_or(StandIn { shown: false, ..StandIn::beside(placed) });
+
+    egui::ScrollArea::vertical().show(ui, |ui| {
+        let mut shown = edited.shown;
+        if ui.checkbox(&mut shown, get!("prop.stand_in.shown")).changed() {
+            editor.edit(|doc| doc.stand_in = Some(StandIn { shown, ..edited }));
+            edited.shown = shown;
         }
-        for class in Class::iter() {
-            ui.selectable_value(&mut figure.0, Some(class), class.name());
-        }
+        ui.add_enabled_ui(edited.shown, |ui| {
+            let mut class = edited.class;
+            ui.horizontal(|ui| {
+                ui.label(get!("prop.stand_in.class"));
+                egui::ComboBox::from_id_salt("prop_stand_in_class").selected_text(class.name()).show_ui(ui, |ui| {
+                    for candidate in Class::iter() {
+                        ui.selectable_value(&mut class, candidate, candidate.name());
+                    }
+                });
+            });
+            if class != edited.class {
+                editor.edit(|doc| doc.stand_in = Some(StandIn { class, ..edited }));
+                edited.class = class;
+            }
+
+            // A held or worn prop's figure stands where the hold or the hat puts it.
+            if crate::prop::stand_in::figure_holds(editor.doc().archetype) {
+                return;
+            }
+            let mut moved = edited;
+            let mut degrees = moved.yaw.to_degrees();
+            let mut changed = vec3_ui(ui, get!("prop.stand_in.feet"), &mut moved.at, 0.01, "m");
+            if drag(ui, get!("prop.stand_in.turn"), &mut degrees, 1.0, "°") {
+                moved.yaw = degrees.to_radians();
+                changed = true;
+            }
+            if changed {
+                editor.begin_gesture();
+                editor.doc_mut().stand_in = Some(moved);
+            }
+
+            if ui.button(get!("prop.stand_in.beside")).clicked() {
+                let StandIn { at, yaw, .. } = StandIn::beside(placed);
+                editor.edit(|doc| doc.stand_in = Some(StandIn { at, yaw, ..edited }));
+            }
+        });
     });
 }
 
@@ -3177,8 +3246,8 @@ pub(crate) fn handle_files(
 mod tests {
     use super::*;
 
-    /// Fails if Fit can show nobody, if Model does not get its figure back, or
-    /// if Fit forgets its class across a trip to Model.
+    /// Fails if Fit can show nobody, or if Fit forgets its class across a trip
+    /// to Model.
     #[test]
     fn workspaces_hand_the_figure_back() {
         let mut layout = PropPanels::default();
@@ -3191,9 +3260,31 @@ mod tests {
         let fitted = figure.0;
 
         layout.switch_to(Workspace::Model, &mut figure);
-        assert_eq!(figure.0, None, "Model gets its own choice back");
 
         layout.switch_to(Workspace::Fit, &mut figure);
         assert_eq!(figure.0, fitted, "Fit remembers who it was fitting");
+    }
+
+    /// Fails if Model's figure does not follow the prop's stand-in on entry, so another mode's
+    /// choice would stand there.
+    #[test]
+    fn model_shows_the_stand_in_as_its_figure() {
+        use bevy::ecs::system::RunSystemOnce;
+        use crate::prop::stand_in::StandIn;
+        let mut doc = PropDoc::new("prop.untitled");
+        doc.stand_in = Some(StandIn { class: Class::Heavy, ..StandIn::beside(false) });
+        let mut editor = PropEditor::default();
+        editor.open(doc, None);
+
+        let mut world = World::new();
+        world.insert_resource(PropPanels::default());
+        world.insert_resource(editor);
+        world.insert_resource(ScaleFigure(Some(Class::Raptor)));
+        world.run_system_once(figure_on_entry).unwrap();
+        assert_eq!(world.resource::<ScaleFigure>().0, Some(Class::Heavy));
+
+        world.resource_mut::<PropEditor>().edit(|doc| doc.archetype = Archetype::Obstacle);
+        world.run_system_once(figure_on_entry).unwrap();
+        assert_eq!(world.resource::<ScaleFigure>().0, None, "a placed prop's body is the free stand-in");
     }
 }
