@@ -1211,7 +1211,6 @@ file_exists = "{ file } already exists."
 [prop.menu]
 frame = "Frame"
 frame_selected = "Frame selected"
-view = "View"
 
 [prop.workspace]
 model = "Model"
@@ -1225,6 +1224,7 @@ scene = "Scene"
 hold = "Hold"
 hat = "Hat"
 bones = "Bones"
+stand_in = "Stand-in"
 problems = "Problems"
 problems_count = "Problems ({ count })"
 
@@ -1259,6 +1259,13 @@ depth = "Depth"
 [prop.scene]
 figure = "Reference figure"
 no_figure = "None"
+
+[prop.stand_in]
+shown = "Show a body for scale"
+class = "Class"
+feet = "Feet at"
+turn = "Turn"
+beside = "Put beside the prop"
 
 [prop.names]
 top_hat = "Top Hat"

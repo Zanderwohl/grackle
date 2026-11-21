@@ -238,6 +238,9 @@ pub struct PropDoc {
     /// A key in `taunts.toml`: the taunt a weapon of this model offers first while held.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub taunt: Option<String>,
+    /// A body for scale in the Model workspace; never part of the prop.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stand_in: Option<crate::prop::stand_in::StandIn>,
     /// Stored rather than derived from the highest id in use, so deleting the
     /// last feature cannot make the next one reuse its id.
     #[serde(default)]
@@ -269,6 +272,7 @@ impl PropDoc {
             pickup: PickupSpec::default(),
             hat: HatSpec::default(),
             taunt: None,
+            stand_in: None,
             next_id: 0,
             bones: vec![],
             animations: ClipSet::default(),
