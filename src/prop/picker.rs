@@ -124,3 +124,10 @@ pub(super) fn publish_prop_choices(
     let Some(ctx) = previews.ctx() else { return };
     PROPS.publish(ctx, choices);
 }
+
+pub(super) fn show_prop_library(mut previews: PropPreviews, mut library: ResMut<crate::common::library::Library>) {
+    let names: Vec<String> = library.entries().iter().map(|entry| entry.name.clone()).collect();
+    previews.want_pictures(names.iter().map(String::as_str));
+    let Some(ctx) = previews.ctx().cloned() else { return };
+    library.show(&ctx, &mut |entry| previews.picture(&entry.name), &|_| None);
+}

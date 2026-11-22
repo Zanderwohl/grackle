@@ -19,6 +19,7 @@ use crate::common::skeleton::state::AnimationState;
 use crate::common::skeleton::Interpolation;
 use strum::IntoEnumIterator;
 use crate::common::app_mode::{mode_menu, AppMode};
+use crate::common::list_row::{begin_rename, confirm_delete, renamable_row, row, RowEvent};
 use crate::common::assets::Assets;
 use crate::common::file_menu::{file_menu, DiscardQuestion, DocumentKind, FileAction};
 use crate::common::recent_files::RecentFiles;
@@ -56,6 +57,7 @@ pub struct AnimPanels {
     right_width: f32,
     timeline_height: f32,
     discard: DiscardQuestion,
+    deleting: Option<Doomed>,
     /// Whether egui is actively using the pointer (a menu open, a widget mid-drag), not merely over a
     /// panel. The strip is a panel's rect, so "over egui" is true across all of it.
     pub egui_wants_pointer: bool,
@@ -72,6 +74,7 @@ impl Default for AnimPanels {
             ]),
             menu_bar_height: 0.0,
             discard: DiscardQuestion::default(),
+            deleting: None,
             left_width: 220.0,
             right_width: 300.0,
             timeline_height: DEFAULT_STRIP,
@@ -132,6 +135,34 @@ struct AnimTabs<'a> {
     reselect: Option<KeyAt>,
     /// Cleared outside the drawing closures, which hold the selection by shared reference.
     clear_keys: bool,
+    /// Asked about outside the dock, once the tabs are dropped.
+    deleting: Option<Doomed>,
+}
+
+/// What a listing's Delete asks about.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Doomed {
+    /// An entry in the open `.gpp`.
+    PropClip(String),
+    /// A clip file, moved to the trash when the body clips are saved.
+    BodyClip(String),
+    /// An entry in `taunts.toml`.
+    Taunt(String),
+}
+
+impl Doomed {
+    fn name(&self) -> &str {
+        match self {
+            Doomed::PropClip(name) | Doomed::BodyClip(name) | Doomed::Taunt(name) => name,
+        }
+    }
+}
+
+fn taken(typed: &str, name: &str, siblings: &[String]) -> Option<String> {
+    if typed.is_empty() {
+        return Some(get!("library.new.no_name"));
+    }
+    (typed != name && siblings.iter().any(|had| had == typed)).then(|| get!("anim.library.taken", "name", typed))
 }
 
 impl TabViewer for AnimTabs<'_> {
@@ -268,59 +299,51 @@ impl AnimTabs<'_> {
             if missing {
                 label = label.color(PROBLEM_COLOR);
             }
-            let row = ui.selectable_label(picked, label);
-            if row.clicked() {
-                self.pick_taunt(key);
-            }
-            row.context_menu(|ui| {
-                let id = Id::new(("anim_rename_taunt", key));
-                let mut typed = ui
-                    .data_mut(|data| data.get_temp::<String>(id))
-                    .unwrap_or_else(|| key.clone());
-                let field = ui.text_edit_singleline(&mut typed);
-                let typed_key = typed.trim().to_string();
-                let usable = !typed_key.is_empty() && typed_key != *key && !keys.contains(&typed_key);
-                ui.data_mut(|data| data.insert_temp(id, typed.clone()));
-                let entered = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                if ui
-                    .add_enabled(usable, egui::Button::new(get!("anim.library.rename")))
-                    .clicked()
-                    || (entered && usable)
-                {
+            let id = Id::new(("anim_taunt_row", key));
+            let problem = |typed: &str| taken(typed, key, &keys);
+            match renamable_row(ui, id, picked, label, None, problem) {
+                RowEvent::Row(row) => {
+                    if row.clicked() {
+                        self.pick_taunt(key);
+                    }
+                    row.context_menu(|ui| {
+                        if ui.button(get!("anim.library.rename")).clicked() {
+                            begin_rename(ui.ctx(), id, key);
+                            ui.close_kind(UiKind::Menu);
+                        }
+                        if ui.button(get!("anim.library.duplicate")).clicked() {
+                            let copy = unused_name(&format!("{key}_"), &keys);
+                            let original = key.clone();
+                            self.body.edit_taunts(|taunts| {
+                                if let Some(at) = taunts.iter().position(|(named, _)| *named == original) {
+                                    let spec = taunts[at].1.clone();
+                                    taunts.insert(at + 1, (copy.clone(), spec));
+                                }
+                            });
+                            self.pick_taunt(&copy);
+                            begin_rename(ui.ctx(), Id::new(("anim_taunt_row", &copy)), &copy);
+                            ui.close_kind(UiKind::Menu);
+                        }
+                        ui.separator();
+                        if ui.button(get!("anim.library.delete")).clicked() {
+                            self.deleting = Some(Doomed::Taunt(key.clone()));
+                            ui.close_kind(UiKind::Menu);
+                        }
+                    });
+                }
+                RowEvent::Renamed(typed) if typed != *key => {
                     let from = key.clone();
                     self.body.edit_taunts(|taunts| {
                         if let Some((named, _)) = taunts.iter_mut().find(|(named, _)| *named == from) {
-                            *named = typed_key.clone();
+                            *named = typed.clone();
                         }
                     });
                     if self.anim.taunt.as_deref() == Some(key.as_str()) {
-                        self.anim.taunt = Some(typed_key.clone());
+                        self.anim.taunt = Some(typed);
                     }
-                    ui.data_mut(|data| data.remove::<String>(id));
-                    ui.close_kind(UiKind::Menu);
                 }
-                ui.separator();
-                if ui.button(get!("anim.library.duplicate")).clicked() {
-                    let copy = unused_name(&format!("{key}_"), &keys);
-                    let original = key.clone();
-                    self.body.edit_taunts(|taunts| {
-                        if let Some(at) = taunts.iter().position(|(named, _)| *named == original) {
-                            let spec = taunts[at].1.clone();
-                            taunts.insert(at + 1, (copy.clone(), spec));
-                        }
-                    });
-                    self.pick_taunt(&copy);
-                    ui.close_kind(UiKind::Menu);
-                }
-                if ui.button(get!("anim.library.delete")).clicked() {
-                    let doomed = key.clone();
-                    self.body.edit_taunts(|taunts| taunts.retain(|(named, _)| *named != doomed));
-                    if self.anim.taunt.as_deref() == Some(key.as_str()) {
-                        self.anim.taunt = None;
-                    }
-                    ui.close_kind(UiKind::Menu);
-                }
-            });
+                RowEvent::Renamed(_) | RowEvent::Renaming | RowEvent::PutBack => {}
+            }
         }
         if ui.small_button("+").on_hover_text(get!("anim.library.new_taunt")).clicked() {
             let key = unused_name("taunt", &keys);
@@ -354,43 +377,39 @@ impl AnimTabs<'_> {
                 .map_or_else(|| name.to_string(), |state| state.name()),
             ClipSource::Prop => name.to_string(),
         };
-        let row = ui.selectable_label(picked, label);
+        let id = Id::new(("anim_clip_row", source == ClipSource::Prop, name));
+        let row = match renamable_row(ui, id, picked, label, None, |typed| taken(typed, name, siblings)) {
+            RowEvent::Row(row) => row,
+            RowEvent::Renamed(typed) => {
+                if typed != name {
+                    self.rename_prop_clip(name, &typed);
+                }
+                return;
+            }
+            RowEvent::Renaming | RowEvent::PutBack => return,
+        };
         if row.clicked() && !picked {
             self.pick(source, name);
         }
         row.context_menu(|ui| {
             if source == ClipSource::Prop {
-                let id = Id::new(("anim_rename", name));
-                let mut typed = ui
-                    .data_mut(|data| data.get_temp::<String>(id))
-                    .unwrap_or_else(|| name.to_string());
-                let field = ui.text_edit_singleline(&mut typed);
-                let taken = typed != name && siblings.iter().any(|had| *had == typed);
-                let usable = !typed.trim().is_empty() && !taken && typed != name;
-                ui.data_mut(|data| data.insert_temp(id, typed.clone()));
-                let entered = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                if ui
-                    .add_enabled(usable, egui::Button::new(get!("anim.library.rename")))
-                    .clicked()
-                    || (entered && usable)
-                {
-                    self.rename_prop_clip(name, typed.trim());
-                    ui.data_mut(|data| data.remove::<String>(id));
+                if ui.button(get!("anim.library.rename")).clicked() {
+                    begin_rename(ui.ctx(), id, name);
                     ui.close_kind(UiKind::Menu);
                 }
-                ui.separator();
                 if ui.button(get!("anim.library.duplicate")).clicked() {
                     let copy = unused_name(&format!("{name}_"), siblings);
                     if let Some(clip) = self.editor.doc().animations.get(name).cloned() {
                         self.editor.begin_gesture();
                         self.editor.doc_mut().animations.clips.insert(copy.clone(), clip);
                         self.pick(ClipSource::Prop, &copy);
+                        begin_rename(ui.ctx(), Id::new(("anim_clip_row", true, &copy)), &copy);
                     }
                     ui.close_kind(UiKind::Menu);
                 }
+                ui.separator();
                 if ui.button(get!("anim.library.delete")).clicked() {
-                    self.editor.begin_gesture();
-                    self.editor.doc_mut().animations.clips.remove(name);
+                    self.deleting = Some(Doomed::PropClip(name.to_string()));
                     ui.close_kind(UiKind::Menu);
                 }
             } else if BodyClips::state_of(name).is_none() {
@@ -401,6 +420,11 @@ impl AnimTabs<'_> {
                         self.body.edit(|clips| clips.insert(copy.clone(), clip.into()));
                         self.pick(ClipSource::Body, &copy);
                     }
+                    ui.close_kind(UiKind::Menu);
+                }
+                ui.separator();
+                if ui.button(get!("anim.library.delete")).clicked() {
+                    self.deleting = Some(Doomed::BodyClip(name.to_string()));
                     ui.close_kind(UiKind::Menu);
                 }
             } else {
@@ -455,7 +479,7 @@ impl AnimTabs<'_> {
     }
 
     fn blend_rows(&mut self, ui: &mut Ui, name: &str, state: AnimationState, headings: &[f32]) {
-        let header = ui.add(egui::Label::new(state.name()).selectable(false).sense(egui::Sense::click()));
+        let header = row(ui, false, state.name(), None);
         header.context_menu(|ui| {
             if ui.button(get!("anim.library.revert")).clicked() {
                 let name = name.to_string();
@@ -474,11 +498,11 @@ impl AnimTabs<'_> {
                     "heading",
                     format!("{:+.0}°", heading.to_degrees())
                 );
-                let row = ui.selectable_label(picked, label);
-                if row.clicked() && !picked {
+                let variant = row(ui, picked, label, None);
+                if variant.clicked() && !picked {
                     self.pick(ClipSource::Body, &address);
                 }
-                row.context_menu(|ui| {
+                variant.context_menu(|ui| {
                     if ui.button(get!("anim.library.duplicate")).clicked() {
                         let mut landed = None;
                         self.body.edit(|clips| {
@@ -1672,6 +1696,7 @@ fn panels(
         reselect: None,
         file: None,
         edit: None,
+        deleting: layout.deleting.take(),
     };
 
     layout.menu_bar_height = egui::Panel::top("anim_menu_bar")
@@ -1778,7 +1803,24 @@ fn panels(
     let reselect = tabs.reselect;
     let asked = tabs.file.take();
     let edit = tabs.edit;
+    layout.deleting = tabs.deleting.take();
     drop(tabs);
+    if let Some(doomed) = layout.deleting.clone() {
+        let to_trash = matches!(doomed, Doomed::BodyClip(_));
+        let more = |ui: &mut Ui| {
+            if to_trash {
+                ui.weak(get!("library.delete.to_trash_on_save"));
+            }
+        };
+        match confirm_delete(&ctx, Id::new("anim_confirm_delete"), doomed.name(), more) {
+            Some(true) => {
+                layout.deleting = None;
+                delete(doomed, &mut anim, &mut editor, &mut body);
+            }
+            Some(false) => layout.deleting = None,
+            None => {}
+        }
+    }
     if clear_keys {
         selection.0.clear();
     }
@@ -1827,6 +1869,32 @@ fn panels(
     }
 }
 
+/// One undo step in the document it is in.
+fn delete(doomed: Doomed, anim: &mut AnimEditor, editor: &mut PropEditor, body: &mut BodyClips) {
+    let source = match &doomed {
+        Doomed::PropClip(name) => {
+            editor.begin_gesture();
+            editor.doc_mut().animations.clips.remove(name);
+            ClipSource::Prop
+        }
+        Doomed::BodyClip(name) => {
+            body.edit(|clips| clips.remove(name));
+            ClipSource::Body
+        }
+        Doomed::Taunt(key) => {
+            body.edit_taunts(|taunts| taunts.retain(|(named, _)| named != key));
+            if anim.taunt.as_deref() == Some(key.as_str()) {
+                anim.taunt = None;
+            }
+            return;
+        }
+    };
+    if anim.source == source && anim.selected.as_deref() == Some(doomed.name()) {
+        anim.selected = None;
+        anim.track = None;
+    }
+}
+
 /// Answer the File menu for whichever document the source edits. A prop's clips live in its `.gpp`,
 /// so every action is `prop::ui::handle_files`. The body clips are a pack: Open re-reads the packs,
 /// Save As asks which pack, and New is an empty set (every state on its built-in pose, one undo
@@ -1871,7 +1939,14 @@ fn handle_files(
                 }
                 Some(FileAction::Save) => save_the_body_clips(body, &BodyClips::default_pack()),
                 Some(FileAction::SaveAs) => files.body.ask_where_to_save(),
-                Some(FileAction::OpenRecent(_) | FileAction::Demo(_) | FileAction::Quit) | None => {}
+                Some(
+                    FileAction::OpenPath(_)
+                    | FileAction::Demo(_)
+                    | FileAction::Quit
+                    | FileAction::Library
+                    | FileAction::Create(_),
+                )
+                | None => {}
             }
         }
     }

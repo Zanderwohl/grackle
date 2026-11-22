@@ -12,6 +12,7 @@ use bevy_egui::egui;
 use bevy_egui::egui::UiKind;
 
 use crate::common::keybind::{self, Action};
+use crate::common::library::NewItem;
 pub use crate::common::recent_files::DocumentKind;
 use crate::common::shortcuts::EditorChords;
 use crate::get;
@@ -23,7 +24,12 @@ pub enum FileAction {
     Open,
     Save,
     SaveAs,
-    OpenRecent(PathBuf),
+    /// Up for kinds with [`DocumentKind::has_library`].
+    Library,
+    /// A file chosen from the Recent submenu or the Library.
+    OpenPath(PathBuf),
+    /// Answered from the Library's New dialog: made at the item's path and opened.
+    Create(NewItem),
     /// A shipped file, opened untitled so a save asks where rather than writing over it.
     Demo(Demo),
     Quit,
@@ -90,6 +96,8 @@ const MENU: &[Entry] = &[
     Entry::Action(FileAction::Save),
     Entry::Action(FileAction::SaveAs),
     Entry::Gap,
+    Entry::Action(FileAction::Library),
+    Entry::Gap,
     Entry::Recent,
     Entry::Demos,
     Entry::Gap,
@@ -103,7 +111,9 @@ impl FileAction {
             FileAction::Open => "file.menu.open",
             FileAction::Save => "file.menu.save",
             FileAction::SaveAs => "file.menu.save_as",
-            FileAction::OpenRecent(_) => "file.menu.recent",
+            FileAction::Library => "file.menu.library",
+            FileAction::OpenPath(_) => "file.menu.recent",
+            FileAction::Create(_) => "file.menu.new",
             FileAction::Demo(demo) => demo.name_key,
             FileAction::Quit => "file.menu.quit",
         }
@@ -132,13 +142,19 @@ impl FileAction {
             FileAction::New => Some(Action::New),
             FileAction::Save => Some(Action::Save),
             FileAction::SaveAs => Some(Action::SaveAs),
-            FileAction::Open | FileAction::OpenRecent(_) | FileAction::Demo(_) | FileAction::Quit => None,
+            FileAction::Open
+            | FileAction::Library
+            | FileAction::OpenPath(_)
+            | FileAction::Create(_)
+            | FileAction::Demo(_)
+            | FileAction::Quit => None,
         }
     }
 
     pub fn opens(&self) -> Option<PathBuf> {
         match self {
-            FileAction::OpenRecent(path) => Some(path.clone()),
+            FileAction::OpenPath(path) => Some(path.clone()),
+            FileAction::Create(item) => Some(item.path.clone()),
             FileAction::Demo(demo) => Some(PathBuf::from(demo.path)),
             _ => None,
         }
@@ -154,6 +170,9 @@ pub fn file_menu(ui: &mut egui::Ui, kind: DocumentKind, recent: &[PathBuf], requ
     ui.menu_button(get!("file.menu.title"), |ui| {
         for line in MENU {
             match line {
+                Entry::Action(FileAction::Library) => {
+                    ui.add_enabled_ui(kind.has_library(), |ui| entry(ui, FileAction::Library, request));
+                }
                 Entry::Action(action) => entry(ui, action.clone(), request),
                 Entry::Gap => {
                     ui.separator();
@@ -168,7 +187,7 @@ pub fn file_menu(ui: &mut egui::Ui, kind: DocumentKind, recent: &[PathBuf], requ
                                 let button = ui.button(name).on_hover_text(path.display().to_string());
                                 if button.clicked() {
                                     ui.close_kind(UiKind::Menu);
-                                    *request = Some(FileAction::OpenRecent(path.clone()));
+                                    *request = Some(FileAction::OpenPath(path.clone()));
                                 }
                             }
                         });
@@ -278,9 +297,12 @@ mod tests {
             | FileAction::Open
             | FileAction::Save
             | FileAction::SaveAs
-            | FileAction::OpenRecent(_)
+            | FileAction::Library
+            | FileAction::OpenPath(_)
             | FileAction::Demo(_)
             | FileAction::Quit => {}
+            // Drawn by the Library, not the menu.
+            FileAction::Create(_) => {}
         }
     }
 
@@ -292,7 +314,8 @@ mod tests {
             FileAction::Open,
             FileAction::Save,
             FileAction::SaveAs,
-            FileAction::OpenRecent(PathBuf::new()),
+            FileAction::Library,
+            FileAction::OpenPath(PathBuf::new()),
             FileAction::Demo(DEMO_SCENE),
             FileAction::Quit,
         ];
@@ -301,9 +324,14 @@ mod tests {
             let drawn = MENU
                 .iter()
                 .filter(|line| match (action, line) {
-                    (FileAction::OpenRecent(_), Entry::Recent) | (FileAction::Demo(_), Entry::Demos) => true,
+                    (FileAction::OpenPath(_), Entry::Recent) | (FileAction::Demo(_), Entry::Demos) => true,
                     (
-                        FileAction::New | FileAction::Open | FileAction::Save | FileAction::SaveAs | FileAction::Quit,
+                        FileAction::New
+                        | FileAction::Open
+                        | FileAction::Save
+                        | FileAction::SaveAs
+                        | FileAction::Library
+                        | FileAction::Quit,
                         Entry::Action(entry),
                     ) => entry == action,
                     _ => false,
@@ -388,7 +416,7 @@ mod tests {
     #[test]
     fn only_an_open_over_unsaved_edits_is_held() {
         let mut question = DiscardQuestion::default();
-        let recent = FileAction::OpenRecent(PathBuf::from("a.gpp"));
+        let recent = FileAction::OpenPath(PathBuf::from("a.gpp"));
         assert_eq!(question.guard(Some(recent.clone()), false), Some(recent.clone()));
         assert_eq!(question.guard(Some(FileAction::Save), true), Some(FileAction::Save));
         assert_eq!(question.held, None);

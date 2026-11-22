@@ -1,5 +1,5 @@
 //! Choosing something by name from a pack: a button naming it, which opens a searchable grid of
-//! previews. Materials, props and weapons are each a [`PickerKind`].
+//! previews ([`preview_grid`]). Materials, props and weapons are each a [`PickerKind`].
 //!
 //! A feature's `editor_ui` is handed egui and nothing else, so a system publishes each kind's
 //! choices into the egui context's memory ([`PickerKind::publish`]) and [`picker_button`] reads
@@ -11,10 +11,10 @@ use std::collections::BTreeSet;
 use bevy_egui::egui;
 
 use crate::common::assets::default_packs;
+use crate::common::preview_grid::{self, Face, Tile};
 use crate::get;
 
 const VISIBLE_ROWS: f32 = 4.5;
-const PLACEHOLDER_GRAY: egui::Color32 = egui::Color32::from_gray(90);
 /// So the button keeps its width whatever it names.
 const BUTTON_CHARS: f32 = 20.0;
 
@@ -72,7 +72,7 @@ pub struct Choice {
     pub badge: Option<String>,
     /// `None` is the label.
     pub tooltip: Option<String>,
-    /// Drawn white on gray when there is no preview; `None` shows the label instead.
+    /// Drawn white on gray when there is no preview; `None` is the "[No preview]" stand-in.
     pub placeholder: Option<String>,
 }
 
@@ -179,47 +179,24 @@ fn picker(
 
 /// `Some` when clicked: what should now be named.
 fn tile_ui(ui: &mut egui::Ui, kind: PickerKind, choice: Option<&Choice>, current: Option<&str>, plain: &str) -> Option<Option<String>> {
-    if kind.captioned {
-        return ui
-            .vertical(|ui| {
-                ui.set_width(kind.tile[0]);
-                ui.add(egui::Label::new(choice.map_or(plain, |choice| choice.label.as_str())).truncate());
-                tile_button(ui, kind, choice, current, plain)
-            })
-            .inner;
-    }
-    tile_button(ui, kind, choice, current, plain)
-}
-
-fn tile_button(ui: &mut egui::Ui, kind: PickerKind, choice: Option<&Choice>, current: Option<&str>, plain: &str) -> Option<Option<String>> {
-    let size = kind.tile_size();
-    let selected = choice.map(|choice| choice.name.as_str()) == current;
-    let inside = size - ui.spacing().button_padding * 2.0;
-    let placeholder = choice.filter(|choice| choice.preview.is_none()).and_then(|choice| choice.placeholder.as_deref());
-    let button = match (choice.and_then(|choice| choice.preview), placeholder) {
-        (Some(texture), _) => egui::Button::image(egui::Image::new((texture, inside))),
-        (None, Some(_)) => egui::Button::new(""),
-        (None, None) => egui::Button::new(choice.map_or(plain, |choice| choice.label.as_str())).truncate(),
+    let label = choice.map_or(plain, |choice| choice.label.as_str());
+    let face = match choice {
+        None => Face::Text(plain),
+        Some(Choice { preview: Some(texture), .. }) => Face::Picture(*texture),
+        Some(Choice { placeholder: Some(text), .. }) => Face::Text(text),
+        Some(_) => Face::NoPreview,
     };
-    let response = ui.add_sized(size, button.selected(selected));
-    if let Some(text) = placeholder {
-        let rect = egui::Rect::from_center_size(response.rect.center(), inside);
-        let painter = ui.painter_at(rect);
-        painter.rect_filled(rect, 2.0, PLACEHOLDER_GRAY);
-        painter.text(rect.center(), egui::Align2::CENTER_CENTER, text, egui::FontId::proportional(16.0), egui::Color32::WHITE);
-    }
-    if let Some(badge) = choice.and_then(|choice| choice.badge.clone()) {
-        let painter = ui.painter_at(response.rect);
-        let text = painter.layout_no_wrap(badge, egui::FontId::proportional(10.0), egui::Color32::WHITE);
-        let rect = egui::Rect::from_min_size(response.rect.left_bottom() - egui::vec2(0.0, text.size().y + 2.0), text.size() + egui::vec2(4.0, 2.0));
-        painter.rect_filled(rect, 2.0, egui::Color32::from_black_alpha(180));
-        painter.galley(rect.min + egui::vec2(2.0, 1.0), text, egui::Color32::WHITE);
-    }
-    let tooltip = match choice {
-        Some(choice) => choice.tooltip.clone().unwrap_or_else(|| choice.label.clone()),
-        None => plain.to_owned(),
+    let tooltip = choice.map_or(plain, |choice| choice.tooltip.as_deref().unwrap_or(&choice.label));
+    let tile = Tile {
+        label,
+        face,
+        badge: choice.and_then(|choice| choice.badge.as_deref()),
+        tooltip,
+        selected: choice.map(|choice| choice.name.as_str()) == current,
     };
-    response.on_hover_text(tooltip).clicked().then(|| choice.map(|choice| choice.name.clone()))
+    preview_grid::tile(ui, kind.tile_size(), kind.captioned, &tile)
+        .clicked()
+        .then(|| choice.map(|choice| choice.name.clone()))
 }
 
 /// Authoring side only: read from disk, as a pack offers no listing of its own.

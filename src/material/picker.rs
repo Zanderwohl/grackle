@@ -126,6 +126,42 @@ pub(super) fn publish_choices(
     MATERIALS.publish(ctx, materials);
 }
 
+/// Bakes at most one material a frame.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn show_material_library(
+    mut contexts: EguiContexts,
+    mut library: ResMut<crate::common::library::Library>,
+    mut materials: ResMut<MaterialLibrary>,
+    mut baked: ResMut<BakedTextures>,
+    mut standard: ResMut<Assets<StandardMaterial>>,
+    packs: Res<PackAssets>,
+    device: BevyDevice,
+    // So a material baked again after a save frees the preview it had.
+    mut registered: Local<HashMap<String, AssetId<Image>>>,
+    // Baking waits on the GPU gate; see `gpu::submitting`.
+    _main_thread: bevy::ecs::system::NonSendMarker,
+) {
+    let names: Vec<String> = library.entries().iter().map(|entry| entry.name.clone()).collect();
+    if let Some(name) = names.iter().find(|name| !materials.has_looked_for(name)) {
+        materials.ensure(name, &packs, &device, &mut baked, &mut standard);
+    }
+    let pictures: HashMap<String, AssetId<Image>> =
+        names.iter().filter_map(|name| Some((name.clone(), materials.get(name)?.color_map()))).collect();
+    for (name, asset) in &pictures {
+        if let Some(old) = registered.insert(name.clone(), *asset)
+            && old != *asset
+        {
+            contexts.remove_image(old);
+        }
+    }
+    let pictures: HashMap<String, egui::TextureId> = pictures
+        .into_iter()
+        .map(|(name, asset)| (name, contexts.add_image(EguiTextureHandle::Weak(asset))))
+        .collect();
+    let Ok(ctx) = contexts.ctx_mut() else { return };
+    library.show(ctx, &mut |entry| pictures.get(&entry.name).copied(), &|_| None);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

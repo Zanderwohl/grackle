@@ -96,6 +96,19 @@ impl RecentFiles {
 
     pub fn saved(&mut self, kind: DocumentKind, path: &Path) {
         self.lists.push(kind, path);
+        self.write();
+    }
+
+    /// Keeps a renamed file in its place on the list. Asked after the rename, so `from` is gone
+    /// and compared as spelled.
+    pub fn renamed(&mut self, kind: DocumentKind, from: &Path, to: &Path) {
+        let from = tidy(from);
+        let Some(entry) = self.lists.of_mut(kind).iter_mut().find(|entry| **entry == from) else { return };
+        *entry = tidy(to);
+        self.write();
+    }
+
+    fn write(&self) {
         let Some(file) = &self.file else { return };
         let written = toml::to_string_pretty(&self.lists)
             .map_err(|e| e.to_string())

@@ -110,7 +110,7 @@ pub fn delete_weapon(pack: &Path, key: &str, expected: &WeaponEntry) -> Result<(
         return Ok(());
     }
     check_unchanged(&path, &text, Some(expected))?;
-    std::fs::remove_file(&path).map_err(|e| format!("{}: {e}", path.display()))
+    crate::common::trash::trash(crate::common::recent_files::DocumentKind::Weapon, &path).map(|_| ())
 }
 
 /// Renames in `permitted` lists and `default`s only, in order. `None` when nothing in it names one.

@@ -2,7 +2,7 @@ use std::fmt::Display;
 use strum_macros::EnumIter;
 use crate::get;
 
-#[derive(Copy, Clone, Debug, PartialEq, PartialOrd, EnumIter)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, EnumIter)]
 pub enum GameMode {
     Arena,
     CTF,

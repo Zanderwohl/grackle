@@ -15,8 +15,10 @@ use crate::common::lang::LangFile;
 use crate::common::app_mode::{mode_menu, AppMode};
 use crate::common::edit_menu::{edit_menu, EditAction, EditAvailability};
 use crate::common::file_menu::{dialog_directory, file_menu, DocumentKind, FileAction};
+use crate::common::library::{pack_name, NewDialog, NewOutcome};
+use crate::common::list_row::{begin_rename, renamable_row, RowEvent};
 use crate::common::recent_files::RecentFiles;
-use crate::common::lang::{default_packs, FALLBACK_LANG};
+use crate::common::lang::{default_packs, FALLBACK_LANG, LANG_DIR};
 use crate::common::net::NetRole;
 use crate::common::shortcuts::chords;
 use crate::get;
@@ -147,6 +149,7 @@ fn count_problems(node: &Node, marks: &HashMap<KeyPath, Marks>, into: &mut HashM
 struct LangUi {
     files: Option<Vec<LangFile>>,
     dialog: Option<Dialog>,
+    new: Option<NewDialog>,
     filter: String,
     problems_only: bool,
     tree: Tree,
@@ -168,6 +171,8 @@ struct Requests {
     edit: Option<EditAction>,
     mode: Option<AppMode>,
     open: Option<PathBuf>,
+    /// A file and the code it is renamed to.
+    rename: Option<(PathBuf, String)>,
 }
 
 pub struct LangUiPlugin;
@@ -237,6 +242,9 @@ fn panels(
     });
 
     dialogs(&ctx, &mut editor, &mut state, &mut requests);
+    if let Some((from, code)) = requests.rename.take() {
+        rename_file(&mut editor, &mut state, &mut recent, &from, &code);
+    }
 
     editor.checkpoint_when_idle(!ctx.egui_is_using_pointer() && !ctx.egui_wants_keyboard_input());
 
@@ -245,7 +253,7 @@ fn panels(
         next_mode.set(mode);
     }
     // Through the browser's path, so unsaved edits are asked about.
-    if let Some(FileAction::OpenRecent(path)) = &requests.file {
+    if let Some(FileAction::OpenPath(path)) = &requests.file {
         requests.open = Some(path.clone());
     }
     // The file already open is not reloaded: that would throw its edits away.
@@ -264,36 +272,51 @@ fn panels(
 }
 
 fn browser(ui: &mut Ui, editor: &LangEditor, state: &mut LangUi, requests: &mut Requests) {
+    if ui.button(get!("library.new.button")).clicked() {
+        state.new = Some(NewDialog::new(DocumentKind::Lang));
+    }
+    ui.separator();
     let open = editor.path.clone();
-    let files = state.files();
+    let files = state.files().to_vec();
     let mut dialog = None;
     egui::ScrollArea::vertical().show(ui, |ui| {
         let mut pack: Option<&Path> = None;
-        for file in files {
+        for file in &files {
             if pack != Some(file.pack.as_path()) {
                 pack = Some(file.pack.as_path());
                 ui.add_space(4.0);
-                ui.label(RichText::new(file.pack.display().to_string()).strong());
+                ui.label(RichText::new(pack_name(&file.pack)).strong());
             }
             let label = match &file.name {
                 Some(name) => format!("{}  {}", file.code, name),
                 None => file.code.clone(),
             };
-            let row = ui.selectable_label(open.as_ref() == Some(&file.path), label);
-            if row.clicked() {
-                requests.open = Some(file.path.clone());
+            let id = Id::new(("lang_row", &file.path));
+            let problem = |code: &str| rename_problem(&file.path, code);
+            match renamable_row(ui, id, open.as_ref() == Some(&file.path), label, None, problem) {
+                RowEvent::Row(row) => {
+                    if row.clicked() {
+                        requests.open = Some(file.path.clone());
+                    }
+                    row.context_menu(|ui| {
+                        if ui.button(get!("lang_editor.browser.rename")).clicked() {
+                            begin_rename(ui.ctx(), id, &file.code);
+                            ui.close();
+                        }
+                        if ui.button(get!("lang_editor.browser.duplicate")).clicked() {
+                            dialog = Some(duplicate_dialog(&file.path));
+                            ui.close();
+                        }
+                        ui.separator();
+                        if ui.button(get!("lang_editor.browser.delete")).clicked() {
+                            dialog = Some(Dialog::Delete { path: file.path.clone() });
+                            ui.close();
+                        }
+                    });
+                }
+                RowEvent::Renamed(code) if code != file.code => requests.rename = Some((file.path.clone(), code)),
+                RowEvent::Renamed(_) | RowEvent::Renaming | RowEvent::PutBack => {}
             }
-            row.context_menu(|ui| {
-                if ui.button(get!("lang_editor.browser.open")).clicked() {
-                    requests.open = Some(file.path.clone());
-                }
-                if ui.button(get!("lang_editor.browser.duplicate")).clicked() {
-                    dialog = Some(duplicate_dialog(&file.path));
-                }
-                if ui.button(get!("lang_editor.browser.delete")).clicked() {
-                    dialog = Some(Dialog::Delete { path: file.path.clone() });
-                }
-            });
         }
         if files.is_empty() {
             ui.weak(get!("lang_editor.browser.empty"));
@@ -301,6 +324,59 @@ fn browser(ui: &mut Ui, editor: &LangEditor, state: &mut LangUi, requests: &mut 
     });
     if dialog.is_some() {
         state.dialog = dialog;
+    }
+    if let Some(new) = state.new.as_mut() {
+        match new.show(ui.ctx(), &|_| None) {
+            NewOutcome::Asking => {}
+            NewOutcome::Canceled => state.new = None,
+            NewOutcome::Create(item) => {
+                // Empty: every key shows as missing against `en-US`, which is the list to fill in.
+                match item.make_folder().and_then(|()| std::fs::write(&item.path, "").map_err(|e| format!("{}: {e}", item.path.display()))) {
+                    Ok(()) => {
+                        info!("Made the lang file {}", item.path.display());
+                        state.rescan();
+                        requests.open = Some(item.path);
+                    }
+                    Err(e) => error!("Could not make the lang file: {e}"),
+                }
+                state.new = None;
+            }
+        }
+    }
+}
+
+fn rename_problem(path: &Path, code: &str) -> Option<String> {
+    // Every other language falls back to it, key by key.
+    let reference = code_of(path).as_deref() == Some(FALLBACK_LANG) && path.starts_with(LANG_DIR);
+    if reference && code != FALLBACK_LANG {
+        return Some(get!("lang_editor.error.rename_reference"));
+    }
+    if !super::doc::valid_segment(code) {
+        return Some(get!("lang_editor.error.bad_code"));
+    }
+    let to = path.with_file_name(format!("{code}.{FILE_EXTENSION}"));
+    (to != path && to.exists()).then(|| get!("lang_editor.error.file_exists", "file", to.display()))
+}
+
+fn rename_file(editor: &mut LangEditor, state: &mut LangUi, recent: &mut RecentFiles, from: &Path, code: &str) {
+    let to = from.with_file_name(format!("{code}.{FILE_EXTENSION}"));
+    if let Some(problem) = rename_problem(from, code) {
+        return warn!("Renaming {}: {problem}", from.display());
+    }
+    match std::fs::rename(from, &to) {
+        Ok(()) => {
+            info!("Renamed the lang file {} to {}", from.display(), to.display());
+            if editor.path.as_deref() == Some(from) {
+                editor.path = Some(to.clone());
+            }
+            recent.renamed(DocumentKind::Lang, from, &to);
+            crate::common::lang::remerge(&default_packs());
+            if [code_of(from), code_of(&to)].iter().any(|code| code.as_deref() == Some(FALLBACK_LANG)) {
+                editor.reload_reference();
+            }
+            state.rescan();
+        }
+        Err(e) => error!("Renaming {}: {e}", from.display()),
     }
 }
 
@@ -632,9 +708,8 @@ fn dialogs(ctx: &egui::Context, editor: &mut LangEditor, state: &mut LangUi, req
                 ui.heading(get!("lang_editor.browser.delete"));
                 ui.label(get!("lang_editor.dialog.delete", "file", path.display()));
                 if confirm_row(ui, ui.input(|input| input.key_pressed(egui::Key::Enter)), &mut done) {
-                    match std::fs::remove_file(&*path) {
-                        Ok(()) => {
-                            info!("Deleted lang file {path:?}");
+                    match crate::common::trash::trash(DocumentKind::Lang, path) {
+                        Ok(_) => {
                             if editor.path.as_ref() == Some(path) {
                                 editor.mark_deleted();
                             }

@@ -11,12 +11,40 @@ pub const LANG_DIR: &str = "assets/default/lang";
 
 pub const FALLBACK_LANG: &str = "en-US";
 
-/// The pack list until Grackle has a real one.
+/// The pack list until Grackle has a real one, lowest priority first: the default pack, every
+/// other folder under `assets/` by name (made by the Library's New), then the user pack. Read once
+/// and kept, since it is asked every frame; [`rescan_packs`] reads it again.
 pub fn default_packs() -> Vec<PathBuf> {
-    vec![
-        PathBuf::from("assets/default"),
-        PathBuf::from(crate::common::assets::USER_PACK),
-    ]
+    PACKS.read().unwrap_or_else(|poisoned| poisoned.into_inner()).clone()
+}
+
+/// After a pack is made.
+pub fn rescan_packs() {
+    *PACKS.write().unwrap_or_else(|poisoned| poisoned.into_inner()) = packs_on_disk();
+}
+
+static PACKS: LazyLock<RwLock<Vec<PathBuf>>> = LazyLock::new(|| RwLock::new(packs_on_disk()));
+
+/// A browser cannot list a folder, so there it is the two packs every build has.
+fn packs_on_disk() -> Vec<PathBuf> {
+    let default = PathBuf::from("assets/default");
+    let user = PathBuf::from(crate::common::assets::USER_PACK);
+    #[cfg(target_arch = "wasm32")]
+    let others: Vec<PathBuf> = Vec::new();
+    #[cfg(not(target_arch = "wasm32"))]
+    let mut others: Vec<PathBuf> = fs::read_dir(crate::common::assets::ASSET_ROOT)
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.is_dir() && *path != default && *path != user)
+        .collect();
+    #[cfg(not(target_arch = "wasm32"))]
+    others.sort();
+    let mut packs = vec![default];
+    packs.extend(others);
+    packs.push(user);
+    packs
 }
 
 static LANG: LazyLock<RwLock<toml::Value>> = LazyLock::new(|| RwLock::new(
