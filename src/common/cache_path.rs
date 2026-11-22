@@ -14,12 +14,19 @@ pub const NO_PACK: &str = "_no_pack";
 /// The name folder for a document with no file.
 pub const UNTITLED: &str = "untitled";
 
-/// The pack's folder name and the path inside it, of a file under `assets/{pack}/`. A path from a
-/// file dialog is absolute, so it is taken relative to the working directory first.
+/// The pack's folder name and the path inside it, of a file under `assets/{pack}/`. An absolute
+/// path (from a file dialog) is canonicalized when needed, since it or the working directory may
+/// run through a symlink.
 pub fn in_pack(file: &Path) -> Option<(String, PathBuf)> {
     let relative = match file.is_absolute() {
-        true => file.strip_prefix(std::env::current_dir().ok()?).ok()?,
-        false => file,
+        true => {
+            let cwd = std::env::current_dir().ok()?;
+            match file.strip_prefix(&cwd) {
+                Ok(relative) => relative.to_path_buf(),
+                Err(_) => file.canonicalize().ok()?.strip_prefix(cwd.canonicalize().ok()?).ok()?.to_path_buf(),
+            }
+        }
+        false => file.to_path_buf(),
     };
     let mut parts = relative.strip_prefix(ASSET_ROOT).ok()?.components();
     let Some(Component::Normal(pack)) = parts.next() else { return None };
@@ -30,8 +37,7 @@ pub fn in_pack(file: &Path) -> Option<(String, PathBuf)> {
     Some((pack.to_str()?.to_owned(), rest.to_path_buf()))
 }
 
-/// `cache/{kind}/{pack}/{stem}`, a folder for what is cached about one document. A document with
-/// no file, or one under no pack, is filed under [`NO_PACK`].
+/// `cache/{kind}/{pack}/{stem}`, a folder for what is cached about one document.
 pub fn document_folder(kind: &str, file: Option<&Path>) -> PathBuf {
     let stem = file.and_then(|file| file.file_stem()).map_or_else(|| UNTITLED.to_owned(), |stem| stem.to_string_lossy().into_owned());
     let pack = file.and_then(in_pack).map_or_else(|| NO_PACK.to_owned(), |(pack, _)| pack);

@@ -45,10 +45,8 @@ impl PostcardChoice {
     }
 
     /// The picture's file name without `.png`: `top`, `camera_{order}_{feature}` or
-    /// `camera_{order}_{feature}_copy_{image}`, so a camera's pictures sort as the spectator
-    /// cameras do once the numbers are read as numbers. `order` is the camera's
-    /// [`SpectatorCamera::order`](crate::editor::spectator_camera::SpectatorCamera), ignored for a
-    /// built-in.
+    /// `camera_{order}_{feature}_copy_{image}`, so pictures sort as the spectator cameras do when
+    /// the numbers are compared as numbers. `order` is ignored for a built-in.
     pub fn file_stem(&self, order: u32) -> String {
         match self {
             PostcardChoice::BuiltIn(_) => self.key(),

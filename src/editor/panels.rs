@@ -279,6 +279,13 @@ impl Plugin for EditorPanelPlugin {
                     .run_if(in_state(AppMode::Editor))
                     .run_if(crate::common::library::showing(DocumentKind::Map)),
             )
+            .init_resource::<crate::tool::postcard_bake::MapPreviews>()
+            .add_systems(
+                EguiPrimaryContextPass,
+                crate::tool::postcard_bake::free_map_previews
+                    .after(crate::tool::postcard_bake::show_map_library)
+                    .run_if(not(crate::common::library::showing(DocumentKind::Map))),
+            )
             // Before the panel, so a chord is answered this frame.
             .add_systems(Update, file_shortcuts.run_if(in_state(AppMode::Editor)).run_if(crate::common::net::has_authority))
         ;

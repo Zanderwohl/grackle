@@ -253,10 +253,11 @@ mod disk {
     use super::*;
     use bevy::image::{CompressedImageFormats, ImageSampler, ImageType};
 
-    /// Taken no earlier than the file's last change.
+    /// Taken after the file's last change. A tie is retaken: on a filesystem with one-second
+    /// times, a save in the same second as the picture would otherwise keep it.
     pub fn read(entry: &CacheEntry) -> Option<Image> {
         let modified = |path: &Path| std::fs::metadata(path).and_then(|m| m.modified()).ok();
-        if modified(&entry.picture)? < modified(&entry.source)? {
+        if modified(&entry.picture)? <= modified(&entry.source)? {
             return None;
         }
         let bytes = std::fs::read(&entry.picture).ok()?;

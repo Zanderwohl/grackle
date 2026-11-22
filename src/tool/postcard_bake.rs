@@ -8,10 +8,9 @@
 //! [`PostcardChoice::file_stem`]: `top.png`, `camera_{order}_{feature}.png`,
 //! `camera_{order}_{feature}_copy_{image}.png`, beside a `hash.txt` saying what they are of. The hash is FNV
 //! over every feature as it would be saved, the map's settings that a picture can show
-//! ([`SavedMetadata::pictured`]), halfbright, which photographs without sunlight, and the folder,
-//! so a map saved somewhere new is photographed again there. A folder whose hash differs is
-//! taken again. Pack content (materials, props) is not in it: after editing one, delete
-//! `cache/postcards/`.
+//! ([`SavedMetadata::pictured`]), halfbright, which photographs without sunlight, and the folder
+//! ([`filed_hash`]). A folder whose hash differs is taken again. Pack content (materials, props)
+//! is not in it: after editing one, delete `cache/postcards/`.
 //!
 //! Only the authority takes them; any machine reads a set already on disk. The set read or taken
 //! most recently is kept as [`CapturedPostcards`] for the postcard picker ([`postcard_button`]) and
@@ -133,6 +132,8 @@ pub struct PostcardBake {
     settings: Option<(SavedMetadata, u64)>,
     /// Where the open map's set goes, from its file.
     folder: PathBuf,
+    /// The file `folder` was last worked out for, so it is not worked out every frame.
+    filed: Option<PathBuf>,
     /// `changed_at` is when `current` was first seen, in real seconds.
     current: Option<u64>,
     changed_at: f32,
@@ -167,6 +168,7 @@ impl Default for PostcardBake {
             features_stale_since: None,
             settings: None,
             folder: folder(None),
+            filed: None,
             current: None,
             changed_at: 0.0,
             ready_since: None,
@@ -289,7 +291,7 @@ pub fn settings_hash(settings: &SavedMetadata) -> u64 {
     crate::common::stable_hash::of_text(&serde_json::to_string(&settings.pictured()).unwrap_or_default())
 }
 
-pub fn postcard_hash(features: u64, settings: u64, halfbright: bool, folder: &Path) -> u64 {
+pub fn postcard_hash(features: u64, settings: u64, halfbright: bool) -> u64 {
     let mut hasher = Fnv::default();
     FORMAT.hash(&mut hasher);
     HEIGHT.hash(&mut hasher);
@@ -297,6 +299,14 @@ pub fn postcard_hash(features: u64, settings: u64, halfbright: bool, folder: &Pa
     features.hash(&mut hasher);
     settings.hash(&mut hasher);
     halfbright.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// [`postcard_hash`] with the folder the set is filed in, so a map saved somewhere new is
+/// photographed there.
+pub fn filed_hash(hash: u64, folder: &Path) -> u64 {
+    let mut hasher = Fnv::default();
+    hash.hash(&mut hasher);
     folder.hash(&mut hasher);
     hasher.finish()
 }
@@ -304,6 +314,11 @@ pub fn postcard_hash(features: u64, settings: u64, halfbright: bool, folder: &Pa
 /// `cache/postcards/{pack}/{map}`, for the map saved at `file`.
 pub fn folder(file: Option<&Path>) -> PathBuf {
     crate::common::cache_path::document_folder(CACHE_KIND, file)
+}
+
+/// A map with no file is filed by its [`postcard_hash`], so two unsaved maps keep a set each.
+fn untitled_folder(hash: u64) -> PathBuf {
+    folder(None).with_file_name(format!("{}_{hash:016x}", crate::common::cache_path::UNTITLED))
 }
 
 /// The picture a Library shows for the map at `file`: its first spectator camera's, else the
@@ -479,7 +494,9 @@ mod disk {
 
     /// Into a partial folder renamed into place, so a folder with a hash is a whole set.
     pub fn store(folder: &Path, hash: u64, pictures: &[(String, image::RgbaImage)]) -> Result<(), String> {
-        let partial = folder.with_extension("partial");
+        let mut partial = folder.as_os_str().to_owned();
+        partial.push(".partial");
+        let partial = PathBuf::from(partial);
         let _ = std::fs::remove_dir_all(&partial);
         std::fs::create_dir_all(&partial).map_err(|e| e.to_string())?;
         for (name, picture) in pictures {
@@ -577,11 +594,22 @@ fn bake_postcards(
         state.settings = Some((settings, hash));
     }
     let settings = state.settings.as_ref().map_or(0, |(_, hash)| *hash);
-    let at = folder(file.as_ref().and_then(|file| file.path.as_deref()));
-    if state.folder != at {
-        state.folder = at;
+    let content = postcard_hash(state.features.unwrap_or_default(), settings, sun.halfbright());
+    match file.as_ref().and_then(|file| file.path.as_ref()) {
+        Some(path) if state.filed.as_ref() != Some(path) => {
+            state.folder = folder(Some(path));
+            state.filed = Some(path.clone());
+        }
+        Some(_) => {}
+        None => {
+            let at = untitled_folder(content);
+            if state.folder != at {
+                state.folder = at;
+            }
+            state.filed = None;
+        }
     }
-    let hash = postcard_hash(state.features.unwrap_or_default(), settings, sun.halfbright(), &state.folder);
+    let hash = filed_hash(content, &state.folder);
     if state.current != Some(hash) || features_stale {
         state.current = Some(hash);
         state.changed_at = now;
@@ -930,20 +958,31 @@ fn publish_postcard_choices(
     PICKER.publish(ctx, choices);
 }
 
-/// Each map's [`preview_file`], read again each time the Library opens.
-#[derive(Default)]
+/// Each map's [`preview_file`], read again each time the Library opens and freed when it closes.
+#[derive(Resource, Default)]
 pub struct MapPreviews {
     opened: u64,
-    /// By the map's file. A map with no picture has none.
+    /// By the map's file.
     pictures: HashMap<PathBuf, Handle<Image>>,
     reading: Vec<(PathBuf, Task<Option<image::RgbaImage>>)>,
+}
+
+pub fn free_map_previews(mut contexts: EguiContexts, mut images: ResMut<Assets<Image>>, mut previews: ResMut<MapPreviews>) {
+    if previews.pictures.is_empty() && previews.reading.is_empty() {
+        return;
+    }
+    for (_, handle) in previews.pictures.drain() {
+        contexts.remove_image(handle.id());
+        images.remove(&handle);
+    }
+    previews.reading.clear();
 }
 
 pub fn show_map_library(
     mut contexts: EguiContexts,
     mut library: ResMut<crate::common::library::Library>,
     mut images: ResMut<Assets<Image>>,
-    mut previews: Local<MapPreviews>,
+    mut previews: ResMut<MapPreviews>,
 ) {
     let MapPreviews { opened, pictures, reading } = &mut *previews;
     if *opened != library.opened {
@@ -1092,11 +1131,12 @@ mod tests {
     #[test]
     fn the_hash_follows_the_map_and_halfbright() {
         let settings = settings_hash(&SavedMetadata::of(&MapMetadata::default()));
+        assert_eq!(postcard_hash(1, settings, false), postcard_hash(1, settings, false));
+        assert_ne!(postcard_hash(1, settings, false), postcard_hash(1, settings, true));
+        assert_ne!(postcard_hash(1, settings, false), postcard_hash(2, settings, false));
         let (here, there) = (Path::new("cache/postcards/user/a"), Path::new("cache/postcards/user/b"));
-        assert_eq!(postcard_hash(1, settings, false, here), postcard_hash(1, settings, false, here));
-        assert_ne!(postcard_hash(1, settings, false, here), postcard_hash(1, settings, true, here));
-        assert_ne!(postcard_hash(1, settings, false, here), postcard_hash(2, settings, false, here));
-        assert_ne!(postcard_hash(1, settings, false, here), postcard_hash(1, settings, false, there));
+        assert_ne!(filed_hash(1, here), filed_hash(1, there));
+        assert_ne!(untitled_folder(1), untitled_folder(2), "two unsaved maps would share a set");
     }
 
     /// Breaks if choosing a postcard, renaming the map or changing its music would make every
