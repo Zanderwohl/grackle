@@ -28,9 +28,11 @@ use crate::prop::region::{arrange, axis_clear, Region};
 use crate::prop::sketch::SketchId;
 use crate::prop::sketch::{PlacedSketch, Sketch};
 use crate::prop::seam::{self, FaceTable, Junction, Seam};
-use crate::prop::reference::{pickables, GeomRef, Located, Outline, Pickable, Wire};
+use crate::prop::reference::{pickables, GeomRef, Located, Outline, OutlineFace, Pickable, Wire};
 use crate::prop::path::{self, Orient, PathPoints};
-use crate::prop::skin::{pushed, revolution, skin, tapers_within, Run, Section, SkinProblem, TaggedLoop};
+use crate::prop::skin::{pushed, revolution, skin, tapers_within, Run, Section, SkinProblem, Swept, TaggedLoop};
+use crate::prop::face_profile::face_profile;
+use crate::prop::solid::NO_FACE;
 use crate::prop::solid::{is_full_turn, Shape, Solid};
 use crate::prop::surface::Surface;
 
@@ -100,13 +102,10 @@ impl Axis {
 #[serde(tag = "feature", rename_all = "snake_case")]
 pub enum FeatureOp {
     Primitive { shape: Shape, placement: Placement, surface: Surface },
-    /// Regions of a sketch pushed along a direction, its plane's normal
-    /// unless one is named, joined into one body. Scalars first: TOML needs
-    /// every scalar before any sub-table.
+    /// A profile pushed along a direction, its plane's normal unless one is
+    /// named, joined into one body. Scalars first: TOML needs every scalar
+    /// before any sub-table.
     Extrude {
-        sketch: PropFeatureId,
-        /// Entries in the sketch's own region list.
-        regions: Vec<SketchId>,
         /// Degrees each wall leans in, going away from the sketch's plane.
         #[serde(default, with = "crate::prop::nice_f32::scalar")]
         taper: f32,
@@ -122,14 +121,12 @@ pub enum FeatureOp {
         other: Option<End>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         direction: Option<DirectionRef>,
+        profile: ProfileSource,
         surface: Surface,
     },
-    /// Regions of a sketch turned about a line lying in the sketch's plane,
-    /// in straight steps. Scalars first, as for [`FeatureOp::Extrude`].
+    /// A profile turned about a line lying in its plane, in straight steps.
+    /// Scalars first, as for [`FeatureOp::Extrude`].
     Revolve {
-        sketch: PropFeatureId,
-        /// As for [`FeatureOp::Extrude`].
-        regions: Vec<SketchId>,
         #[serde(with = "crate::prop::nice_f32::scalar")]
         degrees: f32,
         /// Clamped by [`revolve_steps`].
@@ -143,14 +140,12 @@ pub enum FeatureOp {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         target: Option<PropFeatureId>,
         axis: CurveRef,
+        profile: ProfileSource,
         surface: Surface,
     },
-    /// Regions of a sketch carried along a path, which starts on the
-    /// sketch's plane. Scalars first, as for [`FeatureOp::Extrude`].
+    /// A profile carried along a path, which starts on the profile's plane.
+    /// Scalars first, as for [`FeatureOp::Extrude`].
     Sweep {
-        sketch: PropFeatureId,
-        /// As for [`FeatureOp::Extrude`].
-        regions: Vec<SketchId>,
         #[serde(default)]
         orient: Orient,
         /// Degrees about the path over its whole length.
@@ -165,6 +160,7 @@ pub enum FeatureOp {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         target: Option<PropFeatureId>,
         path: PathRef,
+        profile: ProfileSource,
         surface: Surface,
     },
     /// A region of one sketch joined to a region of the next, in order,
@@ -211,6 +207,24 @@ pub enum FeatureOp {
     Point { def: PointDef },
     /// A drawing on a plane, which makes no body; see [`crate::prop::sketch`].
     Sketch { on: PlaneRef, sketch: Sketch },
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "from", rename_all = "snake_case")]
+pub enum ProfileSource {
+    /// Entries in the sketch's own region list.
+    Regions { sketch: PropFeatureId, regions: Vec<SketchId> },
+    /// Read off the body as it stands when the feature runs.
+    Face { face: GeomRef },
+}
+
+impl ProfileSource {
+    pub fn sketch(&self) -> Option<PropFeatureId> {
+        match self {
+            ProfileSource::Regions { sketch, .. } => Some(*sketch),
+            ProfileSource::Face { .. } => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -378,12 +392,22 @@ impl FeatureOp {
             picked: false,
             refs: vec![AnyRef::Body { body: *id }],
         };
-        let regions = |sketch: &PropFeatureId, entries: &Vec<SketchId>| Field {
-            label: "prop.inspector.regions_field",
-            slot: slot::REGIONS,
-            consumed: false,
-            picked: false,
-            refs: vec![AnyRef::Regions { sketch: *sketch, entries: entries.clone() }],
+        // Regions have rows of their own; a face is a Pick row.
+        let profiled = |profile: &ProfileSource| match profile {
+            ProfileSource::Regions { sketch, regions } => Field {
+                label: "prop.inspector.regions_field",
+                slot: slot::REGIONS,
+                consumed: false,
+                picked: false,
+                refs: vec![AnyRef::Regions { sketch: *sketch, entries: regions.clone() }],
+            },
+            ProfileSource::Face { face } => Field {
+                label: "prop.inspector.profile_face",
+                slot: slot::REGIONS,
+                consumed: false,
+                picked: true,
+                refs: vec![AnyRef::Face { face: face.clone() }],
+            },
         };
         // Drawn in the feature's own sections rather than as rows, each
         // empty while unset, so every field keeps its index.
@@ -402,20 +426,20 @@ impl FeatureOp {
         let bound = |end: Option<&End>| end.and_then(End::bound).into_iter().cloned().collect();
         match self {
             FeatureOp::Primitive { .. } => vec![],
-            FeatureOp::Extrude { sketch, regions: entries, direction, end, other, op, target, .. } => vec![
-                regions(sketch, entries),
+            FeatureOp::Extrude { profile, direction, end, other, op, target, .. } => vec![
+                profiled(profile),
                 unpicked("prop.inspector.direction", slot::DIRECTION, direction.iter().cloned().map(AnyRef::Direction).collect()),
                 unpicked("prop.extrude.up_to", slot::BOUND, bound(Some(end))),
                 unpicked("prop.extrude.up_to", slot::BOUND, bound(other.as_ref())),
                 operand(op, target),
             ],
-            FeatureOp::Sweep { sketch, regions: entries, path, op, target, .. } => vec![
-                regions(sketch, entries),
+            FeatureOp::Sweep { profile, path, op, target, .. } => vec![
+                profiled(profile),
                 field("prop.inspector.path", slot::PATH, vec![AnyRef::Path(path.clone())]),
                 operand(op, target),
             ],
-            FeatureOp::Revolve { sketch, regions: entries, axis, op, target, .. } => vec![
-                regions(sketch, entries),
+            FeatureOp::Revolve { profile, axis, op, target, .. } => vec![
+                profiled(profile),
                 field("prop.inspector.axis", slot::AXIS, vec![AnyRef::Curve(axis.clone())]),
                 operand(op, target),
             ],
@@ -460,14 +484,15 @@ impl FeatureOp {
     pub fn set_field(&mut self, index: usize, value: Resolved) -> bool {
         match (self, index, value) {
             (
-                FeatureOp::Extrude { sketch, regions, .. }
-                | FeatureOp::Revolve { sketch, regions, .. }
-                | FeatureOp::Sweep { sketch, regions, .. },
+                FeatureOp::Extrude { profile, .. } | FeatureOp::Revolve { profile, .. } | FeatureOp::Sweep { profile, .. },
                 0,
-                Resolved::Regions { sketch: s, entries },
-            ) => {
-                (*sketch, *regions) = (s, entries);
-            }
+                Resolved::Regions { sketch, entries },
+            ) => *profile = ProfileSource::Regions { sketch, regions: entries },
+            (
+                FeatureOp::Extrude { profile, .. } | FeatureOp::Revolve { profile, .. } | FeatureOp::Sweep { profile, .. },
+                0,
+                Resolved::ProfileFace(face),
+            ) => *profile = ProfileSource::Face { face },
             (FeatureOp::Sweep { path, .. }, 1, Resolved::Path(to)) => *path = to,
             (FeatureOp::Extrude { direction, .. }, 1, Resolved::Direction(to)) => *direction = Some(to),
             (FeatureOp::Extrude { end, .. }, 2, Resolved::Bound(to)) => *end = End::UpTo { to },
@@ -565,9 +590,9 @@ impl FeatureOp {
     /// Each sketch the feature sweeps regions of, and the entries it names.
     pub fn sketch_regions(&self) -> Vec<(PropFeatureId, Vec<SketchId>)> {
         match self {
-            FeatureOp::Extrude { sketch, regions, .. }
-            | FeatureOp::Revolve { sketch, regions, .. }
-            | FeatureOp::Sweep { sketch, regions, .. } => vec![(*sketch, regions.clone())],
+            FeatureOp::Extrude { profile: ProfileSource::Regions { sketch, regions }, .. }
+            | FeatureOp::Revolve { profile: ProfileSource::Regions { sketch, regions }, .. }
+            | FeatureOp::Sweep { profile: ProfileSource::Regions { sketch, regions }, .. } => vec![(*sketch, regions.clone())],
             FeatureOp::Loft { profiles, .. } => profiles.iter().map(|p| (p.sketch, vec![p.region])).collect(),
             _ => vec![],
         }
@@ -1013,12 +1038,18 @@ fn sweep(
     local: impl Fn(&[Vec2]) -> Vec<Vec2>,
     places: &[Transform],
     surface: Surface,
+    by_across: bool,
 ) -> Result<(Solid, Outline), String> {
     let mut outline = Outline::default();
     let mut solid: Option<Solid> = None;
     for region in regions {
         let swept = skin(&run_of(tagged_loops(region, &local)), surface).map_err(SkinProblem::message)?;
-        let piece = places.iter().fold(swept.solid, |solid, place| solid.transformed(*place));
+        let swept = if by_across { numbered_by_tag(swept) } else { swept };
+        // Each region numbers its faces from 0, but the outline lists them
+        // after the earlier regions' faces.
+        let offset = outline.faces.len() as u32;
+        let solid_of_region = swept.solid.retagged(|tag| if tag == NO_FACE { tag } else { tag + offset });
+        let piece = places.iter().fold(solid_of_region, |solid, place| solid.transformed(*place));
         solid = Some(match solid {
             Some(joined) => joined.union(&piece),
             None => piece,
@@ -1028,6 +1059,58 @@ fn sweep(
     match solid {
         Some(solid) if !solid.is_empty() => Ok((solid, outline)),
         _ => Err(get!("prop.problems.empty_sweep")),
+    }
+}
+
+/// Side faces in order of span, then segment tag, so a notch that adds pieces
+/// to a face profile's boundary renumbers none of them. Caps keep 0 and 1.
+fn numbered_by_tag(swept: Swept) -> Swept {
+    let caps = (swept.outline.faces.len() - swept.sides.len()) as u32;
+    let mut order: Vec<usize> = (0..swept.sides.len()).collect();
+    order.sort_by_key(|&side| swept.sides[side]);
+    let mut moved_to = vec![0u32; order.len()];
+    for (new, &old) in order.iter().enumerate() {
+        moved_to[old] = caps + new as u32;
+    }
+    let Swept { solid, mut outline, sides } = swept;
+    let side_faces = outline.faces.split_off(caps as usize);
+    let mut slots: Vec<Option<OutlineFace>> = vec![None; side_faces.len()];
+    for (old, face) in side_faces.into_iter().enumerate() {
+        slots[(moved_to[old] - caps) as usize] = Some(face);
+    }
+    outline.faces.extend(slots.into_iter().flatten());
+    let solid = solid.retagged(|tag| match tag >= caps && tag != NO_FACE {
+        true => moved_to.get((tag - caps) as usize).copied().unwrap_or(tag),
+        false => tag,
+    });
+    let sides = order.iter().map(|&old| sides[old]).collect();
+    Swept { solid, outline, sides }
+}
+
+/// The bool is whether side faces are numbered by the face across. `None`
+/// once a Problem is pushed.
+fn profile_of(
+    feature: PropFeatureId,
+    profile: &ProfileSource,
+    scope: &Scope,
+    problems: &mut Vec<Problem>,
+) -> Option<(Plane, Vec<Region>, bool)> {
+    match profile {
+        ProfileSource::Regions { sketch, regions } => {
+            let Some(placed) = scope.sketch(*sketch) else {
+                problems.push(Problem { feature, message: get!("prop.problems.missing_sketch") });
+                return None;
+            };
+            let found = resolve_regions(feature, placed, regions, problems)?;
+            Some((placed.plane, found, false))
+        }
+        ProfileSource::Face { face } => match face_profile(face, scope) {
+            Ok((plane, regions)) => Some((plane, regions, true)),
+            Err(message) => {
+                problems.push(Problem { feature, message });
+                None
+            }
+        },
     }
 }
 
@@ -1113,13 +1196,9 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
                 let solid = shape.solid(*surface).transformed(placement.transform());
                 live.push(made(solid, shape.outline().transformed(placement.transform()), &mut faces));
             }
-            FeatureOp::Extrude { sketch, regions, taper, op, target, end, other, direction, surface } => {
-                let Some(placed) = sketches.iter().find(|placed: &&PlacedSketch| placed.id == *sketch) else {
-                    problems.push(Problem { feature: feature.id, message: get!("prop.problems.missing_sketch") });
-                    continue;
-                };
-                let Some(found) = resolve_regions(feature.id, placed, regions, &mut problems) else { continue };
-                let reach = Reach::new(&placed.plane, direction.as_ref(), &scope, &live).and_then(|reach| {
+            FeatureOp::Extrude { profile, taper, op, target, end, other, direction, surface } => {
+                let Some((plane, found, by_across)) = profile_of(feature.id, profile, &scope, &mut problems) else { continue };
+                let reach = Reach::new(&plane, direction.as_ref(), &scope, &live).and_then(|reach| {
                     let near = match other {
                         Some(other) => reach.side(other, -1.0)?,
                         None => 0.0,
@@ -1134,29 +1213,24 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
                         continue;
                     }
                 };
-                let rise = reach.along.dot(*placed.plane.normal).abs() * from.abs().max(to.abs());
+                let rise = reach.along.dot(*plane.normal).abs() * from.abs().max(to.abs());
                 if found.iter().any(|region| !tapers_within(&region.outer, *taper, rise)) {
                     problems.push(Problem { feature: feature.id, message: get!("prop.problems.taper_closes") });
                     continue;
                 }
-                let local = reach.local(&placed.plane);
+                let local = reach.local(&plane);
                 let run = |loops| pushed(loops, from, to, local, *taper);
-                match sweep(&found, run, |points| points.to_vec(), &[placed.plane.transform()], *surface) {
+                match sweep(&found, run, |points| points.to_vec(), &[plane.transform()], *surface, by_across) {
                     Ok((solid, outline)) => combine(made(solid, outline, &mut faces), *op, *target, &mut live, &mut problems),
                     Err(message) => problems.push(Problem { feature: feature.id, message }),
                 }
             }
-            FeatureOp::Sweep { sketch, regions, orient, twist, scale, op, target, path, surface } => {
-                let Some(placed) = sketches.iter().find(|placed: &&PlacedSketch| placed.id == *sketch) else {
-                    problems.push(Problem { feature: feature.id, message: get!("prop.problems.missing_sketch") });
-                    continue;
-                };
-                let Some(found) = resolve_regions(feature.id, placed, regions, &mut problems) else { continue };
+            FeatureOp::Sweep { profile, orient, twist, scale, op, target, path, surface } => {
+                let Some((plane, found, by_across)) = profile_of(feature.id, profile, &scope, &mut problems) else { continue };
                 let Some(curves) = path.resolve(&scope) else {
                     problems.push(Problem { feature: feature.id, message: get!("prop.problems.missing_path") });
                     continue;
                 };
-                let plane = placed.plane;
                 let Some(points) = PathPoints::of(&curves).from_plane(&plane, IN_PLANE) else {
                     problems.push(Problem { feature: feature.id, message: get!("prop.problems.path_off_plane") });
                     continue;
@@ -1187,7 +1261,7 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
                     spans: points.spans.clone(),
                     closed: points.closed,
                 };
-                match sweep(&found, run, |points| points.to_vec(), &[], *surface) {
+                match sweep(&found, run, |points| points.to_vec(), &[], *surface, by_across) {
                     Ok((solid, outline)) => combine(made(solid, outline, &mut faces), *op, *target, &mut live, &mut problems),
                     Err(message) => problems.push(Problem { feature: feature.id, message }),
                 }
@@ -1229,22 +1303,18 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
                     Err(message) => problems.push(Problem { feature: feature.id, message }),
                 }
             }
-            FeatureOp::Revolve { sketch, axis, degrees, steps, symmetric, op, target, surface, regions } => {
-                let Some(placed) = sketches.iter().find(|placed: &&PlacedSketch| placed.id == *sketch) else {
-                    problems.push(Problem { feature: feature.id, message: get!("prop.problems.missing_sketch") });
-                    continue;
-                };
-                let Some(found) = resolve_regions(feature.id, placed, regions, &mut problems) else { continue };
+            FeatureOp::Revolve { profile, axis, degrees, steps, symmetric, op, target, surface } => {
+                let Some((plane, found, by_across)) = profile_of(feature.id, profile, &scope, &mut problems) else { continue };
                 let Some((a, b)) = resolved_axis(axis) else {
                     problems.push(Problem { feature: feature.id, message: get!("prop.problems.missing_axis") });
                     continue;
                 };
-                if [a, b].iter().any(|p| placed.plane.distance(*p).abs() > IN_PLANE) {
+                if [a, b].iter().any(|p| plane.distance(*p).abs() > IN_PLANE) {
                     problems.push(Problem { feature: feature.id, message: get!("prop.problems.axis_off_plane") });
                     continue;
                 }
-                let (a, b) = (placed.plane.flatten(a), placed.plane.flatten(b));
-                let Some(frame) = AxisFrame::new(&placed.plane, a, b, &found.iter().collect::<Vec<_>>()) else {
+                let (a, b) = (plane.flatten(a), plane.flatten(b));
+                let Some(frame) = AxisFrame::new(&plane, a, b, &found.iter().collect::<Vec<_>>()) else {
                     problems.push(Problem { feature: feature.id, message: get!("prop.problems.axis_crosses") });
                     continue;
                 };
@@ -1254,7 +1324,7 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
                     false => Transform::IDENTITY,
                 };
                 let run = |loops| revolution(loops, *degrees, steps);
-                match sweep(&found, run, |points| frame.local(points), &[spin, frame.transform], *surface) {
+                match sweep(&found, run, |points| frame.local(points), &[spin, frame.transform], *surface, by_across) {
                     Ok((solid, outline)) => combine(made(solid, outline, &mut faces), *op, *target, &mut live, &mut problems),
                     Err(message) => problems.push(Problem { feature: feature.id, message }),
                 }
@@ -1427,8 +1497,7 @@ mod tests {
         let surface = Surface::default();
         vec![
             FeatureOp::Extrude {
-                sketch: id(100),
-                regions: vec![SketchId(1)],
+                profile: ProfileSource::Regions { sketch: id(100), regions: vec![SketchId(1)] },
                 taper: 5.0,
                 op: SweepOp::Cut,
                 target: Some(id(137)),
@@ -1438,8 +1507,7 @@ mod tests {
                 surface,
             },
             FeatureOp::Sweep { op: SweepOp::NewBody, target: None,
-                sketch: id(131),
-                regions: vec![SketchId(1)],
+                profile: ProfileSource::Regions { sketch: id(131), regions: vec![SketchId(1)] },
                 orient: Orient::Frenet,
                 twist: 15.0,
                 scale: 0.5,
@@ -1452,12 +1520,19 @@ mod tests {
                 surface,
             },
             FeatureOp::Revolve { op: SweepOp::NewBody, target: None,
-                sketch: id(101),
-                regions: vec![SketchId(1)],
+                profile: ProfileSource::Regions { sketch: id(101), regions: vec![SketchId(1)] },
                 degrees: 90.0,
                 steps: 12,
                 symmetric: false,
                 axis: CurveRef::Datum { feature: id(102) },
+                surface,
+            },
+            FeatureOp::Revolve { op: SweepOp::Join, target: Some(id(143)),
+                profile: ProfileSource::Face { face: geom(Element::Face(4), 141) },
+                degrees: 45.0,
+                steps: 6,
+                symmetric: true,
+                axis: CurveRef::Datum { feature: id(142) },
                 surface,
             },
             FeatureOp::Loft { op: SweepOp::NewBody, target: None,
@@ -1549,6 +1624,7 @@ mod tests {
                     ),
                     (_, [AnyRef::Body { body }]) => Resolved::Body(*body),
                     (_, [AnyRef::Regions { sketch, entries }]) => Resolved::Regions { sketch: *sketch, entries: entries.clone() },
+                    (Kind::Regions, [AnyRef::Face { face }]) => Resolved::ProfileFace(face.clone()),
                     (_, [AnyRef::Curve(curve)]) => Resolved::Curve(curve.clone()),
                     (_, [AnyRef::Direction(direction)]) => Resolved::Direction(direction.clone()),
                     (_, [AnyRef::Plane(on)]) => Resolved::Plane(*on),
@@ -1820,7 +1896,6 @@ mod tests {
                 PropFeature::new(
                     PropFeatureId(1),
                     FeatureOp::Extrude {
-                        sketch: PropFeatureId(0),
                         taper: 0.0,
                         op: SweepOp::NewBody,
                         target: None,
@@ -1829,7 +1904,7 @@ mod tests {
                         other: symmetric.then_some(End::Distance { distance: distance / 2.0 }),
                         direction: None,
                         surface: Surface::default(),
-                        regions,
+                        profile: ProfileSource::Regions { sketch: PropFeatureId(0), regions },
                     },
                 ),
             ];
@@ -1938,8 +2013,7 @@ mod tests {
                 _ => unreachable!(),
             };
             let sweep = doc.push(FeatureOp::Extrude {
-                sketch: on,
-                regions: ids,
+                profile: ProfileSource::Regions { sketch: on, regions: ids },
                 taper: 0.0,
                 op: SweepOp::NewBody,
                 target: None,
@@ -2123,8 +2197,7 @@ mod tests {
                 PropFeature::new(
                     PropFeatureId(2),
                     FeatureOp::Sweep { op: SweepOp::NewBody, target: None,
-                        sketch: PropFeatureId(0),
-                        regions,
+                        profile: ProfileSource::Regions { sketch: PropFeatureId(0), regions },
                         orient,
                         twist: 0.0,
                         scale: 1.0,
@@ -2221,13 +2294,12 @@ mod tests {
                 PropFeature::new(
                     PropFeatureId(1),
                     FeatureOp::Revolve { op: SweepOp::NewBody, target: None,
-                        sketch: PropFeatureId(0),
                         axis: CurveRef::Sketch { sketch: PropFeatureId(0), entity: axis },
                         degrees,
                         steps,
                         symmetric,
                         surface: Surface::default(),
-                        regions,
+                        profile: ProfileSource::Regions { sketch: PropFeatureId(0), regions },
                     },
                 ),
             ])
@@ -2311,8 +2383,7 @@ mod tests {
                     PropFeature::new(
                         PropFeatureId(1),
                         FeatureOp::Revolve { op: SweepOp::NewBody, target: None,
-                            sketch: PropFeatureId(0),
-                            regions: regions.clone(),
+                            profile: ProfileSource::Regions { sketch: PropFeatureId(0), regions: regions.clone() },
                             degrees: 360.0,
                             steps: 12,
                             symmetric: false,
@@ -2349,13 +2420,12 @@ mod tests {
                 PropFeature::new(
                     PropFeatureId(1),
                     FeatureOp::Revolve { op: SweepOp::NewBody, target: None,
-                        sketch: PropFeatureId(0),
                         axis: CurveRef::Sketch { sketch: PropFeatureId(0), entity: axis },
                         degrees: 120.0,
                         steps: 4,
                         symmetric: false,
                         surface: Surface::default(),
-                        regions: vec![outer],
+                        profile: ProfileSource::Regions { sketch: PropFeatureId(0), regions: vec![outer] },
                     },
                 ),
             ]);
@@ -2376,13 +2446,12 @@ mod tests {
             let mut doc = PropDoc::new("test");
             let on = doc.push(FeatureOp::Sketch { on: PlaneRef::Origin(OriginPlane::Xz), sketch });
             doc.push(FeatureOp::Revolve { op: SweepOp::NewBody, target: None,
-                sketch: on,
                 axis: CurveRef::Sketch { sketch: on, entity: axis },
                 degrees: 270.0,
                 steps: 9,
                 symmetric: true,
                 surface: Surface::default(),
-                regions,
+                profile: ProfileSource::Regions { sketch: on, regions },
             });
             let text = to_text(&doc).unwrap();
             assert_eq!(parse(&text).unwrap(), doc, "{text}");
@@ -2600,8 +2669,7 @@ mod tests {
 
         fn extrude(sketch: u32, region: SketchId, end: End) -> FeatureOp {
             FeatureOp::Extrude {
-                sketch: PropFeatureId(sketch),
-                regions: vec![region],
+                profile: ProfileSource::Regions { sketch: PropFeatureId(sketch), regions: vec![region] },
                 taper: 0.0,
                 op: SweepOp::NewBody,
                 target: None,
@@ -2765,8 +2833,7 @@ mod tests {
             let on = doc.push(FeatureOp::Sketch { on: PlaneRef::Origin(OriginPlane::Xy), sketch });
             let face = GeomRef { element: Element::Face(1), source: Source { feature: body, copies: vec![] } };
             doc.push(FeatureOp::Extrude {
-                sketch: on,
-                regions: vec![region],
+                profile: ProfileSource::Regions { sketch: on, regions: vec![region] },
                 taper: 2.5,
                 op: SweepOp::Cut,
                 target: Some(body),
@@ -2776,8 +2843,7 @@ mod tests {
                 surface: Surface::default(),
             });
             doc.push(FeatureOp::Revolve {
-                sketch: on,
-                regions: vec![region],
+                profile: ProfileSource::Regions { sketch: on, regions: vec![region] },
                 degrees: 90.0,
                 steps: 6,
                 symmetric: false,
@@ -2810,8 +2876,7 @@ mod tests {
                 PropFeature::new(
                     PropFeatureId(2),
                     FeatureOp::Revolve {
-                        sketch: PropFeatureId(1),
-                        regions: vec![region],
+                        profile: ProfileSource::Regions { sketch: PropFeatureId(1), regions: vec![region] },
                         degrees: 360.0,
                         steps: 24,
                         symmetric: false,

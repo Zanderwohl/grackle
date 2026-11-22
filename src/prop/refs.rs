@@ -284,6 +284,14 @@ impl<'a> Scope<'a> {
         self
     }
 
+    /// The body with `name`'s polygons, the face's tag, and the face table.
+    pub fn body_with_face(&self, name: &GeomRef) -> Option<(&'a Solid, u32, &'a FaceTable)> {
+        let faces = self.faces?;
+        let tag = faces.tag(name)?;
+        let (_, solid) = self.bodies.iter().find(|(_, solid)| solid.polygons().iter().any(|p| p.surface.tag == tag))?;
+        Some((*solid, tag, faces))
+    }
+
     /// The body that has both faces' polygons on it, and all its seams.
     fn seams_with(&self, names: &[GeomRef]) -> Option<(Vec<Seam>, Vec<Junction>)> {
         let faces = self.faces?;

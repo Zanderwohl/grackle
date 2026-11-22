@@ -291,7 +291,7 @@ Each sweep is a way of producing sections:
 
 #### Sweep
 
-- `FeatureOp::Sweep { sketch, regions, path: PathRef, orient, twist, scale, op, target }`.
+- `FeatureOp::Sweep { profile, path: PathRef, orient, twist, scale, op, target }`.
 - `orient`: **`Minimal`** (rotation-minimizing frames by the double-reflection
   method — the default, since it does not spin on straight stretches),
   **`Frenet`** (follows the curvature, undefined on a straight path and
@@ -322,6 +322,37 @@ Each sweep is a way of producing sections:
   to the nearest hole on the profile before. `op` and `target` come with
   stage 8. The skin draws a side as a quad only between two copies of one
   loop, since a quad between two different loops is not flat.
+
+#### Faces as profiles
+
+Extrude, Revolve and Sweep carry a `ProfileSource`: sketch regions, or one
+flat face (`from = "face"`), picked into the same `Regions` slot. A face is
+taken as it stands when the feature runs, so a later edit to the body moves
+the profile with it, and it is never given a plane feature the way a face
+picked for a plane is. Loft still takes regions only.
+
+- **The boundary comes from the solid, not the generator.**
+  [`face_profile`](../src/prop/face_profile.rs) collects the polygons carrying
+  the face's tag, keeps the parts of their edges no other piece of the face
+  shares (matched by overlap along a line, as seams are, since the BSP leaves
+  T-junctions), chains them into loops, splits a loop wherever it passes
+  through one point twice (a pinch, or a hole touching the outside), and sorts
+  the loops into outsides and holes by winding. A face a boolean split in two
+  is two regions; a hole that fits no outside is a Problem.
+- **The frame comes from the generator.** The plane's origin is the generator
+  face's first corner and its `x` runs along the generator face's first edge,
+  so a later cut into the face does not turn the profile.
+- **Each boundary piece is tagged by the face across it**, ranked by that
+  face's name, source first. A swept side face is numbered by span, then by
+  that rank (`numbered_by_tag` after `skin`, which reports each side face's
+  span and segment tag), so a notch cut into the face adds side faces after
+  the existing ones rather than renumbering them: the faces a later feature
+  makes rank after the faces already there. Deleting a neighbor shifts the
+  ones ranked after it.
+- Corners and edges of a face-profile sweep are numbered by position, as a
+  sketch sweep's are.
+- A face that is not flat, is cut away entirely, or whose boundary does not
+  close is a Problem on the feature.
 
 ## Order of work
 
@@ -425,4 +456,7 @@ this plan; they need stage 4 and adjacency on the result, and get their own.
 - [ ] Through all reaches past every body's bounding box, not its surface
 - [ ] A taper shrinks the profile about its centroid, by the lean at its equivalent radius; it is not an offset, so a long thin profile leans more along its length than across it
 - [ ] Revolve keeps `symmetric`; two-sided angles are not built
+- [x] A flat face as the profile of an Extrude, Revolve or Sweep (`ProfileSource::Face`, `face_profile.rs`); side faces numbered by the face across each boundary piece
+- [ ] A face as a Loft profile
+- [ ] Corners and edges of a face-profile sweep are numbered by position, so a notch in the face can renumber them
 - [ ] A Join, Cut or Intersect target is chosen in the inspector (defaulting to the latest body), not picked as the tool's second slot
