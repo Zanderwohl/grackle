@@ -776,6 +776,7 @@ title = "Multiplayer"
 host = "Host Game..."
 join = "Connect to..."
 solo = "Leave Game"
+close_server = "Close Server"
 
 [net.role]
 solo = "Playing alone"
@@ -805,14 +806,36 @@ connecting = "Connecting..."
 connected = "Connected"
 failed = "Failed: { reason }"
 
+# The window a client gets when its link to the server fails.
+[net.lost]
+disconnected = "Disconnected"
+failed_to_connect = "Failed to Connect"
+ok = "Ok"
+no_answer = "The server did not answer."
+stopped_answering = "The server stopped answering."
+denied = "The server refused the connection. It may be full."
+token_expired = "The connection took too long to set up."
+closed = "Server Closed"
+closed_because = "Server Closed: { reason }"
+network = "Network error: { reason }"
+ended = "The connection ended."
+no_token = "The connection could not be set up."
+unresolved = "Could not find { host }: { reason }"
+
+# The map editor's menu bar, at its right edge, while hosting.
+[net.bar]
+hosting = "Hosting on port { port }"
+listening = "Listening"
+one_client = "1 client"
+clients = "{ count } clients"
+
 [pause]
 title = "Menu"
 resume = "Resume"
 settings = "Settings"
 change_teams = "Change Teams"
 join_or_spectate = "Join or Spectate"
-back_to_editor = "Back to Editor"
-back_to_main_menu = "Back to Main Menu"
+return_to = "Return to { mode }"
 disconnect = "Disconnect"
 
 [anim]
@@ -1128,12 +1151,28 @@ onboarding = "Onboarding"
 title = "File"
 new = "New"
 save = "Save"
-save_as = "Save As"
+save_as = "Save As…"
 open = "Open"
+recent = "Recent"
 demo_maps = "Demo Maps"
+demo_props = "Demo Props"
+demo_animations = "Demo Animations"
+demo_materials = "Demo Materials"
+demo_weapons = "Demo Weapons"
+demo_langs = "Demo Lang Files"
 demo_scene = "Demo Scene"
 showcase = "Material Showcase"
+rocket_launcher = "Rocket Launcher"
+health_pack = "Health Pack"
+top_hat = "Top Hat"
 quit = "Quit"
+
+# Asked before Recent or a demo replaces a document with unsaved changes.
+[file.discard]
+heading = "Unsaved changes"
+body = "Open { file } and discard the changes to this one?"
+discard = "Discard"
+cancel = "Cancel"
 
 [edit.menu]
 title = "Edit"

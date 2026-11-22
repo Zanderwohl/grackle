@@ -172,6 +172,15 @@ impl Plugin for GamePlugin {
             .init_resource::<ViewPreference>()
             .init_resource::<crate::game::player::CameraPull>()
             .add_plugins(crate::game::condition::ConditionPlugin)
+            .init_resource::<crate::common::app_mode::CameFrom>()
+            .init_resource::<crate::common::app_mode::JoinedFrom>()
+            .add_systems(Update, crate::common::app_mode::remember_where_play_came_from.before(toggle_mode))
+            .add_systems(
+                Update,
+                crate::common::app_mode::remember_where_a_client_joined_from
+                    .after(crate::common::net::apply_net_requests)
+                    .before(leave_a_round_without_a_server),
+            )
             .add_systems(Update, (toggle_mode, start_in_play, leave_a_round_without_a_server))
             .add_systems(Update, (
                 toggle_view,
@@ -245,18 +254,19 @@ fn toggle_mode(
     // its own authority.
     role: Option<Res<NetRole>>,
     mode: Res<State<AppMode>>,
+    came_from: Option<Res<crate::common::app_mode::CameFrom>>,
     mut next: ResMut<NextState<AppMode>>,
 ) {
     if !actions.just_pressed(crate::common::keybind::Action::ToggleMode) {
         return;
     }
-    if !role.is_none_or(|role| role.is_authority()) {
+    if !role.as_deref().is_none_or(NetRole::is_authority) {
         info!("The server decides when the match is played; F5 does nothing here.");
         return;
     }
     next.set(match mode.get() {
         AppMode::Editor => AppMode::Play,
-        AppMode::Play => AppMode::Editor,
+        AppMode::Play => came_from.as_deref().copied().unwrap_or_default().after_a_round(role.as_deref()),
         // No wildcard: a new mode should have to decide what F5 means to it.
         mode @ (AppMode::Prop | AppMode::Animation | AppMode::Material | AppMode::Weapon | AppMode::Lang) => {
             info!(
@@ -271,11 +281,12 @@ fn toggle_mode(
 
 /// A client that stops being one drops what the server sent, which it would
 /// otherwise stand up a second copy of as the authority (props, pickups).
-/// Losing its server mid-round sends it to the editor, since nobody runs that round.
+/// Losing its server mid-round sends it back to where it joined from, since nobody runs that round.
 fn leave_a_round_without_a_server(
     mut commands: Commands,
     role: Option<Res<NetRole>>,
     mode: Res<State<AppMode>>,
+    joined: Option<Res<crate::common::app_mode::JoinedFrom>>,
     mut next: ResMut<NextState<AppMode>>,
     sent: Query<Entity, With<lightyear::prelude::client::Remote>>,
     mut was_client: Local<bool>,
@@ -286,8 +297,9 @@ fn leave_a_round_without_a_server(
             commands.entity(entity).try_despawn();
         }
         if *mode.get() == AppMode::Play {
-            info!("No longer connected to a server; back to the editor");
-            next.set(AppMode::Editor);
+            let back = joined.as_deref().copied().unwrap_or_default().after_leaving();
+            info!("No longer connected to a server; back to {}", back.name());
+            next.set(back);
         }
     }
     *was_client = client;
@@ -477,7 +489,8 @@ mod tests {
         Room::new(min, max)
     }
 
-    /// F5 swaps the map editor and Play, and does nothing from the prop editor.
+    /// F5 swaps the map editor and Play, and does nothing from the prop editor. From Play it goes
+    /// back to whichever mode the round was started from.
     #[test]
     fn f5_toggles_the_map_editor_and_play_and_nothing_else() {
         fn press(app: &mut App) {
@@ -498,7 +511,8 @@ mod tests {
             .init_state::<AppMode>()
             .init_resource::<ButtonInput<KeyCode>>()
             .add_plugins(crate::common::keybind::KeybindPlugin)
-            .add_systems(Update, toggle_mode);
+            .init_resource::<crate::common::app_mode::CameFrom>()
+            .add_systems(Update, (crate::common::app_mode::remember_where_play_came_from, toggle_mode).chain());
 
         press(&mut app);
         assert_eq!(mode(&app), AppMode::Play, "F5 did not start a round");
@@ -509,6 +523,11 @@ mod tests {
         app.update();
         press(&mut app);
         assert_eq!(mode(&app), AppMode::Prop, "F5 started a round from the prop editor");
+
+        app.world_mut().resource_mut::<NextState<AppMode>>().set(AppMode::Play);
+        app.update();
+        press(&mut app);
+        assert_eq!(mode(&app), AppMode::Prop, "F5 did not go back to where the round was started");
     }
 
     /// Breaks if a client left without a server stays in a round nobody runs or keeps what it was sent.
@@ -530,6 +549,24 @@ mod tests {
         app.update();
         assert_eq!(*app.world().resource::<State<AppMode>>().get(), AppMode::Editor);
         assert!(app.world().get_entity(sent).is_err(), "what the server sent outlived the link");
+    }
+
+    /// Breaks if a client that joined from the main menu and loses its server mid-round is left in
+    /// the map editor rather than sent back to the main menu.
+    #[test]
+    fn a_client_that_loses_its_server_goes_back_where_it_joined_from() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, bevy::state::app::StatesPlugin))
+            .init_state::<AppMode>()
+            .insert_resource(NetRole::Client { host: "elsewhere".into(), port: 27100 })
+            .insert_resource(crate::common::app_mode::JoinedFrom(AppMode::MainMenu))
+            .add_systems(Update, leave_a_round_without_a_server);
+        app.world_mut().resource_mut::<NextState<AppMode>>().set(AppMode::Play);
+        app.update();
+        app.insert_resource(NetRole::Solo);
+        app.update();
+        app.update();
+        assert_eq!(*app.world().resource::<State<AppMode>>().get(), AppMode::MainMenu);
     }
 
     #[test]

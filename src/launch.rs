@@ -102,6 +102,7 @@ pub fn run(binary: Binary) {
             }),
         )
         .insert_resource(settings)
+        .insert_resource(crate::common::recent_files::RecentFiles::load())
         .insert_resource(Keymap::load())
         .insert_resource(editor_params.net.clone())
         .insert_resource(StartInPlay(editor_params.start_playing))

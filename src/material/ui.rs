@@ -11,7 +11,8 @@ use super::gpu::{submitting, BakedTextures, BevyEguiTextures};
 use super::{load, save, MaterialEditor, FILE_EXTENSION, MATERIALS_DIR};
 use crate::common::app_mode::{mode_menu, AppMode};
 use crate::common::edit_menu::{edit_menu, EditAction, EditAvailability};
-use crate::common::file_menu::{dialog_directory, file_menu, FileAction};
+use crate::common::file_menu::{dialog_directory, file_menu, DiscardQuestion, DocumentKind, FileAction};
+use crate::common::recent_files::RecentFiles;
 use crate::common::net::NetRole;
 use crate::common::shortcuts::chords;
 use crate::get;
@@ -40,6 +41,7 @@ pub struct MaterialUiPlugin;
 impl Plugin for MaterialUiPlugin {
     fn build(&self, app: &mut App) {
         crate::common::keybind::ensure(app);
+        crate::common::recent_files::ensure(app);
         app.init_resource::<MaterialFileDialog>()
             .add_systems(
                 bevy_egui::EguiPrimaryContextPass,
@@ -66,6 +68,8 @@ fn panels(
     role: Option<Res<NetRole>>,
     mut exit: MessageWriter<AppExit>,
     mut baked: ResMut<BakedTextures>,
+    mut recent: ResMut<RecentFiles>,
+    mut discard: Local<DiscardQuestion>,
 ) {
     let Ok(ctx) = contexts.ctx_mut() else { return };
     let ctx = ctx.clone();
@@ -78,7 +82,7 @@ fn panels(
     let mut requests = Requests::default();
     egui::Panel::top("material_menu_bar").resizable(false).show(&mut window_ui, |ui| {
         egui::MenuBar::new().ui(ui, |ui| {
-            file_menu(ui, crate::common::file_menu::DOCUMENT, &mut requests.file);
+            file_menu(ui, DocumentKind::Material, recent.of(DocumentKind::Material), &mut requests.file);
             edit_menu(ui, edit_availability(&material), &mut requests.edit);
             // This system is gated on `AppMode::Material`.
             mode_menu(ui, AppMode::Material, role.as_deref(), &mut requests.mode);
@@ -106,8 +110,13 @@ fn panels(
     if let Some(mode) = requests.mode {
         next_mode.set(mode);
     }
-    handle_files(requests.file, &mut material, &dialog);
-    if requests.file == Some(FileAction::Quit) {
+    let quit = requests.file == Some(FileAction::Quit);
+    let mut file = discard.guard(requests.file, material.dirty());
+    if let Some(discarded) = discard.show(&ctx) {
+        file = Some(discarded);
+    }
+    handle_files(file, &mut material, &dialog, &mut recent);
+    if quit {
         info!("Quitting, as asked");
         exit.write(AppExit::Success);
     }
@@ -118,6 +127,7 @@ fn material_shortcuts(
     actions: Res<crate::common::keybind::Actions>,
     dialog: Res<MaterialFileDialog>,
     mut material: NonSendMut<MaterialEditor>,
+    mut recent: ResMut<RecentFiles>,
 ) {
     let chords = chords(&actions);
     handle_edit(
@@ -129,7 +139,7 @@ fn material_shortcuts(
         &mut material,
     );
     if let Some(action) = FileAction::from_chords(chords) {
-        handle_files(Some(action), &mut material, &dialog);
+        handle_files(Some(action), &mut material, &dialog, &mut recent);
     }
 }
 
@@ -152,27 +162,29 @@ fn handle_edit(action: Option<EditAction>, material: &mut MaterialEditor) {
 }
 
 /// New, open and save. Quit is the caller's. Called every frame, to collect a dialog's answer.
-fn handle_files(action: Option<FileAction>, material: &mut MaterialEditor, dialog: &MaterialFileDialog) {
+fn handle_files(
+    action: Option<FileAction>,
+    material: &mut MaterialEditor,
+    dialog: &MaterialFileDialog,
+    recent: &mut RecentFiles,
+) {
     if action == Some(FileAction::New) {
         material.open(texture_graph_core::Graph::new(), None);
     }
 
     if let Some(result) = dialog.result.lock().unwrap().take() {
         match result {
-            DialogResult::Save(path) => save_to(material, path),
-            DialogResult::Open(path) => match load(&path) {
-                Ok(graph) => {
-                    info!("Opened material {path:?}");
-                    material.open(graph, Some(path));
-                }
-                Err(e) => error!("Opening the material: {e}"),
-            },
+            DialogResult::Save(path) => save_to(material, path, recent),
+            DialogResult::Open(path) => open_material(material, path, true),
         }
     }
 
     match action {
+        Some(FileAction::OpenRecent(path)) => open_material(material, path, true),
+        // Untitled, so a save asks where rather than writing over the shipped file.
+        Some(FileAction::Demo(demo)) => open_material(material, PathBuf::from(demo.path), false),
         Some(FileAction::Save) => match material.path.clone() {
-            Some(path) => save_to(material, path),
+            Some(path) => save_to(material, path, recent),
             None => ask_where_to_save(material, dialog),
         },
         Some(FileAction::SaveAs) => ask_where_to_save(material, dialog),
@@ -194,10 +206,21 @@ fn handle_files(action: Option<FileAction>, material: &mut MaterialEditor, dialo
     }
 }
 
-fn save_to(material: &mut MaterialEditor, path: PathBuf) {
+fn open_material(material: &mut MaterialEditor, path: PathBuf, titled: bool) {
+    match load(&path) {
+        Ok(graph) => {
+            info!("Opened material {path:?}");
+            material.open(graph, titled.then_some(path));
+        }
+        Err(e) => error!("Opening the material: {e}"),
+    }
+}
+
+fn save_to(material: &mut MaterialEditor, path: PathBuf, recent: &mut RecentFiles) {
     match save(&path, material.graph()) {
         Ok(()) => {
             info!("Saved material to {path:?}");
+            recent.saved(DocumentKind::Material, &path);
             material.mark_saved(path);
         }
         Err(e) => error!("Saving the material: {e}"),

@@ -30,9 +30,9 @@ pub enum AppMode {
     Weapon,
     /// One pack's strings for one language.
     Lang,
+    Play,
     /// The first screen of the `grackle` binary.
     MainMenu,
-    Play,
     /// A name and a field of view, for somebody with no name saved. Never offered by the Mode menu.
     Onboarding,
 }
@@ -137,6 +137,9 @@ pub fn mode_menu(
 ) {
     ui.menu_button(get!("app_mode.menu.title"), |ui| {
         for mode in AppMode::iter().filter(|mode| *mode != AppMode::Onboarding) {
+            if matches!(mode, AppMode::Play | AppMode::MainMenu) {
+                ui.separator();
+            }
             let enabled = mode.selectable_from(current, role);
             let entry = ui.add_enabled(enabled, egui::Button::new(mode.name()));
             if entry.clicked() {
@@ -156,16 +159,63 @@ pub fn mode_menu(
 }
 
 /// Where a bare launch of this binary starts: the map editor for `editor`, the main menu for
-/// `grackle`.
+/// `grackle`. Only onboarding reads it; leaving a round goes to [`CameFrom`] instead.
 #[derive(Resource, Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Home(pub AppMode);
 
-impl Home {
-    /// A host stays online after a round, so it cannot go to a home that is not offered networked.
+/// The mode Play was last entered from, which F5 and the pause menu go back to. Written only by
+/// [`remember_where_play_came_from`].
+#[derive(Resource, Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CameFrom(pub AppMode);
+
+impl CameFrom {
+    /// A host stays online after a round, so it cannot go back to a mode not offered networked.
     pub fn after_a_round(self, role: Option<&NetRole>) -> AppMode {
-        match role.is_some_and(NetRole::is_online) && !self.0.offered_networked() {
-            true => AppMode::Editor,
-            false => self.0,
+        let online = role.is_some_and(NetRole::is_online);
+        match self.0 {
+            AppMode::Play | AppMode::Onboarding => AppMode::Editor,
+            mode if online && !mode.offered_networked() => AppMode::Editor,
+            mode => mode,
+        }
+    }
+}
+
+/// The mode a client was in when it joined, which it goes back to when it leaves: the main menu,
+/// not the map editor it then waited in. Written only by [`remember_where_a_client_joined_from`].
+#[derive(Resource, Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct JoinedFrom(pub AppMode);
+
+impl JoinedFrom {
+    /// No longer a client, so nothing is barred for being networked.
+    pub fn after_leaving(self) -> AppMode {
+        CameFrom(self.0).after_a_round(None)
+    }
+}
+
+/// Ordered after `apply_net_requests`, so it runs in the frame the role changes, before
+/// `back_to_the_map_editor_when_networked`'s transition lands.
+pub fn remember_where_a_client_joined_from(
+    role: Option<Res<NetRole>>,
+    mode: Res<State<AppMode>>,
+    mut joined: ResMut<JoinedFrom>,
+    mut was_client: Local<bool>,
+) {
+    let client = role.is_some_and(|role| matches!(*role, NetRole::Client { .. }));
+    if client && !*was_client {
+        joined.0 = *mode.get();
+    }
+    *was_client = client;
+}
+
+pub fn remember_where_play_came_from(
+    mut transitions: MessageReader<StateTransitionEvent<AppMode>>,
+    mut came_from: ResMut<CameFrom>,
+) {
+    for transition in transitions.read() {
+        if transition.entered == Some(AppMode::Play)
+            && let Some(from) = transition.exited.filter(|from| *from != AppMode::Play)
+        {
+            came_from.0 = from;
         }
     }
 }
@@ -261,27 +311,77 @@ mod tests {
         assert!(AppMode::Prop.selectable_from(AppMode::Editor, None));
     }
 
-    /// Fails if the Mode menu stops offering the main menu, or offers it somewhere other than
-    /// just above Play.
+    /// Fails if the Mode menu's order drifts: the authoring modes, Play, then the main menu.
     #[test]
-    fn the_main_menu_is_offered_just_above_play() {
-        let modes: Vec<AppMode> = AppMode::iter().collect();
-        let menu = modes.iter().position(|mode| *mode == AppMode::MainMenu).unwrap();
-        assert_eq!(modes[menu + 1], AppMode::Play);
+    fn the_menu_lists_the_editors_then_play_then_the_main_menu() {
+        let modes: Vec<AppMode> = AppMode::iter().filter(|mode| *mode != AppMode::Onboarding).collect();
+        assert_eq!(
+            modes,
+            [
+                AppMode::Editor,
+                AppMode::Prop,
+                AppMode::Animation,
+                AppMode::Material,
+                AppMode::Weapon,
+                AppMode::Lang,
+                AppMode::Play,
+                AppMode::MainMenu,
+            ],
+        );
         assert!(AppMode::MainMenu.selectable_from(AppMode::Editor, None));
         assert!(AppMode::Editor.selectable_from(AppMode::MainMenu, None));
         assert!(!AppMode::MainMenu.is_authoring());
     }
 
-    /// Fails if a host is sent to a main menu it would be bounced out of, or a solo game or a client
-    /// leaving is not sent home.
+    /// Fails if leaving a round goes anywhere but where it was entered from, or sends a host to a
+    /// mode it would be bounced out of.
     #[test]
-    fn leaving_a_round_goes_home_unless_home_is_not_offered_online() {
-        let game = Home(AppMode::MainMenu);
-        assert_eq!(game.after_a_round(None), AppMode::MainMenu);
-        assert_eq!(game.after_a_round(Some(&NetRole::Solo)), AppMode::MainMenu);
-        assert_eq!(game.after_a_round(Some(&NetRole::Listen { port: 1 })), AppMode::Editor);
-        assert_eq!(Home::default().after_a_round(None), AppMode::Editor);
+    fn leaving_a_round_goes_back_where_it_came_from() {
+        assert_eq!(CameFrom(AppMode::Editor).after_a_round(None), AppMode::Editor);
+        assert_eq!(CameFrom(AppMode::Prop).after_a_round(Some(&NetRole::Solo)), AppMode::Prop);
+        assert_eq!(CameFrom(AppMode::MainMenu).after_a_round(None), AppMode::MainMenu);
+        assert_eq!(CameFrom(AppMode::Prop).after_a_round(Some(&NetRole::Listen { port: 1 })), AppMode::Editor);
+        assert_eq!(CameFrom(AppMode::Onboarding).after_a_round(None), AppMode::Editor);
+    }
+
+    /// Fails if the record changes on anything but entering Play.
+    #[test]
+    fn entering_play_remembers_the_mode_it_left() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, bevy::state::app::StatesPlugin))
+            .insert_state(AppMode::MainMenu)
+            .init_resource::<CameFrom>()
+            .add_systems(Update, remember_where_play_came_from);
+        for mode in [AppMode::Editor, AppMode::Play, AppMode::Editor, AppMode::Prop] {
+            app.world_mut().resource_mut::<NextState<AppMode>>().set(mode);
+            app.update();
+        }
+        assert_eq!(*app.world().resource::<CameFrom>(), CameFrom(AppMode::Editor));
+    }
+
+    /// Fails if a client that joined from the main menu is remembered as joining from the map
+    /// editor it is bounced to, or a later join keeps the first one's mode.
+    #[test]
+    fn a_client_remembers_the_mode_it_joined_from() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, bevy::state::app::StatesPlugin))
+            .insert_state(AppMode::MainMenu)
+            .insert_resource(NetRole::Solo)
+            .init_resource::<JoinedFrom>()
+            .add_systems(Update, remember_where_a_client_joined_from);
+        app.update();
+        app.insert_resource(NetRole::Client { host: "elsewhere".into(), port: 1 });
+        app.update();
+        // As `back_to_the_map_editor_when_networked` does in the frame the role changes.
+        app.world_mut().resource_mut::<NextState<AppMode>>().set(AppMode::Editor);
+        app.update();
+        assert_eq!(app.world().resource::<JoinedFrom>().after_leaving(), AppMode::MainMenu);
+
+        app.insert_resource(NetRole::Solo);
+        app.update();
+        app.insert_resource(NetRole::Client { host: "elsewhere".into(), port: 1 });
+        app.update();
+        assert_eq!(app.world().resource::<JoinedFrom>().after_leaving(), AppMode::Editor);
     }
 
     /// Both halves: a client that could leave a round would walk out of the

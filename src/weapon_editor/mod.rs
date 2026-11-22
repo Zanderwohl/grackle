@@ -88,6 +88,8 @@ pub struct WeaponEditor {
     /// Read when the mode opens; nothing in this mode edits them.
     loadouts: LoadoutFiles,
     pub problems: Vec<(usize, WeaponProblem)>,
+    /// Files written since the caller last took them, for the File menu's Recent list.
+    pub written: Vec<PathBuf>,
 }
 
 impl WeaponEditor {
@@ -541,6 +543,7 @@ fn save_file(
     match save::save_weapon(&change.pack, &change.key, now, expected, from) {
         Ok(deleted) => {
             info!("Saved {}", path.display());
+            editor.written.push(path.clone());
             editor.mark_saved(&change.pack, &change.key);
             match (from, deleted) {
                 (Some((old, _, true)), Ok(())) => {

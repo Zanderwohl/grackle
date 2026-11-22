@@ -20,7 +20,8 @@ use crate::common::skeleton::Interpolation;
 use strum::IntoEnumIterator;
 use crate::common::app_mode::{mode_menu, AppMode};
 use crate::common::assets::Assets;
-use crate::common::file_menu::{file_menu, FileAction};
+use crate::common::file_menu::{file_menu, DiscardQuestion, DocumentKind, FileAction};
+use crate::common::recent_files::RecentFiles;
 use crate::common::class::Class;
 use crate::common::net::NetRole;
 use crate::editor::multicam::{Insets, MulticamState};
@@ -54,6 +55,7 @@ pub struct AnimPanels {
     left_width: f32,
     right_width: f32,
     timeline_height: f32,
+    discard: DiscardQuestion,
     /// Whether egui is actively using the pointer (a menu open, a widget mid-drag), not merely over a
     /// panel. The strip is a panel's rect, so "over egui" is true across all of it.
     pub egui_wants_pointer: bool,
@@ -69,6 +71,7 @@ impl Default for AnimPanels {
                 AnimTab::Problems,
             ]),
             menu_bar_height: 0.0,
+            discard: DiscardQuestion::default(),
             left_width: 220.0,
             right_width: 300.0,
             timeline_height: DEFAULT_STRIP,
@@ -82,6 +85,7 @@ pub struct AnimUiPlugin;
 impl Plugin for AnimUiPlugin {
     fn build(&self, app: &mut App) {
         crate::common::keybind::ensure(app);
+        crate::common::recent_files::ensure(app);
         app.init_resource::<AnimPanels>()
             .init_resource::<BodyClipDialog>()
             .add_systems(
@@ -104,6 +108,7 @@ struct AnimFiles<'w, 's> {
     layer_blends: Res<'w, crate::common::skeleton::play::LayerBlends>,
     exit: MessageWriter<'w, AppExit>,
     rigs: Local<'s, crate::anim::PreviewRigCache>,
+    recent: ResMut<'w, RecentFiles>,
 }
 
 struct AnimTabs<'a> {
@@ -1648,6 +1653,7 @@ fn panels(
     );
 
     let mut requested: Option<AppMode> = None;
+    let recent = files.recent.of(DocumentKind::Animation).to_vec();
     let mut tabs = AnimTabs {
         editor: &mut editor,
         body: &mut body,
@@ -1673,7 +1679,7 @@ fn panels(
         .show(&mut viewport_ui, |ui| {
             egui::MenuBar::new().ui(ui, |ui| {
                 // `mode_menu` names `AppMode::Animation` outright: this system is gated on it.
-                file_menu(ui, crate::common::file_menu::DOCUMENT, &mut tabs.file);
+                file_menu(ui, DocumentKind::Animation, &recent, &mut tabs.file);
                 let available = edit_availability(tabs.anim.source, tabs.editor, tabs.body);
                 edit_menu(ui, available, &mut tabs.edit);
                 mode_menu(ui, AppMode::Animation, role.as_deref(), tabs.mode);
@@ -1770,7 +1776,7 @@ fn panels(
 
     let clear_keys = tabs.clear_keys;
     let reselect = tabs.reselect;
-    let asked = tabs.file;
+    let asked = tabs.file.take();
     let edit = tabs.edit;
     drop(tabs);
     if clear_keys {
@@ -1779,7 +1785,12 @@ fn panels(
     if let Some(key) = reselect {
         selection.0 = [key].into();
     }
-    handle_files(asked, anim.source, &mut editor, &mut body, &mut files);
+    // What Recent and the demos open is a prop, so it is the prop's edits they would throw away.
+    let mut asked = layout.discard.guard(asked, editor.dirty);
+    if let Some(discarded) = layout.discard.show(&ctx) {
+        asked = Some(discarded);
+    }
+    handle_files(asked, &mut anim, &mut editor, &mut body, &mut files);
     handle_edit(edit, anim.source, &mut editor, &mut body, &files.assets);
 
     // Using the pointer, or with something floating under it (a menu, a combo list). Background panels
@@ -1819,14 +1830,20 @@ fn panels(
 /// Answer the File menu for whichever document the source edits. A prop's clips live in its `.gpp`,
 /// so every action is `prop::ui::handle_files`. The body clips are a pack: Open re-reads the packs,
 /// Save As asks which pack, and New is an empty set (every state on its built-in pose, one undo
-/// step).
+/// step). A recent file or a demo is a prop, so it switches the source to it.
 fn handle_files(
     action: Option<FileAction>,
-    source: ClipSource,
+    anim: &mut AnimEditor,
     editor: &mut PropEditor,
     body: &mut BodyClips,
     files: &mut AnimFiles,
 ) {
+    if action.as_ref().and_then(FileAction::opens).is_some() && anim.source != ClipSource::Prop {
+        anim.source = ClipSource::Prop;
+        anim.selected = None;
+        anim.track = None;
+    }
+    let source = anim.source;
     // Answered first so it reads the same from any source.
     if action == Some(FileAction::Quit) {
         info!("Quitting, as asked");
@@ -1835,7 +1852,9 @@ fn handle_files(
     }
 
     match source {
-        ClipSource::Prop => crate::prop::ui::handle_files(action, editor, &files.prop),
+        ClipSource::Prop => {
+            crate::prop::ui::handle_files(action, editor, &files.prop, &mut files.recent, DocumentKind::Animation)
+        }
         ClipSource::Body => {
             // Polled every frame: the chooser answers on its own thread, seconds later.
             if let Some(pack) = files.body.take() {
@@ -1852,7 +1871,7 @@ fn handle_files(
                 }
                 Some(FileAction::Save) => save_the_body_clips(body, &BodyClips::default_pack()),
                 Some(FileAction::SaveAs) => files.body.ask_where_to_save(),
-                Some(FileAction::Example(_) | FileAction::Quit) | None => {}
+                Some(FileAction::OpenRecent(_) | FileAction::Demo(_) | FileAction::Quit) | None => {}
             }
         }
     }
@@ -1904,7 +1923,7 @@ fn save_the_body_clips(body: &mut BodyClips, pack: &std::path::Path) {
 /// names.
 fn anim_shortcuts(
     actions: Res<crate::common::keybind::Actions>,
-    anim: Res<AnimEditor>,
+    mut anim: ResMut<AnimEditor>,
     mut editor: ResMut<PropEditor>,
     mut body: ResMut<BodyClips>,
     mut files: AnimFiles,
@@ -1919,7 +1938,7 @@ fn anim_shortcuts(
     handle_edit(edit, anim.source, &mut editor, &mut body, &files.assets);
 
     if let Some(action) = FileAction::from_chords(chords) {
-        handle_files(Some(action), anim.source, &mut editor, &mut body, &mut files);
+        handle_files(Some(action), &mut anim, &mut editor, &mut body, &mut files);
     }
 }
 

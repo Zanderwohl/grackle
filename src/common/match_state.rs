@@ -23,7 +23,7 @@ pub struct MatchMode {
 
 impl From<AppMode> for MatchMode {
     fn from(mode: AppMode) -> Self {
-        Self { playing: !mode.is_authoring() }
+        Self { playing: mode == AppMode::Play }
     }
 }
 
@@ -38,6 +38,12 @@ impl From<MatchMode> for AppMode {
     }
 }
 
+/// Sent to every client as the host closes the server, so a client says "Server Closed" rather
+/// than waiting for the link to time out. Its channel is reliable and ordered, so it follows
+/// anything already sent.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ServerClosing;
+
 pub struct MatchStatePlugin;
 
 impl Plugin for MatchStatePlugin {
@@ -49,6 +55,8 @@ impl Plugin for MatchStatePlugin {
         .add_direction(NetworkDirection::ServerToClient);
 
         app.register_message::<MatchMode>()
+            .add_direction(NetworkDirection::ServerToClient);
+        app.register_message::<ServerClosing>()
             .add_direction(NetworkDirection::ServerToClient);
 
         app.add_systems(

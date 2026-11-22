@@ -2,9 +2,9 @@ use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts, EguiPrimaryContextPass};
 use bevy_egui::egui::UiKind;
 
-use crate::common::app_mode::AppMode;
+use crate::common::app_mode::{AppMode, JoinedFrom};
 use crate::common::net::{parse_endpoint, NetRequest, NetRole};
-use crate::common::net_transport::NetStatus;
+use crate::common::net_transport::{LinkLoss, LinkLost, NetStatus};
 use crate::constants::DEFAULT_PORT;
 use crate::get;
 
@@ -77,11 +77,98 @@ pub struct NetMenuPlugin;
 impl Plugin for NetMenuPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ConnectDialog>()
+            .init_resource::<LinkNotice>()
+            .add_message::<LinkLost>()
+            .add_systems(Update, go_back_after_a_lost_link)
             .add_systems(
                 EguiPrimaryContextPass,
-                connect_dialog.run_if(in_state(AppMode::Editor).or_else(in_state(AppMode::MainMenu))),
+                (
+                    connect_dialog.run_if(in_state(AppMode::Editor).or_else(in_state(AppMode::MainMenu))),
+                    // Every mode: the link can fail wherever the client is.
+                    link_notice_window,
+                ),
             );
     }
+}
+
+/// The last lost link, shown until Ok.
+#[derive(Resource, Debug, Default)]
+pub struct LinkNotice(pub Option<LinkLost>);
+
+impl LinkNotice {
+    pub fn is_open(&self) -> bool {
+        self.0.is_some()
+    }
+}
+
+/// A failed link sends the client back to the mode it joined from, wherever it is now, and keeps
+/// the reason for [`link_notice_window`].
+fn go_back_after_a_lost_link(
+    mut lost: MessageReader<LinkLost>,
+    mut notice: ResMut<LinkNotice>,
+    joined: Option<Res<JoinedFrom>>,
+    mode: Res<State<AppMode>>,
+    mut next: ResMut<NextState<AppMode>>,
+) {
+    let Some(last) = lost.read().last() else { return };
+    notice.0 = Some(last.clone());
+    let back = joined.as_deref().copied().unwrap_or_default().after_leaving();
+    if *mode.get() != back {
+        next.set(back);
+    }
+}
+
+fn link_notice_window(mut contexts: EguiContexts, mut notice: ResMut<LinkNotice>) {
+    let Some(lost) = &notice.0 else { return };
+    let Ok(ctx) = contexts.ctx_mut() else { return };
+    let title = match lost.loss {
+        LinkLoss::Disconnected => get!("net.lost.disconnected"),
+        LinkLoss::FailedToConnect => get!("net.lost.failed_to_connect"),
+    };
+    let mut ok = false;
+    egui::Window::new(&title)
+        .id(egui::Id::new("link_notice"))
+        .title_bar(false)
+        .collapsible(false)
+        .resizable(false)
+        .pivot(egui::Align2::CENTER_CENTER)
+        .default_pos(ctx.viewport_rect().center())
+        .order(egui::Order::Foreground)
+        .show(ctx, |ui| {
+            ui.vertical_centered(|ui| {
+                ui.heading(&title);
+                ui.label(&lost.message);
+                ui.add_space(8.0);
+                ok = ui.button(get!("net.lost.ok")).clicked() || ui.input(|input| input.key_pressed(egui::Key::Enter));
+            });
+        });
+    if ok {
+        notice.0 = None;
+    }
+}
+
+/// `None` when not hosting.
+pub fn hosting_summary(role: &NetRole, status: &NetStatus) -> Option<String> {
+    let NetRole::Listen { port } = role else { return None };
+    let mut parts = vec![get!("net.bar.hosting", "port", port)];
+    match status {
+        NetStatus::Hosting { clients } => {
+            parts.push(get!("net.bar.listening"));
+            parts.push(match clients {
+                1 => get!("net.bar.one_client"),
+                count => get!("net.bar.clients", "count", count),
+            });
+        }
+        other => parts.push(other.describe()),
+    }
+    Some(parts.join(" | "))
+}
+
+/// Returns whether it drew anything.
+pub fn hosting_label(ui: &mut egui::Ui, role: &NetRole, status: &NetStatus) -> bool {
+    let Some(summary) = hosting_summary(role, status) else { return false };
+    ui.label(egui::RichText::new(summary).strong());
+    true
 }
 
 /// The `Multiplayer` menu, drawn into the editor's existing menu bar, which is built in one pass by
@@ -100,6 +187,15 @@ pub fn network_menu(
         ui.label(status.describe());
         ui.separator();
 
+        // Hosting again or joining elsewhere would also close the server, so a host is offered only
+        // closing it.
+        if matches!(role, NetRole::Listen { .. }) {
+            if ui.button(get!("net.menu.close_server")).clicked() {
+                ui.close_kind(UiKind::Menu);
+                requests.write(NetRequest::GoSolo);
+            }
+            return;
+        }
         if ui.button(get!("net.menu.host")).clicked() {
             ui.close_kind(UiKind::Menu);
             dialog.show(ConnectMode::Host);
@@ -218,6 +314,26 @@ mod tests {
             endpoint: text.to_owned(),
             error: None,
         }
+    }
+
+    /// Fails if a host's menu bar loses the port or the client count, or a solo game or a client
+    /// says it is hosting.
+    #[test]
+    fn only_a_host_says_it_is_hosting() {
+        let host = NetRole::Listen { port: 27100 };
+        let summary = hosting_summary(&host, &NetStatus::Hosting { clients: 2 }).unwrap();
+        assert_eq!(
+            summary,
+            [get!("net.bar.hosting", "port", 27100), get!("net.bar.listening"), get!("net.bar.clients", "count", 2)].join(" | "),
+        );
+        let alone = hosting_summary(&host, &NetStatus::Hosting { clients: 1 }).unwrap();
+        assert!(alone.ends_with(&get!("net.bar.one_client")), "{alone}");
+        let failed = hosting_summary(&host, &NetStatus::Failed("taken".into())).unwrap();
+        assert!(failed.ends_with(&NetStatus::Failed("taken".into()).describe()), "{failed}");
+
+        assert_eq!(hosting_summary(&NetRole::Solo, &NetStatus::Offline), None);
+        let client = NetRole::Client { host: "elsewhere".into(), port: 27100 };
+        assert_eq!(hosting_summary(&client, &NetStatus::Connected), None);
     }
 
     #[test]

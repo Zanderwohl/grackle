@@ -14,7 +14,8 @@ use super::{code_of, load, save, scan, LangEditor, FILE_EXTENSION, LANG_SUBDIR};
 use crate::common::lang::LangFile;
 use crate::common::app_mode::{mode_menu, AppMode};
 use crate::common::edit_menu::{edit_menu, EditAction, EditAvailability};
-use crate::common::file_menu::{dialog_directory, file_menu, FileAction};
+use crate::common::file_menu::{dialog_directory, file_menu, DocumentKind, FileAction};
+use crate::common::recent_files::RecentFiles;
 use crate::common::lang::{default_packs, FALLBACK_LANG};
 use crate::common::net::NetRole;
 use crate::common::shortcuts::chords;
@@ -174,6 +175,7 @@ pub struct LangUiPlugin;
 impl Plugin for LangUiPlugin {
     fn build(&self, app: &mut App) {
         crate::common::keybind::ensure(app);
+        crate::common::recent_files::ensure(app);
         app.init_resource::<LangFileDialog>()
             .init_resource::<LangUi>()
             .add_systems(OnEnter(AppMode::Lang), |mut state: ResMut<LangUi>| state.rescan())
@@ -198,6 +200,7 @@ fn panels(
     mut next_mode: ResMut<NextState<AppMode>>,
     role: Option<Res<NetRole>>,
     mut exit: MessageWriter<AppExit>,
+    mut recent: ResMut<RecentFiles>,
 ) {
     let Ok(ctx) = contexts.ctx_mut() else { return };
     let ctx = ctx.clone();
@@ -210,7 +213,7 @@ fn panels(
     let mut requests = Requests::default();
     egui::Panel::top("lang_menu_bar").resizable(false).show(&mut window_ui, |ui| {
         egui::MenuBar::new().ui(ui, |ui| {
-            file_menu(ui, crate::common::file_menu::DOCUMENT, &mut requests.file);
+            file_menu(ui, DocumentKind::Lang, recent.of(DocumentKind::Lang), &mut requests.file);
             edit_menu(ui, edit_availability(&editor), &mut requests.edit);
             mode_menu(ui, AppMode::Lang, role.as_deref(), &mut requests.mode);
             ui.separator();
@@ -241,6 +244,10 @@ fn panels(
     if let Some(mode) = requests.mode {
         next_mode.set(mode);
     }
+    // Through the browser's path, so unsaved edits are asked about.
+    if let Some(FileAction::OpenRecent(path)) = &requests.file {
+        requests.open = Some(path.clone());
+    }
     // The file already open is not reloaded: that would throw its edits away.
     if let Some(path) = requests.open.filter(|path| editor.path.as_ref() != Some(path)) {
         match editor.dirty() {
@@ -248,8 +255,9 @@ fn panels(
             false => open_file(&mut editor, path),
         }
     }
-    handle_files(requests.file, &mut editor, &mut state, &dialog);
-    if requests.file == Some(FileAction::Quit) {
+    let quit = requests.file == Some(FileAction::Quit);
+    handle_files(requests.file, &mut editor, &mut state, &dialog, &mut recent);
+    if quit {
         info!("Quitting, as asked");
         exit.write(AppExit::Success);
     }
@@ -715,6 +723,7 @@ fn lang_shortcuts(
     dialog: Res<LangFileDialog>,
     mut editor: ResMut<LangEditor>,
     mut state: ResMut<LangUi>,
+    mut recent: ResMut<RecentFiles>,
 ) {
     let chords = chords(&actions);
     handle_edit(
@@ -726,7 +735,7 @@ fn lang_shortcuts(
         &mut editor,
     );
     if let Some(action) = FileAction::from_chords(chords) {
-        handle_files(Some(action), &mut editor, &mut state, &dialog);
+        handle_files(Some(action), &mut editor, &mut state, &dialog, &mut recent);
     }
 }
 
@@ -748,22 +757,33 @@ fn handle_edit(action: Option<EditAction>, editor: &mut LangEditor) {
     }
 }
 
-/// Quit is the caller's. Called every frame, to collect a dialog's answer.
-fn handle_files(action: Option<FileAction>, editor: &mut LangEditor, state: &mut LangUi, dialog: &LangFileDialog) {
+/// Quit and a recent file are the caller's. Called every frame, to collect a dialog's answer.
+fn handle_files(
+    action: Option<FileAction>,
+    editor: &mut LangEditor,
+    state: &mut LangUi,
+    dialog: &LangFileDialog,
+    recent: &mut RecentFiles,
+) {
     if action == Some(FileAction::New) {
         editor.open(Default::default(), None);
     }
 
     if let Some(result) = dialog.result.lock().unwrap().take() {
         match result {
-            DialogResult::Save(path) => save_to(editor, state, path),
+            DialogResult::Save(path) => save_to(editor, state, path, recent),
             DialogResult::Open(path) => open_file(editor, path),
         }
     }
 
     match action {
+        // Untitled, so a save asks where rather than writing over the shipped file.
+        Some(FileAction::Demo(demo)) => match load(std::path::Path::new(demo.path)) {
+            Ok(doc) => editor.open(doc, None),
+            Err(e) => error!("Opening the lang file: {e}"),
+        },
         Some(FileAction::Save) => match editor.path.clone() {
-            Some(path) => save_to(editor, state, path),
+            Some(path) => save_to(editor, state, path, recent),
             None => ask_where_to_save(editor, dialog),
         },
         Some(FileAction::SaveAs) => ask_where_to_save(editor, dialog),
@@ -784,10 +804,11 @@ fn handle_files(action: Option<FileAction>, editor: &mut LangEditor, state: &mut
     }
 }
 
-fn save_to(editor: &mut LangEditor, state: &mut LangUi, path: PathBuf) {
+fn save_to(editor: &mut LangEditor, state: &mut LangUi, path: PathBuf, recent: &mut RecentFiles) {
     match save(&path, &editor.doc) {
         Ok(()) => {
             info!("Saved lang file to {path:?}");
+            recent.saved(DocumentKind::Lang, &path);
             editor.mark_saved(path.clone());
             if code_of(&path).as_deref() == Some(FALLBACK_LANG) {
                 editor.reload_reference();
