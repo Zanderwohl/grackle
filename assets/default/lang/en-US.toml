@@ -1245,6 +1245,7 @@ unsaved = "Unsaved changes"
 discard = "Open { file } and discard the changes to this file?"
 
 [lang_editor.error]
+rename_reference = "en-US in the default pack is what every language falls back to, so it keeps its name"
 bad_key = "A key is letters, digits, _ and -, joined by dots."
 bad_code = "A language code is letters, digits, _ and -."
 exists = "`{ key }` already exists."

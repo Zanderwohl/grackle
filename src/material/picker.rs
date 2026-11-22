@@ -136,6 +136,8 @@ pub(super) fn show_material_library(
     mut standard: ResMut<Assets<StandardMaterial>>,
     packs: Res<PackAssets>,
     device: BevyDevice,
+    // So a material baked again after a save frees the preview it had.
+    mut registered: Local<HashMap<String, AssetId<Image>>>,
     // Baking waits on the GPU gate; see `gpu::submitting`.
     _main_thread: bevy::ecs::system::NonSendMarker,
 ) {
@@ -145,6 +147,13 @@ pub(super) fn show_material_library(
     }
     let pictures: HashMap<String, AssetId<Image>> =
         names.iter().filter_map(|name| Some((name.clone(), materials.get(name)?.color_map()))).collect();
+    for (name, asset) in &pictures {
+        if let Some(old) = registered.insert(name.clone(), *asset)
+            && old != *asset
+        {
+            contexts.remove_image(old);
+        }
+    }
     let pictures: HashMap<String, egui::TextureId> = pictures
         .into_iter()
         .map(|(name, asset)| (name, contexts.add_image(EguiTextureHandle::Weak(asset))))

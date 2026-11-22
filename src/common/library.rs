@@ -184,7 +184,12 @@ impl NewItem {
     /// Makes the folder the file goes in, which a new pack does not have yet.
     pub fn make_folder(&self) -> Result<(), String> {
         let folder = self.pack.join(self.kind.folder());
-        std::fs::create_dir_all(&folder).map_err(|e| format!("{}: {e}", folder.display()))
+        let new_pack = !self.pack.is_dir();
+        std::fs::create_dir_all(&folder).map_err(|e| format!("{}: {e}", folder.display()))?;
+        if new_pack {
+            crate::common::lang::rescan_packs();
+        }
+        Ok(())
     }
 }
 

@@ -265,12 +265,16 @@ impl BodyClips {
             written += 1;
         }
         // A clip deleted or a state reverted since the last read: this pack's copy goes to the trash,
-        // or it would be read back next time.
-        for name in self.on_disk.clips.keys().filter(|name| !self.doc.clips.contains_key(*name)) {
+        // or it would be read back next time. Never the default pack's, which is shipped content.
+        // A file that will not move is logged rather than abandoning the rest of the save.
+        let shipped = pack == Path::new("assets/default");
+        for name in self.on_disk.clips.keys().filter(|name| !shipped && !self.doc.clips.contains_key(*name)) {
             let path = directory.join(format!("{name}.{CLIP_EXTENSION}"));
             if path.is_file() {
-                crate::common::trash::trash(crate::common::recent_files::DocumentKind::Animation, &path)?;
-                written += 1;
+                match crate::common::trash::trash(crate::common::recent_files::DocumentKind::Animation, &path) {
+                    Ok(_) => written += 1,
+                    Err(e) => error!("Could not move a deleted clip to the trash: {e}"),
+                }
             }
         }
 

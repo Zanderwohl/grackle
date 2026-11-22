@@ -88,7 +88,7 @@ struct Browser {
     new: Option<NewDialog>,
     rename_loadouts: bool,
     /// Asking whether to delete this weapon.
-    deleting: Option<usize>,
+    deleting: Option<(PathBuf, String)>,
     /// The selected weapon's model as its file held it, read when the name changes or the mode
     /// opens. Only for the summary: opening it reads the file again.
     model: Option<(String, Option<(PathBuf, PropDoc)>)>,
@@ -455,7 +455,12 @@ impl Tabs<'_, '_, '_> {
                 }
             }
         }
-        if let Some(index) = self.browser.deleting.filter(|index| *index < self.editor.weapons.len()) {
+        let doomed = self.browser.deleting.clone();
+        let found = doomed.and_then(|(pack, key)| self.editor.weapons.iter().position(|weapon| weapon.pack == pack && weapon.key == key));
+        if self.browser.deleting.is_some() && found.is_none() {
+            self.browser.deleting = None;
+        }
+        if let Some(index) = found {
             let key = self.editor.weapons[index].key.clone();
             let id = Id::new("weapon_confirm_delete");
             let more = |ui: &mut Ui| {
@@ -517,11 +522,13 @@ impl Tabs<'_, '_, '_> {
                 ui.label(egui::RichText::new(bucket.to_string()).strong());
             }
             for index in in_bucket {
-                // A row deleted or renamed above changes the indices; the rest are drawn next frame.
-                if index >= self.editor.weapons.len() {
+                let before = self.editor.weapons.len();
+                self.row_ui(ui, index);
+                // A duplicate or override inserted a row, so the indices after it moved; the rest
+                // are drawn next frame.
+                if self.editor.weapons.len() != before {
                     return;
                 }
-                self.row_ui(ui, index);
             }
         }
     }
@@ -602,7 +609,7 @@ impl Tabs<'_, '_, '_> {
         });
         ui.separator();
         if ui.button(get!("weapon_editor.browser.delete")).clicked() {
-            self.browser.deleting = Some(index);
+            self.browser.deleting = Some((weapon.pack.clone(), weapon.key.clone()));
             ui.close();
         }
     }

@@ -18,7 +18,7 @@ use crate::common::file_menu::{dialog_directory, file_menu, DocumentKind, FileAc
 use crate::common::library::{pack_name, NewDialog, NewOutcome};
 use crate::common::list_row::{begin_rename, renamable_row, RowEvent};
 use crate::common::recent_files::RecentFiles;
-use crate::common::lang::{default_packs, FALLBACK_LANG};
+use crate::common::lang::{default_packs, FALLBACK_LANG, LANG_DIR};
 use crate::common::net::NetRole;
 use crate::common::shortcuts::chords;
 use crate::get;
@@ -243,7 +243,7 @@ fn panels(
 
     dialogs(&ctx, &mut editor, &mut state, &mut requests);
     if let Some((from, code)) = requests.rename.take() {
-        rename_file(&mut editor, &mut state, &from, &code);
+        rename_file(&mut editor, &mut state, &mut recent, &from, &code);
     }
 
     editor.checkpoint_when_idle(!ctx.egui_is_using_pointer() && !ctx.egui_wants_keyboard_input());
@@ -347,6 +347,11 @@ fn browser(ui: &mut Ui, editor: &LangEditor, state: &mut LangUi, requests: &mut 
 
 /// What is wrong with renaming the file at `path` to `code`, beside it.
 fn rename_problem(path: &Path, code: &str) -> Option<String> {
+    // Every other language falls back to it, key by key.
+    let reference = code_of(path).as_deref() == Some(FALLBACK_LANG) && path.starts_with(LANG_DIR);
+    if reference && code != FALLBACK_LANG {
+        return Some(get!("lang_editor.error.rename_reference"));
+    }
     if !super::doc::valid_segment(code) {
         return Some(get!("lang_editor.error.bad_code"));
     }
@@ -354,7 +359,7 @@ fn rename_problem(path: &Path, code: &str) -> Option<String> {
     (to != path && to.exists()).then(|| get!("lang_editor.error.file_exists", "file", to.display()))
 }
 
-fn rename_file(editor: &mut LangEditor, state: &mut LangUi, from: &Path, code: &str) {
+fn rename_file(editor: &mut LangEditor, state: &mut LangUi, recent: &mut RecentFiles, from: &Path, code: &str) {
     let to = from.with_file_name(format!("{code}.{FILE_EXTENSION}"));
     if let Some(problem) = rename_problem(from, code) {
         return warn!("Renaming {}: {problem}", from.display());
@@ -365,6 +370,7 @@ fn rename_file(editor: &mut LangEditor, state: &mut LangUi, from: &Path, code: &
             if editor.path.as_deref() == Some(from) {
                 editor.path = Some(to.clone());
             }
+            recent.renamed(DocumentKind::Lang, from, &to);
             crate::common::lang::remerge(&default_packs());
             if [code_of(from), code_of(&to)].iter().any(|code| code.as_deref() == Some(FALLBACK_LANG)) {
                 editor.reload_reference();
