@@ -126,7 +126,7 @@ pub(super) fn publish_choices(
     MATERIALS.publish(ctx, materials);
 }
 
-/// The Library for materials, pictured by their color maps. Bakes at most one a frame.
+/// Bakes at most one material a frame.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn show_material_library(
     mut contexts: EguiContexts,

@@ -125,7 +125,6 @@ pub(super) fn publish_prop_choices(
     PROPS.publish(ctx, choices);
 }
 
-/// The Library for props, pictured by their thumbnails.
 pub(super) fn show_prop_library(mut previews: PropPreviews, mut library: ResMut<crate::common::library::Library>) {
     let names: Vec<String> = library.entries().iter().map(|entry| entry.name.clone()).collect();
     previews.want_pictures(names.iter().map(String::as_str));

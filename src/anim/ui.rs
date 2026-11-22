@@ -57,7 +57,6 @@ pub struct AnimPanels {
     right_width: f32,
     timeline_height: f32,
     discard: DiscardQuestion,
-    /// Asking whether to delete this.
     deleting: Option<Doomed>,
     /// Whether egui is actively using the pointer (a menu open, a widget mid-drag), not merely over a
     /// panel. The strip is a panel's rect, so "over egui" is true across all of it.
@@ -159,7 +158,6 @@ impl Doomed {
     }
 }
 
-/// What is wrong with renaming `name` to `typed` among `siblings`.
 fn taken(typed: &str, name: &str, siblings: &[String]) -> Option<String> {
     if typed.is_empty() {
         return Some(get!("library.new.no_name"));

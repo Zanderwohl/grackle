@@ -345,7 +345,6 @@ fn browser(ui: &mut Ui, editor: &LangEditor, state: &mut LangUi, requests: &mut 
     }
 }
 
-/// What is wrong with renaming the file at `path` to `code`, beside it.
 fn rename_problem(path: &Path, code: &str) -> Option<String> {
     // Every other language falls back to it, key by key.
     let reference = code_of(path).as_deref() == Some(FALLBACK_LANG) && path.starts_with(LANG_DIR);

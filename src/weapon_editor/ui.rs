@@ -87,7 +87,6 @@ enum WeaponTab {
 struct Browser {
     new: Option<NewDialog>,
     rename_loadouts: bool,
-    /// Asking whether to delete this weapon.
     deleting: Option<(PathBuf, String)>,
     /// The selected weapon's model as its file held it, read when the name changes or the mode
     /// opens. Only for the summary: opening it reads the file again.
@@ -591,7 +590,6 @@ impl Tabs<'_, '_, '_> {
             begin_rename(ui.ctx(), Id::new(("weapon_row", &weapon.pack, &key)), &key);
             ui.close();
         }
-        // Only a later pack can override.
         let rank = |pack: &PathBuf| self.packs.iter().position(|of| of == pack);
         let later: Vec<PathBuf> = self.packs.iter().filter(|pack| rank(pack) > rank(&weapon.pack)).cloned().collect();
         ui.add_enabled_ui(!later.is_empty(), |ui| {

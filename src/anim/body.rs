@@ -264,9 +264,8 @@ impl BodyClips {
             std::fs::write(&path, text).map_err(|e| format!("{}: {e}", path.display()))?;
             written += 1;
         }
-        // A clip deleted or a state reverted since the last read: this pack's copy goes to the trash,
-        // or it would be read back next time. Never the default pack's, which is shipped content.
-        // A file that will not move is logged rather than abandoning the rest of the save.
+        // A clip deleted or reverted since the last read would be read back next time. The default
+        // pack's are shipped, so they are never trashed.
         let shipped = pack == Path::new("assets/default");
         for name in self.on_disk.clips.keys().filter(|name| !shipped && !self.doc.clips.contains_key(*name)) {
             let path = directory.join(format!("{name}.{CLIP_EXTENSION}"));

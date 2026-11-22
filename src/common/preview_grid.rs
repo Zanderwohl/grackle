@@ -74,7 +74,6 @@ fn font(inside: egui::Vec2) -> egui::FontId {
     egui::FontId::proportional((inside.min_elem() / 6.0).clamp(8.0, 16.0))
 }
 
-/// The stand-in for a kind with no preview yet.
 pub fn no_preview(painter: &egui::Painter, rect: egui::Rect, name: &str) {
     painter.rect_filled(rect, 2.0, egui::Color32::WHITE);
     let width = rect.width() - 4.0;

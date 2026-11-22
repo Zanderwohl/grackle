@@ -27,7 +27,6 @@ const TILE: f32 = 160.0;
 const MARGIN: f32 = 100.0;
 
 impl DocumentKind {
-    /// The folder each pack keeps this kind in.
     pub fn folder(self) -> &'static str {
         match self {
             DocumentKind::Map => crate::constants::BLUEPRINTS_DIR,
@@ -79,12 +78,11 @@ impl DocumentKind {
         }
     }
 
-    /// Where a file of this kind named `name` goes in `pack`.
     pub fn path_in(self, pack: &Path, name: &str) -> PathBuf {
         pack.join(self.folder()).join(format!("{name}.{}", self.extension()))
     }
 
-    /// What is wrong with `name` as one of these, before asking whether it is taken.
+    /// Before asking whether it is taken.
     fn name_problem(self, name: &str) -> Option<String> {
         if name.is_empty() {
             return Some(get!("library.new.no_name"));
@@ -103,7 +101,6 @@ impl DocumentKind {
     }
 }
 
-/// Letters, digits, spaces, `_` and `-`, not starting with a space.
 fn valid_file_name(name: &str) -> bool {
     !name.starts_with(' ') && name.chars().all(|c| c.is_alphanumeric() || matches!(c, '_' | '-' | ' '))
 }
@@ -121,7 +118,6 @@ pub fn packs() -> Vec<PathBuf> {
     packs
 }
 
-/// "User" and "Default" for those two, else the folder's name.
 pub fn pack_name(pack: &Path) -> String {
     if pack == Path::new(USER_PACK) {
         get!("library.pack.user")
@@ -140,8 +136,7 @@ pub struct LibraryEntry {
     pub path: PathBuf,
 }
 
-/// Every file of `kind` in every pack, by name and then in [`packs`] order. Authoring side only:
-/// read from disk, as a pack offers no listing of its own.
+/// Authoring side only: read from disk, as a pack offers no listing of its own.
 pub fn scan(kind: DocumentKind) -> Vec<LibraryEntry> {
     let packs = packs();
     let mut entries = Vec::new();
@@ -169,11 +164,9 @@ pub enum NewExtra {
     Map(GameMode),
 }
 
-/// What the New dialog was answered with.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewItem {
     pub kind: DocumentKind,
-    /// Made with its folder for the kind when it is a new pack.
     pub pack: PathBuf,
     pub name: String,
     pub path: PathBuf,
@@ -181,7 +174,7 @@ pub struct NewItem {
 }
 
 impl NewItem {
-    /// Makes the folder the file goes in, which a new pack does not have yet.
+    /// A new pack has no folder yet.
     pub fn make_folder(&self) -> Result<(), String> {
         let folder = self.pack.join(self.kind.folder());
         let new_pack = !self.pack.is_dir();
@@ -205,7 +198,6 @@ pub enum NewOutcome {
     Create(NewItem),
 }
 
-/// Asks for a name and a pack, and an archetype for a prop or a mode for a map.
 #[derive(Debug, Clone)]
 pub struct NewDialog {
     kind: DocumentKind,
@@ -327,7 +319,7 @@ impl NewDialog {
                     }
                 }
             });
-            // Shown only once there is a name, so the dialog does not open scolding.
+            // Only once there is a name, so a fresh dialog shows no error.
             if let Some(problem) = problem.as_ref().filter(|_| !self.name.trim().is_empty()) {
                 ui.colored_label(ui.visuals().error_fg_color, problem);
             }
@@ -365,7 +357,6 @@ struct Showing {
     new: Option<NewDialog>,
 }
 
-/// Which Library is up, and what was chosen from it until its mode takes it.
 #[derive(Resource, Default)]
 pub struct Library {
     showing: Option<Showing>,
@@ -401,8 +392,7 @@ impl Library {
         }
     }
 
-    /// Draws the Library while it is up. `preview` is the picture of an entry, if its kind has one;
-    /// `elsewhere` is passed to the New dialog.
+    /// `preview` is an entry's picture, if its kind has one.
     pub fn show(
         &mut self,
         ctx: &egui::Context,
@@ -500,7 +490,6 @@ pub fn ensure(app: &mut App) {
     }
 }
 
-/// The Library for maps, which have no previews yet.
 pub fn show_map_library(mut contexts: bevy_egui::EguiContexts, mut library: ResMut<Library>) {
     let Ok(ctx) = contexts.ctx_mut() else { return };
     library.show(ctx, &mut |_| None, &|_| None);

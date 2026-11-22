@@ -16,7 +16,7 @@ pub struct Leading {
     pub size: f32,
 }
 
-/// Picked, hovered or plain; the text truncated rather than widening the list.
+/// The text is truncated rather than widening the list.
 pub fn row(ui: &mut egui::Ui, selected: bool, text: impl Into<egui::WidgetText>, leading: Option<Leading>) -> egui::Response {
     let padding = ui.spacing().button_padding;
     let width = ui.available_width();
@@ -83,7 +83,6 @@ pub fn is_renaming(ctx: &egui::Context, row: egui::Id) -> bool {
 pub enum RowEvent {
     /// The row as drawn, with no rename open on it.
     Row(egui::Response),
-    /// Still being typed.
     Renaming,
     /// What was typed, which `problem` found nothing wrong with.
     Renamed(String),
@@ -119,7 +118,6 @@ pub fn renamable_row(
     } else if field.lost_focus() {
         match (wrong, enter) {
             (None, _) => RowEvent::Renamed(renaming.text.trim().to_owned()),
-            // Enter on a bad name keeps the field up to fix it.
             (Some(_), true) => {
                 renaming.focused = false;
                 RowEvent::Renaming

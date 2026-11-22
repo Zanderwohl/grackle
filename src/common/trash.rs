@@ -28,7 +28,6 @@ impl DocumentKind {
     }
 }
 
-/// Moves `path` into the trash, returning where it went.
 pub fn trash(kind: DocumentKind, path: &Path) -> Result<PathBuf, String> {
     trash_into(&Path::new(TRASH_DIR).join(kind.trash_key()), path, SystemTime::now())
 }
