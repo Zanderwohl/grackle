@@ -21,7 +21,7 @@ use crate::common::skeleton::play::{
 };
 use crate::common::skeleton::rig::ScratchPose;
 use crate::common::skeleton::{Pose, Skeleton};
-use crate::common::weapon::{Equipped, WeaponCatalog, WeaponId};
+use crate::common::weapon::{Ammo, Equipped, WeaponCatalog, WeaponId};
 use crate::common::taunt::{Taunts, WeaponTaunts};
 use crate::game::condition::Condition;
 use crate::game::player::{LocalPlayer, Player, ViewMode};
@@ -67,6 +67,8 @@ pub struct HeldModel {
     /// Handles off the bake, so a save refilled under them is what plays.
     clips: BTreeMap<String, Handle<Clip>>,
     rig: PropRig,
+    /// The class the hold and clips were chosen for, so a `Class` arriving late re-dresses it.
+    class: Option<Class>,
 }
 
 /// What a body's weapon, or the viewmodel's, is in the middle of doing. Named
@@ -374,6 +376,7 @@ fn dress_held_weapons(
             && drawn.weapon == held
             && drawn.resolved
             && drawn.cached_at == cache.generation()
+            && drawn.class == class.copied()
         {
             continue;
         }
@@ -385,14 +388,14 @@ fn dress_held_weapons(
                 if drawn.is_none_or(|drawn| drawn.weapon != held) {
                     replace_parts(
                         &mut commands, body, drawn, vec![], held, false, HoldSpec::default(),
-                        ViewmodelSpec::default(), None, BTreeMap::new(), PropRig::default(), cache.generation(),
+                        ViewmodelSpec::default(), None, BTreeMap::new(), PropRig::default(), cache.generation(), class.copied(),
                     );
                 }
             }
             Wanted::Nothing => {
                 replace_parts(
                     &mut commands, body, drawn, vec![], held, true, HoldSpec::default(),
-                    ViewmodelSpec::default(), None, BTreeMap::new(), PropRig::default(), cache.generation(),
+                    ViewmodelSpec::default(), None, BTreeMap::new(), PropRig::default(), cache.generation(), class.copied(),
                 )
             }
             Wanted::Model(model) => {
@@ -409,7 +412,10 @@ fn dress_held_weapons(
                     hold = baked.hold.for_class(class.copied());
                     viewmodel = baked.viewmodel;
                     muzzle = baked.muzzle.clone();
-                    clips = baked.clips.clone();
+                    clips = crate::common::skeleton::clip::clips_for_class(
+                        &baked.clips,
+                        class.map(|class| Class::key(*class)).as_deref(),
+                    );
                     rig = baked.rig.clone();
                     // Before the parts: a carousel body is spawned without one.
                     commands.entity(body).insert_if_new(Visibility::default()).with_children(|body| {
@@ -436,7 +442,7 @@ fn dress_held_weapons(
                 let cached_at = cache.generation();
                 replace_parts(
                     &mut commands, body, drawn, spawned, held, true, hold, viewmodel, muzzle,
-                    clips, rig, cached_at,
+                    clips, rig, cached_at, class.copied(),
                 );
 
             }
@@ -458,6 +464,7 @@ fn replace_parts(
     clips: BTreeMap<String, Handle<Clip>>,
     rig: PropRig,
     cached_at: u64,
+    class: Option<Class>,
 ) {
     if let Some(drawn) = drawn {
         for part in &drawn.parts {
@@ -467,7 +474,7 @@ fn replace_parts(
     commands
         .entity(body)
         .insert((
-            HeldModel { weapon, resolved, parts, hold, viewmodel, muzzle, clips, rig, cached_at },
+            HeldModel { weapon, resolved, parts, hold, viewmodel, muzzle, clips, rig, cached_at, class },
             WeaponInHand::default(),
         ));
 }
@@ -717,7 +724,12 @@ pub(crate) fn grip_the_weapon(
         let holding = stack.map_or(1.0, |stack| {
             crate::common::skeleton::play::controller_weight(stack, &clips, crate::common::skeleton::clip::Controller::Hold)
         });
-        let cover = arms.map(|arm| stack.map_or(0.0, |stack| stack.cover(arm, Layer::Weapon)).max(1.0 - holding));
+        let grips = stack.map_or(Default::default(), |stack| grip_offsets(stack, &clips, skeleton));
+        let mut cover = arms.map(|arm| stack.map_or(0.0, |stack| stack.cover(arm, Layer::Weapon)).max(1.0 - holding));
+        // A one-handed weapon's free hand is held only as far as a clip takes it.
+        if held.hold.support_frame().is_none() {
+            cover[1] = cover[1].max(1.0 - grips.taken[1]);
+        }
         if cover.iter().all(|cover| *cover >= 1.0) {
             continue;
         }
@@ -729,7 +741,6 @@ pub(crate) fn grip_the_weapon(
             clipped.copy_from(pose);
             clipped
         });
-        let grips = stack.map_or([Vec3::ZERO; 2], |stack| grip_offsets(stack, &clips, skeleton));
         grip_hands(skeleton, pose, &root, &held.hold, &weapon.0, cover.map(|cover| cover < 1.0), grips);
 
         let Some(clipped) = clipped else { continue };
@@ -812,16 +823,24 @@ fn show_held_weapons(
 /// Prop bones are posed here rather than in the pose chain, since only the drawing reads them.
 pub(crate) fn place_held_weapons(
     clips: Res<Assets<Clip>>,
-    bodies: Query<(&HeldModel, &WeaponInHand, &ClipStack)>,
+    catalog: Option<Res<WeaponCatalog>>,
+    bodies: Query<(&HeldModel, &WeaponInHand, &ClipStack, Option<&Ammo>)>,
     mut parts: Query<(&mut Transform, Option<&OnPropBone>), With<HeldPart>>,
 ) {
-    for (held, weapon, stack) in &bodies {
-        let deltas = held.rig.deltas_for(stack, &clips);
+    for (held, weapon, stack, ammo) in &bodies {
+        let deltas = held.rig.drawn_deltas(stack, &clips, loaded(catalog.as_deref(), held.weapon, ammo));
         for part in &held.parts {
             let Ok((mut transform, bone)) = parts.get_mut(*part) else { continue };
             transform.set_if_neq(place_part(weapon.0, &deltas, bone));
         }
     }
+}
+
+/// `weapon` is the one the parts were built for: a switch changes `Equipped` a frame before the
+/// parts. Anything not known yet counts as loaded.
+pub(crate) fn loaded(catalog: Option<&WeaponCatalog>, weapon: Option<WeaponId>, ammo: Option<&Ammo>) -> bool {
+    let Some(ammo) = ammo else { return true };
+    weapon.and_then(|id| catalog?.get(id)).is_none_or(|weapon| ammo.loaded(weapon))
 }
 
 #[cfg(test)]
@@ -947,7 +966,7 @@ mod tests {
                     muzzle: None,
                     clips: BTreeMap::new(),
                     rig: PropRig::default(),
-                    cached_at: 0,
+                    cached_at: 0, class: None,
                 },
                 WeaponInHand::default(),
             ))
@@ -1010,7 +1029,7 @@ mod tests {
                     muzzle: None,
                     clips,
                     rig: PropRig::default(),
-                    cached_at: 0,
+                    cached_at: 0, class: None,
                 },
                 Performance::default(),
                 ClipStack::default(),
@@ -1074,7 +1093,7 @@ mod tests {
                     muzzle: None,
                     clips,
                     rig: PropRig::default(),
-                    cached_at: 0,
+                    cached_at: 0, class: None,
                 },
                 Performance::default(),
                 ClipStack::default(),
@@ -1224,6 +1243,101 @@ mod tests {
         assert!(shared.distance(gripped) > 0.2 * span, "the hand snapped onto the weapon");
     }
 
+    /// Fails if a fading reload snaps a one-handed weapon's free hand onto it.
+    #[test]
+    fn a_fading_reload_brings_the_free_hand_in_part_way() {
+        let doc = crate::prop::document::parse(include_str!("../../assets/default/props/rpg.gpp")).unwrap();
+        let reload = doc.animations.clips["body_reload"].clone();
+        let hand = |weight: Option<f32>| {
+            let mut world = World::new();
+            let body = body_holding(&mut world, Class::Soldier, 0.0);
+            world.get_mut::<HeldModel>(body).unwrap().hold = doc.hold.clone();
+            if let Some(weight) = weight {
+                let clip = world.resource_mut::<Assets<Clip>>().add(reload.clone());
+                world.entity_mut(body).insert(ClipStack(vec![Playing { weight, ..Playing::new(Layer::Weapon, clip, 0.3) }]));
+            }
+            world.run_system_once(place_the_weapon).unwrap();
+            world.run_system_once(play_the_clips).unwrap();
+            world.run_system_once(grip_the_weapon).unwrap();
+            let skeleton = world.get::<Skeleton>(body).unwrap().clone();
+            let pose = world.get::<Pose>(body).unwrap().clone();
+            let weapon = world.get::<WeaponInHand>(body).unwrap().0;
+            let index = skeleton.index_of(bone::HAND_L).unwrap();
+            weapon.rotation.inverse() * (skeleton.posed_bones(&pose, &Transform::IDENTITY)[index].head - weapon.translation)
+        };
+        let (free, taken, halfway) = (hand(None), hand(Some(1.0)), hand(Some(0.5)));
+        let span = free.distance(taken);
+        assert!(span > 0.1, "the reload did not take the hand");
+        assert!(halfway.distance(free) > 0.2 * span, "the hand stayed where it was");
+        assert!(halfway.distance(taken) > 0.2 * span, "the hand jumped onto the weapon");
+    }
+
+    /// Fails if a build, the raptor through its own clip, misses a key of the RPG's reload or lets
+    /// the round slip in its free hand.
+    #[test]
+    fn the_rpgs_reload_carries_the_round_in_the_free_hand() {
+        let doc = crate::prop::document::parse(include_str!("../../assets/default/props/rpg.gpp")).unwrap();
+        assert!(!doc.hold.two_handed);
+        let rig = PropRig::of(&doc.bones);
+        let round = rig.index_of("round").unwrap();
+        // The warhead's middle, seated, in the prop's frame.
+        let grasp = Vec3::new(0.0, 0.22, -0.67);
+        let builds = crate::common::class::ClassBuilds::shipped();
+        let classes: Vec<Class> = builds.humanoids().into_iter().chain([Class::Raptor]).collect();
+
+        for class in classes {
+            let reload = crate::common::skeleton::clip::clips_for_class(&doc.animations.clips, Some(&Class::key(class)))
+                ["body_reload"]
+                .clone();
+            let hold = doc.hold.for_class(Some(class));
+            let mut hand_to_round = None;
+            for step in 0..=20 {
+                let time = reload.length * step as f32 / 20.0;
+                let mut world = World::new();
+                let body = body_holding(&mut world, class, 0.0);
+                world.entity_mut(body).insert(builds.rig_for(class));
+                world.get_mut::<HeldModel>(body).unwrap().hold = hold.clone();
+                let clip = world.resource_mut::<Assets<Clip>>().add(reload.clone());
+                let stack = ClipStack(vec![Playing::new(Layer::Weapon, clip, time)]);
+                world.entity_mut(body).insert(stack.clone());
+                world.run_system_once(place_the_weapon).unwrap();
+                world.run_system_once(play_the_clips).unwrap();
+                world.run_system_once(grip_the_weapon).unwrap();
+
+                let skeleton = world.get::<Skeleton>(body).unwrap().clone();
+                let pose = world.get::<Pose>(body).unwrap().clone();
+                let weapon = world.get::<WeaponInHand>(body).unwrap().0;
+                let free = skeleton.anatomy().hand(1).and_then(|limb| limb.chain.tip).unwrap();
+                let index = skeleton.index_of(free).unwrap();
+                let hand = skeleton.posed_bones(&pose, &Transform::IDENTITY)[index].head;
+                let clips = world.resource::<Assets<Clip>>();
+                let grips = grip_offsets(&stack, clips, &skeleton);
+                assert!(grips.taken[1] >= 1.0, "the reload does not take the free hand at {time}");
+                let wanted = weapon.transform_point(hold.loose_support_frame().translation + grips[1]);
+                assert!(
+                    hand.distance(wanted) < 0.02,
+                    "{class:?}'s free hand is {} off where the reload put it at {time}",
+                    hand.distance(wanted),
+                );
+
+                // Seated, the hand lets go of it.
+                let deltas = rig.drawn_deltas(&stack, clips, false);
+                if deltas[round].scale == Vec3::ZERO || deltas[round].translation.length() < 1e-3 {
+                    continue;
+                }
+                let held_at = weapon.transform_point(deltas[round].transform_point(grasp));
+                let apart = held_at - hand;
+                let first = *hand_to_round.get_or_insert(apart.length());
+                assert!(
+                    (apart.length() - first).abs() < 0.01,
+                    "{class:?}'s round slips {} in the hand at {time}",
+                    (apart.length() - first).abs(),
+                );
+            }
+            assert!(hand_to_round.is_some(), "the round never left the tube");
+        }
+    }
+
     /// The shared reload takes the support hand to the magazine well and back,
     /// and every build reaches the whole way.
     #[test]
@@ -1308,7 +1422,7 @@ mod tests {
             HeldModel {
                 weapon: None, resolved: true, parts: vec![part],
                 hold: HoldSpec::default(), viewmodel: ViewmodelSpec::default(), muzzle: None,
-                clips: BTreeMap::new(), rig: PropRig::default(), cached_at: 0,
+                clips: BTreeMap::new(), rig: PropRig::default(), cached_at: 0, class: None,
             },
             WeaponInHand(decided),
         ));

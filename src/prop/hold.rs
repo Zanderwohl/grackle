@@ -16,6 +16,7 @@ use crate::common::class::Class;
 
 use crate::common::rotation::quat_from_euler;
 use crate::common::skeleton::ik::{self, reach_or_leave, Reach};
+use crate::common::skeleton::play::Grips;
 use crate::common::skeleton::{Pose, Skeleton};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -333,10 +334,13 @@ impl HoldSpec {
     }
 
     pub fn support_frame(&self) -> Option<Transform> {
-        self.support().map(|at| {
-            Transform::from_translation(at)
-                .with_rotation(quat_from_euler(Vec3::from_array(self.support_rotation)))
-        })
+        self.two_handed.then(|| self.loose_support_frame())
+    }
+
+    /// The support grip whether or not the weapon is held with it.
+    pub fn loose_support_frame(&self) -> Transform {
+        Transform::from_translation(Vec3::from_array(self.support))
+            .with_rotation(quat_from_euler(Vec3::from_array(self.support_rotation)))
     }
 }
 
@@ -390,13 +394,14 @@ pub fn grip_with(
     hold: &HoldSpec,
     weapon: &Transform,
 ) -> [Reach; 2] {
-    grip_hands(skeleton, pose, root, hold, weapon, [true; 2], [Vec3::ZERO; 2])
+    grip_hands(skeleton, pose, root, hold, weapon, [true; 2], Grips::default())
 }
 
 /// [`grip_with`], solving only the hands in `which`, trigger hand first. A
 /// hand left out is untouched and reports `Impossible`. Each grip is moved by
-/// its `offsets` entry, in the weapon's axes, keeping the hand's rotation:
-/// what a clip's `Space::Grip` tracks ask for.
+/// its `grips` entry, in the weapon's axes, keeping the hand's rotation:
+/// what a clip's `Space::Grip` tracks ask for. A one-handed weapon's free hand
+/// goes to the stored support point while a track keys it.
 pub fn grip_hands(
     skeleton: &Skeleton,
     pose: &mut Pose,
@@ -404,10 +409,17 @@ pub fn grip_hands(
     hold: &HoldSpec,
     weapon: &Transform,
     which: [bool; 2],
-    offsets: [Vec3; 2],
+    grips: Grips,
 ) -> [Reach; 2] {
     let mut reached = [Reach::Impossible; 2];
-    let frames = [Some(hold.grip_frame()), hold.support_frame()];
+    let loose = hold.support_frame().is_none();
+    let support = hold.support_frame().or_else(|| (grips.taken[1] > 0.0).then(|| hold.loose_support_frame()));
+    let frames = [Some(hold.grip_frame()), support];
+    // A fading clip moves a free hand by its whole key; the caller blends the arm instead.
+    let mut offsets = grips.offsets;
+    if loose && grips.taken[1] > 0.0 {
+        offsets[1] /= grips.taken[1];
+    }
 
     for (index, frame) in frames.into_iter().enumerate() {
         let Some(limb) = skeleton.anatomy().hand(index).copied() else { continue };

@@ -337,7 +337,7 @@ pub fn pose_the_figure(
         if holding {
             let grips = match (performance.as_deref(), clips.as_deref()) {
                 (Some(performance), Some(clips)) => grip_offsets(&performance.0, clips, skeleton),
-                _ => [Vec3::ZERO; 2],
+                _ => Default::default(),
             };
             let reached = grip_hands(skeleton, &mut standing, &root, hold, &placed, [true; 2], grips);
             if reach.0 != reached {

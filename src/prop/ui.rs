@@ -2211,6 +2211,7 @@ fn bones_ui(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
                     });
                 });
                 changed |= vec3_ui(ui, get!("prop.bones.pivot"), &mut bone.pivot, 0.001, "m");
+                changed |= ui.checkbox(&mut bone.round, get!("prop.bones.round")).changed();
                 ui.label(get!("prop.bones.parts"));
                 for (body, (id, name)) in bodies.iter().enumerate() {
                     let mut bound = riding[body] == Some(index);

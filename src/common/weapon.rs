@@ -633,6 +633,14 @@ impl Ammo {
         &mut self.weapons[index].1
     }
 
+    /// A weapon with no entry yet counts as loaded, so it is drawn as modeled.
+    pub fn loaded(&self, weapon: &Weapon) -> bool {
+        self.at(weapon.id).is_none_or(|state| match weapon.magazine.clip {
+            Some(_) => state.clip > 0,
+            None => state.reserve > 0,
+        })
+    }
+
     pub fn full(magazine: &Magazine) -> AmmoState {
         AmmoState {
             clip: magazine.clip.unwrap_or(0),

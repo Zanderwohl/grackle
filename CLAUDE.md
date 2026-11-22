@@ -1530,6 +1530,20 @@ masked where a layer above claims the weapon. A placed prop loops its `idle`
 and plays `hit` on each `DamageDealt` naming it, which is relayed, so every
 machine draws it; hats and thumbnails stand in rest. The pistol's slide kicks
 on `fire` and its magazine drops in its reloads; the crate jolts on `hit`.
+A bone marked **`round`** holds the round ready to fire: in hand and in first
+person it is scaled to nothing while the held weapon has none (`Ammo::loaded`),
+unless a playing clip has reached that bone's first key
+(`PropRig::drawn_deltas`). A clip ends, so the ammo keeps a fired round
+hidden, and a reload shows the next one from the key that places it. The RPG's
+rocket is one; its reloads fetch it from the hip in the free hand. A
+one-handed weapon's free hand is gripped onto it at the stored support point
+as far as a clip keying a `Space::Grip` track for it shows (`Grips::taken`),
+by the whole key, its arm mixed with what it was doing, so a clip's
+`blend_in` and `blend_out` ease it on and off. A prop clip named
+`{clip}@{class key}` (`body_reload@raptor`) is what that class plays for
+`{clip}`, chosen as the hold's `per_class` is (`clips_for_class`). A rig stood
+by its carry in first person (the raptor) is stood from the weapon's framing,
+not from where its clips move it, so a swing moves the weapon and not the body.
 
 ## What a prop can be
 
