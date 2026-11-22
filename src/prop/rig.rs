@@ -28,11 +28,15 @@ pub struct PropBone {
     /// [`bone_of_each_body`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub parts: Vec<PropFeatureId>,
+    /// Its parts are the round ready to fire, so a held weapon with none draws them shrunk to
+    /// nothing; see [`PropRig::hide_spent_rounds`].
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub round: bool,
 }
 
 impl PropBone {
     pub fn new(name: impl Into<String>, pivot: Vec3) -> PropBone {
-        PropBone { name: name.into(), parent: None, pivot: pivot.to_array(), parts: vec![] }
+        PropBone { name: name.into(), parent: None, pivot: pivot.to_array(), parts: vec![], round: false }
     }
 }
 
@@ -47,6 +51,7 @@ pub struct RigBone {
     pub name: String,
     pub parent: Option<usize>,
     pub pivot: Vec3,
+    pub round: bool,
 }
 
 impl PropRig {
@@ -58,7 +63,12 @@ impl PropRig {
                 .parent
                 .as_deref()
                 .and_then(|parent| rig.bones.iter().position(|earlier| earlier.name == parent));
-            rig.bones.push(RigBone { name: bone.name.clone(), parent, pivot: Vec3::from_array(bone.pivot) });
+            rig.bones.push(RigBone {
+                name: bone.name.clone(),
+                parent,
+                pivot: Vec3::from_array(bone.pivot),
+                round: bone.round,
+            });
         }
         rig
     }
@@ -240,6 +250,52 @@ impl PropRig {
     }
 }
 
+impl PropRig {
+    /// [`PropRig::deltas_for`], with the rounds hidden as [`PropRig::hide_spent_rounds`] says.
+    pub fn drawn_deltas(&self, stack: &ClipStack, clips: &Assets<Clip>, loaded: bool) -> Vec<Transform> {
+        let mut deltas = self.deltas_for(stack, clips);
+        self.hide_spent_rounds(&mut deltas, stack, clips, loaded);
+        deltas
+    }
+
+    /// Scales each round bone, and every bone under it, to nothing while the weapon is not
+    /// `loaded`, unless a playing clip has reached that bone's first key. A clip ends, so it
+    /// cannot keep a fired round hidden; the ammo does, and a reload's clip shows the next round
+    /// from the key that first places it.
+    pub fn hide_spent_rounds(&self, deltas: &mut [Transform], stack: &ClipStack, clips: &Assets<Clip>, loaded: bool) {
+        if loaded || !self.bones.iter().any(|bone| bone.round) {
+            return;
+        }
+        let mut hidden = vec![false; self.bones.len()];
+        for (index, bone) in self.bones.iter().enumerate() {
+            let under_hidden = bone.parent.is_some_and(|parent| hidden[parent]);
+            hidden[index] = under_hidden || (bone.round && !clip_places(stack, clips, &bone.name));
+            if hidden[index]
+                && let Some(delta) = deltas.get_mut(index)
+            {
+                delta.scale = Vec3::ZERO;
+            }
+        }
+    }
+}
+
+/// Whether a playing clip the weapon is not masked from has reached its first key on `bone`.
+fn clip_places(stack: &ClipStack, clips: &Assets<Clip>, bone: &str) -> bool {
+    shown_layers(stack, clips).any(|(playing, clip, _, masked)| {
+        let time = clip.wrap(playing.time);
+        !masked.overlaps(Regions::WEAPON)
+            && clip.tracks.iter().filter(|track| track.enabled).any(|track| match &track.channel {
+                Channel::PropBone { bone: keyed, keys } | Channel::PropBoneOffset { bone: keyed, keys } => {
+                    keyed == bone
+                        && keys.iter().map(|key| key.at).reduce(f32::min).is_some_and(|first| {
+                            track_time(track.timing, time, None) >= first
+                        })
+                }
+                _ => false,
+            })
+    })
+}
+
 pub fn place_part(prop: Transform, deltas: &[Transform], bone: Option<&OnPropBone>) -> Transform {
     match bone.and_then(|bone| deltas.get(bone.0)) {
         Some(delta) => prop * *delta,
@@ -366,6 +422,74 @@ mod tests {
             apply_clip(&doc.animations.clips[clip], 0.03, &rig, &mut pose);
             // Forward is -Z, so back is +Z.
             assert!(rig.deltas(&pose)[slide].transform_point(Vec3::ZERO).z > 0.02, "{clip}");
+        }
+    }
+
+    fn round_rig() -> PropRig {
+        let mut round = PropBone::new("round", Vec3::ZERO);
+        round.round = true;
+        let mut fins = PropBone::new("fins", Vec3::ZERO);
+        fins.parent = Some("round".into());
+        PropRig::of(&[round, fins, PropBone::new("slide", Vec3::ZERO)])
+    }
+
+    fn stack_of(clip: Clip, time: f32) -> (ClipStack, Assets<Clip>) {
+        let mut clips = Assets::<Clip>::default();
+        let handle = clips.add(clip);
+        (ClipStack(vec![crate::common::skeleton::play::Playing::new(crate::common::skeleton::play::Layer::Weapon, handle, time)]), clips)
+    }
+
+    /// Fails if an empty weapon still draws its round, or a loaded one hides it.
+    #[test]
+    fn a_round_is_drawn_only_while_loaded() {
+        let rig = round_rig();
+        let (stack, clips) = (ClipStack::default(), Assets::<Clip>::default());
+        let loaded = rig.drawn_deltas(&stack, &clips, true);
+        assert!(loaded.iter().all(|delta| delta.scale == Vec3::ONE));
+        let empty = rig.drawn_deltas(&stack, &clips, false);
+        assert_eq!(empty.iter().map(|delta| delta.scale).collect::<Vec<_>>(), [Vec3::ZERO, Vec3::ZERO, Vec3::ONE]);
+    }
+
+    /// A reload shows the next round from the key that first places it, not from its start.
+    #[test]
+    fn a_clip_shows_an_empty_weapons_round_from_its_first_key() {
+        let rig = round_rig();
+        let keyed = clip(Channel::PropBoneOffset {
+            bone: "round".into(),
+            keys: vec![Key::all(0.3, [0.0, -0.4, 0.2], Interpolation::Linear)],
+        });
+        let (before, clips) = stack_of(keyed.clone(), 0.2);
+        assert_eq!(rig.drawn_deltas(&before, &clips, false)[0].scale, Vec3::ZERO);
+        let (after, clips) = stack_of(keyed, 0.4);
+        let shown = rig.drawn_deltas(&after, &clips, false)[0];
+        assert_eq!(shown.scale, Vec3::ONE);
+        assert!(shown.translation.abs_diff_eq(Vec3::new(0.0, -0.4, 0.2), 1e-6));
+        let (other, clips) = stack_of(clip(Channel::PropBoneOffset { bone: "slide".into(), keys: vec![Key::all(0.0, [0.0; 3], Interpolation::Linear)] }), 0.4);
+        assert_eq!(rig.drawn_deltas(&other, &clips, false)[0].scale, Vec3::ZERO, "a clip moving another bone showed the round");
+    }
+
+    /// Fails if the RPG's rocket stops riding its round bone, or the reloads stop placing it.
+    #[test]
+    fn the_shipped_rpgs_rocket_is_its_round() {
+        let doc = crate::prop::document::parse(include_str!("../../assets/default/props/rpg.gpp")).unwrap();
+        assert_eq!(problems(&doc.bones), Vec::<String>::new());
+        let rig = PropRig::of(&doc.bones);
+        let round = rig.index_of("round").unwrap();
+        assert!(rig.bones[round].round);
+        let evaluated = doc.evaluate();
+        let bones = bone_of_each_body(&doc.features, &doc.bones, &evaluated);
+        let rocket = doc.features.iter().find(|feature| feature.name == "Round").unwrap().id;
+        let on = evaluated.bodies.iter().position(|(body, _)| *body == rocket).map(|index| bones[index]);
+        assert_eq!(on, Some(Some(round)));
+        assert!(bones.contains(&None), "the tube rides the round too");
+        for name in ["reload", "body_reload"] {
+            let reload = &doc.animations.clips[name];
+            let (start, clips) = stack_of(reload.clone(), 0.0);
+            assert_eq!(rig.drawn_deltas(&start, &clips, false)[round].scale, Vec3::ZERO, "{name} shows the round before the hand has it");
+            let (end, clips) = stack_of(reload.clone(), reload.length);
+            let seated = rig.drawn_deltas(&end, &clips, false)[round];
+            assert_eq!(seated.scale, Vec3::ONE, "{name}");
+            assert!(seated.translation.length() < 1e-5, "{name} leaves the round out of the tube");
         }
     }
 

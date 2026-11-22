@@ -81,8 +81,11 @@ pub struct Viewmodel {
     /// Where the weapon was drawn this frame, after its clips: what the arms
     /// are solved onto.
     weapon: Option<Transform>,
+    /// Where it was framed, before its clips: what a rig stood by its carry is stood from, so a
+    /// clip moves the weapon and not the body.
+    framed: Option<Transform>,
     /// Where the clips moved each hand's grip, trigger hand first.
-    grips: [Vec3; 2],
+    grips: crate::common::skeleton::play::Grips,
 }
 
 impl Viewmodel {
@@ -108,8 +111,10 @@ struct ArmsKey {
     aspect: u32,
     /// The weapon as drawn, so a clip moving it re-solves the arms.
     weapon: [u32; 7],
+    framed: [u32; 7],
     /// The grips, so a clip taking a hand off the weapon does too.
     grips: [[u32; 3]; 2],
+    taken: [u32; 2],
 }
 
 /// Everything that places the viewmodel, for whatever draws over it.
@@ -286,12 +291,16 @@ fn place_the_viewmodel(
     clips: Res<Assets<Clip>>,
     catalog: Option<Res<WeaponCatalog>>,
     rechamber: Option<Res<Rechamber>>,
-    held: Query<(Entity, &HeldModel, &Skeleton, Option<(&Sights, &crate::common::weapon::Equipped)>), Viewed>,
+    held: Query<
+        (Entity, &HeldModel, &Skeleton, Option<(&Sights, &crate::common::weapon::Equipped)>, Option<&crate::common::weapon::Ammo>),
+        Viewed,
+    >,
     mut views: Query<(&mut Viewmodel, &ClipStack)>,
     cameras: Query<(&Camera, &Projection, &Children, &ChildOf), With<ViewmodelCamera>>,
     mut parts: Query<(&mut Transform, Option<&OnPropBone>), With<ViewmodelPart>>,
 ) {
-    let Ok((body, held, skeleton, sights)) = held.single() else { return };
+    let Ok((body, held, skeleton, sights, ammo)) = held.single() else { return };
+    let loaded = crate::game::held::loaded(catalog.as_deref(), sights.map(|(_, equipped)| equipped).zip(ammo));
     let spec = held.viewmodel();
     let raised = sights.zip(catalog.as_deref()).map_or(0.0, |((sights, equipped), catalog)| {
         shown(body, sights, equipped, catalog, rechamber.as_deref()).raised
@@ -309,11 +318,14 @@ fn place_the_viewmodel(
         if viewmodel.weapon != Some(placed) {
             viewmodel.weapon = Some(placed);
         }
+        if viewmodel.framed != Some(framed) {
+            viewmodel.framed = Some(framed);
+        }
         let grips = grip_offsets(stack, &clips, skeleton);
         if viewmodel.grips != grips {
             viewmodel.grips = grips;
         }
-        let deltas = held.rig().deltas_for(stack, &clips);
+        let deltas = held.rig().drawn_deltas(stack, &clips, loaded);
         for child in children.iter() {
             let Ok((mut transform, bone)) = parts.get_mut(child) else { continue };
             let wanted = place_part(placed, &deltas, bone);
@@ -467,9 +479,8 @@ fn place_the_viewmodel_arms(
         let aspect = size.x / size.y;
 
         let Ok(mut viewmodel) = views.get_mut(view.parent()) else { continue };
-        let weapon = viewmodel
-            .weapon
-            .unwrap_or_else(|| held.viewmodel().transform(perspective.fov, aspect));
+        let framed = viewmodel.framed.unwrap_or_else(|| held.viewmodel().transform(perspective.fov, aspect));
+        let weapon = viewmodel.weapon.unwrap_or(framed);
         let key = ArmsKey {
             body,
             skeleton: skeleton.last_changed(),
@@ -477,7 +488,9 @@ fn place_the_viewmodel_arms(
             fov: perspective.fov.to_bits(),
             aspect: aspect.to_bits(),
             weapon: bits(&weapon),
-            grips: viewmodel.grips.map(|grip| grip.to_array().map(f32::to_bits)),
+            framed: bits(&framed),
+            grips: viewmodel.grips.offsets.map(|grip| grip.to_array().map(f32::to_bits)),
+            taken: viewmodel.grips.taken.map(f32::to_bits),
         };
         if viewmodel.arms_placed_for == Some(key) {
             continue;
@@ -485,7 +498,7 @@ fn place_the_viewmodel_arms(
         viewmodel.arms_placed_for = Some(key);
 
         let skeleton: &Skeleton = &skeleton;
-        let (root, pose, reached) = stand_and_grip(skeleton, held.hold(), &weapon, viewmodel.grips);
+        let (root, pose, reached) = stand_and_grip(skeleton, held.hold(), &weapon, &framed, viewmodel.grips);
         let posed = skeleton.posed_bones(&pose, &root);
 
         for child in children.iter() {
@@ -510,14 +523,20 @@ fn place_the_viewmodel_arms(
 /// Stands the rig by its eye, or by its carry when the trigger hand cannot reach from the eye
 /// (the raptor's eye is half a meter above its shoulders). From rest, because the camera does
 /// not bob.
-fn stand_and_grip(skeleton: &Skeleton, hold: &HoldSpec, weapon: &Transform, grips: [Vec3; 2]) -> (Transform, Pose, [Reach; 2]) {
+fn stand_and_grip(
+    skeleton: &Skeleton,
+    hold: &HoldSpec,
+    weapon: &Transform,
+    framed: &Transform,
+    grips: crate::common::skeleton::play::Grips,
+) -> (Transform, Pose, [Reach; 2]) {
     let grip = |root: Transform| {
         let mut pose = Pose::rest();
         let reached = grip_hands(skeleton, &mut pose, &root, hold, weapon, [true; 2], grips);
         (root, pose, reached)
     };
     let by_eye = grip(eye_space(skeleton));
-    match carry_space(skeleton, hold, weapon) {
+    match carry_space(skeleton, hold, framed) {
         Some(root) if by_eye.2[0] != Reach::Reached => grip(root),
         _ => by_eye,
     }
@@ -621,7 +640,7 @@ mod tests {
             }
             let hold = doc.hold.for_class(Some(Class::Raptor));
             let weapon = doc.viewmodel.transform(VIEWMODEL_FOV, 16.0 / 9.0);
-            let (_, _, reached) = stand_and_grip(&skeleton, &hold, &weapon, [Vec3::ZERO; 2]);
+            let (_, _, reached) = stand_and_grip(&skeleton, &hold, &weapon, &weapon, Default::default());
             assert_eq!(reached[0], Reach::Reached, "the raptor's trigger hand misses {}", path.display());
             assert_eq!(
                 reached[1] == Reach::Reached,
@@ -632,6 +651,41 @@ mod tests {
         }
     }
 
+    /// Fails if the RPG's first-person reload takes the free hand somewhere on screen it cannot
+    /// reach: the arm would be hidden and the round would float. The raptor is stood from the framing, not
+    /// from where its clip moves the weapon, or the swing would carry its shoulders along.
+    #[test]
+    fn the_rpgs_free_hand_reaches_through_its_first_person_reload() {
+        let doc = document::parse(include_str!("../../assets/default/props/rpg.gpp")).unwrap();
+        let framed = doc.viewmodel.transform(VIEWMODEL_FOV, 16.0 / 9.0);
+        let builds = crate::common::class::ClassBuilds::shipped();
+        for class in builds.humanoids().chain([Class::Raptor]) {
+            let mut clips = Assets::<Clip>::default();
+            let own = crate::common::skeleton::clip::clips_for_class(&doc.animations.clips, Some(&Class::key(class)));
+            let reload = clips.add(own["reload"].clone());
+            let skeleton = builds.rig_for(class);
+            let hold = doc.hold.for_class(Some(class));
+            for step in 0..=20 {
+                let time = step as f32 / 20.0;
+                let stack = ClipStack(vec![crate::common::skeleton::play::Playing::new(
+                    crate::common::skeleton::play::Layer::Weapon,
+                    reload.clone(),
+                    time,
+                )]);
+                let weapon = played(framed, &stack, &skeleton, &clips);
+                let grips = grip_offsets(&stack, &clips, &skeleton);
+                let (_, _, reached) = stand_and_grip(&skeleton, &hold, &weapon, &framed, grips);
+                // An arm that misses is hidden, which is unseen below the bottom of the frame.
+                let target = weapon.transform_point(hold.loose_support_frame().translation + grips[1]);
+                let below_the_frame = -target.y > -target.z * (VIEWMODEL_FOV / 2.0).tan();
+                assert!(
+                    reached[1] == Reach::Reached || below_the_frame,
+                    "{class:?}'s free hand misses on screen at {time}",
+                );
+            }
+        }
+    }
+
     /// A humanoid still stands by its eye: its arms reach from there.
     #[test]
     fn a_humanoid_stands_by_its_eye() {
@@ -639,7 +693,7 @@ mod tests {
         let weapon = ViewmodelSpec::default().transform(VIEWMODEL_FOV, 16.0 / 9.0);
         for class in crate::common::class::ClassBuilds::shipped().humanoids() {
             let skeleton = humanoid(crate::common::class::ClassBuilds::shipped().of(class));
-            let (root, _, _) = stand_and_grip(&skeleton, &hold, &weapon, [Vec3::ZERO; 2]);
+            let (root, _, _) = stand_and_grip(&skeleton, &hold, &weapon, &weapon, Default::default());
             assert_eq!(root, eye_space(&skeleton), "{class:?} was stood by its carry");
         }
     }

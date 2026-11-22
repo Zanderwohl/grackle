@@ -1002,6 +1002,23 @@ pub struct ClipSet {
     pub clips: BTreeMap<String, Clip>,
 }
 
+/// Between a clip's name and a class's key: a prop's `body_reload@raptor` is what a Raptor plays
+/// for `body_reload`, as `HoldSpec::per_class` overrides a hold.
+pub const FOR_CLASS: char = '@';
+
+/// `clips` as `class` (a class's key) plays them: each override in place of the clip it names,
+/// and no override listed under its own name.
+pub fn clips_for_class<T: Clone>(clips: &BTreeMap<String, T>, class: Option<&str>) -> BTreeMap<String, T> {
+    clips
+        .iter()
+        .filter(|(name, _)| !name.contains(FOR_CLASS))
+        .map(|(name, clip)| {
+            let over = class.and_then(|class| clips.get(&format!("{name}{FOR_CLASS}{class}")));
+            (name.clone(), over.unwrap_or(clip).clone())
+        })
+        .collect()
+}
+
 impl ClipSet {
     pub fn get(&self, name: &str) -> Option<&Clip> {
         self.clips.get(name)
@@ -1021,6 +1038,18 @@ impl ClipSet {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A class's override plays under the plain name, and nobody plays it under its own.
+    #[test]
+    fn a_class_plays_its_own_clip_in_place_of_the_shared_one() {
+        let clips: BTreeMap<String, u8> =
+            [("reload".into(), 1), ("reload@raptor".into(), 2), ("fire".into(), 3)].into_iter().collect();
+        let raptor = clips_for_class(&clips, Some("raptor"));
+        assert_eq!(raptor, [("fire".into(), 3), ("reload".into(), 2)].into_iter().collect());
+        let scout = clips_for_class(&clips, Some("scout"));
+        assert_eq!(scout, [("fire".into(), 3), ("reload".into(), 1)].into_iter().collect());
+        assert_eq!(clips_for_class(&clips, None), scout);
+    }
 
     fn a_clip() -> Clip {
         Clip {

@@ -995,10 +995,10 @@ pub fn controller_weight(stack: &ClipStack, clips: &Assets<Clip>, controller: Co
     weight
 }
 
-pub fn grip_offsets(stack: &ClipStack, clips: &Assets<Clip>, skeleton: &Skeleton) -> [Vec3; 2] {
-    let mut offsets = [Vec3::ZERO; 2];
+pub fn grip_offsets(stack: &ClipStack, clips: &Assets<Clip>, skeleton: &Skeleton) -> Grips {
+    let mut grips = Grips::default();
     if stack.0.is_empty() {
-        return offsets;
+        return grips;
     }
     // No sorted copy: this runs for every holding body every frame.
     let ranked = Layer::ALL
@@ -1027,10 +1027,29 @@ pub fn grip_offsets(stack: &ClipStack, clips: &Assets<Clip>, skeleton: &Skeleton
                 Axis::Value(at) => at * scale,
                 Axis::Free | Axis::Ground { .. } => 0.0,
             }));
-            offsets[hand] = offsets[hand].lerp(moved, shown);
+            grips.offsets[hand] = grips.offsets[hand].lerp(moved, shown);
+            grips.taken[hand] = grips.taken[hand].max(shown);
         }
     }
-    offsets
+    grips
+}
+
+/// What a stack's `Space::Grip` tracks ask of each hand, trigger hand first.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Grips {
+    /// Each grip's move, in the weapon's axes, in meters.
+    pub offsets: [Vec3; 2],
+    /// How far a shown track keys that hand, 0 to 1: a one-handed weapon's free hand is
+    /// brought onto the weapon this far.
+    pub taken: [f32; 2],
+}
+
+impl std::ops::Index<usize> for Grips {
+    type Output = Vec3;
+
+    fn index(&self, hand: usize) -> &Vec3 {
+        &self.offsets[hand]
+    }
 }
 
 /// Each clip on `stack` that shows, lowest layer first and within a layer in stack order, with
@@ -1612,7 +1631,8 @@ mod tests {
         let kick = clips.add(Clip { length: 1.0, ..Clip::default() });
 
         let full = grip_offsets(&ClipStack(vec![Playing::new(Layer::Weapon, reach.clone(), 0.0)]), &clips, &rig);
-        assert_eq!(full, [Vec3::ZERO, Vec3::new(0.0, -0.1, 0.2)], "the trigger hand moved, or the support did not");
+        assert_eq!(full.offsets, [Vec3::ZERO, Vec3::new(0.0, -0.1, 0.2)], "the trigger hand moved, or the support did not");
+        assert_eq!(full.taken, [0.0, 1.0]);
 
         let half = grip_offsets(
             &ClipStack(vec![Playing { weight: 0.5, ..Playing::new(Layer::Weapon, reach.clone(), 0.0) }]),
