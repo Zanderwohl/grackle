@@ -203,10 +203,10 @@ fn save_on_change(settings: Res<PlayerSettings>, profile: Res<Profile>) {
     {
         let text = match toml::to_string(&*settings) {
             Ok(text) => text,
-            Err(e) => return warn!("Could not write the player settings: {e}"),
+            Err(e) => return error!("Could not write the player settings for {}: {e}", path(*profile).display()),
         };
         if let Err(e) = std::fs::write(path(*profile), text) {
-            warn!("Could not save {}: {e}", path(*profile).display());
+            error!("Could not save {}: {e}", path(*profile).display());
         }
     }
 }

@@ -71,6 +71,10 @@ retarget = "Retarget"
 
 [bakes]
 title = "Bake Operations"
+developer = "Developer"
+dump_ecs = "Dump ECS"
+dumped_ecs_before = "Dumped ECS listing at "
+dumped_ecs_after = "."
 room_geometry = "Room Geometry"
 auto_rooms = "Auto-bake Rooms"
 sunlight = "Sunlight"
@@ -1917,6 +1921,18 @@ sample = "The quick brown fox jumps over the lazy dog 0123456789"
 
 [settings.developer]
 icons = "Icons"
+logging = "Logging"
+log_level = "Log level"
+log_days = "Keep logs for"
+days_suffix = " days"
+log_level_restart = "The log level at startup was { startup }. To apply the new log level ({ chosen }), restart the application."
+
+[settings.developer.log_levels]
+error = "Error"
+warn = "Warn"
+info = "Info"
+debug = "Debug"
+trace = "Trace"
 
 [settings.unsaved]
 heading = "Unsaved changes"

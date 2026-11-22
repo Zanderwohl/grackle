@@ -120,12 +120,12 @@ fn load_startup_blueprint(
         Ok(loaded) => {
             *features = loaded.timeline;
             *map_metadata = loaded.metadata;
-            info!("Loaded {:?}", path);
+            info!("Opened the map {}", path.display());
             if let (Some(_), Some(mut current)) = (&asked, current) {
                 current.path = Some(path);
             }
         }
-        Err(e) => error!("Failed to load {:?}: {}", path, e),
+        Err(e) => error!("Could not open the map at startup: {e}"),
     }
 }
 
@@ -814,7 +814,7 @@ impl FeatureTimeline {
                 }
                 // A string this process wrote always decodes; a server's may name a type this build lacks.
                 // Losing one feature beats losing the rest.
-                Err(error) => error!("Could not rebuild feature {id:?}: {error}"),
+                Err(error) => warn!("Could not rebuild feature {id:?}, so it is left out: {error}"),
             }
         }
 

@@ -99,7 +99,7 @@ impl MaterialLibrary {
                 let maps = submitting(|| {
                     let out = baker
                         .bake_output(&graph, (TILE_TEXELS, TILE_TEXELS), &EvalCtx::default(), false)
-                        .map_err(|e| error!("Baking material {name}: {e}"))
+                        .map_err(|e| warn!("Baking material {name}: {e}"))
                         .ok()?;
                     Some(mapper.maps(baker.ctx(), &out))
                 })?;
@@ -151,7 +151,7 @@ fn find(name: &str, packs: &PackAssets) -> Option<(Graph, PathBuf)> {
             .and_then(|text| texture_graph_core::load_from_str(&text).map_err(|e| e.to_string()));
         match parsed {
             Ok(file) => found = Some((file.graph, pack.join(&relative))),
-            Err(e) => error!("{}: {e}", pack.join(&relative).display()),
+            Err(e) => warn!("{}: {e}", pack.join(&relative).display()),
         }
     }
     found

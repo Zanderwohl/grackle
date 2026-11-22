@@ -327,7 +327,7 @@ fn open_link_for_role(
             let address = match resolve(host, *port) {
                 Ok(address) => address,
                 Err(message) => {
-                    error!("Cannot connect to {host}:{port}: {message}");
+                    warn!("Cannot connect to {host}:{port}: {message}");
                     fail(&mut status, crate::get!("net.lost.unresolved", "host", host, "reason", message));
                     return;
                 }

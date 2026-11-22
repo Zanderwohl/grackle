@@ -117,7 +117,7 @@ fn panels(
     }
     handle_files(file, &mut material, &dialog, &mut recent);
     if quit {
-        info!("Quitting, as asked");
+        info!("Quitting from the File menu");
         exit.write(AppExit::Success);
     }
 }

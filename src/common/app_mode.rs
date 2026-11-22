@@ -247,7 +247,7 @@ pub fn start_in_play(
     if rooms.is_empty() {
         warn!("Starting in Play with no rooms baked; the map may be empty");
     }
-    info!("Starting in Play, as asked");
+    info!("Starting in Play, as the command line asked");
     next.set(AppMode::Play);
     *done = true;
 }

@@ -65,7 +65,7 @@ impl Binary {
 pub fn run(binary: Binary) {
     let editor_params = startup::EditorParams::new()
         .unwrap_or_else(|message| {
-            eprintln!("Editor Startup Error:\n{}", message);
+            eprintln!("Startup error:\n{}", message);
             std::process::exit(1);
         });
     let (settings, settings_problem) = Settings::load();
@@ -76,7 +76,11 @@ pub fn run(binary: Binary) {
     let lang = editor_params.lang.clone().or_else(|| settings.language.clone());
     change_lang_or_fallback(lang.as_deref().unwrap_or(FALLBACK_LANG), &default_packs());
 
+    crate::common::log_file::note_startup_level(settings.log_level);
+    let log_level = settings.log_level.level();
     App::new()
+        // Before `DefaultPlugins`: the log file's layer reads how many days of logs to keep.
+        .insert_resource(settings)
         .add_plugins(DefaultPlugins
             .set(WindowPlugin {
                primary_window: Some(Window {
@@ -91,7 +95,7 @@ pub fn run(binary: Binary) {
                 exit_condition: ExitCondition::OnPrimaryClosed,
                 close_when_requested: true,
             })
-            .set(bevy::log::LogPlugin { custom_layer: crate::common::log_file::layer, ..default() })
+            .set(bevy::log::LogPlugin { level: log_level, custom_layer: crate::common::log_file::layer, ..default() })
             // From the working directory, as the packs are read: Bevy's own default is
             // `CARGO_MANIFEST_DIR`, unset outside `cargo run`, else the executable's folder.
             .set(bevy::asset::AssetPlugin {
@@ -101,7 +105,6 @@ pub fn run(binary: Binary) {
                 ..default()
             }),
         )
-        .insert_resource(settings)
         .insert_resource(crate::common::recent_files::RecentFiles::load())
         .insert_resource(Keymap::load())
         .insert_resource(editor_params.net.clone())
@@ -147,7 +150,7 @@ pub fn run(binary: Binary) {
             (GamePlugin, crate::game::match_cycle::MatchCyclePlugin, crate::game::match_banner::MatchBannerPlugin, crate::game::soundtrack::SoundtrackPlugin),
             (WorldPropPlugin, (ThumbnailPlugin, crate::tool::postcard_bake::PostcardBakePlugin, crate::game::postcards::PostcardHudPlugin), ForwardCameraPlugin, SunlitPlugin, DecalPlugin, SprayPlugin, (crate::game::streak::StreakPlugin, crate::game::scope_vignette::ScopeVignettePlugin, crate::game::laser_dot::LaserDotPlugin, crate::game::muzzle_flash::MuzzleFlashPlugin), crate::game::beam::BeamPlugin, crate::game::class_picker::PortraitWarmUpPlugin, crate::game::gib_blood::GibBloodPlugin, crate::game::flame_jet::FlameJetPlugin, crate::game::hud_fire::HudFirePlugin, crate::game::gust_ring::GustRingPlugin, crate::game::blast_cloud::BlastCloudPlugin, crate::game::rocket_trail::RocketTrailPlugin),
             SkeletonPlugin,
-            (PerfPlugin, crate::common::screenshot::ScreenshotPlugin, SettingsPlugin, FontsPlugin, crate::common::music::MusicPlugin, crate::common::icons::IconsPlugin, UiShapePlugin, crate::common::player_settings::PlayerSettingsPlugin { profile: editor_params.profile }),
+            (PerfPlugin, crate::common::path_open::PathOpenPlugin, crate::common::screenshot::ScreenshotPlugin, SettingsPlugin, FontsPlugin, crate::common::music::MusicPlugin, crate::common::icons::IconsPlugin, UiShapePlugin, crate::common::player_settings::PlayerSettingsPlugin { profile: editor_params.profile }),
             ))
         .add_plugins(RoundSettingsFilePlugin { path: server_files.saved.clone(), seed: server_files.shipped.clone() })
         .add_plugins((crate::main_menu::MainMenuPlugin, crate::common::lan_discovery::LanDiscoveryPlugin, crate::server_browser::ServerBrowserPlugin))

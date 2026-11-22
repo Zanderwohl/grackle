@@ -54,7 +54,7 @@ fn perf_ui(
     window: Query<&Window, With<PrimaryWindow>>,
 ) {
     let ctx = contexts.ctx_mut();
-    if ctx.is_err() { warn!("{}", ctx.unwrap_err()); return; }
+    if ctx.is_err() { warn!("perf::perf_ui: no egui context: {}", ctx.unwrap_err()); return; }
     let ctx = ctx.unwrap();
 
     let smoothed = |key: &bevy::diagnostic::DiagnosticPath| {

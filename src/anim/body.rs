@@ -389,7 +389,7 @@ fn read_the_packs(assets: &Assets, packs: &[PathBuf]) -> PackDoc {
                     clips.insert(state.clip_name().to_string(), clip);
                 }
                 Ok(None) => {}
-                Err(why) => warn!("{}: {why}", state.clip_name()),
+                Err(why) => warn!("{}/{CLIPS_DIR}/{}.{CLIP_EXTENSION}: {why}", pack.display(), state.clip_name()),
             }
         }
         // Another rig's clips, states and others alike, filed as `<rig>/<name>`.

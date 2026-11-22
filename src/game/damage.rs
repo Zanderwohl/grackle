@@ -94,7 +94,7 @@ impl Plugin for DamagePlugin {
                     .chain()
                     .in_set(DamageSystems::Resolve),
             )
-            .add_systems(Update, (spawn_damage_numbers, fade_damage_numbers, announce_deaths).chain())
+            .add_systems(Update, (spawn_damage_numbers, fade_damage_numbers, announce_deaths.run_if(crate::common::net::is_remote_client)).chain())
             .add_systems(
                 EguiPrimaryContextPass,
                 draw_damage_numbers.run_if(crate::common::app_mode::simulating),

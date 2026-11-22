@@ -202,7 +202,7 @@ fn adopt_the_servers_models(
                         cache.adopt(name, &doc, &mut meshes, &mut materials, &mut surfaces, &mut clips, None);
                         adopted.0.insert(name.clone(), (text.clone(), cache.bakes()));
                     }
-                    Err(e) => error!("the server's prop {name} will not parse: {e}"),
+                    Err(e) => warn!("The server's prop {name} will not parse, so it is not drawn: {e}"),
                 }
             }
         }

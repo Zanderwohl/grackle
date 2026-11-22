@@ -83,7 +83,7 @@ pub fn remerge(packs: &[PathBuf]) {
         .map(|current| current.clone())
         .unwrap_or_else(|_| FALLBACK_LANG.to_string());
     if let Err(e) = change_lang(&current, packs) {
-        error!("{e}; keeping the previous strings");
+        warn!("{e}; keeping the previous strings");
     }
 }
 
@@ -93,9 +93,9 @@ pub fn change_lang_or_fallback(lang: &str, packs: &[PathBuf]) -> String {
     match change_lang(lang, packs) {
         Ok(()) => lang.to_string(),
         Err(e) => {
-            error!("{}; falling back to `{}`", e, FALLBACK_LANG);
+            warn!("{e}; falling back to `{FALLBACK_LANG}`");
             if let Err(e) = change_lang(FALLBACK_LANG, packs) {
-                error!("{}", e);
+                error!("{e}; the fallback language would not load either, so every string will render as its key");
             }
             FALLBACK_LANG.to_string()
         }

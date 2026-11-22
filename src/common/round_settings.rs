@@ -425,7 +425,7 @@ fn write_round_settings(
             .and_then(|()| std::fs::write(&file.path, written_into(&text, &current.0, &current.1)));
         match saved {
             Ok(()) => info!("Saved the round settings to {}", file.path.display()),
-            Err(error) => warn!("Could not save the round settings to {}: {error}", file.path.display()),
+            Err(error) => error!("Could not save the round settings to {}: {error}", file.path.display()),
         }
     }
     // Not tried again until they change, whether or not the write went through.

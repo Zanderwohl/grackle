@@ -203,19 +203,18 @@ pub fn reap_the_dead(mut commands: Commands, dying: Query<Entity, With<Dying>>) 
     }
 }
 
-/// The kill feed, such as it is.
+/// A client's record of each death, since it keeps no round: the authority logs its kills in
+/// [`crate::game::telemetry`].
 pub fn announce_deaths(mut deaths: MessageReader<Died>) {
+    use crate::game::telemetry::{log_event, source_id, Event};
     for death in deaths.read() {
-        let victim = match (&death.victim_name, death.victim_id) {
-            (Some(name), Some(id)) => format!("{name} ({id})"),
-            (Some(name), None) => name.clone(),
-            (None, Some(id)) => id.to_string(),
-            (None, None) => format!("{}", death.victim),
-        };
-        match death.assist {
-            Some(assist) => info!("{victim} killed by {} (assist {assist})", death.killer),
-            None => info!("{victim} killed by {}", death.killer),
-        }
+        log_event(&Event::Death {
+            victim: death.victim_id.map(|id| id.0),
+            victim_name: death.victim_name.clone(),
+            killer: source_id(death.killer),
+            assist: death.assist.and_then(source_id),
+            at: death.at.to_array(),
+        });
     }
 }
 

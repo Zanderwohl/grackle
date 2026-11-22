@@ -8,7 +8,6 @@
 use std::path::{Path, PathBuf};
 
 use bevy::platform::collections::HashMap;
-use bevy::prelude::info;
 use serde::{Deserialize, Serialize};
 
 use crate::common::mode::GameMode;
@@ -167,21 +166,26 @@ pub fn parse(text: &str) -> Result<LoadedBlueprint, String> {
     Ok(LoadedBlueprint { timeline, metadata: blueprint.metadata.into_metadata() })
 }
 
+/// Every error names `path`.
 pub fn save(path: &Path, features: &FeatureTimeline, metadata: &MapMetadata) -> Result<(), String> {
-    let text = to_text(features, metadata)?;
+    let text = to_text(features, metadata).map_err(|e| format!("{}: {e}", path.display()))?;
 
     let backup_path =
         path.with_extension(format!("{}.{}", MAP_BLUEPRINT_EXTENSION, MAP_BACKUP_EXTENSION));
     let had_existing = path.exists();
     if had_existing {
-        std::fs::copy(path, &backup_path).map_err(|e| format!("Failed to create backup: {e}"))?;
+        std::fs::copy(path, &backup_path).map_err(|e| format!("{}: could not make the backup {}: {e}", path.display(), backup_path.display()))?;
     }
 
-    let result = std::fs::write(path, text).map_err(|e| format!("{}: {e}", path.display()));
+    let mut result = std::fs::write(path, text).map_err(|e| format!("{}: {e}", path.display()));
 
-    if result.is_err() && had_existing {
-        info!("Save failed, restoring from backup");
-        let _ = std::fs::copy(&backup_path, path);
+    if let Err(why) = &mut result
+        && had_existing
+    {
+        match std::fs::copy(&backup_path, path) {
+            Ok(_) => why.push_str("; the file as it was before is restored"),
+            Err(e) => why.push_str(&format!("; restoring it from {} failed too: {e}", backup_path.display())),
+        }
     }
     if had_existing && result.is_ok() {
         let _ = std::fs::remove_file(&backup_path);

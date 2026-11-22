@@ -258,7 +258,7 @@ fn panels(
     let quit = requests.file == Some(FileAction::Quit);
     handle_files(requests.file, &mut editor, &mut state, &dialog, &mut recent);
     if quit {
-        info!("Quitting, as asked");
+        info!("Quitting from the File menu");
         exit.write(AppExit::Success);
     }
 }
@@ -710,10 +710,10 @@ fn duplicate(editor: &LangEditor, from: &Path, code: &str, pack: &Path) -> Resul
 fn open_file(editor: &mut LangEditor, path: PathBuf) {
     match load(&path) {
         Ok(doc) => {
-            info!("Opened lang file {path:?}");
+            info!("Opened the lang file {}", path.display());
             editor.open(doc, Some(path));
         }
-        Err(e) => error!("Opening the lang file: {e}"),
+        Err(e) => error!("Could not open the lang file: {e}"),
     }
 }
 
@@ -780,7 +780,7 @@ fn handle_files(
         // Untitled, so a save asks where rather than writing over the shipped file.
         Some(FileAction::Demo(demo)) => match load(std::path::Path::new(demo.path)) {
             Ok(doc) => editor.open(doc, None),
-            Err(e) => error!("Opening the lang file: {e}"),
+            Err(e) => error!("Could not open the lang file: {e}"),
         },
         Some(FileAction::Save) => match editor.path.clone() {
             Some(path) => save_to(editor, state, path, recent),

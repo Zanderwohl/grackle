@@ -144,7 +144,7 @@ pub fn read_pack_weapons(assets: &Assets, packs: &[PathBuf]) -> Vec<PackWeapon> 
     for pack in packs {
         for key in assets.stems(pack, WEAPONS_DIR, WEAPON_EXTENSION) {
             if !is_weapon_key(&key) {
-                error!(
+                warn!(
                     "{}: a weapon's file is named by its key, lowercase letters, digits and underscores; ignoring it",
                     weapon_path(pack, &key).display()
                 );
@@ -165,7 +165,7 @@ pub fn read_pack_weapon(assets: &Assets, pack: &Path, key: &str) -> Option<PackW
     match parse_weapon(&text) {
         Ok(entry) => Some(PackWeapon { pack: pack.to_path_buf(), key: key.to_owned(), entry }),
         Err(e) => {
-            error!("{}/{file} will not parse: {e}", pack.display());
+            warn!("{}/{file} will not parse: {e}", pack.display());
             None
         }
     }
@@ -222,7 +222,7 @@ pub fn read_loadouts(assets: &Assets, packs: &[PathBuf]) -> LoadoutFiles {
         let Some(text) = read(assets, pack, LOADOUTS_FILE) else { continue };
         match toml::from_str(&text) {
             Ok(file) => files.push((pack.clone(), file)),
-            Err(e) => error!("{}/{LOADOUTS_FILE} will not parse: {e}", pack.display()),
+            Err(e) => warn!("{}/{LOADOUTS_FILE} will not parse: {e}", pack.display()),
         }
     }
     LoadoutFiles(files)
@@ -238,7 +238,7 @@ pub fn catalog_with(weapons: &[PackWeapon], loadouts: &LoadoutFiles) -> WeaponCa
     let mut catalog = WeaponCatalog::default();
     for weapon in weapons {
         match problem(&catalog, weapon) {
-            Some(why) => error!("{}: {why}; ignoring it", weapon_path(&weapon.pack, &weapon.key).display()),
+            Some(why) => warn!("{}: {why}; ignoring it", weapon_path(&weapon.pack, &weapon.key).display()),
             None => catalog.insert(weapon.entry.clone().into_weapon(&weapon.key)),
         }
     }
@@ -333,14 +333,14 @@ fn read(assets: &Assets, pack: &Path, file: &str) -> Option<String> {
         Ok(bytes) => bytes,
         Err(crate::common::assets::AssetError::NotFound(_)) => return None,
         Err(e) => {
-            error!("{e}");
+            warn!("{e}; skipping it");
             return None;
         }
     };
     match String::from_utf8(bytes) {
         Ok(text) => Some(text),
         Err(e) => {
-            error!("{}/{file} is not valid UTF-8: {e}", pack.display());
+            warn!("{}/{file} is not valid UTF-8: {e}", pack.display());
             None
         }
     }
@@ -349,7 +349,7 @@ fn read(assets: &Assets, pack: &Path, file: &str) -> Option<String> {
 fn apply_loadouts(pack: &Path, file: &LoadoutFile, catalog: &mut WeaponCatalog) {
     for (key, entry) in &file.loadouts {
         let Some(class) = Class::named(key) else {
-            error!("{}/{LOADOUTS_FILE}: no class called {key}", pack.display());
+            warn!("{}/{LOADOUTS_FILE}: no class called {key}", pack.display());
             continue;
         };
 
@@ -383,7 +383,7 @@ fn slot_choices(
     for name in &entry.permitted {
         let id = WeaponId::of(name);
         if catalog.get(id).is_none() {
-            error!(
+            warn!(
                 "{}/{LOADOUTS_FILE}: {class}'s {slot:?} may carry {name}, which no pack defines",
                 pack.display()
             );
@@ -396,7 +396,7 @@ fn slot_choices(
     if let (Some(name), Some(id)) = (&entry.default, default)
         && !permitted.contains(&id)
     {
-        error!(
+        warn!(
             "{}/{LOADOUTS_FILE}: {class}'s {slot:?} starts with {name}, which it may not carry; \
              dropping the slot",
             pack.display(),

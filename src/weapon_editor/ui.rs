@@ -225,7 +225,7 @@ fn panels(
         next_mode.set(mode);
     }
     if requests.file == Some(FileAction::Quit) {
-        info!("Quitting, as asked");
+        info!("Quitting from the File menu");
         exit.write(AppExit::Success);
     } else if requests.file.is_some() {
         handle_files(requests.file, &mut editor, &mut panels.browser, &mut published, &assets, &dialog, &mut recent);
@@ -340,7 +340,7 @@ fn save_as(editor: &mut WeaponEditor, published: &mut PublishedCatalog, pack: &P
         Err(e) => return error!("Saving a weapon: {e}"),
     };
     if editor.key_problem(&to_key, None) == Some(KeyProblem::Malformed) {
-        return error!("Saving a weapon: {to_key} {}", get!("weapon_editor.key.malformed"));
+        return warn!("Saving a weapon: {to_key} {}", get!("weapon_editor.key.malformed"));
     }
     let Some(index) = editor.weapons.iter().position(|weapon| weapon.pack == pack && weapon.key == key) else {
         return error!("Saving a weapon: {key} is no longer in the draft");
@@ -752,7 +752,7 @@ fn read_prop(assets: &Assets, name: &str) -> Option<(PathBuf, PropDoc)> {
     match load(assets, pack, name) {
         Ok(doc) => Some((path, doc)),
         Err(e) => {
-            error!("{e}");
+            warn!("Could not read the prop {name} for the weapon editor, {}/{e}", pack.display());
             None
         }
     }

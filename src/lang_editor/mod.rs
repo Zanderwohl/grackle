@@ -211,7 +211,7 @@ fn start_in_the_lang_editor(
     if !start.0 || *done {
         return;
     }
-    info!("Opening the lang editor, as asked");
+    info!("Opening the lang editor, as the command line asked");
     next.set(AppMode::Lang);
     *done = true;
 }

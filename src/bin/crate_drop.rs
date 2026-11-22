@@ -64,7 +64,7 @@ fn ui(
     mut contexts: EguiContexts,
 ) {
     let ctx = contexts.ctx_mut();
-    if ctx.is_err() { warn!("{}", ctx.unwrap_err()); return; }
+    if ctx.is_err() { warn!("crate_drop::ui: no egui context: {}", ctx.unwrap_err()); return; }
     let ctx = ctx.unwrap();
 
     // egui 0.36 hangs top-level panels off a root `Ui` covering the viewport
@@ -94,7 +94,7 @@ fn ui(
                     match unlock(state.series) {
                         Ok(item) => state.items.push(item),
                         Err(err) => {
-                            error!("{}", err);
+                            error!("Could not open a crate from the series {}: {err}", state.series);
                         }
                     }
                 }
