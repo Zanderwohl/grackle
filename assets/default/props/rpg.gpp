@@ -53,7 +53,7 @@ height = 0.12
 origin = [
     0.0,
     0.22,
-    0.48,
+    0.42846984,
 ]
 rotation = [
     -1.5707963,
@@ -455,224 +455,6 @@ pivot = [
 parts = [13]
 round = true
 
-[animations.clips.reload]
-name_key = "anim.clips.reload"
-length = 1.0
-clock = "seconds"
-looping = false
-note = "The RPG's reload: swung left and back while the free hand takes the next round from the left hip at 20 %, carries it to the front of the tube and seats it at 72 %. The round's keys are the hand's, moved by one fixed offset, so it stays in the hand. Fitted to the reload time."
-blend_in = 0.2
-blend_out = 0.25
-
-[[animations.clips.reload.tracks]]
-combine = "compose"
-space = "carry"
-unit = "arm_lengths"
-enabled = true
-
-[animations.clips.reload.tracks.channel]
-channel = "weapon"
-
-[[animations.clips.reload.tracks.channel.keys]]
-at = 0.0
-to = [
-    0.0,
-    0.0,
-    0.0,
-]
-ease = "smoother_step"
-
-[[animations.clips.reload.tracks.channel.keys]]
-at = 0.22
-to = [
-    0.2,
-    -0.15,
-    0.55,
-]
-ease = "linear"
-
-[[animations.clips.reload.tracks.channel.keys]]
-at = 0.78
-to = [
-    0.2,
-    -0.15,
-    0.55,
-]
-ease = "smoother_step"
-
-[[animations.clips.reload.tracks.channel.keys]]
-at = 1.0
-to = [
-    0.0,
-    0.0,
-    0.0,
-]
-ease = "linear"
-
-[[animations.clips.reload.tracks]]
-combine = "compose"
-space = "carry"
-unit = "meters"
-enabled = true
-
-[animations.clips.reload.tracks.channel]
-channel = "weapon_rotation"
-
-[[animations.clips.reload.tracks.channel.keys]]
-at = 0.0
-to = [
-    0.0,
-    0.0,
-    "free",
-]
-ease = "smoother_step"
-
-[[animations.clips.reload.tracks.channel.keys]]
-at = 0.22
-to = [
-    0.15,
-    1.3,
-    "free",
-]
-ease = "linear"
-
-[[animations.clips.reload.tracks.channel.keys]]
-at = 0.78
-to = [
-    0.15,
-    1.3,
-    "free",
-]
-ease = "smoother_step"
-
-[[animations.clips.reload.tracks.channel.keys]]
-at = 1.0
-to = [
-    0.0,
-    0.0,
-    "free",
-]
-ease = "linear"
-
-[[animations.clips.reload.tracks]]
-combine = "replace"
-space = "grip"
-unit = "meters"
-enabled = true
-
-[animations.clips.reload.tracks.channel]
-channel = "effector"
-chain = "left_arm"
-
-[[animations.clips.reload.tracks.channel.keys]]
-at = 0.0
-to = [
-    -0.5,
-    -0.16,
-    0.25,
-]
-ease = "smoother_step"
-
-[[animations.clips.reload.tracks.channel.keys]]
-at = 0.2
-to = [
-    -0.15,
-    -0.18,
-    -0.3,
-]
-ease = "smoother_step"
-
-[[animations.clips.reload.tracks.channel.keys]]
-at = 0.28
-to = [
-    -0.15,
-    -0.18,
-    -0.3,
-]
-ease = "smoother_step"
-
-[[animations.clips.reload.tracks.channel.keys]]
-at = 0.58
-to = [
-    0.0,
-    0.05,
-    -0.5,
-]
-ease = "smoother_step"
-
-[[animations.clips.reload.tracks.channel.keys]]
-at = 0.72
-to = [
-    0.0,
-    0.06,
-    -0.35,
-]
-ease = "linear"
-
-[[animations.clips.reload.tracks.channel.keys]]
-at = 0.8
-to = [
-    0.0,
-    0.06,
-    -0.35,
-]
-ease = "smoother_step"
-
-[[animations.clips.reload.tracks.channel.keys]]
-at = 1.0
-to = [
-    -0.5,
-    -0.16,
-    0.25,
-]
-ease = "linear"
-
-[[animations.clips.reload.tracks]]
-combine = "replace"
-space = "body"
-unit = "meters"
-enabled = true
-
-[animations.clips.reload.tracks.channel]
-channel = "prop_bone_offset"
-bone = "round"
-
-[[animations.clips.reload.tracks.channel.keys]]
-at = 0.2
-to = [
-    -0.15,
-    -0.24,
-    0.05,
-]
-ease = "smoother_step"
-
-[[animations.clips.reload.tracks.channel.keys]]
-at = 0.28
-to = [
-    -0.15,
-    -0.24,
-    0.05,
-]
-ease = "smoother_step"
-
-[[animations.clips.reload.tracks.channel.keys]]
-at = 0.58
-to = [
-    0.0,
-    -0.01,
-    -0.15,
-]
-ease = "smoother_step"
-
-[[animations.clips.reload.tracks.channel.keys]]
-at = 0.72
-to = [
-    0.0,
-    0.0,
-    0.0,
-]
-ease = "linear"
-
 [animations.clips.body_reload]
 name_key = "anim.clips.body_reload"
 length = 1.0
@@ -891,224 +673,6 @@ to = [
 ]
 ease = "linear"
 
-[animations.clips."reload@raptor"]
-name_key = "anim.clips.reload"
-length = 1.0
-clock = "seconds"
-looping = false
-note = "The reload for the raptor's short arms and small hands: the same beats, swung nearer its shoulder."
-blend_in = 0.2
-blend_out = 0.25
-
-[[animations.clips."reload@raptor".tracks]]
-combine = "compose"
-space = "carry"
-unit = "arm_lengths"
-enabled = true
-
-[animations.clips."reload@raptor".tracks.channel]
-channel = "weapon"
-
-[[animations.clips."reload@raptor".tracks.channel.keys]]
-at = 0.0
-to = [
-    0.0,
-    0.0,
-    0.0,
-]
-ease = "smoother_step"
-
-[[animations.clips."reload@raptor".tracks.channel.keys]]
-at = 0.22
-to = [
-    0.7,
-    -0.15,
-    0.55,
-]
-ease = "linear"
-
-[[animations.clips."reload@raptor".tracks.channel.keys]]
-at = 0.78
-to = [
-    0.7,
-    -0.15,
-    0.55,
-]
-ease = "smoother_step"
-
-[[animations.clips."reload@raptor".tracks.channel.keys]]
-at = 1.0
-to = [
-    0.0,
-    0.0,
-    0.0,
-]
-ease = "linear"
-
-[[animations.clips."reload@raptor".tracks]]
-combine = "compose"
-space = "carry"
-unit = "meters"
-enabled = true
-
-[animations.clips."reload@raptor".tracks.channel]
-channel = "weapon_rotation"
-
-[[animations.clips."reload@raptor".tracks.channel.keys]]
-at = 0.0
-to = [
-    0.0,
-    0.0,
-    "free",
-]
-ease = "smoother_step"
-
-[[animations.clips."reload@raptor".tracks.channel.keys]]
-at = 0.22
-to = [
-    0.15,
-    1.3,
-    "free",
-]
-ease = "linear"
-
-[[animations.clips."reload@raptor".tracks.channel.keys]]
-at = 0.78
-to = [
-    0.15,
-    1.3,
-    "free",
-]
-ease = "smoother_step"
-
-[[animations.clips."reload@raptor".tracks.channel.keys]]
-at = 1.0
-to = [
-    0.0,
-    0.0,
-    "free",
-]
-ease = "linear"
-
-[[animations.clips."reload@raptor".tracks]]
-combine = "replace"
-space = "grip"
-unit = "meters"
-enabled = true
-
-[animations.clips."reload@raptor".tracks.channel]
-channel = "effector"
-chain = "left_arm"
-
-[[animations.clips."reload@raptor".tracks.channel.keys]]
-at = 0.0
-to = [
-    -0.33,
-    -0.2,
-    0.34,
-]
-ease = "smoother_step"
-
-[[animations.clips."reload@raptor".tracks.channel.keys]]
-at = 0.2
-to = [
-    -0.15,
-    -0.22,
-    -0.26,
-]
-ease = "smoother_step"
-
-[[animations.clips."reload@raptor".tracks.channel.keys]]
-at = 0.28
-to = [
-    -0.15,
-    -0.22,
-    -0.26,
-]
-ease = "smoother_step"
-
-[[animations.clips."reload@raptor".tracks.channel.keys]]
-at = 0.58
-to = [
-    -0.04,
-    0.12,
-    -0.51,
-]
-ease = "smoother_step"
-
-[[animations.clips."reload@raptor".tracks.channel.keys]]
-at = 0.72
-to = [
-    -0.04,
-    0.13,
-    -0.39,
-]
-ease = "linear"
-
-[[animations.clips."reload@raptor".tracks.channel.keys]]
-at = 0.8
-to = [
-    -0.04,
-    0.13,
-    -0.39,
-]
-ease = "smoother_step"
-
-[[animations.clips."reload@raptor".tracks.channel.keys]]
-at = 1.0
-to = [
-    -0.33,
-    -0.2,
-    0.34,
-]
-ease = "linear"
-
-[[animations.clips."reload@raptor".tracks]]
-combine = "replace"
-space = "body"
-unit = "meters"
-enabled = true
-
-[animations.clips."reload@raptor".tracks.channel]
-channel = "prop_bone_offset"
-bone = "round"
-
-[[animations.clips."reload@raptor".tracks.channel.keys]]
-at = 0.2
-to = [
-    -0.11,
-    -0.35,
-    0.13,
-]
-ease = "smoother_step"
-
-[[animations.clips."reload@raptor".tracks.channel.keys]]
-at = 0.28
-to = [
-    -0.11,
-    -0.35,
-    0.13,
-]
-ease = "smoother_step"
-
-[[animations.clips."reload@raptor".tracks.channel.keys]]
-at = 0.58
-to = [
-    0.0,
-    -0.01,
-    -0.12,
-]
-ease = "smoother_step"
-
-[[animations.clips."reload@raptor".tracks.channel.keys]]
-at = 0.72
-to = [
-    0.0,
-    0.0,
-    0.0,
-]
-ease = "linear"
-
 [animations.clips."body_reload@raptor"]
 name_key = "anim.clips.body_reload"
 length = 1.0
@@ -1319,6 +883,442 @@ to = [
 ease = "smoother_step"
 
 [[animations.clips."body_reload@raptor".tracks.channel.keys]]
+at = 0.72
+to = [
+    0.0,
+    0.0,
+    0.0,
+]
+ease = "linear"
+
+[animations.clips.reload]
+name_key = "anim.clips.reload"
+length = 1.0
+clock = "seconds"
+looping = false
+note = "The RPG's reload: swung left and back while the free hand takes the next round from the left hip at 20 %, carries it to the front of the tube and seats it at 72 %. The round's keys are the hand's, moved by one fixed offset, so it stays in the hand. Fitted to the reload time."
+blend_in = 0.2
+blend_out = 0.25
+
+[[animations.clips.reload.tracks]]
+combine = "compose"
+space = "carry"
+unit = "arm_lengths"
+enabled = true
+
+[animations.clips.reload.tracks.channel]
+channel = "weapon"
+
+[[animations.clips.reload.tracks.channel.keys]]
+at = 0.0
+to = [
+    0.0,
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[animations.clips.reload.tracks.channel.keys]]
+at = 0.22
+to = [
+    0.2,
+    -0.15,
+    0.55,
+]
+ease = "linear"
+
+[[animations.clips.reload.tracks.channel.keys]]
+at = 0.78
+to = [
+    0.2,
+    -0.15,
+    0.55,
+]
+ease = "smoother_step"
+
+[[animations.clips.reload.tracks.channel.keys]]
+at = 1.0
+to = [
+    0.0,
+    0.0,
+    0.0,
+]
+ease = "linear"
+
+[[animations.clips.reload.tracks]]
+combine = "compose"
+space = "carry"
+unit = "meters"
+enabled = true
+
+[animations.clips.reload.tracks.channel]
+channel = "weapon_rotation"
+
+[[animations.clips.reload.tracks.channel.keys]]
+at = 0.0
+to = [
+    0.0,
+    0.0,
+    "free",
+]
+ease = "smoother_step"
+
+[[animations.clips.reload.tracks.channel.keys]]
+at = 0.22
+to = [
+    0.15,
+    1.3,
+    "free",
+]
+ease = "linear"
+
+[[animations.clips.reload.tracks.channel.keys]]
+at = 0.78
+to = [
+    0.15,
+    1.3,
+    "free",
+]
+ease = "smoother_step"
+
+[[animations.clips.reload.tracks.channel.keys]]
+at = 1.0
+to = [
+    0.0,
+    0.0,
+    "free",
+]
+ease = "linear"
+
+[[animations.clips.reload.tracks]]
+combine = "replace"
+space = "grip"
+unit = "meters"
+enabled = true
+
+[animations.clips.reload.tracks.channel]
+channel = "effector"
+chain = "left_arm"
+
+[[animations.clips.reload.tracks.channel.keys]]
+at = 0.0
+to = [
+    -0.5,
+    -0.16,
+    0.25,
+]
+ease = "smoother_step"
+
+[[animations.clips.reload.tracks.channel.keys]]
+at = 0.2
+to = [
+    -0.15,
+    -0.18,
+    -0.3,
+]
+ease = "smoother_step"
+
+[[animations.clips.reload.tracks.channel.keys]]
+at = 0.28
+to = [
+    -0.15,
+    -0.18,
+    -0.3,
+]
+ease = "smoother_step"
+
+[[animations.clips.reload.tracks.channel.keys]]
+at = 0.58
+to = [
+    0.0,
+    0.05,
+    -0.5,
+]
+ease = "smoother_step"
+
+[[animations.clips.reload.tracks.channel.keys]]
+at = 0.72
+to = [
+    0.0,
+    0.06,
+    -0.35,
+]
+ease = "linear"
+
+[[animations.clips.reload.tracks.channel.keys]]
+at = 0.8
+to = [
+    0.0,
+    0.06,
+    -0.35,
+]
+ease = "smoother_step"
+
+[[animations.clips.reload.tracks.channel.keys]]
+at = 1.0
+to = [
+    -0.5,
+    -0.16,
+    0.25,
+]
+ease = "linear"
+
+[[animations.clips.reload.tracks]]
+combine = "replace"
+space = "body"
+unit = "meters"
+enabled = true
+
+[animations.clips.reload.tracks.channel]
+channel = "prop_bone_offset"
+bone = "round"
+
+[[animations.clips.reload.tracks.channel.keys]]
+at = 0.2
+to = [
+    -0.15,
+    -0.24,
+    0.05,
+]
+ease = "smoother_step"
+
+[[animations.clips.reload.tracks.channel.keys]]
+at = 0.28
+to = [
+    -0.15,
+    -0.24,
+    0.05,
+]
+ease = "smoother_step"
+
+[[animations.clips.reload.tracks.channel.keys]]
+at = 0.58
+to = [
+    0.0,
+    -0.01,
+    -0.15,
+]
+ease = "smoother_step"
+
+[[animations.clips.reload.tracks.channel.keys]]
+at = 0.72
+to = [
+    0.0,
+    0.0,
+    0.0,
+]
+ease = "linear"
+
+[animations.clips."reload@raptor"]
+name_key = "anim.clips.reload"
+length = 1.0
+clock = "seconds"
+looping = false
+note = "The reload for the raptor's short arms and small hands: the same beats, swung nearer its shoulder."
+blend_in = 0.2
+blend_out = 0.25
+
+[[animations.clips."reload@raptor".tracks]]
+combine = "compose"
+space = "carry"
+unit = "arm_lengths"
+enabled = true
+
+[animations.clips."reload@raptor".tracks.channel]
+channel = "weapon"
+
+[[animations.clips."reload@raptor".tracks.channel.keys]]
+at = 0.0
+to = [
+    0.0,
+    0.0,
+    0.0,
+]
+ease = "smoother_step"
+
+[[animations.clips."reload@raptor".tracks.channel.keys]]
+at = 0.22
+to = [
+    0.7,
+    -0.15,
+    0.55,
+]
+ease = "linear"
+
+[[animations.clips."reload@raptor".tracks.channel.keys]]
+at = 0.78
+to = [
+    0.7,
+    -0.15,
+    0.55,
+]
+ease = "smoother_step"
+
+[[animations.clips."reload@raptor".tracks.channel.keys]]
+at = 1.0
+to = [
+    0.0,
+    0.0,
+    0.0,
+]
+ease = "linear"
+
+[[animations.clips."reload@raptor".tracks]]
+combine = "compose"
+space = "carry"
+unit = "meters"
+enabled = true
+
+[animations.clips."reload@raptor".tracks.channel]
+channel = "weapon_rotation"
+
+[[animations.clips."reload@raptor".tracks.channel.keys]]
+at = 0.0
+to = [
+    0.0,
+    0.0,
+    "free",
+]
+ease = "smoother_step"
+
+[[animations.clips."reload@raptor".tracks.channel.keys]]
+at = 0.22
+to = [
+    0.15,
+    1.3,
+    "free",
+]
+ease = "linear"
+
+[[animations.clips."reload@raptor".tracks.channel.keys]]
+at = 0.78
+to = [
+    0.15,
+    1.3,
+    "free",
+]
+ease = "smoother_step"
+
+[[animations.clips."reload@raptor".tracks.channel.keys]]
+at = 1.0
+to = [
+    0.0,
+    0.0,
+    "free",
+]
+ease = "linear"
+
+[[animations.clips."reload@raptor".tracks]]
+combine = "replace"
+space = "grip"
+unit = "meters"
+enabled = true
+
+[animations.clips."reload@raptor".tracks.channel]
+channel = "effector"
+chain = "left_arm"
+
+[[animations.clips."reload@raptor".tracks.channel.keys]]
+at = 0.0
+to = [
+    -0.33,
+    -0.2,
+    0.34,
+]
+ease = "smoother_step"
+
+[[animations.clips."reload@raptor".tracks.channel.keys]]
+at = 0.2
+to = [
+    -0.15,
+    -0.22,
+    -0.26,
+]
+ease = "smoother_step"
+
+[[animations.clips."reload@raptor".tracks.channel.keys]]
+at = 0.28
+to = [
+    -0.15,
+    -0.22,
+    -0.26,
+]
+ease = "smoother_step"
+
+[[animations.clips."reload@raptor".tracks.channel.keys]]
+at = 0.58
+to = [
+    -0.04,
+    0.12,
+    -0.51,
+]
+ease = "smoother_step"
+
+[[animations.clips."reload@raptor".tracks.channel.keys]]
+at = 0.72
+to = [
+    -0.04,
+    0.13,
+    -0.39,
+]
+ease = "linear"
+
+[[animations.clips."reload@raptor".tracks.channel.keys]]
+at = 0.8
+to = [
+    -0.04,
+    0.13,
+    -0.39,
+]
+ease = "smoother_step"
+
+[[animations.clips."reload@raptor".tracks.channel.keys]]
+at = 1.0
+to = [
+    -0.33,
+    -0.2,
+    0.34,
+]
+ease = "linear"
+
+[[animations.clips."reload@raptor".tracks]]
+combine = "replace"
+space = "body"
+unit = "meters"
+enabled = true
+
+[animations.clips."reload@raptor".tracks.channel]
+channel = "prop_bone_offset"
+bone = "round"
+
+[[animations.clips."reload@raptor".tracks.channel.keys]]
+at = 0.2
+to = [
+    -0.11,
+    -0.35,
+    0.13,
+]
+ease = "smoother_step"
+
+[[animations.clips."reload@raptor".tracks.channel.keys]]
+at = 0.28
+to = [
+    -0.11,
+    -0.35,
+    0.13,
+]
+ease = "smoother_step"
+
+[[animations.clips."reload@raptor".tracks.channel.keys]]
+at = 0.58
+to = [
+    0.0,
+    -0.01,
+    -0.12,
+]
+ease = "smoother_step"
+
+[[animations.clips."reload@raptor".tracks.channel.keys]]
 at = 0.72
 to = [
     0.0,
