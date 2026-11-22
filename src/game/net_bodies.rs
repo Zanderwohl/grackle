@@ -226,7 +226,7 @@ pub(crate) fn give_bodies_to_whoever_needs_one(
             && let Some(class) = rules.class_for(who.class)
         {
             let spawn = place(who.team());
-            info!("Standing our own body up as {} on {}", who.id, team_name(who.team()));
+            debug!("Standing our own body up as {} on {}", who.id, team_name(who.team()));
             let body = spawn_player(&mut commands, spawn, &who, who.color(&start), class, &rules, &catalog);
             commands.entity(body).insert(LocalPlayer);
             if hosting {
@@ -258,7 +258,7 @@ pub(crate) fn give_bodies_to_whoever_needs_one(
         }
         let Some(class) = rules.class_for(who.class) else { continue };
         let spawn = place(who.team());
-        info!("Standing a client's body up as {} on {}", who.id, team_name(who.team()));
+        debug!("Standing a client's body up as {} on {}", who.id, team_name(who.team()));
         spawn_body_for(&mut commands, spawn, (who, start, class), (link, peer.0), &rules, &catalog);
     }
 
@@ -319,7 +319,7 @@ pub(crate) fn give_bodies_to_whoever_needs_one(
             }
         };
         let spawn = place(who.team());
-        info!("Standing a bot's body up as {} on {} as the {:?}", who.id, team_name(who.team()), class);
+        debug!("Standing a bot's body up as {} on {} as the {:?}", who.id, team_name(who.team()), class);
         let body = spawn_player(&mut commands, spawn, &who, who.color(&start), class, &rules, &catalog);
         commands.entity(body).insert((BotOf(seat), BotIntent::default(), BotRoute::default(), BotStride::default(), costs, mind, BotSenses::default(), BotThought::default(), BotAim::default(), Name::new("Bot")));
         if hosting {

@@ -553,14 +553,14 @@ fn save_file(
                 }
                 // The old file is left to the deletions, which try it again.
                 (_, Err(e)) => {
-                    error!("Saving a weapon: {e}");
+                    error!("Saved {}, but could not remove the file it was renamed from: {e}", path.display());
                     Err(None)
                 }
                 _ => Ok(()),
             }
         }
         Err(e) => {
-            error!("Saving a weapon: {e}");
+            error!("Could not save {}: {e}", path.display());
             Err(from.map(|(key, _, _)| key.to_owned()))
         }
     }
@@ -590,7 +590,7 @@ fn start_in_the_weapon_editor(start: Res<StartInWeaponEditor>, mut next: ResMut<
     if !start.0 || *done {
         return;
     }
-    info!("Opening the weapon editor, as asked");
+    info!("Opening the weapon editor, as the command line asked");
     next.set(AppMode::Weapon);
     *done = true;
 }

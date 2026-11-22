@@ -16,8 +16,17 @@ use crate::tool::bake_progress;
 use crate::tool::bake_job::{self, BakeKind, BakeProgress, BakeState, BakeStatus, VolumeLabels, SETTLE_SECONDS};
 use crate::tool::room::{Block, CalculateRoomGeometry, ClearRoomGeometry, MapVolumes, Room, RoomSlot, VolumeOrder};
 
+/// Writes every entity and its components to `logs/grackle_ecsdump_{stamp}.txt`.
 #[derive(Message)]
-pub struct LogECS;
+pub struct DumpEcs;
+
+/// The ECS dump being written, and where the last one went, shown in the Bakes panel until the
+/// button is pressed again.
+#[derive(Resource, Default)]
+pub struct EcsDump {
+    writing: Option<bevy::tasks::Task<Result<std::path::PathBuf, String>>>,
+    pub written: Option<std::path::PathBuf>,
+}
 
 /// Everything rebuilt from the map before a round starts. A set so a new kind
 /// of bake joins by naming it, and the round setup orders after all of them.
@@ -39,8 +48,12 @@ impl Plugin for BakePlugin {
             .init_resource::<BakeProgress>()
             .add_message::<CalculateRoomGeometry>()
             .add_message::<ClearRoomGeometry>()
-            .add_message::<LogECS>()
-            .add_systems(Update, (Self::post_startup, Self::clear_room_geometry, Self::log_ecs).run_if(in_state(AppMode::Editor)))
+            .add_message::<DumpEcs>()
+            // Handled by `PathOpenPlugin`; registered here too so the panel stands alone in tests.
+            .add_message::<crate::common::path_open::RequestPathOpen>()
+            .init_resource::<EcsDump>()
+            .add_systems(Update, (Self::post_startup, Self::clear_room_geometry).run_if(in_state(AppMode::Editor)))
+            .add_systems(Update, (dump_ecs, finish_the_ecs_dump).chain().run_if(in_state(AppMode::Editor)))
             // Ungated: the map can be edited during a round.
             .add_systems(Update, (Self::bake_room_geometry, Self::auto_bake_rooms, Self::auto_bake_stairs, Self::report_rooms).chain())
             .configure_sets(OnEnter(AppMode::Play), BakeSystems::All)
@@ -235,7 +248,7 @@ fn touches(a: &Volume, b: &Volume) -> bool {
 
 impl BakePlugin {
     /// Takes the switches as they stand and returns them as left, with any button pressed.
-    pub fn ui(ui: &mut egui::Ui, current: &BakeCommands, nav: &mut NavCommands, progress: &BakeProgress) -> BakeCommands {
+    pub fn ui(ui: &mut egui::Ui, current: &BakeCommands, nav: &mut NavCommands, progress: &BakeProgress, dump: &EcsDump) -> BakeCommands {
         let (auto, auto_sun, halfbright, auto_postcards) = (current.auto, current.auto_sun, current.halfbright, current.auto_postcards);
         let mut commands = BakeCommands { auto, auto_sun, halfbright, auto_postcards, ..default() };
         ui.vertical(|ui| {
@@ -269,11 +282,27 @@ impl BakePlugin {
                 }
             });
             nav_overlay::section(ui, nav);
-            ui.separator();
-            if ui.button("Log ECS").clicked() {
-                commands.log_ecs = true;
-            }
             bake_progress::section(ui, progress);
+            ui.separator();
+            ui.label(egui::RichText::new(get!("bakes.developer")).strong());
+            if ui.button(get!("bakes.dump_ecs")).clicked() {
+                commands.dump_ecs = true;
+            }
+            if let Some(path) = &dump.written {
+                // Brighter than egui's weak text, which is hard to read on either theme.
+                let gray = match ui.visuals().dark_mode {
+                    true => egui::Color32::from_gray(170),
+                    false => egui::Color32::from_gray(85),
+                };
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing.x = 0.0;
+                    ui.colored_label(gray, get!("bakes.dumped_ecs_before"));
+                    if ui.link(path.display().to_string()).clicked() {
+                        commands.reveal_ecs_dump = true;
+                    }
+                    ui.colored_label(gray, get!("bakes.dumped_ecs_after"));
+                });
+            }
         });
         commands
     }
@@ -565,30 +594,71 @@ impl BakePlugin {
             info!("Cleared {} baked room mesh(es)", count);
         }
     }
+}
 
-    fn log_ecs(
-        mut events: MessageReader<LogECS>,
-        query: Query<(Entity, &FeatureTag, &Transform, Option<&Room>, Option<&PointLight>)>,
-    ) {
-        if events.read().next().is_none() { return; }
-        events.clear();
-
-        info!("=== ECS Entity Dump ===");
-        for (entity, tag, transform, room, point_light) in &query {
-            let room_str = match room {
-                Some(r) => format!("{:?}", r),
-                None => "None".to_string(),
-            };
-            let light_str = match point_light {
-                Some(l) => format!("{:?}", l),
-                None => "None".to_string(),
-            };
-            info!(
-                "{:?} | {:?} | {:?} | Room: {} | PointLight: {}",
-                entity, tag, transform.translation, room_str, light_str,
-            );
+/// Every entity, its name and its components, one block each, written on the IO pool. Feature
+/// entities also get their tag, place and room or light.
+fn dump_ecs(world: &mut World) {
+    let asked = world.resource_mut::<Messages<DumpEcs>>().drain().count() > 0;
+    if !asked {
+        return;
+    }
+    world.resource_mut::<EcsDump>().written = None;
+    use std::fmt::Write;
+    let mut text = String::new();
+    let mut entities: Vec<(Entity, Option<String>)> =
+        world.query::<(Entity, Option<&Name>)>().iter(world).map(|(entity, name)| (entity, name.map(|name| name.to_string()))).collect();
+    entities.sort_by_key(|(entity, _)| *entity);
+    let mut features = world.query::<(&FeatureTag, &Transform, Option<&Room>, Option<&PointLight>)>();
+    for (entity, name) in &entities {
+        let _ = writeln!(text, "{entity} {}", name.as_deref().unwrap_or("-"));
+        if let Ok((tag, transform, room, light)) = features.get(world, *entity) {
+            let _ = writeln!(text, "  feature: {tag:?} at {:?}", transform.translation);
+            if let Some(room) = room {
+                let _ = writeln!(text, "  room: {room:?}");
+            }
+            if let Some(light) = light {
+                let _ = writeln!(text, "  light: {light:?}");
+            }
         }
-        info!("=== {} entities total ===", query.iter().count());
+        if let Ok(components) = world.inspect_entity(*entity) {
+            let mut names: Vec<String> = components.map(|(_, info)| info.name().to_string()).collect();
+            names.sort();
+            for name in names {
+                let _ = writeln!(text, "  {name}");
+            }
+        }
+    }
+    let _ = writeln!(text, "{} entities", entities.len());
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let stamp = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S");
+        let path = std::path::Path::new(crate::common::log_file::DIRECTORY).join(format!("grackle_ecsdump_{stamp}.txt"));
+        let writing = bevy::tasks::IoTaskPool::get().spawn(async move {
+            std::fs::create_dir_all(path.parent().expect("in logs/"))
+                .and_then(|()| std::fs::write(&path, text))
+                .map(|()| path.clone())
+                .map_err(|error| format!("Could not write the ECS dump to {}: {error}", path.display()))
+        });
+        world.resource_mut::<EcsDump>().writing = Some(writing);
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = text;
+        warn!("The ECS dump is written to a file, which a browser has nowhere to put");
+    }
+}
+
+fn finish_the_ecs_dump(mut dump: ResMut<EcsDump>) {
+    let Some(writing) = dump.writing.as_mut() else { return };
+    let Some(written) = bevy::tasks::futures::check_ready(writing) else { return };
+    dump.writing = None;
+    match written {
+        Ok(path) => {
+            info!("Wrote the ECS dump to {}", path.display());
+            dump.written = Some(path);
+        }
+        Err(why) => error!("{why}"),
     }
 }
 
@@ -1070,5 +1140,7 @@ pub struct BakeCommands {
     pub clear_sunlight: bool,
     pub calculate_room_geometry: bool,
     pub clear_room_geometry: bool,
-    pub log_ecs: bool,
+    pub dump_ecs: bool,
+    /// Show the last ECS dump selected in the file manager.
+    pub reveal_ecs_dump: bool,
 }

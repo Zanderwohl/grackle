@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use bevy::log::{info, warn};
+use bevy::log::warn;
 use rand::Rng;
 use crate::common::item::{PARTICLES, PROTOTYPES};
 use crate::common::item::item::{Item, ParticleEffect, StatTracker};
@@ -65,21 +65,17 @@ impl CrateSeriesEntry {
 
         let mut loops = 0;
         let loop_limit = (self.particle_effects.len() + self.stat_trackers.len()) as i32 * 10; // TODO: This is nuts. Are we potentially looping thousands of times?
-        info!("Particle effect odds: {}; Stat tracker odds: {}", self.total_particle_effect_odds, self.total_stat_tracker_odds);
 
         'create: loop  {
             loops += 1;
             if self.total_particle_effect_odds > 0 {
                 let mut current_odds = 0;
                 let random_number = rand::rng().random_range(0..self.total_particle_effect_odds);
-                info!("Particle effect: {}", random_number);
                 'particle: for entry in &self.particle_effects {
                     current_odds += entry.odds;
-                    info!("\tCurrent odds: {} (+{}) - {}", current_odds, entry.odds, random_number < current_odds);
                     if random_number < current_odds {
                         if effect.is_none() {
                             if let Some(key) = &entry.particle_effect_key && let Some(selected_effect) = PARTICLES.get(key) {
-                                info!("\t\tSetting!");
                                 effect = Some(selected_effect.clone());
                             }
                         }
@@ -91,14 +87,11 @@ impl CrateSeriesEntry {
             if self.total_stat_tracker_odds > 0 {
                 let random_number = rand::rng().random_range(0..self.total_stat_tracker_odds);
                 let mut current_odds = 0;
-                info!("Stat tracker: {}", random_number);
                 'stat_tracker: for entry in &self.stat_trackers {
                     current_odds += entry.odds;
-                    info!("\tCurrent odds: {} (+{}) - {}", current_odds, entry.odds, random_number < current_odds);
                     if random_number < current_odds {
                         if stat_tracker.is_none() {
                             if let Some(new_stat_tracker) = &entry.stat_tracker {
-                                info!("\t\tSetting!");
                                 stat_tracker = Some(new_stat_tracker.clone());
                             }
                         }
@@ -109,7 +102,7 @@ impl CrateSeriesEntry {
             }
 
             if !self.allow_plain && self.total_stat_tracker_odds == 0 && self.total_particle_effect_odds > 0 {
-                warn!("{}", get!("create_drop.error.no_odds", "item", self.prototype_key));
+                warn!("{}", get!("crate_drop.error.no_odds", "item", self.prototype_key));
                 return Err(NoQualities(self.prototype_key.clone()));
             }
             if self.allow_plain || effect.is_some() || stat_tracker.is_some() { break 'create; }

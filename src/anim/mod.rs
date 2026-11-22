@@ -82,7 +82,7 @@ fn start_in_the_anim_editor(
     if !start.0 || *done {
         return;
     }
-    info!("Opening the animation editor, as asked");
+    info!("Opening the animation editor, as the command line asked");
     next.set(AppMode::Animation);
     *done = true;
 }

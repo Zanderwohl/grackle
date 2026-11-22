@@ -482,7 +482,7 @@ impl MulticamPlugin {
                     gizmos.line(f, g, color);
                     gizmos.line(e, g, color);
                 }
-                (_, _, _, _, _, _, _) => { info!("?") }
+                (_, _, _, _, _, _, _) => {}
             }
         }
     }
@@ -589,7 +589,7 @@ impl MulticamPlugin {
         mut contexts: EguiContexts,
     ) {
         let ctx = contexts.ctx_mut();
-        if ctx.is_err() { warn!("{}", ctx.unwrap_err()); return; }
+        if ctx.is_err() { warn!("multicam::debug_window: no egui context: {}", ctx.unwrap_err()); return; }
         let ctx = ctx.unwrap();
         
         if !state.debug_window {
@@ -651,7 +651,7 @@ impl MulticamPlugin {
         mut contexts: EguiContexts,
     ) {
         let ctx = contexts.ctx_mut();
-        if ctx.is_err() { warn!("{}", ctx.unwrap_err()); return; }
+        if ctx.is_err() { warn!("multicam::debug_boxes: no egui context: {}", ctx.unwrap_err()); return; }
         let ctx = ctx.unwrap();
         
         if ctx.is_pointer_over_egui() || ctx.egui_wants_pointer_input() {

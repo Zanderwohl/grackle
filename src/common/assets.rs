@@ -104,7 +104,7 @@ impl Assets {
             match self.read(&pack, relative) {
                 Ok(bytes) => found = Some(bytes),
                 Err(AssetError::NotFound(_)) => {}
-                Err(e) => error!("{e}"),
+                Err(e) => warn!("{e}; using a lower pack's copy, if any"),
             }
         }
         found

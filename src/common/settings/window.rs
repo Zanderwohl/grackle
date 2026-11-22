@@ -11,7 +11,7 @@ use bevy::prelude::*;
 use bevy_egui::egui::{self, Id, Ui};
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass};
 
-use super::Settings;
+use super::{LogLevel, Settings};
 use crate::common::app_mode::{authoring, AppMode};
 use crate::common::credits;
 use crate::common::fonts::{self, PackFonts};
@@ -461,6 +461,30 @@ impl SettingsWindow {
     }
 
     fn developer(&mut self, ui: &mut Ui) {
+        ui.heading(get!("settings.developer.logging"));
+        ui.add_space(5.0);
+        egui::Grid::new("settings_logging").num_columns(2).spacing([10.0, 8.0]).show(ui, |ui| {
+            ui.label(get!("settings.developer.log_level"));
+            let level = &mut self.draft.log_level;
+            egui::ComboBox::from_id_salt("log_level").selected_text(level_name(*level)).width(180.0).show_ui(ui, |ui| {
+                for choice in LogLevel::ALL {
+                    ui.selectable_value(level, choice, level_name(choice));
+                }
+            });
+            ui.end_row();
+            ui.label(get!("settings.developer.log_days"));
+            ui.add(egui::DragValue::new(&mut self.draft.log_days).range(super::LOG_DAYS_RANGE).suffix(get!("settings.developer.days_suffix")));
+            ui.end_row();
+        });
+        if let Some(startup) = crate::common::log_file::startup_level()
+            && startup != self.draft.log_level
+        {
+            ui.colored_label(
+                ui.visuals().warn_fg_color,
+                get!("settings.developer.log_level_restart", "startup", level_name(startup), "chosen", level_name(self.draft.log_level)),
+            );
+        }
+        ui.add_space(15.0);
         ui.heading(get!("settings.developer.icons"));
         ui.add_space(5.0);
         icon_grid(ui, &self.icons);
@@ -972,4 +996,8 @@ mod tests {
         assert!(names.iter().any(|name| name == icons::FALLBACK), "{names:?}");
         assert!(names.windows(2).all(|pair| pair[0] < pair[1]), "not sorted and unique");
     }
+}
+
+fn level_name(level: LogLevel) -> String {
+    get!(format!("settings.developer.log_levels.{}", level.name()))
 }

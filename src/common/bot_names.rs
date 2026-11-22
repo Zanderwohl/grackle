@@ -62,7 +62,7 @@ pub fn load_bot_names(mut commands: Commands, assets: Option<Res<Assets>>) {
             Ok(bytes) => Some(String::from_utf8_lossy(&bytes).into_owned()),
             Err(AssetError::NotFound(_)) => None,
             Err(e) => {
-                error!("{e}");
+                warn!("{e}; skipping it");
                 None
             }
         })

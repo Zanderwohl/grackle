@@ -1,12 +1,12 @@
 //! What each round did, kept for reading afterward. Two records, both on the authority:
 //!
-//! - **The log** gets a RON line per kill — victim, killer and assist with their health and what
-//!   each wanted, the weapon, how it killed and who did what damage — and at the round's end a
-//!   [`RoundRecord`]: every bot's temperament and the scoreboard.
 //! - **`cache/rounds/{map}/{started}.jsonl`** gets one JSON [`Event`] per line, game seconds since
 //!   the round started first in each: spawns, every hit, kills, pickups, what bots go for and
 //!   who they first see, and every body's place once a second. Derived and disposable, like the
 //!   rest of `cache/`. Native only.
+//! - **The log** gets the same events as `GAME_EVENT {json}` lines ([`log_event`]), the frequent
+//!   ones at debug, plus a few only the log has: a [`RoundRecord`] at the round's end, team and
+//!   class choices, and a client's view of each death.
 //!
 //! A round is one match's live phase, so matches played back to back are a file each; without
 //! the match cycle (the game's tests) it is the whole of Play.
@@ -24,6 +24,7 @@ use crate::common::match_phase::MatchPhase;
 use crate::common::damage::{Armor, DamageDealt, DamageSource, Damageable, Died, How, PlayerId};
 use crate::common::net::has_authority;
 use crate::common::round_settings::{BotSkill, RoundSettings};
+use crate::common::team::Team;
 use crate::common::weapon::{Equipped, WeaponCatalog, WeaponId};
 use crate::game::bot::{BotIntent, BotOf, BotSeat, Goal, RouteCosts};
 use crate::game::bot_sense::{BotMind, BotSenses, Sense};
@@ -51,7 +52,7 @@ pub struct Temperament {
 }
 
 /// One per round, at its end, in the log.
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Clone, Debug, PartialEq)]
 pub struct RoundRecord {
     pub round: u32,
     pub map: String,
@@ -153,6 +154,55 @@ pub enum Event {
     Sight { t: f32, by: u64, of: u64, distance: f32 },
     Sample { t: f32, bodies: Vec<Sampled> },
     RoundEnd { t: f32, scoreboard: Vec<Standing> },
+    /// Logged only, after the round's file is closed: every bot's temperament and the scoreboard.
+    RoundRecord(RoundRecord),
+    /// Logged only, by the authority. With no team, `team` is `None`.
+    Seat { id: u64, seat: SeatKind, team: Option<Team> },
+    /// Logged only, by the authority: a class chosen, for the next body.
+    Class { id: u64, class: String },
+    /// Logged only, by a client, which keeps no round: a death as it was told of it. A `killer`
+    /// of `None` is the map.
+    Death { victim: Option<u64>, victim_name: Option<String>, killer: Option<u64>, assist: Option<u64>, at: [f32; 3] },
+}
+
+#[derive(Serialize, Clone, Copy, Debug, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum SeatKind {
+    Playing,
+    Spectating,
+}
+
+/// The prefix of every game event's line in the log, to grep for.
+pub const GAME_EVENT: &str = "GAME_EVENT";
+/// The log target of every game event, for `RUST_LOG`.
+pub const EVENT_TARGET: &str = "grackle::event";
+
+impl Event {
+    /// Many a second at the busiest: every hit, every bot's change of mind, every sighting and
+    /// the once-a-second sample.
+    fn frequent(&self) -> bool {
+        matches!(self, Event::Damage { .. } | Event::Goal { .. } | Event::Sight { .. } | Event::Sample { .. })
+    }
+}
+
+/// Writes `GAME_EVENT {json}` to the log, the JSON being what a round's `.jsonl` file holds.
+pub fn log_event(event: &Event) {
+    let line = || serde_json::to_string(event).expect("an event is plain data");
+    if event.frequent() {
+        if bevy::log::tracing::enabled!(target: EVENT_TARGET, bevy::log::Level::DEBUG) {
+            debug!(target: EVENT_TARGET, "{GAME_EVENT} {}", line());
+        }
+    } else {
+        info!(target: EVENT_TARGET, "{GAME_EVENT} {}", line());
+    }
+}
+
+/// `None` is the map.
+pub fn source_id(source: DamageSource) -> Option<u64> {
+    match source {
+        DamageSource::Player(id) => Some(id.0),
+        DamageSource::World => None,
+    }
 }
 
 /// What was last seen of somebody, kept so a body reaped before `Update` still has a record.
@@ -227,6 +277,7 @@ impl Round {
         if !self.open {
             return;
         }
+        log_event(event);
         #[cfg(test)]
         self.written.push(event.clone());
         #[cfg(not(target_arch = "wasm32"))]
@@ -494,9 +545,6 @@ fn note_kills(mut round: ResMut<Round>, time: Res<Time>, mut died: MessageReader
             (a.distance(b) * 100.0).round() / 100.0
         });
         let record = KillRecord { t, victim: party, killer, assist, weapon: weapon_key(catalog.as_deref(), cause.weapon), how: cause.how, reflected: cause.reflected, headshot: cause.headshot, distance, life, damage };
-        if round.open {
-            info!("kill {}", ron::to_string(&record).expect("a kill is plain data"));
-        }
         round.write(&Event::Kill(record));
     }
 }
@@ -618,8 +666,7 @@ fn close_the_round(
     let mut temperaments: Vec<(u64, String, Temperament)> = seats.iter().map(|(who, route, mind)| (who.id.0, name(who.id), Temperament { route: *route, mind: *mind })).collect();
     temperaments.sort_by_key(|(id, ..)| *id);
     let record = RoundRecord { round: round.number, map: round.map.clone(), seconds: (t * 10.0).round() / 10.0, temperaments, scoreboard };
-    let pretty = ron::ser::PrettyConfig::new().depth_limit(4);
-    info!("round {}", ron::ser::to_string_pretty(&record, pretty).expect("a round is plain data"));
+    log_event(&Event::RoundRecord(record));
 }
 
 #[cfg(test)]

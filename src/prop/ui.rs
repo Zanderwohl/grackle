@@ -525,7 +525,7 @@ fn panels(
     }
     handle_files(file, &mut editor, &dialog, &mut shared.recent, DocumentKind::Prop);
     if quit {
-        info!("Quitting, as asked");
+        info!("Quitting from the File menu");
         exit.write(AppExit::Success);
     }
 
@@ -3139,12 +3139,12 @@ pub fn save_or_ask(editor: &mut PropEditor, dialog: &PropFileDialog) -> Option<P
     };
     match document::save(&path, editor.doc()) {
         Ok(()) => {
-            info!("Saved prop to {path:?}");
+            info!("Saved the prop to {}", path.display());
             editor.mark_saved(path.clone());
             Some(path)
         }
         Err(e) => {
-            error!("Saving the prop failed: {e}");
+            error!("Could not save the prop: {e}");
             None
         }
     }
@@ -3155,12 +3155,12 @@ fn open_prop(editor: &mut PropEditor, path: PathBuf, titled: bool) {
     match std::fs::read_to_string(&path) {
         Ok(text) => match document::parse(&text) {
             Ok(doc) => {
-                info!("Opened prop {path:?}");
+                info!("Opened the prop {}", path.display());
                 editor.open(doc, titled.then_some(path));
             }
-            Err(e) => error!("{}: {e}", path.display()),
+            Err(e) => error!("Could not open the prop {}: {e}", path.display()),
         },
-        Err(e) => error!("{}: {e}", path.display()),
+        Err(e) => error!("Could not open the prop {}: {e}", path.display()),
     }
 }
 
@@ -3242,11 +3242,11 @@ pub(crate) fn handle_files(
         match result {
             DialogResult::Save(path) => match document::save(&path, editor.doc()) {
                 Ok(()) => {
-                    info!("Saved prop to {path:?}");
+                    info!("Saved the prop to {}", path.display());
                     recent.saved(kind, &path);
                     editor.mark_saved(path);
                 }
-                Err(e) => error!("Saving the prop failed: {e}"),
+                Err(e) => error!("Could not save the prop: {e}"),
             },
             DialogResult::Open(path) => open_prop(editor, path, true),
         }

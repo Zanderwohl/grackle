@@ -361,10 +361,10 @@ fn load_pack(assets: &Assets, pack: &Path, specs: &mut Vec<(String, TauntSpec)>)
     let text = match assets.read(pack, TAUNTS_FILE) {
         Ok(bytes) => match String::from_utf8(bytes) {
             Ok(text) => text,
-            Err(e) => return error!("{named} is not valid UTF-8: {e}"),
+            Err(e) => return warn!("{named} is not valid UTF-8, so it is skipped: {e}"),
         },
         Err(AssetError::NotFound(_)) => return,
-        Err(e) => return error!("{e}"),
+        Err(e) => return warn!("{e}; skipping it"),
     };
     merge(&named, &text, specs);
 }
@@ -379,7 +379,7 @@ pub fn taunt_specs_in(text: &str) -> Vec<(String, TauntSpec)> {
 fn merge(named: &str, text: &str, specs: &mut Vec<(String, TauntSpec)>) {
     let file: toml::Table = match toml::from_str(text) {
         Ok(file) => file,
-        Err(e) => return error!("{named} will not parse: {e}"),
+        Err(e) => return warn!("{named} will not parse, so it is skipped: {e}"),
     };
     for (key, value) in file {
         let checked = TauntEntry::deserialize(value)

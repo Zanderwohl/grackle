@@ -169,7 +169,7 @@ fn broadcast_map_changes(
 
     last.since = 0.0;
     last.blueprint = blueprint.clone();
-    info!("Map changed; sending {} bytes to everyone", blueprint.len());
+    debug!("Map changed; sending {} bytes to everyone", blueprint.len());
     sender.send::<_, MapChannel>(&MapSnapshot { blueprint, opened: timeline.adoptions() }, &server, &NetworkTarget::All)?;
     Ok(())
 }
@@ -273,7 +273,10 @@ fn adopt_the_servers_map(
                     continue;
                 }
             };
-            info!("Adopting the server's map: {} feature(s)", incoming.features.len());
+            match another_map {
+                true => info!("Adopting the server's map: {} feature(s)", incoming.features.len()),
+                false => debug!("Adopting the server's changed map: {} feature(s)", incoming.features.len()),
+            }
 
             let features = incoming
                 .features

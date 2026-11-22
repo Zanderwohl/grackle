@@ -192,6 +192,8 @@ pub struct ServerList {
     failed: bool,
     /// The last broadcast failed, so the next failure is not warned about again.
     broadcast_failing: bool,
+    /// The last read failed, so a repeat is not warned about until a read works.
+    read_failing: bool,
 }
 
 impl ServerList {
@@ -268,6 +270,9 @@ struct Responder {
     retry_at: Option<f64>,
     /// A bind has failed since the socket last opened, so later failures are not warned about.
     warned: bool,
+    /// Reading or answering failed last time, so a repeat is not warned about until it works.
+    read_failing: bool,
+    send_failing: bool,
     throttle: Throttle,
 }
 
@@ -307,9 +312,8 @@ fn open_or_close_the_responder(role: Option<Res<NetRole>>, listing: Option<Res<S
             *responder = Responder { socket: Some(socket), ..default() };
         }
         Err(error) => {
-            match responder.warned {
-                false => warn!("Cannot answer LAN discovery on port {DISCOVERY_PORT}: {error}; trying again every {BIND_RETRY} s"),
-                true => debug!("Cannot answer LAN discovery on port {DISCOVERY_PORT}: {error}"),
+            if !responder.warned {
+                warn!("Cannot answer LAN discovery on port {DISCOVERY_PORT}: {error}; trying again every {BIND_RETRY} s");
             }
             responder.warned = true;
             responder.retry_at = Some(now + BIND_RETRY);
@@ -358,15 +362,24 @@ impl Describe<'_, '_> {
 }
 
 fn answer_questions(mut responder: ResMut<Responder>, describe: Describe) {
-    let Responder { socket: Some(socket), throttle, .. } = &mut *responder else { return };
+    let Responder { socket: Some(socket), throttle, read_failing, send_failing, .. } = &mut *responder else { return };
     let mut buffer = [0u8; DATAGRAM];
     loop {
         let (length, from) = match socket.recv_from(&mut buffer) {
-            Ok(received) => received,
-            Err(error) if error.kind() == io::ErrorKind::WouldBlock => return,
+            Ok(received) => {
+                *read_failing = false;
+                received
+            }
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                *read_failing = false;
+                return;
+            }
             Err(error) => {
-                // Tried again next time: an error that repeats would otherwise hold the frame here.
-                debug!("LAN discovery read failed: {error}");
+                // Tried again next frame: an error that repeats would otherwise hold the frame here.
+                if !*read_failing {
+                    warn!("Could not read a LAN discovery question: {error}; still trying");
+                    *read_failing = true;
+                }
                 return;
             }
         };
@@ -378,8 +391,13 @@ fn answer_questions(mut responder: ResMut<Responder>, describe: Describe) {
             continue;
         }
         let Some(reply) = describe.reply(question.nonce) else { return };
-        if let Err(error) = socket.send_to(&encode_reply(reply), from) {
-            debug!("Could not answer LAN discovery from {from}: {error}");
+        match socket.send_to(&encode_reply(reply), from) {
+            Ok(_) => *send_failing = false,
+            Err(error) if !*send_failing => {
+                warn!("Could not answer LAN discovery from {from}: {error}; not said again until an answer goes");
+                *send_failing = true;
+            }
+            Err(_) => {}
         }
     }
 }
@@ -389,6 +407,7 @@ fn ask(mut list: ResMut<ServerList>) {
         list.socket = None;
         list.last_question = None;
         list.failed = false;
+        list.read_failing = false;
         return;
     }
     if list.failed {
@@ -414,7 +433,7 @@ fn ask(mut list: ResMut<ServerList>) {
             warn!("Could not broadcast a LAN discovery query: {error}; trying again every {ASK_EVERY} s");
             list.broadcast_failing = true;
         }
-        Err(error) => debug!("Could not broadcast a LAN discovery query: {error}"),
+        Err(_) => {}
     }
 }
 
@@ -424,13 +443,20 @@ fn read_replies(mut list: ResMut<ServerList>) {
         let Some(socket) = &list.socket else { break };
         match socket.recv_from(&mut buffer) {
             Ok((length, from)) => {
+                list.read_failing = false;
                 if let Some(reply) = decode_reply(&buffer[..length]) {
                     list.file(from, reply, now());
                 }
             }
-            Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                list.read_failing = false;
+                break;
+            }
             Err(error) => {
-                debug!("LAN discovery read failed: {error}");
+                if !list.read_failing {
+                    warn!("Could not read a LAN discovery reply: {error}; still trying");
+                    list.read_failing = true;
+                }
                 break;
             }
         }

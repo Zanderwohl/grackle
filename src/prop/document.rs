@@ -799,7 +799,7 @@ pub fn from_the_packs<T>(
         match read(assets, pack, name) {
             Ok(read) => found = Some((read, prop_path(pack, name))),
             Err(PropFileError::Asset(_)) => {}
-            Err(e) => error!("{e}"),
+            Err(e) => warn!("{}/{e}; skipping it", pack.display()),
         }
     }
     found

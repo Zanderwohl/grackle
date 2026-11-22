@@ -141,19 +141,23 @@ the saved one, then the profile's shipped copy, then the defaults. **An unattend
 a blueprint as its file, `--spectate` takes the Spectate seat each round,
 `--rounds N` quits once N rounds have ended (the cycle starts each next one), and every round's standings are
 logged as a table as it ends (`rounds::report`). **Telemetry**
-([`src/game/telemetry.rs`](src/game/telemetry.rs), authority only) puts a RON
-line in the log per kill — victim, killer and assist with health, place and
-goal pulls, the weapon, how it killed, every attacker's share — and a
-`RoundRecord` at the round's end with each bot's temperament and the
-scoreboard; and, where an app binary asks (`RecordRounds`, so tests write
-nothing), a JSON Lines file per round — each match's live phase, so matches
+([`src/game/telemetry.rs`](src/game/telemetry.rs), authority only) writes every
+game event to the log as a `GAME_EVENT {json}` line (`log_event`, target
+`grackle::event`; hits, bots' goals, sightings and samples at debug) — a kill
+carries victim, killer and assist with health, place and goal pulls, the weapon,
+how it killed and every attacker's share, and a `RoundRecord` at the round's
+end each bot's temperament and the scoreboard — and, where an app binary asks
+(`RecordRounds`, so tests write nothing), the same events as a JSON Lines file
+per round — each match's live phase, so matches
 back to back are a file each — at `cache/rounds/{map}/{started}.jsonl`:
 spawns, hits, kills, pickups, goal changes (a retreat marked), first sightings
 and every body once a second. A hit knows its weapon because `Damage` and
 `DamageDealt` carry a `Cause` — weapon, how, reflected — from the trigger pull
 on, through projectiles, blasts and burns; nothing decides anything from it.
 The log itself goes to `logs/` too ([`src/common/log_file.rs`](src/common/log_file.rs)):
-one file per launch, split at 32 MiB, the newest 30 kept. What a bot goes
+one file per launch, split at 32 MiB, each line with its source file and line,
+deleted after Settings → Developer's **Keep logs for** days (7 by default); its
+**Log level** (Info by default) is read at startup. See "Logging". What a bot goes
 for is `think`'s ([`src/game/bot_think.rs`](src/game/bot_think.rs)), the one
 writer of `BotIntent::goal`: health, armor, arms, a hunt, cover, an ambush or a
 roam, each scored by its temperament's `Drives`, the one it has getting a
@@ -267,7 +271,7 @@ shape is a new producer and not a rewrite of every consumer — see
 | `assets/default/` | The default pack: `lang/`, `blueprints/`, `servers/` (example `--server-config` files), `images/backgrounds/title/` (main-menu backgrounds). |
 | `assets/user/` | The user pack: gitignored, made at startup with `blueprints/`, `props/` and `images/backgrounds/title/`, last in `default_packs()` so it overrides the shipped one. A new map or prop is saved here unless the document already has a folder. Also holds `settings.toml`, the player settings, `shortcuts.toml`, `server.toml` (the Round tab) and `recent.toml` (the File menu's Recent lists). |
 | `cache/` | Gitignored, derived from the packs and maps: `thumbnail/props/{name}.png`, `nav/{hash}.bin`, `lightmap/{hash}.bin`, `postcards/{hash}/*.png`, `rounds/{map}/*.jsonl`. Safe to delete. |
-| `logs/` | Gitignored: the log's file drain, one file per launch. |
+| `logs/` | Gitignored: the log's file drain, one file per launch, and the Bakes panel's ECS dumps (`grackle_ecsdump_{stamp}.txt`, whose path the panel shows as a link that selects the file in the file manager), all deleted after the days set in Settings → Developer. |
 | `screenshots/` | Gitignored, made at startup: `F12` saves the window as drawn, HUD and egui included, as `{date}_{time}_{millisecond}.png` ([`src/common/screenshot.rs`](src/common/screenshot.rs)). |
 
 ## Spawn points and class metrics
@@ -584,8 +588,9 @@ player's name, auto-reload and field of view, which are `PlayerSettings`),
 **Shortcuts** (`keybind/sheet.rs`: click a binding, press a key, mouse button
 or chord; a modifier let go alone is bound alone; a mouse button is bound
 only when pressed on the prompt, and a press elsewhere stops the wait; Escape
-stops it too; keys are captured from Bevy's input, not egui's) and **Developer** (every pack's
-`icons/*.svg` in a grid with its name). In Play it is opened from the pause
+stops it too; keys are captured from Bevy's input, not egui's) and **Developer** (the log level
+and how many days of logs to keep, in `settings.toml`, the level taking effect at the next launch
+with a note in yellow saying so; and every pack's `icons/*.svg` in a grid with its name). In Play it is opened from the pause
 menu (`OpenSettings`), and `MouseHeld::settings` keeps the cursor free while it
 is up. Starting a round closes it, dropping an unapplied draft, since a window
 carried into Play with the cursor grabbed could not be closed and would keep
@@ -4098,6 +4103,31 @@ assertion.
 `cargo run --bin ensure_lang` stubs missing keys into non-reference files. It
 writes `MISSING <key>` as the value, which will trip the placeholder test on any
 key that has slots — fill those in by hand.
+
+## Logging
+
+Once `LogPlugin` is up, everything goes through the log macros, so it reaches `logs/`;
+`eprintln!` is only for a failure before then (the command line, the lang files, the log file
+itself). The command-line tools in `src/bin/` build no app and print with `println!`. Levels:
+
+- `error!`: something the user asked for did not happen (a save, an open, a screenshot), or a bug.
+- `warn!`: content skipped or defaulted (a pack file that will not parse), input refused (a host
+  name that does not resolve), a cache write that failed, or a system run without what it needs
+  (a missing egui context, which names its system: these find scheduling-order bugs).
+- `info!`: milestones and state changes, a few a second at most.
+- `debug!`: anything that may repeat every frame or tick.
+
+A failure names its file and what was being done. Nothing logs every frame: a failure that can
+repeat warns once and stays quiet until it clears (`lan_discovery`'s `read_failing`). A game
+event is a `GAME_EVENT {json}` line from `telemetry::log_event`, never prose. The plan this came
+from is [documentation/logging.md](documentation/logging.md).
+
+**To open a path on the desktop, write a `RequestPathOpen`**
+([`src/common/path_open.rs`](src/common/path_open.rs)): `PathOpen::Open` hands it to its default
+program, `PathOpen::Reveal` shows its folder with it selected (`open -R` on macOS,
+`explorer /select,` on Windows, freedesktop `FileManager1.ShowItems` over `dbus-send` on Linux,
+else the folder alone). `handle_path_open_requests` runs the command on the IO pool and logs a
+failure; nothing on wasm.
 
 ## Conventions
 

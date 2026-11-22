@@ -12,12 +12,62 @@ use serde::{Deserialize, Serialize};
 
 pub use window::{request_settings, OpenSettings, SettingsPlugin, SettingsWindow};
 
-#[derive(Resource, Serialize, Deserialize, Clone, PartialEq, Debug, Default)]
+#[derive(Resource, Serialize, Deserialize, Clone, PartialEq, Debug)]
 #[serde(default)]
 pub struct Settings {
     /// A lang file's code, such as `de-DE`; `None` is the fallback language.
     /// `--lang` overrides it for one run.
     pub language: Option<String>,
+    /// Read once, when the log is set up; a change takes effect at the next launch.
+    pub log_level: LogLevel,
+    /// Files in `logs/` older than this are deleted at startup.
+    pub log_days: u32,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Settings { language: None, log_level: LogLevel::default(), log_days: DEFAULT_LOG_DAYS }
+    }
+}
+
+pub const DEFAULT_LOG_DAYS: u32 = 7;
+pub const LOG_DAYS_RANGE: std::ops::RangeInclusive<u32> = 1..=365;
+
+/// The least severe level written to the console and to `logs/`.
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum LogLevel {
+    Error,
+    Warn,
+    #[default]
+    Info,
+    Debug,
+    Trace,
+}
+
+impl LogLevel {
+    pub const ALL: [LogLevel; 5] = [LogLevel::Error, LogLevel::Warn, LogLevel::Info, LogLevel::Debug, LogLevel::Trace];
+
+    pub fn level(self) -> bevy::log::Level {
+        use bevy::log::Level;
+        match self {
+            LogLevel::Error => Level::ERROR,
+            LogLevel::Warn => Level::WARN,
+            LogLevel::Info => Level::INFO,
+            LogLevel::Debug => Level::DEBUG,
+            LogLevel::Trace => Level::TRACE,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            LogLevel::Error => "error",
+            LogLevel::Warn => "warn",
+            LogLevel::Info => "info",
+            LogLevel::Debug => "debug",
+            LogLevel::Trace => "trace",
+        }
+    }
 }
 
 pub fn path() -> PathBuf {
@@ -56,7 +106,7 @@ mod tests {
 
     #[test]
     fn settings_round_trip() {
-        let settings = Settings { language: Some("de-DE".to_owned()) };
+        let settings = Settings { language: Some("de-DE".to_owned()), log_level: LogLevel::Debug, log_days: 30 };
         let text = toml::to_string_pretty(&settings).unwrap();
         assert_eq!(toml::from_str::<Settings>(&text).unwrap(), settings);
     }

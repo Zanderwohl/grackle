@@ -292,7 +292,7 @@ mod disk {
                     .map_err(|e| e.to_string())
             });
         match saved {
-            Ok(()) => info!("Thumbnail saved to {}", entry.picture.display()),
+            Ok(()) => debug!("Thumbnail saved to {}", entry.picture.display()),
             Err(e) => warn!("Could not save thumbnail {}: {e}", entry.picture.display()),
         }
     }

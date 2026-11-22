@@ -20,15 +20,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::common::app_mode::AppMode;
 use crate::common::class::Class;
-use crate::common::damage::PlayerId;
 use crate::common::game_rules::GameRules;
 use crate::common::match_phase::MatchPhase;
 use crate::common::net::{has_authority, NetRole};
-use crate::game::death::Dying;
-use crate::game::player::Player;
 use crate::common::player_color::PlayerColor;
 use crate::game::respawn::{HueStart, Identity, OurIdentity};
 use crate::game::team_choice::{Chair, TeamChannel};
+use crate::game::telemetry::{log_event, Event};
 
 /// Written by the picker on every machine; the authority answers its own and a client's goes
 /// over the wire.
@@ -88,7 +86,6 @@ pub(crate) fn seat_whoever_chose_a_class(
     mut links: Query<&mut Identity, With<ClientOf>>,
     mut receivers: Query<(Entity, &mut MessageReceiver<ChooseClass>), With<ClientOf>>,
     rules: Res<GameRules>,
-    alive: Query<&PlayerId, (With<Player>, Without<Dying>)>,
 ) {
     let mut requests: Vec<(Chair, Class)> = ours.read().map(|request| (Chair::Ours, request.0)).collect();
     for (link, mut receiver) in &mut receivers {
@@ -116,11 +113,7 @@ pub(crate) fn seat_whoever_chose_a_class(
             Chair::Ours => us.as_deref_mut().expect("read above").0.class = Some(class),
             Chair::Link(link) => links.get_mut(link).expect("read above").class = Some(class),
         }
-        // A toast once there are toasts: documentation/notifications_and_toasts.md.
-        match alive.iter().any(|id| *id == who.id) {
-            true => info!("{} will play the {:?} from their next spawn", who.id, class),
-            false => info!("{} will spawn as the {:?}", who.id, class),
-        }
+        log_event(&Event::Class { id: who.id.0, class: Class::key(class) });
     }
 }
 
@@ -218,6 +211,8 @@ mod tests {
 
     use super::*;
     use crate::common::game_rules::ModeRules;
+    use crate::common::damage::PlayerId;
+    use crate::game::player::Player;
     use crate::game::respawn::Seat;
 
     fn world_with_us(classes: Vec<Class>) -> World {

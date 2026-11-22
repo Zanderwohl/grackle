@@ -64,14 +64,14 @@ mod native {
             // The surface's alpha is whatever the compositor left there, not transparency.
             Ok(image) => image.into_rgb8(),
             Err(error) => {
-                warn!("Could not read the screenshot: {error}");
+                error!("Could not read the screenshot: {error}");
                 return;
             }
         };
         let (path, file) = match claim(Path::new(DIRECTORY), at) {
             Ok(claimed) => claimed,
             Err(error) => {
-                warn!("Could not make a screenshot file in {DIRECTORY}/: {error}");
+                error!("Could not make a screenshot file in {DIRECTORY}/: {error}");
                 return;
             }
         };
@@ -79,7 +79,7 @@ mod native {
         match written {
             Ok(()) => info!("Saved a screenshot to {}", path.display()),
             Err(error) => {
-                warn!("Could not save a screenshot to {}: {error}", path.display());
+                error!("Could not save a screenshot to {}: {error}", path.display());
                 let _ = std::fs::remove_file(&path);
             }
         }

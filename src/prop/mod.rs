@@ -126,7 +126,7 @@ fn load_the_example_prop(assets: Res<Assets>, mut editor: ResMut<PropEditor>) {
             }
             // A pack with no props is an ordinary pack.
             Err(document::PropFileError::Asset(_)) => {}
-            Err(e) => error!("{e}"),
+            Err(e) => warn!("The prop editor could not open the example, {}/{e}", pack.display()),
         }
     }
     if editor.path.is_none() {
@@ -179,7 +179,7 @@ fn start_in_the_prop_editor(
     if !start.0 || *done {
         return;
     }
-    info!("Opening the prop editor, as asked");
+    info!("Opening the prop editor, as the command line asked");
     next.set(AppMode::Prop);
     *done = true;
 }

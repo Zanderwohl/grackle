@@ -229,7 +229,7 @@ pub fn spawn_the_strip(
     // The multicam's egui context camera rather than a second `Camera2d`, which rendered nothing with
     // no diagnostic. Bevy's UI pass runs before egui's node, so an egui popup still draws on top.
     let Ok(camera) = egui_camera.single() else {
-        warn!("no egui camera to hang the timeline on; the strip will not be drawn");
+        warn!("Animation timeline: no egui camera to hang the timeline on; the strip will not be drawn");
         return;
     };
 

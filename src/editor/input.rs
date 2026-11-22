@@ -174,7 +174,7 @@ impl EditorInputPlugin {
     ) {
         // We don't want to grab mouse input while over egui windows or panels.
         let ctx = egui_contexts.ctx_mut();
-        if ctx.is_err() { warn!("{}", ctx.unwrap_err()); return; }
+        if ctx.is_err() { warn!("input::mouse_input: no egui context: {}", ctx.unwrap_err()); return; }
         let ctx = ctx.unwrap();
 
         // Mirror button state even over egui, so a drag that ends over a panel still sees its release.

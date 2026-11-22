@@ -29,8 +29,9 @@ use crate::editor::spawn_point::SpawnPointMarker;
 use crate::game::bot::BotSeat;
 use crate::game::death::Dying;
 use crate::game::player::Player;
-use crate::game::respawn::{team_name, Identity, OurIdentity, Seat};
+use crate::game::respawn::{Identity, OurIdentity, Seat};
 use crate::game::score::Standing;
+use crate::game::telemetry::{log_event, Event, SeatKind};
 
 /// Players a team may be ahead of any other by, once joined.
 pub const MOST_AHEAD: usize = 2;
@@ -252,9 +253,13 @@ pub(crate) fn seat_whoever_chose(
         if seat == who.seat {
             continue;
         }
-        match seat {
-            Seat::Spectating => info!("{} spectates", who.id),
-            _ => info!("{} joins {}", who.id, team_name(seat.team())),
+        let kind = match seat {
+            Seat::Spectating => Some(SeatKind::Spectating),
+            Seat::Playing(_) => Some(SeatKind::Playing),
+            Seat::Choosing => None,
+        };
+        if let Some(kind) = kind {
+            log_event(&Event::Seat { id: who.id.0, seat: kind, team: seat.team() });
         }
         match chair {
             Chair::Ours => us.as_deref_mut().expect("found above").0.seat = seat,

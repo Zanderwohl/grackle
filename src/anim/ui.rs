@@ -1846,7 +1846,7 @@ fn handle_files(
     let source = anim.source;
     // Answered first so it reads the same from any source.
     if action == Some(FileAction::Quit) {
-        info!("Quitting, as asked");
+        info!("Quitting from the File menu");
         files.exit.write(AppExit::Success);
         return;
     }
@@ -1915,7 +1915,7 @@ fn handle_edit(
 fn save_the_body_clips(body: &mut BodyClips, pack: &std::path::Path) {
     match body.save(pack) {
         Ok(count) => info!("Saved {count} body animation(s) to {}", pack.display()),
-        Err(why) => warn!("Could not save body animations: {why}"),
+        Err(why) => error!("Could not save the body animations to {}: {why}", pack.display()),
     }
 }
 

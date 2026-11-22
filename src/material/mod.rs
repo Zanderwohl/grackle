@@ -215,7 +215,7 @@ fn start_in_the_material_editor(
     if !start.0 || *done {
         return;
     }
-    info!("Opening the material editor, as asked");
+    info!("Opening the material editor, as the command line asked");
     next.set(AppMode::Material);
     *done = true;
 }

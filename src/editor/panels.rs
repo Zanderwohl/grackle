@@ -36,7 +36,8 @@ use crate::tool::Tools;
 use crate::tool::bake_job::BakeProgress;
 use crate::common::round_settings::{BotSkill, RoundSettings, ServerListing, MOST_SLOTS};
 use crate::tool::bake_progress::{self, Step};
-use crate::tool::bakes::{BakePlugin, BakeCommands, LogECS, RoomBake};
+use crate::tool::bakes::{BakePlugin, BakeCommands, DumpEcs, EcsDump, RoomBake};
+use crate::common::path_open::{PathOpen, RequestPathOpen};
 use crate::tool::sun_bake::{BakeSunlight, ClearSunlight, SunBake};
 use crate::tool::postcard_bake::PostcardPanel;
 use crate::tool::nav_overlay::{NavCommands, NavPanel};
@@ -147,10 +148,12 @@ struct PanelMessages<'w> {
     listing: ResMut<'w, ServerListing>,
     room: MessageWriter<'w, CalculateRoomGeometry>,
     clear_room: MessageWriter<'w, ClearRoomGeometry>,
-    log_ecs: MessageWriter<'w, LogECS>,
+    dump_ecs: MessageWriter<'w, DumpEcs>,
     room_bake: ResMut<'w, RoomBake>,
     sun_bake: ResMut<'w, SunBake>,
     bake_progress: Res<'w, BakeProgress>,
+    ecs_dump: Res<'w, EcsDump>,
+    open_path: MessageWriter<'w, RequestPathOpen>,
     nav: NavPanel<'w>,
     sun_messages: (MessageWriter<'w, BakeSunlight>, MessageWriter<'w, ClearSunlight>),
     postcards: PostcardPanel<'w>,
@@ -174,6 +177,7 @@ struct TabViewerAndResources<'a> {
     multicam_state: &'a mut MulticamState,
     bake_commands: &'a mut BakeCommands,
     bake_progress: &'a BakeProgress,
+    ecs_dump: &'a EcsDump,
     nav_commands: &'a mut NavCommands,
     gizmo_visibility: &'a mut GizmoVisibility,
     pending_edits: &'a mut PendingEditEvents,
@@ -225,7 +229,7 @@ impl<'a> TabViewer for TabViewerAndResources<'a> {
                 Tools::ui(ui, self.current_tool, self.next_tool);
             }
             TabKinds::Bakes => {
-                *self.bake_commands = BakePlugin::ui(ui, self.bake_commands, self.nav_commands, self.bake_progress);
+                *self.bake_commands = BakePlugin::ui(ui, self.bake_commands, self.nav_commands, self.bake_progress, self.ecs_dump);
             }
             TabKinds::Show => {
                 ShowPlugin::ui(ui, self.multicam_state, self.gizmo_visibility);
@@ -347,7 +351,7 @@ impl EditorPanels {
     ) {
         let ctx = contexts.ctx_mut();
         if ctx.is_err() {
-            warn!("{}", ctx.unwrap_err());
+            warn!("panels::ui: no egui context: {}", ctx.unwrap_err());
             return;
         }
         let ctx = ctx.unwrap();
@@ -396,6 +400,7 @@ impl EditorPanels {
             multicam_state: &mut *multicam_state,
             bake_commands: &mut bake_commands,
             bake_progress: &messages.bake_progress,
+            ecs_dump: &messages.ecs_dump,
             nav_commands: &mut nav_commands,
             gizmo_visibility: &mut *gizmo_visibility,
             pending_edits: &mut pending_edits,
@@ -536,22 +541,22 @@ impl EditorPanels {
                 DialogResult::SavePath(path) => {
                     match save::save(&path, &editor_features, &map_metadata) {
                         Ok(()) => {
-                            info!("Saved to {:?}", path);
+                            info!("Saved the map to {}", path.display());
                             messages.recent.saved(DocumentKind::Map, &path);
                             current_file.path = Some(path);
                             editor_features.mark_saved(&map_metadata);
                         }
-                        Err(e) => error!("Save failed: {}", e),
+                        Err(e) => error!("Could not save the map: {e}"),
                     }
                 }
                 DialogResult::OpenPath(path) => {
                     match save::load(&path) {
                         Ok(loaded) => {
-                            info!("Loaded from {:?}", path);
+                            info!("Opened the map {}", path.display());
                             loaded_blueprint = Some(loaded);
                             current_file.path = Some(path);
                         }
-                        Err(e) => error!("Load failed: {}", e),
+                        Err(e) => error!("Could not open the map: {e}"),
                     }
                 }
             }
@@ -571,36 +576,36 @@ impl EditorPanels {
                     };
                     match save::load(&template) {
                         Ok(loaded) => {
-                            info!("New from template {:?}", template);
+                            info!("Opened the template {} as a new map", template.display());
                             loaded_blueprint = Some(loaded);
                             current_file.path = None;
                         }
-                        Err(e) => error!("New failed: {}", e),
+                        Err(e) => error!("Could not open the template for a new map: {e}"),
                     }
                 }
                 FileAction::OpenRecent(path) => match save::load(&path) {
                     Ok(loaded) => {
-                        info!("Loaded from {:?}", path);
+                        info!("Opened the map {}", path.display());
                         loaded_blueprint = Some(loaded);
                         current_file.path = Some(path);
                     }
-                    Err(e) => error!("Load failed: {}", e),
+                    Err(e) => error!("Could not open the map: {e}"),
                 },
                 FileAction::Save => match current_file.path.clone() {
                     Some(path) => match save::save(&path, &editor_features, &map_metadata) {
                         Ok(()) => {
-                            info!("Saved to {:?}", path);
+                            info!("Saved the map to {}", path.display());
                             messages.recent.saved(DocumentKind::Map, &path);
                             editor_features.mark_saved(&map_metadata);
                         }
-                        Err(e) => error!("Save failed: {}", e),
+                        Err(e) => error!("Could not save the map: {e}"),
                     },
                     None => ask_where_to_save(&current_file),
                 },
                 FileAction::SaveAs => ask_where_to_save(&current_file),
                 // No unsaved-changes prompt yet.
                 FileAction::Quit => {
-                    info!("Quitting, as asked");
+                    info!("Quitting from the File menu");
                     messages.exit.write(AppExit::Success);
                 }
                 FileAction::Open => {
@@ -629,11 +634,11 @@ impl EditorPanels {
                 if let Some(path) = current_file.path.clone() {
                     match save::load(&path) {
                         Ok(loaded) => {
-                            info!("Reverted to {:?}", path);
+                            info!("Reverted the map to {}", path.display());
                             editor_features.replace_as_edit(loaded.timeline, &loaded.metadata, &mut map_metadata);
                             current_file.deferred_room_bake = 2;
                         }
-                        Err(e) => error!("Revert failed: {}", e),
+                        Err(e) => error!("Could not revert the map: {e}"),
                     }
                 }
             }
@@ -677,8 +682,13 @@ impl EditorPanels {
             messages.clear_room.write(ClearRoomGeometry);
         }
         messages.nav.apply(&nav_commands);
-        if bake_commands.log_ecs {
-            messages.log_ecs.write(LogECS);
+        if bake_commands.dump_ecs {
+            messages.dump_ecs.write(DumpEcs);
+        }
+        if bake_commands.reveal_ecs_dump
+            && let Some(path) = messages.ecs_dump.written.clone()
+        {
+            messages.open_path.write(RequestPathOpen { path, how: PathOpen::Reveal });
         }
 
         if let Some((feature_id, label)) = retarget_request {

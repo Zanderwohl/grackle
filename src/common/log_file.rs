@@ -1,17 +1,38 @@
 //! The second drain for the log: everything the console gets also goes to `logs/` under the
-//! working directory, one file per launch, split by size. The appender deletes nothing on its
-//! own, so the oldest files past [`KEPT_FILES`] go at startup; an unbounded `logs/` fills a
-//! server's disk. Native only: a browser tab logs to its console.
+//! working directory, one file per launch, split by size, each line with the file and line that
+//! wrote it. The appender deletes nothing on its own, so files older than
+//! [`Settings::log_days`] go at startup; an unbounded `logs/` fills a server's disk. Native only:
+//! a browser tab logs to its console.
+
+use std::sync::OnceLock;
 
 use bevy::prelude::*;
+
+use crate::common::settings::LogLevel;
+#[cfg(not(target_arch = "wasm32"))]
+use crate::common::settings::Settings;
 
 /// Bytes a file grows to before the next part of the same launch starts.
 #[cfg(not(target_arch = "wasm32"))]
 const SPLIT_AT: u64 = 32 * 1024 * 1024;
-/// Files kept in `logs/`, every part of every launch counted, newest by name.
+pub const DIRECTORY: &str = "logs";
+
+static STARTUP_LEVEL: OnceLock<LogLevel> = OnceLock::new();
+
+/// Called once, with the level `LogPlugin` is built with.
+pub fn note_startup_level(level: LogLevel) {
+    let _ = STARTUP_LEVEL.set(level);
+}
+
+/// `None` in a process that never set up the log, such as a test.
+pub fn startup_level() -> Option<LogLevel> {
+    STARTUP_LEVEL.get().copied()
+}
+
+/// What pruning could not delete, logged once the log exists.
 #[cfg(not(target_arch = "wasm32"))]
-const KEPT_FILES: usize = 30;
-const DIRECTORY: &str = "logs";
+#[derive(Resource)]
+struct PruneProblems(Vec<String>);
 
 /// Holds the background writer open; dropping it flushes what is queued.
 #[derive(Resource)]
@@ -33,10 +54,23 @@ pub fn layer(app: &mut App) -> Option<bevy::log::BoxedLayer> {
             return None;
         }
     };
-    prune(std::path::Path::new(DIRECTORY), KEPT_FILES);
+    let days = app.world().get_resource::<Settings>().map_or(crate::common::settings::DEFAULT_LOG_DAYS, |settings| settings.log_days);
+    let problems = prune(std::path::Path::new(DIRECTORY), std::time::Duration::from_secs(u64::from(days) * 24 * 60 * 60), std::time::SystemTime::now());
+    if !problems.is_empty() {
+        app.insert_resource(PruneProblems(problems));
+        app.add_systems(Startup, report_prune_problems);
+    }
     let (writer, guard) = tracing_appender::non_blocking(file);
     app.insert_resource(LogFileGuard(guard));
-    Some(fmt::layer().with_writer(writer).with_ansi(false).boxed())
+    Some(fmt::layer().with_writer(writer).with_ansi(false).with_target(true).with_file(true).with_line_number(true).boxed())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn report_prune_problems(problems: Res<PruneProblems>, mut commands: Commands) {
+    for problem in &problems.0 {
+        warn!("{problem}");
+    }
+    commands.remove_resource::<PruneProblems>();
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -95,23 +129,26 @@ impl std::io::Write for SplitFile {
     }
 }
 
-/// Deletes all but the newest `kept` logs. Names start with the launch's stamp, so their order is
-/// their age; a part sorts after its first file, which only matters within one launch.
+/// Deletes every `grackle_*` file in `logs/` last written more than `kept` before `now`: every
+/// part of every launch's log, and the ECS dumps. Returns what it could not delete.
 #[cfg(not(target_arch = "wasm32"))]
-fn prune(directory: &std::path::Path, kept: usize) {
-    let Ok(entries) = std::fs::read_dir(directory) else { return };
-    let mut logs: Vec<std::path::PathBuf> = entries
-        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
-        .filter(|path| path.extension().is_some_and(|extension| extension == "log"))
-        .filter(|path| path.file_name().and_then(|name| name.to_str()).is_some_and(|name| name.starts_with("grackle_")))
-        .collect();
-    logs.sort();
-    let surplus = logs.len().saturating_sub(kept);
-    for old in logs.into_iter().take(surplus) {
-        if let Err(error) = std::fs::remove_file(&old) {
-            eprintln!("Could not remove {}: {error}", old.display());
+fn prune(directory: &std::path::Path, kept: std::time::Duration, now: std::time::SystemTime) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(directory) else { return Vec::new() };
+    let mut problems = Vec::new();
+    for entry in entries.filter_map(Result::ok) {
+        let path = entry.path();
+        let ours = path.file_name().and_then(|name| name.to_str()).is_some_and(|name| name.starts_with("grackle_"));
+        if !ours || !path.is_file() {
+            continue;
+        }
+        let Ok(written) = entry.metadata().and_then(|metadata| metadata.modified()) else { continue };
+        if now.duration_since(written).is_ok_and(|age| age > kept)
+            && let Err(error) = std::fs::remove_file(&path)
+        {
+            problems.push(format!("Could not remove the old log {}: {error}", path.display()));
         }
     }
+    problems
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
@@ -139,18 +176,26 @@ mod tests {
         std::fs::remove_dir_all(&directory).unwrap();
     }
 
-    /// Breaks if the oldest logs survive past the cap, or something else in the folder is deleted.
+    /// Breaks if a log past its days survives, a recent one goes, or something else is deleted.
     #[test]
-    fn only_the_newest_logs_are_kept() {
+    fn only_logs_past_their_days_are_deleted() {
         let directory = scratch("prune");
         std::fs::create_dir_all(&directory).unwrap();
-        for name in ["grackle_2026-01-01.log", "grackle_2026-01-02.log", "grackle_2026-01-03.log", "notes.log"] {
-            std::fs::write(directory.join(name), "").unwrap();
+        let now = std::time::SystemTime::now();
+        let day = std::time::Duration::from_secs(24 * 60 * 60);
+        for (name, age) in [
+            ("grackle_old.log", 10),
+            ("grackle_ecsdump_old.txt", 10),
+            ("grackle_recent.log", 2),
+            ("notes.log", 10),
+        ] {
+            let file = std::fs::File::create(directory.join(name)).unwrap();
+            file.set_modified(now - day * age).unwrap();
         }
-        prune(&directory, 2);
+        assert!(prune(&directory, day * 7, now).is_empty());
         let mut left: Vec<String> = std::fs::read_dir(&directory).unwrap().map(|entry| entry.unwrap().file_name().into_string().unwrap()).collect();
         left.sort();
-        assert_eq!(left, ["grackle_2026-01-02.log", "grackle_2026-01-03.log", "notes.log"]);
+        assert_eq!(left, ["grackle_recent.log", "notes.log"]);
         std::fs::remove_dir_all(&directory).unwrap();
     }
 }
