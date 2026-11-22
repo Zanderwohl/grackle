@@ -7,7 +7,7 @@ use bevy_egui::egui::{self, Id, LayerId, Ui, UiBuilder};
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass};
 
 use crate::common::app_mode::{AppMode, Home};
-use crate::common::file_menu::{ExampleMap, FileAction};
+use crate::common::file_menu::{FileAction, DEMO_SCENE};
 use crate::common::player_settings::{self, PlayerSettings, NAME_LIMIT};
 use crate::editor::panels::CurrentFilePath;
 use crate::get;
@@ -74,7 +74,7 @@ fn finish(draft: &Draft, home: AppMode, settings: Option<&mut PlayerSettings>, c
         let chosen = PlayerSettings { name: draft.name.clone(), field_of_view: draft.field_of_view, ..settings.clone() };
         *settings = chosen.cleaned();
     }
-    current_file.request(FileAction::Example(ExampleMap::Demo));
+    current_file.request(FileAction::Demo(DEMO_SCENE));
     next.set(home);
 }
 
@@ -163,7 +163,7 @@ mod tests {
         assert_eq!(settings.name, "Ada");
         assert_eq!(settings.field_of_view, *player_settings::FIELD_OF_VIEW_RANGE.end());
         assert!(!settings.auto_reload, "a setting the screen does not ask for was overwritten");
-        assert_eq!(current_file.requested(), Some(FileAction::Example(ExampleMap::Demo)));
+        assert_eq!(current_file.requested(), Some(FileAction::Demo(DEMO_SCENE)));
         assert!(matches!(next, NextState::Pending(AppMode::Editor)));
     }
 

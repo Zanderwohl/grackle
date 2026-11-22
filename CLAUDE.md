@@ -265,7 +265,7 @@ shape is a new producer and not a rewrite of every consumer — see
 | `src/unlock/` | The crate-drop prototype. Orthogonal — see above. |
 | `src/bin/` | `ensure_lang` (fills missing translation keys), `new_map_template` (writes the new-map, demo-scene, arena, cloister, waterworks and showcase blueprints), `map_stats` (bakes a blueprint's nav graph headless and prints its statistics and top-down charts of each field), `decal_images` (rasterizes the default pack's decal SVGs), `bake_body_clips` (seeds a pack's body animations from the pose functions they replace, and writes the clips `seed::WRITTEN` generates key by key), `default_materials` (writes the default pack's materials), `crate_drop`. |
 | `assets/default/` | The default pack: `lang/`, `blueprints/`, `servers/` (example `--server-config` files), `images/backgrounds/title/` (main-menu backgrounds). |
-| `assets/user/` | The user pack: gitignored, made at startup with `blueprints/`, `props/` and `images/backgrounds/title/`, last in `default_packs()` so it overrides the shipped one. A new map or prop is saved here unless the document already has a folder. Also holds `settings.toml`, the player settings, `shortcuts.toml` and `server.toml` (the Round tab). |
+| `assets/user/` | The user pack: gitignored, made at startup with `blueprints/`, `props/` and `images/backgrounds/title/`, last in `default_packs()` so it overrides the shipped one. A new map or prop is saved here unless the document already has a folder. Also holds `settings.toml`, the player settings, `shortcuts.toml`, `server.toml` (the Round tab) and `recent.toml` (the File menu's Recent lists). |
 | `cache/` | Gitignored, derived from the packs and maps: `thumbnail/props/{name}.png`, `nav/{hash}.bin`, `lightmap/{hash}.bin`, `postcards/{hash}/*.png`, `rounds/{map}/*.jsonl`. Safe to delete. |
 | `logs/` | Gitignored: the log's file drain, one file per launch. |
 | `screenshots/` | Gitignored, made at startup: `F12` saves the window as drawn, HUD and egui included, as `{date}_{time}_{millisecond}.png` ([`src/common/screenshot.rs`](src/common/screenshot.rs)). |
@@ -460,8 +460,8 @@ in a team mode is still a gamemode question.
 ## Editor and game in one process
 
 `AppMode` ([`src/common/app_mode.rs`](src/common/app_mode.rs)) is `Editor`,
-`Prop`, `Animation`, `Material`, `Weapon`, `Lang`, `MainMenu`, `Play` or `Onboarding`, iterable in that order, which is
-the Mode menu's order. **`Onboarding`** ([`src/onboarding.rs`](src/onboarding.rs)) is never in the
+`Prop`, `Animation`, `Material`, `Weapon`, `Lang`, `Play`, `MainMenu` or `Onboarding`, iterable in that order, which is
+the Mode menu's order, with a separator above Play and above the main menu. **`Onboarding`** ([`src/onboarding.rs`](src/onboarding.rs)) is never in the
 menu: it is the *initial* state, inserted by `OnboardingPlugin` when the saved player name is
 blank and the command line names nothing to open or play (`EditorParams::chooses_where_to_start`:
 any mode flag, `--map`, `--serve`, `--connect`, `--server-config`, `--server-profile`, `--spectate`, `--rounds` or
@@ -505,8 +505,12 @@ else** — the only way back to the editor, as `Escape` belongs to the pause
 menu. From the prop editor it is answered with a line in the log rather than
 starting a round: the key's whole meaning is that it toggles between *two*
 modes, and one that went one way from a third would have no way back to where
-it came from. No reload, no second process — that is the between-round editing
-feature, so keep it that way.
+it came from. From Play it goes back to the mode the round was entered from
+(`CameFrom`, written by `remember_where_play_came_from` on each transition into Play), as the
+pause menu does: never to a mode chosen by which binary is running, so a round started from
+`grackle`'s map editor ends in the map editor, not on its main menu. A host goes to the map
+editor instead when that mode is not offered networked (`CameFrom::after_a_round`). No reload,
+no second process — that is the between-round editing feature, so keep it that way.
 
 **The prop editor has no shortcut, deliberately.** Every mode is reachable
 from the menu bar's **Mode** pulldown, which both authoring modes show and
@@ -587,9 +591,23 @@ is up. Starting a round closes it, dropping an unapplied draft, since a window
 carried into Play with the cursor grabbed could not be closed and would keep
 every action quiet.
 
+**Every authoring mode has the same File menu**
+([`src/common/file_menu.rs`](src/common/file_menu.rs)): New, Open, Save, Save As…, then a
+**Recent** submenu and a **Demo** submenu named for what the mode edits (Demo Maps, Demo Props,
+…), then Quit. Each mode answers every `FileAction`. **Recent** lists, per `DocumentKind`, the
+files that mode last saved, newest first, ten at most, in `assets/user/recent.toml`
+([`src/common/recent_files.rs`](src/common/recent_files.rs)) — a file joins when it is saved,
+never when it is opened, and a file that is gone is left out of the submenu. Its own file
+because the Settings window writes `settings.toml` from a draft. The animation editor's list is
+the props it saved, and opening one switches it to that prop's clips. Opening a recent file or a
+demo over unsaved changes asks first (`DiscardQuestion`; the lang editor asks its own question). **Demo** opens a shipped
+file untitled, so a save asks where (`DocumentKind::demos`): the demo scene and the material
+showcase for maps, the rocket launcher, health pack and top hat for props, nothing yet for the
+rest, whose submenu is grayed out.
+
 **Every authoring mode has the same Edit menu**, just right of File:
 [`src/common/edit_menu.rs`](src/common/edit_menu.rs), with Undo, Redo and
-*Revert to Saved*. Each mode passes an `EditAvailability` and each entry is
+*Revert to Saved*, then **Settings…**. Each mode passes an `EditAvailability` and each entry is
 grayed out on its own when it cannot be done — nothing to undo, nothing to
 redo, no file to go back to, or (where a mode can tell) nothing changed since
 it was saved. Each mode answers the request with the same handler its chords
@@ -659,12 +677,14 @@ window you have to kill the process to leave. Plain Bevy UI, not `egui`: the
 panels are egui because they are editor tools, and this is part of the game, so
 it has to exist in a build with no editor and on a browser tab where the egui
 layer is one more thing to have gone wrong. It offers **Resume**, **Settings**
-(closes the menu and opens the Settings window), **Change Teams** ("Join or Spectate" in a mode without teams to somebody not yet playing; closes the menu and brings up the team picker, as `.` does) and **Back to Editor** — on the
-authority, ending the round for everybody, who stay connected; **Back to Main Menu** where the
-binary's `Home` is the main menu and nobody is connected (`Home::after_a_round`) — or, on a
-client, **Disconnect**, which also leaves Play for `Home` in the same frame. A client that
-stops being one drops every entity the server sent (lightyear's `Remote`) and,
-mid-round, goes back to the editor (`leave_a_round_without_a_server`). Its buttons are `PlateButton`s
+(closes the menu and opens the Settings window), **Change Teams** ("Join or Spectate" in a mode without teams to somebody not yet playing; closes the menu and brings up the team picker, as `.` does) and **Return to {mode}** — on the
+authority, back to the mode the round was entered from (`CameFrom::after_a_round`, as F5),
+ending the round for everybody, who stay connected — or, on a
+client, **Disconnect**, which also leaves Play in the same frame for the mode it was in when
+it joined (`JoinedFrom`, recorded by `remember_where_a_client_joined_from` in the frame its role
+becomes a client, before it is moved to the map editor): the main menu for somebody who joined
+from it. A client that stops being one drops every entity the server sent (lightyear's `Remote`)
+and, mid-round, goes back to that same mode (`leave_a_round_without_a_server`). Its buttons are `PlateButton`s
 ([`src/game/plate_button.rs`](src/game/plate_button.rs)): a `Plate` that is
 lighter while hovered and darker while held, and triggers `ButtonActivated` on
 release; reuse it for any in-game button. A plate's child marked
@@ -1635,7 +1655,7 @@ The plan and what is left is
   weapon deletes its file, and a renamed one is written from its old file's
   text, so its comments carry over, before the old file goes (`Rename`). A file
   changed on disk since it was read is refused.
-- **File offers New, Open, Save and Save As.** New asks for a key in the
+- **File offers New, Open, Save and Save As**, and Recent, whose files open as Open's do. New asks for a key in the
   browser, as its New button does; Open reads any `{pack}/weapons/{key}.toml`
   into the draft and selects it; Save writes every changed file; Save As writes
   only the selected weapon, as edited, to the chosen file — its pack and key
@@ -3349,7 +3369,11 @@ usual player settings, so two copies on one machine are two players. Bare
 menu, which opens the connect dialog in
 [`src/editor/net_menu.rs`](src/editor/net_menu.rs) — a floating
 `egui::Window` rather than an `egui_dock` tab on purpose: the panels rule is
-about surfaces you work in, and this is a modal question with an answer.
+about surfaces you work in, and this is a modal question with an answer. While hosting, the menu
+offers only **Close Server**, since hosting again or joining elsewhere would close it too.
+While hosting, the map editor's menu bar ends, against its right edge, with
+"Hosting on port N | Listening | K clients" (`hosting_summary`), the status in place of the last
+two while the socket is not yet bound or has failed, so a host can see the server is open.
 
 Two rules, and both are easy to undo:
 
@@ -3870,7 +3894,28 @@ connect that times out, a server that goes away — asks to go solo
 (`drop_a_failed_link`), so the spectating label, the read-only editor and
 Disconnect go with it, and the status keeps the failure's reason. Hosts are
 resolved IPv4 first, because a listen server binds IPv4 and macOS resolves
-`localhost` to `::1` first.
+`localhost` to `::1` first. **The server does not check the address in a connect token**
+(`server_addr_check: false`): it binds `0.0.0.0`, which Lightyear matches only against a token for
+a loopback address, so a client that joined by the host's LAN address was ignored until it timed
+out, and was left in the map editor. The check would prove only that a token was minted for this
+address, and `DEV_PRIVATE_KEY` lets anybody mint one. The transport's systems run after
+`apply_net_requests`, so a retry's new link resets the status before `drop_a_failed_link` reads
+it; otherwise the last attempt's failure sent the retry solo at once.
+`a_client_joins_by_lan_address_and_follows_the_host` runs a host and a client over real sockets.
+
+**A client link that fails says why and goes back.** `report_status` writes one `LinkLost` per
+failed client link, `Disconnected` if it was ever connected (`WasConnected`) and `FailedToConnect`
+otherwise, with Lightyear's reason in words (`explain`: no answer, stopped answering, refused,
+"Server Closed", a network error). Lightyear's own wording is only logged; the only text passed
+through is the server's or the operating system's. `go_back_after_a_lost_link` sends the client to the mode it
+joined from (`JoinedFrom`), wherever it is, and an egui window in every mode says "Disconnected"
+or "Failed to Connect", the reason, and Ok (`LinkNotice`, which the main menu's `Blocker` counts).
+A disconnect the player asked for writes none. **A host with clients closes the server rather
+than dropping it** (`close_the_old_link`): it sends `ServerClosing` on `MatchChannel`, stops
+netcode a tenth of a second later (a client disconnected first drops the message), and despawns
+the server after `CLOSING_SECONDS`, opening the next role's link only then. Quitting while
+clients are connected is held in `Last` until that is done (`close_the_server_before_quitting`),
+since the window's own exit systems write an exit every frame once it is closed.
 
 `DEV_PRIVATE_KEY` is compiled into the binary, so anyone with the game can mint
 a token for any client id. That is the right trade for a LAN listen server with

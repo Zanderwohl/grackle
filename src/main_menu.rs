@@ -2,7 +2,7 @@
 //!
 //! Its nodes target the egui context camera, the one camera live outside the viewport modes (see
 //! [`crate::anim::timeline`]). egui draws over Bevy UI but does not stop Bevy's picking, so while the
-//! connect dialog, the Settings page or the Quit question is up a [`Blocker`] covers the menu and
+//! connect dialog, a lost link's notice, the Settings page or the Quit question is up a [`Blocker`] covers the menu and
 //! takes the pointer. Its background is [`crate::title_background`]'s.
 
 use std::collections::HashMap;
@@ -286,8 +286,14 @@ fn show_what_is_over_it(
     settings: Option<Res<SettingsWindow>>,
     asked: Option<Res<OpenSettings>>,
     mut nodes: Query<(&mut Node, Has<Blocker>), Or<(With<Blocker>, With<QuitRoot>)>>,
+    notice: Option<Res<crate::editor::net_menu::LinkNotice>>,
 ) {
-    let covered = question.open || dialog.open || browser.open || asked.is_some() || settings.is_some_and(|window| window.is_open());
+    let covered = question.open
+        || dialog.open
+        || browser.open
+        || asked.is_some()
+        || settings.is_some_and(|window| window.is_open())
+        || notice.is_some_and(|notice| notice.is_open());
     for (mut node, blocker) in &mut nodes {
         let display = match if blocker { covered } else { question.open } {
             true => Display::Flex,

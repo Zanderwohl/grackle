@@ -17,7 +17,8 @@ use crate::common::app_mode::{mode_menu, AppMode};
 use crate::common::assets::{default_packs, Assets};
 use crate::common::class::Class;
 use crate::common::edit_menu::{edit_menu, EditAction, EditAvailability};
-use crate::common::file_menu::{dialog_directory, file_menu, FileAction, DOCUMENT};
+use crate::common::file_menu::{dialog_directory, file_menu, DocumentKind, FileAction};
+use crate::common::recent_files::RecentFiles;
 use crate::common::net::NetRole;
 use crate::common::shortcuts::chords;
 use crate::common::weapon::{Mounted, Unit, WeaponAction, BUCKETS};
@@ -32,6 +33,7 @@ pub struct WeaponUiPlugin;
 impl Plugin for WeaponUiPlugin {
     fn build(&self, app: &mut App) {
         crate::common::keybind::ensure(app);
+        crate::common::recent_files::ensure(app);
         app.init_resource::<WeaponPanels>()
             .init_resource::<WeaponFileDialog>()
             // A prop saved in another mode is read again.
@@ -137,6 +139,7 @@ fn panels(
     // Optional: a build with no `NetPlugin` is a closed game, its own authority.
     role: Option<Res<NetRole>>,
     mut exit: MessageWriter<AppExit>,
+    mut recent: ResMut<RecentFiles>,
 ) {
     let Some(ctx) = previews.ctx().cloned() else { return };
     let mut window_ui = Ui::new(
@@ -149,7 +152,7 @@ fn panels(
     let mut requests = Requests::default();
     egui::Panel::top("weapon_menu_bar").resizable(false).show(&mut window_ui, |ui| {
         egui::MenuBar::new().ui(ui, |ui| {
-            file_menu(ui, DOCUMENT, &mut requests.file);
+            file_menu(ui, DocumentKind::Weapon, recent.of(DocumentKind::Weapon), &mut requests.file);
             edit_menu(ui, edit_availability(&editor), &mut requests.edit);
             // This system is gated on `AppMode::Weapon`.
             mode_menu(ui, AppMode::Weapon, role.as_deref(), &mut requests.mode);
@@ -225,7 +228,7 @@ fn panels(
         info!("Quitting, as asked");
         exit.write(AppExit::Success);
     } else if requests.file.is_some() {
-        handle_files(requests.file, &mut editor, &mut panels.browser, &mut published, &assets, &dialog);
+        handle_files(requests.file, &mut editor, &mut panels.browser, &mut published, &assets, &dialog, &mut recent);
     }
 }
 
@@ -238,7 +241,9 @@ fn handle_files(
     published: &mut PublishedCatalog,
     assets: &Assets,
     dialog: &WeaponFileDialog,
+    recent: &mut RecentFiles,
 ) {
+    remember_what_was_written(editor, recent);
     if let Some(result) = dialog.result.lock().unwrap().take() {
         match result {
             DialogResult::Open(path) => open_file(editor, assets, &path),
@@ -255,6 +260,8 @@ fn handle_files(
             browser.naming = Some((Naming::New, String::new()));
             browser.deleting = false;
         }
+        Some(FileAction::OpenRecent(path)) => open_file(editor, assets, &path),
+        Some(FileAction::Demo(demo)) => open_file(editor, assets, Path::new(demo.path)),
         Some(FileAction::Save) => save_the_draft(editor, assets, published),
         Some(FileAction::SaveAs) => {
             let from = from();
@@ -289,6 +296,13 @@ fn handle_files(
             });
         }
         _ => {}
+    }
+    remember_what_was_written(editor, recent);
+}
+
+fn remember_what_was_written(editor: &mut WeaponEditor, recent: &mut RecentFiles) {
+    for path in std::mem::take(&mut editor.written) {
+        recent.saved(DocumentKind::Weapon, &path);
     }
 }
 
@@ -817,6 +831,7 @@ fn weapon_shortcuts(
     mut published: ResMut<PublishedCatalog>,
     assets: Res<Assets>,
     dialog: Res<WeaponFileDialog>,
+    mut recent: ResMut<RecentFiles>,
 ) {
     let chords = chords(&actions);
     handle_edit(
@@ -828,7 +843,7 @@ fn weapon_shortcuts(
         &mut editor,
         &assets,
     );
-    handle_files(FileAction::from_chords(chords), &mut editor, &mut panels.browser, &mut published, &assets, &dialog);
+    handle_files(FileAction::from_chords(chords), &mut editor, &mut panels.browser, &mut published, &assets, &dialog, &mut recent);
 }
 
 fn handle_edit(action: Option<EditAction>, editor: &mut WeaponEditor, assets: &Assets) {

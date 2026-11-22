@@ -24,7 +24,8 @@ use strum::IntoEnumIterator;
 
 use crate::common::app_mode::{mode_menu, AppMode};
 use crate::common::edit_menu::{edit_menu, EditAction, EditAvailability};
-use crate::common::file_menu::{dialog_directory, file_menu, FileAction};
+use crate::common::file_menu::{dialog_directory, file_menu, DiscardQuestion, DocumentKind, FileAction};
+use crate::common::recent_files::RecentFiles;
 use crate::common::net::NetRole;
 use crate::editor::multicam::{Insets, MulticamState};
 use crate::get;
@@ -110,6 +111,7 @@ pub struct PropPanels {
     left_width: f32,
     right_width: f32,
     bottom_height: f32,
+    discard: DiscardQuestion,
 }
 
 impl Default for PropPanels {
@@ -125,6 +127,7 @@ impl Default for PropPanels {
             left_width: 260.0,
             right_width: 300.0,
             bottom_height: 80.0,
+            discard: DiscardQuestion::default(),
         }
     }
 }
@@ -244,6 +247,7 @@ pub struct PropUiPlugin;
 impl Plugin for PropUiPlugin {
     fn build(&self, app: &mut App) {
         crate::common::keybind::ensure(app);
+        crate::common::recent_files::ensure(app);
         app.init_resource::<PropPanels>()
             .init_resource::<PropFileDialog>()
             .add_systems(
@@ -270,6 +274,7 @@ struct Shared<'w> {
     // Optional: a build with no `NetPlugin` is a closed game, its own authority.
     role: Option<Res<'w, NetRole>>,
     taunts: Option<Res<'w, Taunts>>,
+    recent: ResMut<'w, RecentFiles>,
 }
 
 /// Bundled to keep [`panels`] inside Bevy's parameter limit.
@@ -308,7 +313,7 @@ fn panels(
     dialog: Res<PropFileDialog>,
     mut frame: MessageWriter<FrameTheProp>,
     mut next_mode: ResMut<NextState<AppMode>>,
-    shared: Shared,
+    mut shared: Shared,
     mut exit: MessageWriter<AppExit>,
     mut session: ResMut<SketchSession>,
 ) {
@@ -349,7 +354,7 @@ fn panels(
         .resizable(false)
         .show(&mut viewport_ui, |ui| {
             egui::MenuBar::new().ui(ui, |ui| {
-                file_menu(ui, crate::common::file_menu::DOCUMENT, &mut tabs.requests.file);
+                file_menu(ui, DocumentKind::Prop, shared.recent.of(DocumentKind::Prop), &mut tabs.requests.file);
                 edit_menu(ui, edit_availability(tabs.editor), &mut tabs.requests.edit);
                 // This system is gated on `AppMode::Prop`.
                 mode_menu(
@@ -513,8 +518,13 @@ fn panels(
     if let Some(mode) = requests.mode {
         next_mode.set(mode);
     }
-    handle_files(requests.file, &mut editor, &dialog);
-    if requests.file == Some(FileAction::Quit) {
+    let quit = requests.file == Some(FileAction::Quit);
+    let mut file = layout.discard.guard(requests.file, editor.dirty);
+    if let Some(discarded) = layout.discard.show(&ctx) {
+        file = Some(discarded);
+    }
+    handle_files(file, &mut editor, &dialog, &mut shared.recent, DocumentKind::Prop);
+    if quit {
         info!("Quitting, as asked");
         exit.write(AppExit::Success);
     }
@@ -3120,17 +3130,36 @@ fn body_picker(
     changed
 }
 
-pub fn save_or_ask(editor: &mut PropEditor, dialog: &PropFileDialog) {
+/// The path written, if it was written now rather than asked for.
+pub fn save_or_ask(editor: &mut PropEditor, dialog: &PropFileDialog) -> Option<PathBuf> {
     let Some(path) = editor.path.clone() else {
         ask_where_to_save(editor, dialog);
-        return;
+        return None;
     };
     match document::save(&path, editor.doc()) {
         Ok(()) => {
             info!("Saved prop to {path:?}");
-            editor.mark_saved(path);
+            editor.mark_saved(path.clone());
+            Some(path)
         }
-        Err(e) => error!("Saving the prop failed: {e}"),
+        Err(e) => {
+            error!("Saving the prop failed: {e}");
+            None
+        }
+    }
+}
+
+/// `titled` is false for a demo, so a save asks where rather than writing over the shipped file.
+fn open_prop(editor: &mut PropEditor, path: PathBuf, titled: bool) {
+    match std::fs::read_to_string(&path) {
+        Ok(text) => match document::parse(&text) {
+            Ok(doc) => {
+                info!("Opened prop {path:?}");
+                editor.open(doc, titled.then_some(path));
+            }
+            Err(e) => error!("{}: {e}", path.display()),
+        },
+        Err(e) => error!("{}: {e}", path.display()),
     }
 }
 
@@ -3161,6 +3190,7 @@ fn prop_shortcuts(
     mut tool: ResMut<ActiveTool>,
     build: Res<PropBuild>,
     mut session: ResMut<SketchSession>,
+    mut recent: ResMut<RecentFiles>,
 ) {
     use crate::common::keybind::Action;
     if tool.0.is_some() {
@@ -3184,19 +3214,27 @@ fn prop_shortcuts(
         frame.write(FrameTheProp { selected: true });
     }
     if let Some(action) = FileAction::from_chords(chords) {
-        handle_files(Some(action), &mut editor, &dialog);
+        handle_files(Some(action), &mut editor, &dialog, &mut recent, DocumentKind::Prop);
     }
 }
 
 /// New, open and save. Also called by the animation editor, since a prop's
-/// clips live in its `.gpp`. Quit is handled by the caller.
+/// clips live in its `.gpp`; `kind` is whose Recent list a save joins. Quit is handled by the
+/// caller.
 pub(crate) fn handle_files(
     action: Option<FileAction>,
     editor: &mut PropEditor,
     dialog: &PropFileDialog,
+    recent: &mut RecentFiles,
+    kind: DocumentKind,
 ) {
     if action == Some(FileAction::New) {
         editor.open(PropDoc::new("prop.untitled"), None);
+    }
+    match &action {
+        Some(FileAction::OpenRecent(path)) => open_prop(editor, path.clone(), true),
+        Some(FileAction::Demo(demo)) => open_prop(editor, PathBuf::from(demo.path), false),
+        _ => {}
     }
 
     if let Some(result) = dialog.result.lock().unwrap().take() {
@@ -3204,25 +3242,19 @@ pub(crate) fn handle_files(
             DialogResult::Save(path) => match document::save(&path, editor.doc()) {
                 Ok(()) => {
                     info!("Saved prop to {path:?}");
+                    recent.saved(kind, &path);
                     editor.mark_saved(path);
                 }
                 Err(e) => error!("Saving the prop failed: {e}"),
             },
-            DialogResult::Open(path) => match std::fs::read_to_string(&path) {
-                Ok(text) => match document::parse(&text) {
-                    Ok(doc) => {
-                        info!("Opened prop {path:?}");
-                        editor.open(doc, Some(path));
-                    }
-                    Err(e) => error!("{}: {e}", path.display()),
-                },
-                Err(e) => error!("{}: {e}", path.display()),
-            },
+            DialogResult::Open(path) => open_prop(editor, path, true),
         }
     }
 
     if action == Some(FileAction::Save) {
-        save_or_ask(editor, dialog);
+        if let Some(path) = save_or_ask(editor, dialog) {
+            recent.saved(kind, &path);
+        }
     } else if action == Some(FileAction::SaveAs) {
         ask_where_to_save(editor, dialog);
     }

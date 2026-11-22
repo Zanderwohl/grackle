@@ -5,7 +5,8 @@ use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use crate::common::app_mode::{mode_menu, AppMode};
 use crate::common::edit_menu::{edit_menu, EditAction, EditAvailability};
-use crate::common::file_menu::{dialog_directory, file_menu, FileAction};
+use crate::common::file_menu::{dialog_directory, file_menu, DiscardQuestion, DocumentKind, FileAction};
+use crate::common::recent_files::RecentFiles;
 use bevy::window::PrimaryWindow;
 use bevy_egui::{egui, EguiPrimaryContextPass, EguiContexts};
 use bevy_egui::egui::{Id, LayerId, Ui, UiBuilder, WidgetText};
@@ -27,7 +28,7 @@ use crate::common::palette::{Palette, RoleNameRefused, RolePaint};
 use crate::common::team::Team;
 use crate::material::picker::{material_button, material_names};
 use crate::editor::multicam::MulticamState;
-use crate::editor::net_menu::{network_menu, ConnectDialog};
+use crate::editor::net_menu::{hosting_label, network_menu, ConnectDialog};
 use crate::editor::save::{self, LoadedBlueprint};
 use crate::editor::rounds_panel::{RoundsTab, RoundsView};
 use crate::get;
@@ -88,6 +89,7 @@ pub struct CurrentFilePath {
     deferred_room_bake: u8,
     /// Set by the keyboard, taken by the panel.
     requested_op: Option<FileAction>,
+    discard: DiscardQuestion,
 }
 
 impl CurrentFilePath {
@@ -98,7 +100,7 @@ impl CurrentFilePath {
 
     #[cfg(test)]
     pub(crate) fn requested(&self) -> Option<FileAction> {
-        self.requested_op
+        self.requested_op.clone()
     }
 }
 
@@ -109,6 +111,7 @@ impl Default for CurrentFilePath {
             dialog_result: Arc::new(Mutex::new(None)),
             deferred_room_bake: 0,
             requested_op: None,
+            discard: DiscardQuestion::default(),
         }
     }
 }
@@ -155,6 +158,7 @@ struct PanelMessages<'w> {
     net: MessageWriter<'w, NetRequest>,
     exit: MessageWriter<'w, AppExit>,
     mode: ResMut<'w, NextState<AppMode>>,
+    recent: ResMut<'w, RecentFiles>,
 }
 
 #[derive(Default)]
@@ -251,6 +255,7 @@ pub struct EditorPanelPlugin;
 impl Plugin for EditorPanelPlugin {
     fn build(&self, app: &mut App) {
         crate::common::keybind::ensure(app);
+        crate::common::recent_files::ensure(app);
         app
             .init_resource::<EditorPanels>()
             .init_resource::<RoundSettings>()
@@ -410,7 +415,7 @@ impl EditorPanels {
             .show(&mut viewport_ui, |ui| {
                 egui::MenuBar::new().ui(ui, |ui| {
                     ui.add_enabled_ui(net_role.is_authority(), |ui| {
-                        file_menu(ui, crate::common::file_menu::ALL, &mut pending_file_op);
+                        file_menu(ui, DocumentKind::Map, messages.recent.of(DocumentKind::Map), &mut pending_file_op);
                     });
                     // Live for a client too, whose Settings hold its name; it can undo nothing.
                     let edit_available = if net_role.is_authority() { edit_available } else { EditAvailability::default() };
@@ -431,12 +436,17 @@ impl EditorPanels {
                         ui.separator();
                         ui.label("*");
                     }
-                    if let Some(step) = Step::current(&messages.bake_progress) {
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    // Right to left: the hosting line hard against the right edge, any bake left of it.
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let hosting = hosting_label(ui, &net_role, &net_status);
+                        if let Some(step) = Step::current(&messages.bake_progress) {
+                            if hosting {
+                                ui.separator();
+                            }
                             bake_progress::bar(ui, step.within(), MENU_BAR_PROGRESS_WIDTH);
                             ui.add(egui::Label::new(step.line()).truncate());
-                        });
-                    }
+                        }
+                    });
                 });
             })
             .response
@@ -527,6 +537,7 @@ impl EditorPanels {
                     match save::save(&path, &editor_features, &map_metadata) {
                         Ok(()) => {
                             info!("Saved to {:?}", path);
+                            messages.recent.saved(DocumentKind::Map, &path);
                             current_file.path = Some(path);
                             editor_features.mark_saved(&map_metadata);
                         }
@@ -546,17 +557,18 @@ impl EditorPanels {
             }
         }
 
+        pending_file_op = current_file.discard.guard(pending_file_op, editor_features.is_dirty());
+        if let Some(discarded) = current_file.discard.show(ctx) {
+            pending_file_op = Some(discarded);
+        }
         if let Some(op) = pending_file_op {
             match op {
-                // All are untitled, so a save asks where rather than writing over the shipped file.
-                FileAction::New | FileAction::Example(_) => {
-                    let name = match op {
-                        FileAction::Example(example) => example.blueprint(),
-                        _ => "new",
+                // Untitled, so a save asks where rather than writing over the shipped file.
+                FileAction::New | FileAction::Demo(_) => {
+                    let template = match &op {
+                        FileAction::Demo(demo) => PathBuf::from(demo.path),
+                        _ => PathBuf::from(format!("assets/default/{BLUEPRINTS_DIR}/new.{MAP_BLUEPRINT_EXTENSION}")),
                     };
-                    let template = PathBuf::from(format!(
-                        "assets/default/{BLUEPRINTS_DIR}/{name}.{MAP_BLUEPRINT_EXTENSION}"
-                    ));
                     match save::load(&template) {
                         Ok(loaded) => {
                             info!("New from template {:?}", template);
@@ -566,10 +578,19 @@ impl EditorPanels {
                         Err(e) => error!("New failed: {}", e),
                     }
                 }
+                FileAction::OpenRecent(path) => match save::load(&path) {
+                    Ok(loaded) => {
+                        info!("Loaded from {:?}", path);
+                        loaded_blueprint = Some(loaded);
+                        current_file.path = Some(path);
+                    }
+                    Err(e) => error!("Load failed: {}", e),
+                },
                 FileAction::Save => match current_file.path.clone() {
                     Some(path) => match save::save(&path, &editor_features, &map_metadata) {
                         Ok(()) => {
                             info!("Saved to {:?}", path);
+                            messages.recent.saved(DocumentKind::Map, &path);
                             editor_features.mark_saved(&map_metadata);
                         }
                         Err(e) => error!("Save failed: {}", e),
