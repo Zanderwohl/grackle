@@ -110,7 +110,7 @@ There is **no compiled map file**. What it was for, and where that went:
 - *Flat runtime geometry* — an in-memory resolve: flat meshes and material
   assignments the game reads, so nothing at runtime walks features.
 - *Baked textures and lighting* — a cache keyed by content hash, like
-  `cache/thumbnail/`: derived, safe to delete, never authoritative. IndexedDB in
+  `cache/thumbnails/`: derived, safe to delete, never authoritative. IndexedDB in
   a browser.
 - *Art-heavy maps* — their weight is meshes and textures, which are pack
   content and travel as packs do; the map only names them.

@@ -1,5 +1,6 @@
 pub mod app_mode;
 pub mod assets;
+pub mod cache_path;
 pub mod bot_names;
 pub mod class;
 pub mod round_settings;

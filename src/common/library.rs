@@ -78,6 +78,14 @@ impl DocumentKind {
         }
     }
 
+    /// A Library tile's face, so a picture is not stretched: a map's is a 3:2 postcard.
+    fn tile_size(self) -> egui::Vec2 {
+        match self {
+            DocumentKind::Map => egui::vec2(TILE * 1.5, TILE),
+            _ => egui::Vec2::splat(TILE),
+        }
+    }
+
     pub fn path_in(self, pack: &Path, name: &str) -> PathBuf {
         pack.join(self.folder()).join(format!("{name}.{}", self.extension()))
     }
@@ -428,7 +436,8 @@ impl Library {
                 ui.weak(get!("library.empty"));
             }
             let spacing = ui.spacing().item_spacing.x;
-            let columns = ((width + spacing) / (TILE + spacing)).floor().max(1.0) as usize;
+            let tile_size = kind.tile_size();
+            let columns = ((width + spacing) / (tile_size.x + spacing)).floor().max(1.0) as usize;
             egui::ScrollArea::vertical().max_height(ui.available_height()).auto_shrink([false, false]).show(ui, |ui| {
                 for row in shown.chunks(columns) {
                     ui.horizontal(|ui| {
@@ -437,7 +446,7 @@ impl Library {
                             let face = preview(entry).map_or(Face::NoPreview, Face::Picture);
                             let tooltip = entry.path.display().to_string();
                             let tile = Tile { label: &entry.name, face, badge: Some(&pack), tooltip: &tooltip, selected: false };
-                            if preview_grid::tile(ui, egui::Vec2::splat(TILE), true, &tile).clicked() {
+                            if preview_grid::tile(ui, tile_size, true, &tile).clicked() {
                                 chosen = Some(FileAction::OpenPath(entry.path.clone()));
                             }
                         }
@@ -488,11 +497,6 @@ pub fn ensure(app: &mut App) {
     if !app.is_plugin_added::<LibraryPlugin>() {
         app.add_plugins(LibraryPlugin);
     }
-}
-
-pub fn show_map_library(mut contexts: bevy_egui::EguiContexts, mut library: ResMut<Library>) {
-    let Ok(ctx) = contexts.ctx_mut() else { return };
-    library.show(ctx, &mut |_| None, &|_| None);
 }
 
 #[cfg(test)]

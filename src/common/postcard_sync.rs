@@ -109,7 +109,7 @@ impl Plugin for PostcardSyncPlugin {
 fn chosen_pictures(metadata: &MapMetadata, captured: &CapturedPostcards) -> Vec<(String, image::RgbaImage)> {
     let mut pictures: Vec<(String, image::RgbaImage)> = Vec::new();
     for choice in metadata.postcards.iter().flatten() {
-        let stem = choice.file_stem();
+        let stem = choice.key();
         if pictures.iter().any(|(taken, _)| *taken == stem) {
             continue;
         }
@@ -153,7 +153,7 @@ fn print_the_postcards(
         return;
     }
     let (Some(metadata), Some(captured)) = (metadata, captured) else { return };
-    let chosen: Vec<String> = metadata.postcards.iter().flatten().map(|choice| choice.file_stem()).collect();
+    let chosen: Vec<String> = metadata.postcards.iter().flatten().map(|choice| choice.key()).collect();
     let printed_from = Some((captured.generation(), chosen));
     if press.printed_from == printed_from {
         return;

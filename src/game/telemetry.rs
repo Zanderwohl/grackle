@@ -1,6 +1,6 @@
 //! What each round did, kept for reading afterward. Two records, both on the authority:
 //!
-//! - **`cache/rounds/{map}/{started}.jsonl`** gets one JSON [`Event`] per line, game seconds since
+//! - **`cache/rounds/{pack}/{map}/{started}.jsonl`** ([`rounds_folder`]) gets one JSON [`Event`] per line, game seconds since
 //!   the round started first in each: spawns, every hit, kills, pickups, what bots go for and
 //!   who they first see, and every body's place once a second. Derived and disposable, like the
 //!   rest of `cache/`. Native only.
@@ -38,7 +38,18 @@ use crate::tool::nav_bake::NavBake;
 use crate::get;
 
 /// Where round files go, a folder per map.
-pub const ROUNDS_DIR: &str = "cache/rounds";
+/// Under [`cache_path::CACHE_ROOT`](crate::common::cache_path::CACHE_ROOT).
+pub const ROUNDS_KIND: &str = "rounds";
+
+/// `cache/rounds/{pack}/{map}`, for the map saved at `file`.
+pub fn rounds_folder(file: Option<&std::path::Path>) -> std::path::PathBuf {
+    crate::common::cache_path::document_folder(ROUNDS_KIND, file)
+}
+
+/// `cache/rounds`, holding a folder per pack.
+pub fn rounds_root() -> std::path::PathBuf {
+    std::path::Path::new(crate::common::cache_path::CACHE_ROOT).join(ROUNDS_KIND)
+}
 /// Game seconds between samples of where everybody is.
 const SAMPLE_EVERY: f32 = 1.0;
 /// A bot seeing somebody it last saw longer ago than this has found them again.
@@ -382,7 +393,7 @@ fn open_the_round(
     *round = Round { open: true, number, map: map.clone(), started: time.elapsed_secs(), bot_skill: settings.bot_skill, ..default() };
     #[cfg(not(target_arch = "wasm32"))]
     if recording.is_some() {
-        let directory = std::path::Path::new(ROUNDS_DIR).join(&map);
+        let directory = rounds_folder(file.as_deref().and_then(|file| file.path.as_deref()));
         let stamp = now.format("%Y-%m-%d_%H-%M-%S");
         // Never over another round's file: two servers, or a round under a second long.
         let opened = std::fs::create_dir_all(&directory).and_then(|_| {

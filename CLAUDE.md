@@ -43,7 +43,7 @@ not a convenience. Design accordingly:
 
   **There is no compiled map file.** Flat runtime geometry is resolved in
   memory; baked textures and lighting are a cache keyed by content hash, like
-  `cache/thumbnail/`, never authoritative; an art-heavy map's weight is meshes
+  `cache/thumbnails/`, never authoritative; an art-heavy map's weight is meshes
   and textures, which are pack content. Materials ship as texture-graphs, not
   pixels — see [documentation/surfaces.md](documentation/surfaces.md).
 
@@ -149,7 +149,7 @@ how it killed and every attacker's share, and a `RoundRecord` at the round's
 end each bot's temperament and the scoreboard — and, where an app binary asks
 (`RecordRounds`, so tests write nothing), the same events as a JSON Lines file
 per round — each match's live phase, so matches
-back to back are a file each — at `cache/rounds/{map}/{started}.jsonl`:
+back to back are a file each — at `cache/rounds/{pack}/{map}/{started}.jsonl`:
 spawns, hits, kills, pickups, goal changes (a retreat marked), first sightings
 and every body once a second. A hit knows its weapon because `Damage` and
 `DamageDealt` carry a `Cause` — weapon, how, reflected — from the trigger pull
@@ -270,7 +270,7 @@ shape is a new producer and not a rewrite of every consumer — see
 | `src/bin/` | `ensure_lang` (fills missing translation keys), `new_map_template` (writes the new-map, demo-scene, arena, cloister, waterworks and showcase blueprints), `map_stats` (bakes a blueprint's nav graph headless and prints its statistics and top-down charts of each field), `decal_images` (rasterizes the default pack's decal SVGs), `bake_body_clips` (seeds a pack's body animations from the pose functions they replace, and writes the clips `seed::WRITTEN` generates key by key), `default_materials` (writes the default pack's materials), `crate_drop`. |
 | `assets/default/` | The default pack: `lang/`, `blueprints/`, `servers/` (example `--server-config` files), `images/backgrounds/title/` (main-menu backgrounds). |
 | `assets/user/` | The user pack: gitignored, made at startup with `blueprints/`, `props/` and `images/backgrounds/title/`, last in `default_packs()` so it overrides the shipped one. A new map or prop is saved here unless the document already has a folder. Also holds `settings.toml`, the player settings, `shortcuts.toml`, `server.toml` (the Round tab) and `recent.toml` (the File menu's Recent lists). |
-| `cache/` | Gitignored, derived from the packs and maps: `thumbnail/props/{name}.png`, `nav/{hash}.bin`, `lightmap/{hash}.bin`, `postcards/{hash}/*.png`, `rounds/{map}/*.jsonl`, `trash/{kind}/` (deleted pack files, kept 30 days). Safe to delete, though the trash is the only copy of what is in it. |
+| `cache/` | Gitignored, derived from the packs and maps: `thumbnails/{pack}/props/{name}.png`, `nav/{hash}.bin`, `lightmap/{hash}.bin`, `postcards/{pack}/{map}/*.png`, `rounds/{pack}/{map}/*.jsonl`, `trash/{kind}/` (deleted pack files, kept 30 days). What is about one pack file is filed under its pack and name ([`src/common/cache_path.rs`](src/common/cache_path.rs)); a file in no pack under `_no_pack/`, and a map with no file under `_no_pack/untitled` (its postcards in `_no_pack/untitled_{hash}`, so two unsaved maps keep a set each). Safe to delete, though the trash is the only copy of what is in it. |
 | `logs/` | Gitignored: the log's file drain, one file per launch, and the Bakes panel's ECS dumps (`grackle_ecsdump_{stamp}.txt`, whose path the panel shows as a link that selects the file in the file manager), all deleted after the days set in Settings → Developer. |
 | `screenshots/` | Gitignored, made at startup: `F12` saves the window as drawn, HUD and egui included, as `{date}_{time}_{millisecond}.png` ([`src/common/screenshot.rs`](src/common/screenshot.rs)). |
 
@@ -618,7 +618,9 @@ the file as `FileAction::OpenPath`, which Recent sends too. It is drawn by a sys
 own (`show_map_library`, `show_prop_library`, …), so the mode's panel system, often at Bevy's
 parameter limit, only opens it and takes what was chosen (`Library::take`). Each passes its
 kind's preview: props their thumbnails, weapons their models', materials their color maps, maps
-none yet, drawn as the white "[No preview]" tile. The tile is
+the postcard of their first spectator camera in carousel order, else `top.png`
+(`postcard_bake::preview_file`, on a 3:2 tile), and a file with none is drawn as the white
+"[No preview]" tile. The tile is
 [`preview_grid`](src/common/preview_grid.rs)'s, which the pickers draw too. Its **New…** button is
 the `NewDialog`, also asked by the weapon and lang editors' own New buttons and the weapon
 editor's File → New: a name, a pack (User, Default, the other folders under `assets/`, then New…
@@ -1972,11 +1974,10 @@ a point inside the frame is two linear bounds on where the camera stands, so
 padding — a bounding sphere would leave a long weapon small in a square
 picture.
 
-Pictures are cached at `cache/thumbnail/props/{name}.png`, with a
-`{name}.source` beside each naming the file it was taken of. One is reused
-only while it is of **the file the prop was baked from** and no older than it,
-so a deleted override does not leave its picture behind. Saving in the prop
-editor re-bakes, so it re-photographs. A picker asks `Thumbnails::look_on_disk`
+Pictures are cached beside their pack, the picture of
+`assets/{pack}/props/{name}.gpp` at `cache/thumbnails/{pack}/props/{name}.png`.
+One is reused only while it is no older than its file, so saving in the prop
+editor, which re-bakes, re-photographs. A picker asks `Thumbnails::look_on_disk`
 first and bakes only on a miss, so browsing a pack does not keep every prop's
 meshes alive. A model the server sent has no file and
 is photographed into memory only. Reading and writing run on the IO pool, and
@@ -2100,11 +2101,15 @@ washed the lightmaps out.
 photographs of the map rendered at 1152×768 whatever the window's size and halved to 576×384 — the size a card prints its picture at, so nothing resamples it again — with no HUD, one through each
 spectator camera at its own vertical field of view and one orthographic from straight above, turned
 in 5° steps to whichever angle lets the rooms' and blocks' corners fill the most of the 3:2 frame.
-They go to `cache/postcards/{hash}/`, named by `PostcardChoice::file_stem` (`top.png`,
-`camera_{feature}.png`, `camera_{feature}_copy_{image}.png`), the hash being FNV over every feature
+They go to `cache/postcards/{pack}/{map}/` for the map's file, named by `PostcardChoice::file_stem`
+(`top.png`, `camera_{order}_{feature}.png`, `camera_{order}_{feature}_copy_{image}.png`, so they
+sort as the carousel does once the numbers are read as numbers; in memory and in the picker a
+picture is known by `PostcardChoice::key`, which has no order), beside a `hash.txt` naming the hash
+they were taken under. A folder whose hash differs is taken again. The hash is FNV over every feature
 as saved (`FeatureTimeline::content_hash`), the settings a picture can show
-(`SavedMetadata::pictured`, so naming the map or choosing postcards is no miss) and halfbright, so
-halfbright pictures, taken without sunlight, are filed apart. Pack content is not in
+(`SavedMetadata::pictured`, so naming the map or choosing postcards is no miss), halfbright, so
+halfbright pictures, taken without sunlight, are not taken for sunlit ones, and the folder, so a map
+saved somewhere new is photographed there. Pack content is not in
 the hash: delete the folder after editing a material. Taken only in the map editor and never while
 rolled back, once rooms and sunlight are up to date (or skipped) and the map has been still for the
 settle wait, by one camera re-aimed per shot, with spawn-point bodies hidden while it shoots.
@@ -2603,7 +2608,7 @@ which the authority picks and replicates — never derived from join order. The
 new-map template is an arena map. A mode with a `frag_limit` keeps score on a
 replicated `Standing` per player ([`src/game/score.rs`](src/game/score.rs)),
 shows it top-left, and ends the round at the limit; the editor's **Rounds**
-tab lists the newest 100 round files under `cache/rounds/`, read on the IO pool
+tab lists the newest 100 round files under `cache/rounds/{pack}/{map}/`, read on the IO pool
 when a round ends or on Refresh, and shows the chosen one as sortable tables —
 players, weapons, who killed whom, bots' wants and senses, every kill, pickups —
 counted from the file's events, not its closing scoreboard
