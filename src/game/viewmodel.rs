@@ -81,8 +81,8 @@ pub struct Viewmodel {
     /// Where the weapon was drawn this frame, after its clips: what the arms
     /// are solved onto.
     weapon: Option<Transform>,
-    /// Where it was framed, before its clips: what a rig stood by its carry is stood from, so a
-    /// clip moves the weapon and not the body.
+    /// The weapon before its clips. A rig stood by its carry is stood from this, so a clip moves
+    /// the weapon and not the body.
     framed: Option<Transform>,
     /// Where the clips moved each hand's grip, trigger hand first.
     grips: crate::common::skeleton::play::Grips,
@@ -300,7 +300,7 @@ fn place_the_viewmodel(
     mut parts: Query<(&mut Transform, Option<&OnPropBone>), With<ViewmodelPart>>,
 ) {
     let Ok((body, held, skeleton, sights, ammo)) = held.single() else { return };
-    let loaded = crate::game::held::loaded(catalog.as_deref(), sights.map(|(_, equipped)| equipped).zip(ammo));
+    let loaded = crate::game::held::loaded(catalog.as_deref(), held.showing().0, ammo);
     let spec = held.viewmodel();
     let raised = sights.zip(catalog.as_deref()).map_or(0.0, |((sights, equipped), catalog)| {
         shown(body, sights, equipped, catalog, rechamber.as_deref()).raised
@@ -652,8 +652,7 @@ mod tests {
     }
 
     /// Fails if the RPG's first-person reload takes the free hand somewhere on screen it cannot
-    /// reach: the arm would be hidden and the round would float. The raptor is stood from the framing, not
-    /// from where its clip moves the weapon, or the swing would carry its shoulders along.
+    /// reach, where the arm would be hidden and the round would float.
     #[test]
     fn the_rpgs_free_hand_reaches_through_its_first_person_reload() {
         let doc = document::parse(include_str!("../../assets/default/props/rpg.gpp")).unwrap();
@@ -675,7 +674,7 @@ mod tests {
                 let weapon = played(framed, &stack, &skeleton, &clips);
                 let grips = grip_offsets(&stack, &clips, &skeleton);
                 let (_, _, reached) = stand_and_grip(&skeleton, &hold, &weapon, &framed, grips);
-                // An arm that misses is hidden, which is unseen below the bottom of the frame.
+                // A hidden arm below the frame is not seen.
                 let target = weapon.transform_point(hold.loose_support_frame().translation + grips[1]);
                 let below_the_frame = -target.y > -target.z * (VIEWMODEL_FOV / 2.0).tan();
                 assert!(

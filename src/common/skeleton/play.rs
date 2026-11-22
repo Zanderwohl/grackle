@@ -1028,7 +1028,7 @@ pub fn grip_offsets(stack: &ClipStack, clips: &Assets<Clip>, skeleton: &Skeleton
                 Axis::Free | Axis::Ground { .. } => 0.0,
             }));
             grips.offsets[hand] = grips.offsets[hand].lerp(moved, shown);
-            grips.taken[hand] = grips.taken[hand].max(shown);
+            grips.taken[hand] += (1.0 - grips.taken[hand]) * shown;
         }
     }
     grips
@@ -1039,8 +1039,8 @@ pub fn grip_offsets(stack: &ClipStack, clips: &Assets<Clip>, skeleton: &Skeleton
 pub struct Grips {
     /// Each grip's move, in the weapon's axes, in meters.
     pub offsets: [Vec3; 2],
-    /// How far a shown track keys that hand, 0 to 1: a one-handed weapon's free hand is
-    /// brought onto the weapon this far.
+    /// The share of `offsets` the tracks blended in, 0 to 1, so `offsets / taken` is their keys
+    /// averaged by weight.
     pub taken: [f32; 2],
 }
 
@@ -1640,6 +1640,18 @@ mod tests {
             &rig,
         );
         assert!((half[1] - Vec3::new(0.0, -0.05, 0.1)).length() < 1e-6, "{}", half[1]);
+        assert!((half.taken[1] - 0.5).abs() < 1e-6);
+
+        let both = grip_offsets(
+            &ClipStack(vec![
+                Playing { weight: 0.5, ..Playing::new(Layer::Weapon, reach.clone(), 0.0) },
+                Playing { weight: 0.5, ..Playing::new(Layer::Weapon, reach.clone(), 0.0) },
+            ]),
+            &clips,
+            &rig,
+        );
+        let average = both.offsets[1] / both.taken[1];
+        assert!((average - Vec3::new(0.0, -0.1, 0.2)).length() < 1e-6, "{average}");
 
         let under_a_kick = grip_offsets(
             &ClipStack(vec![

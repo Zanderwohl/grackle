@@ -401,8 +401,7 @@ pub fn grip_with(
 /// hand left out is untouched and reports `Impossible`. Each grip is moved by
 /// its `grips` entry, in the weapon's axes, keeping the hand's rotation:
 /// what a clip's `Space::Grip` tracks ask for. A one-handed weapon's free hand
-/// goes to the stored support point while a track keys it, moved by the whole
-/// key however far the clip has faded in.
+/// goes to the stored support point while a track keys it.
 pub fn grip_hands(
     skeleton: &Skeleton,
     pose: &mut Pose,
@@ -416,8 +415,7 @@ pub fn grip_hands(
     let loose = hold.support_frame().is_none();
     let support = hold.support_frame().or_else(|| (grips.taken[1] > 0.0).then(|| hold.loose_support_frame()));
     let frames = [Some(hold.grip_frame()), support];
-    // A free hand is not held, so a fading clip moves it by its whole key; the caller blends the
-    // arm with what it was doing instead.
+    // A fading clip moves a free hand by its whole key; the caller blends the arm instead.
     let mut offsets = grips.offsets;
     if loose && grips.taken[1] > 0.0 {
         offsets[1] /= grips.taken[1];

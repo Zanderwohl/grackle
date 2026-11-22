@@ -1002,21 +1002,23 @@ pub struct ClipSet {
     pub clips: BTreeMap<String, Clip>,
 }
 
-/// Between a clip's name and a class's key: a prop's `body_reload@raptor` is what a Raptor plays
-/// for `body_reload`, as `HoldSpec::per_class` overrides a hold.
+/// Joins a clip's name to a class's key: a prop's `body_reload@raptor` is what a Raptor plays for
+/// `body_reload`.
 pub const FOR_CLASS: char = '@';
 
-/// `clips` as `class` (a class's key) plays them: each override in place of the clip it names,
-/// and no override listed under its own name.
+/// Each of `class`'s overrides under the name it overrides, whether or not a shared clip has that
+/// name. No override is listed under its own name.
 pub fn clips_for_class<T: Clone>(clips: &BTreeMap<String, T>, class: Option<&str>) -> BTreeMap<String, T> {
-    clips
-        .iter()
-        .filter(|(name, _)| !name.contains(FOR_CLASS))
-        .map(|(name, clip)| {
-            let over = class.and_then(|class| clips.get(&format!("{name}{FOR_CLASS}{class}")));
-            (name.clone(), over.unwrap_or(clip).clone())
-        })
-        .collect()
+    let mut chosen: BTreeMap<String, T> =
+        clips.iter().filter(|(name, _)| !name.contains(FOR_CLASS)).map(|(name, clip)| (name.clone(), clip.clone())).collect();
+    for (name, clip) in clips {
+        if let Some((base, of)) = name.split_once(FOR_CLASS)
+            && Some(of) == class
+        {
+            chosen.insert(base.to_string(), clip.clone());
+        }
+    }
+    chosen
 }
 
 impl ClipSet {
@@ -1049,6 +1051,10 @@ mod tests {
         let scout = clips_for_class(&clips, Some("scout"));
         assert_eq!(scout, [("fire".into(), 3), ("reload".into(), 1)].into_iter().collect());
         assert_eq!(clips_for_class(&clips, None), scout);
+
+        let only_its_own: BTreeMap<String, u8> = [("taunt@raptor".into(), 4)].into_iter().collect();
+        assert_eq!(clips_for_class(&only_its_own, Some("raptor")), [("taunt".into(), 4)].into_iter().collect());
+        assert!(clips_for_class(&only_its_own, Some("scout")).is_empty());
     }
 
     fn a_clip() -> Clip {

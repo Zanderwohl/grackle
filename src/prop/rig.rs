@@ -28,8 +28,7 @@ pub struct PropBone {
     /// [`bone_of_each_body`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub parts: Vec<PropFeatureId>,
-    /// Its parts are the round ready to fire, so a held weapon with none draws them shrunk to
-    /// nothing; see [`PropRig::hide_spent_rounds`].
+    /// Its parts are the round ready to fire; see [`PropRig::hide_spent_rounds`].
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub round: bool,
 }
@@ -258,10 +257,10 @@ impl PropRig {
         deltas
     }
 
-    /// Scales each round bone, and every bone under it, to nothing while the weapon is not
-    /// `loaded`, unless a playing clip has reached that bone's first key. A clip ends, so it
-    /// cannot keep a fired round hidden; the ammo does, and a reload's clip shows the next round
-    /// from the key that first places it.
+    /// Scales each round bone, and the bones under it, to nothing while the weapon is not
+    /// `loaded`. The ammo hides a fired round, since a clip ends. A reload's clip shows the next
+    /// round from its first key on that bone once the clip is fully faded in, or once the round is
+    /// seated: while fading in, it draws the bone partway from rest.
     pub fn hide_spent_rounds(&self, deltas: &mut [Transform], stack: &ClipStack, clips: &Assets<Clip>, loaded: bool) {
         if loaded || !self.bones.iter().any(|bone| bone.round) {
             return;
@@ -269,7 +268,11 @@ impl PropRig {
         let mut hidden = vec![false; self.bones.len()];
         for (index, bone) in self.bones.iter().enumerate() {
             let under_hidden = bone.parent.is_some_and(|parent| hidden[parent]);
-            hidden[index] = under_hidden || (bone.round && !clip_places(stack, clips, &bone.name));
+            let seated = deltas.get(index).is_some_and(|delta| {
+                delta.translation.length() < 1e-4 && delta.rotation.angle_between(Quat::IDENTITY) < 1e-4
+            });
+            let shown = clip_places(stack, clips, &bone.name).is_some_and(|weight| weight >= 1.0 || seated);
+            hidden[index] = under_hidden || (bone.round && !shown);
             if hidden[index]
                 && let Some(delta) = deltas.get_mut(index)
             {
@@ -279,9 +282,9 @@ impl PropRig {
     }
 }
 
-/// Whether a playing clip the weapon is not masked from has reached its first key on `bone`.
-fn clip_places(stack: &ClipStack, clips: &Assets<Clip>, bone: &str) -> bool {
-    shown_layers(stack, clips).any(|(playing, clip, _, masked)| {
+/// The weight of the most shown unmasked clip that has reached its first key on `bone`.
+fn clip_places(stack: &ClipStack, clips: &Assets<Clip>, bone: &str) -> Option<f32> {
+    let placing = shown_layers(stack, clips).filter(|(playing, clip, _, masked)| {
         let time = clip.wrap(playing.time);
         !masked.overlaps(Regions::WEAPON)
             && clip.tracks.iter().filter(|track| track.enabled).any(|track| match &track.channel {
@@ -293,7 +296,8 @@ fn clip_places(stack: &ClipStack, clips: &Assets<Clip>, bone: &str) -> bool {
                 }
                 _ => false,
             })
-    })
+    });
+    placing.map(|(_, _, shown, _)| shown).reduce(f32::max)
 }
 
 pub fn place_part(prop: Transform, deltas: &[Transform], bone: Option<&OnPropBone>) -> Transform {
@@ -460,10 +464,17 @@ mod tests {
         });
         let (before, clips) = stack_of(keyed.clone(), 0.2);
         assert_eq!(rig.drawn_deltas(&before, &clips, false)[0].scale, Vec3::ZERO);
-        let (after, clips) = stack_of(keyed, 0.4);
+        let (after, clips) = stack_of(keyed.clone(), 0.4);
         let shown = rig.drawn_deltas(&after, &clips, false)[0];
         assert_eq!(shown.scale, Vec3::ONE);
         assert!(shown.translation.abs_diff_eq(Vec3::new(0.0, -0.4, 0.2), 1e-6));
+        let mut clips = Assets::<Clip>::default();
+        let handle = clips.add(keyed.clone());
+        let half_in = ClipStack(vec![crate::common::skeleton::play::Playing {
+            weight: 0.5,
+            ..crate::common::skeleton::play::Playing::new(crate::common::skeleton::play::Layer::Weapon, handle, 0.4)
+        }]);
+        assert_eq!(rig.drawn_deltas(&half_in, &clips, false)[0].scale, Vec3::ZERO, "a round showed sliding out of the tube");
         let (other, clips) = stack_of(clip(Channel::PropBoneOffset { bone: "slide".into(), keys: vec![Key::all(0.0, [0.0; 3], Interpolation::Linear)] }), 0.4);
         assert_eq!(rig.drawn_deltas(&other, &clips, false)[0].scale, Vec3::ZERO, "a clip moving another bone showed the round");
     }

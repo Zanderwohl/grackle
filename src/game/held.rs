@@ -67,6 +67,8 @@ pub struct HeldModel {
     /// Handles off the bake, so a save refilled under them is what plays.
     clips: BTreeMap<String, Handle<Clip>>,
     rig: PropRig,
+    /// The class the hold and clips were chosen for, so a `Class` arriving late re-dresses it.
+    class: Option<Class>,
 }
 
 /// What a body's weapon, or the viewmodel's, is in the middle of doing. Named
@@ -374,6 +376,7 @@ fn dress_held_weapons(
             && drawn.weapon == held
             && drawn.resolved
             && drawn.cached_at == cache.generation()
+            && drawn.class == class.copied()
         {
             continue;
         }
@@ -385,14 +388,14 @@ fn dress_held_weapons(
                 if drawn.is_none_or(|drawn| drawn.weapon != held) {
                     replace_parts(
                         &mut commands, body, drawn, vec![], held, false, HoldSpec::default(),
-                        ViewmodelSpec::default(), None, BTreeMap::new(), PropRig::default(), cache.generation(),
+                        ViewmodelSpec::default(), None, BTreeMap::new(), PropRig::default(), cache.generation(), class.copied(),
                     );
                 }
             }
             Wanted::Nothing => {
                 replace_parts(
                     &mut commands, body, drawn, vec![], held, true, HoldSpec::default(),
-                    ViewmodelSpec::default(), None, BTreeMap::new(), PropRig::default(), cache.generation(),
+                    ViewmodelSpec::default(), None, BTreeMap::new(), PropRig::default(), cache.generation(), class.copied(),
                 )
             }
             Wanted::Model(model) => {
@@ -439,7 +442,7 @@ fn dress_held_weapons(
                 let cached_at = cache.generation();
                 replace_parts(
                     &mut commands, body, drawn, spawned, held, true, hold, viewmodel, muzzle,
-                    clips, rig, cached_at,
+                    clips, rig, cached_at, class.copied(),
                 );
 
             }
@@ -461,6 +464,7 @@ fn replace_parts(
     clips: BTreeMap<String, Handle<Clip>>,
     rig: PropRig,
     cached_at: u64,
+    class: Option<Class>,
 ) {
     if let Some(drawn) = drawn {
         for part in &drawn.parts {
@@ -470,7 +474,7 @@ fn replace_parts(
     commands
         .entity(body)
         .insert((
-            HeldModel { weapon, resolved, parts, hold, viewmodel, muzzle, clips, rig, cached_at },
+            HeldModel { weapon, resolved, parts, hold, viewmodel, muzzle, clips, rig, cached_at, class },
             WeaponInHand::default(),
         ));
 }
@@ -820,11 +824,11 @@ fn show_held_weapons(
 pub(crate) fn place_held_weapons(
     clips: Res<Assets<Clip>>,
     catalog: Option<Res<WeaponCatalog>>,
-    bodies: Query<(&HeldModel, &WeaponInHand, &ClipStack, Option<(&Equipped, &Ammo)>)>,
+    bodies: Query<(&HeldModel, &WeaponInHand, &ClipStack, Option<&Ammo>)>,
     mut parts: Query<(&mut Transform, Option<&OnPropBone>), With<HeldPart>>,
 ) {
     for (held, weapon, stack, ammo) in &bodies {
-        let deltas = held.rig.drawn_deltas(stack, &clips, loaded(catalog.as_deref(), ammo));
+        let deltas = held.rig.drawn_deltas(stack, &clips, loaded(catalog.as_deref(), held.weapon, ammo));
         for part in &held.parts {
             let Ok((mut transform, bone)) = parts.get_mut(*part) else { continue };
             transform.set_if_neq(place_part(weapon.0, &deltas, bone));
@@ -832,11 +836,11 @@ pub(crate) fn place_held_weapons(
     }
 }
 
-/// Whether the weapon `ammo`'s body holds has a round ready, for [`PropRig::drawn_deltas`].
-/// Anything not known yet counts as loaded.
-pub(crate) fn loaded(catalog: Option<&WeaponCatalog>, ammo: Option<(&Equipped, &Ammo)>) -> bool {
-    let Some((equipped, ammo)) = ammo else { return true };
-    catalog.and_then(|catalog| catalog.held_by(equipped)).is_none_or(|weapon| ammo.loaded(weapon))
+/// `weapon` is the one the parts were built for: a switch changes `Equipped` a frame before the
+/// parts. Anything not known yet counts as loaded.
+pub(crate) fn loaded(catalog: Option<&WeaponCatalog>, weapon: Option<WeaponId>, ammo: Option<&Ammo>) -> bool {
+    let Some(ammo) = ammo else { return true };
+    weapon.and_then(|id| catalog?.get(id)).is_none_or(|weapon| ammo.loaded(weapon))
 }
 
 #[cfg(test)]
@@ -962,7 +966,7 @@ mod tests {
                     muzzle: None,
                     clips: BTreeMap::new(),
                     rig: PropRig::default(),
-                    cached_at: 0,
+                    cached_at: 0, class: None,
                 },
                 WeaponInHand::default(),
             ))
@@ -1025,7 +1029,7 @@ mod tests {
                     muzzle: None,
                     clips,
                     rig: PropRig::default(),
-                    cached_at: 0,
+                    cached_at: 0, class: None,
                 },
                 Performance::default(),
                 ClipStack::default(),
@@ -1089,7 +1093,7 @@ mod tests {
                     muzzle: None,
                     clips,
                     rig: PropRig::default(),
-                    cached_at: 0,
+                    cached_at: 0, class: None,
                 },
                 Performance::default(),
                 ClipStack::default(),
@@ -1239,8 +1243,7 @@ mod tests {
         assert!(shared.distance(gripped) > 0.2 * span, "the hand snapped onto the weapon");
     }
 
-    /// A reload fading in takes a one-handed weapon's free hand only part of the way from what
-    /// the body was doing, so the arm does not jump.
+    /// Fails if a fading reload snaps a one-handed weapon's free hand onto it.
     #[test]
     fn a_fading_reload_brings_the_free_hand_in_part_way() {
         let doc = crate::prop::document::parse(include_str!("../../assets/default/props/rpg.gpp")).unwrap();
@@ -1269,9 +1272,8 @@ mod tests {
         assert!(halfway.distance(taken) > 0.2 * span, "the hand jumped onto the weapon");
     }
 
-    /// The RPG is held in one hand, so its reload brings the free hand onto it: from the hip to
-    /// the front of the tube and back, with the round bone keyed to stay in that hand, and every
-    /// build reaches the whole way, the raptor through its own clip.
+    /// Fails if a build, the raptor through its own clip, misses a key of the RPG's reload or lets
+    /// the round slip in its free hand.
     #[test]
     fn the_rpgs_reload_carries_the_round_in_the_free_hand() {
         let doc = crate::prop::document::parse(include_str!("../../assets/default/props/rpg.gpp")).unwrap();
@@ -1420,7 +1422,7 @@ mod tests {
             HeldModel {
                 weapon: None, resolved: true, parts: vec![part],
                 hold: HoldSpec::default(), viewmodel: ViewmodelSpec::default(), muzzle: None,
-                clips: BTreeMap::new(), rig: PropRig::default(), cached_at: 0,
+                clips: BTreeMap::new(), rig: PropRig::default(), cached_at: 0, class: None,
             },
             WeaponInHand(decided),
         ));
