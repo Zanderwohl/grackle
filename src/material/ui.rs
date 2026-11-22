@@ -42,10 +42,17 @@ impl Plugin for MaterialUiPlugin {
     fn build(&self, app: &mut App) {
         crate::common::keybind::ensure(app);
         crate::common::recent_files::ensure(app);
+        crate::common::library::ensure(app);
         app.init_resource::<MaterialFileDialog>()
             .add_systems(
                 bevy_egui::EguiPrimaryContextPass,
-                panels.run_if(in_state(AppMode::Material)),
+                (
+                    panels,
+                    super::picker::show_material_library
+                        .run_if(crate::common::library::showing(DocumentKind::Material)),
+                )
+                    .chain()
+                    .run_if(in_state(AppMode::Material)),
             )
             .add_systems(Update, material_shortcuts.run_if(in_state(AppMode::Material)));
     }
@@ -70,6 +77,7 @@ fn panels(
     mut baked: ResMut<BakedTextures>,
     mut recent: ResMut<RecentFiles>,
     mut discard: Local<DiscardQuestion>,
+    mut library: ResMut<crate::common::library::Library>,
 ) {
     let Ok(ctx) = contexts.ctx_mut() else { return };
     let ctx = ctx.clone();
@@ -111,7 +119,11 @@ fn panels(
         next_mode.set(mode);
     }
     let quit = requests.file == Some(FileAction::Quit);
-    let mut file = discard.guard(requests.file, material.dirty());
+    if requests.file == Some(FileAction::Library) {
+        library.open(DocumentKind::Material);
+    }
+    let asked = requests.file.or_else(|| library.take(DocumentKind::Material));
+    let mut file = discard.guard(asked, material.dirty());
     if let Some(discarded) = discard.show(&ctx) {
         file = Some(discarded);
     }
@@ -180,7 +192,7 @@ fn handle_files(
     }
 
     match action {
-        Some(FileAction::OpenRecent(path)) => open_material(material, path, true),
+        Some(FileAction::OpenPath(path)) => open_material(material, path, true),
         // Untitled, so a save asks where rather than writing over the shipped file.
         Some(FileAction::Demo(demo)) => open_material(material, PathBuf::from(demo.path), false),
         Some(FileAction::Save) => match material.path.clone() {
@@ -188,6 +200,18 @@ fn handle_files(
             None => ask_where_to_save(material, dialog),
         },
         Some(FileAction::SaveAs) => ask_where_to_save(material, dialog),
+        // Written straight away, so it is in the Library and a Save does not ask where.
+        Some(FileAction::Create(item)) => {
+            let graph = texture_graph_core::Graph::new();
+            match item.make_folder().and_then(|()| save(&item.path, &graph)) {
+                Ok(()) => {
+                    info!("Made the material {}", item.path.display());
+                    recent.saved(DocumentKind::Material, &item.path);
+                    material.open(graph, Some(item.path));
+                }
+                Err(e) => error!("Could not make the material {}: {e}", item.path.display()),
+            }
+        }
         Some(FileAction::Open) => {
             let slot = dialog.result.clone();
             let from = dialog_directory(material.path.as_deref(), MATERIALS_DIR);

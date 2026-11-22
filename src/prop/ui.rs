@@ -248,11 +248,17 @@ impl Plugin for PropUiPlugin {
     fn build(&self, app: &mut App) {
         crate::common::keybind::ensure(app);
         crate::common::recent_files::ensure(app);
+        crate::common::library::ensure(app);
         app.init_resource::<PropPanels>()
             .init_resource::<PropFileDialog>()
             .add_systems(
                 bevy_egui::EguiPrimaryContextPass,
-                panels.run_if(in_state(AppMode::Prop)),
+                (
+                    panels,
+                    crate::prop::picker::show_prop_library.run_if(crate::common::library::showing(DocumentKind::Prop)),
+                )
+                    .chain()
+                    .run_if(in_state(AppMode::Prop)),
             )
             .add_systems(Update, prop_shortcuts.run_if(in_state(AppMode::Prop)))
             // Before the figure is stood up on entry, or another mode's choice stands a frame.
@@ -275,6 +281,7 @@ struct Shared<'w> {
     role: Option<Res<'w, NetRole>>,
     taunts: Option<Res<'w, Taunts>>,
     recent: ResMut<'w, RecentFiles>,
+    library: ResMut<'w, crate::common::library::Library>,
 }
 
 /// Bundled to keep [`panels`] inside Bevy's parameter limit.
@@ -519,7 +526,11 @@ fn panels(
         next_mode.set(mode);
     }
     let quit = requests.file == Some(FileAction::Quit);
-    let mut file = layout.discard.guard(requests.file, editor.dirty);
+    if requests.file == Some(FileAction::Library) {
+        shared.library.open(DocumentKind::Prop);
+    }
+    let asked = requests.file.or_else(|| shared.library.take(DocumentKind::Prop));
+    let mut file = layout.discard.guard(asked, editor.dirty);
     if let Some(discarded) = layout.discard.show(&ctx) {
         file = Some(discarded);
     }
@@ -3151,6 +3162,23 @@ pub fn save_or_ask(editor: &mut PropEditor, dialog: &PropFileDialog) -> Option<P
 }
 
 /// `titled` is false for a demo, so a save asks where rather than writing over the shipped file.
+/// Written straight away, so it is in the Library and a Save does not ask where.
+fn create_prop(editor: &mut PropEditor, item: &crate::common::library::NewItem, recent: &mut RecentFiles, kind: DocumentKind) {
+    let mut doc = PropDoc::new("prop.untitled");
+    if let crate::common::library::NewExtra::Prop(archetype) = item.extra {
+        doc.archetype = archetype;
+    }
+    let made = item.make_folder().and_then(|()| document::save(&item.path, &doc).map_err(|e| e.to_string()));
+    match made {
+        Ok(()) => {
+            info!("Made the prop {}", item.path.display());
+            recent.saved(kind, &item.path);
+            editor.open(doc, Some(item.path.clone()));
+        }
+        Err(e) => error!("Could not make the prop {}: {e}", item.path.display()),
+    }
+}
+
 fn open_prop(editor: &mut PropEditor, path: PathBuf, titled: bool) {
     match std::fs::read_to_string(&path) {
         Ok(text) => match document::parse(&text) {
@@ -3233,8 +3261,9 @@ pub(crate) fn handle_files(
         editor.open(PropDoc::new("prop.untitled"), None);
     }
     match &action {
-        Some(FileAction::OpenRecent(path)) => open_prop(editor, path.clone(), true),
+        Some(FileAction::OpenPath(path)) => open_prop(editor, path.clone(), true),
         Some(FileAction::Demo(demo)) => open_prop(editor, PathBuf::from(demo.path), false),
+        Some(FileAction::Create(item)) => create_prop(editor, item, recent, kind),
         _ => {}
     }
 

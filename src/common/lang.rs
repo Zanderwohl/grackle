@@ -11,12 +11,23 @@ pub const LANG_DIR: &str = "assets/default/lang";
 
 pub const FALLBACK_LANG: &str = "en-US";
 
-/// The pack list until Grackle has a real one.
+/// The pack list until Grackle has a real one, lowest priority first: the default pack, every
+/// other folder under `assets/` by name (made by the Library's New), then the user pack.
 pub fn default_packs() -> Vec<PathBuf> {
-    vec![
-        PathBuf::from("assets/default"),
-        PathBuf::from(crate::common::assets::USER_PACK),
-    ]
+    let default = PathBuf::from("assets/default");
+    let user = PathBuf::from(crate::common::assets::USER_PACK);
+    let mut others: Vec<PathBuf> = fs::read_dir(crate::common::assets::ASSET_ROOT)
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.is_dir() && *path != default && *path != user)
+        .collect();
+    others.sort();
+    let mut packs = vec![default];
+    packs.extend(others);
+    packs.push(user);
+    packs
 }
 
 static LANG: LazyLock<RwLock<toml::Value>> = LazyLock::new(|| RwLock::new(

@@ -264,6 +264,15 @@ impl BodyClips {
             std::fs::write(&path, text).map_err(|e| format!("{}: {e}", path.display()))?;
             written += 1;
         }
+        // A clip deleted or a state reverted since the last read: this pack's copy goes to the trash,
+        // or it would be read back next time.
+        for name in self.on_disk.clips.keys().filter(|name| !self.doc.clips.contains_key(*name)) {
+            let path = directory.join(format!("{name}.{CLIP_EXTENSION}"));
+            if path.is_file() {
+                crate::common::trash::trash(crate::common::recent_files::DocumentKind::Animation, &path)?;
+                written += 1;
+            }
+        }
 
         // Edited into the existing file so its comments survive.
         let path = pack.join(TAUNTS_FILE);

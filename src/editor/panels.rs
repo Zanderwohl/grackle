@@ -162,6 +162,7 @@ struct PanelMessages<'w> {
     exit: MessageWriter<'w, AppExit>,
     mode: ResMut<'w, NextState<AppMode>>,
     recent: ResMut<'w, RecentFiles>,
+    library: ResMut<'w, crate::common::library::Library>,
 }
 
 #[derive(Default)]
@@ -260,6 +261,7 @@ impl Plugin for EditorPanelPlugin {
     fn build(&self, app: &mut App) {
         crate::common::keybind::ensure(app);
         crate::common::recent_files::ensure(app);
+        crate::common::library::ensure(app);
         app
             .init_resource::<EditorPanels>()
             .init_resource::<RoundSettings>()
@@ -268,8 +270,15 @@ impl Plugin for EditorPanelPlugin {
             .init_resource::<CurrentFilePath>()
             .add_plugins(crate::editor::rounds_panel::RoundArchivePlugin)
             .add_systems(Startup, EditorPanels::set_multicam_size)
-            .add_systems(Startup, crate::common::assets::create_the_user_pack)
+            .add_systems(Startup, (crate::common::assets::create_the_user_pack, crate::common::trash::empty_old_trash))
             .add_systems(EguiPrimaryContextPass, EditorPanels::ui.run_if(in_state(AppMode::Editor)))
+            .add_systems(
+                EguiPrimaryContextPass,
+                crate::common::library::show_map_library
+                    .after(EditorPanels::ui)
+                    .run_if(in_state(AppMode::Editor))
+                    .run_if(crate::common::library::showing(DocumentKind::Map)),
+            )
             // Before the panel, so a chord is answered this frame.
             .add_systems(Update, file_shortcuts.run_if(in_state(AppMode::Editor)).run_if(crate::common::net::has_authority))
         ;
@@ -376,7 +385,8 @@ impl EditorPanels {
 
         // A client's map is the server's: a request queued before it joined (onboarding asks for
         // the demo scene) would stand a map over it that the server never corrects.
-        let mut pending_file_op: Option<FileAction> = current_file.requested_op.take().filter(|_| net_role.is_authority());
+        let mut pending_file_op: Option<FileAction> =
+            current_file.requested_op.take().or_else(|| messages.library.take(DocumentKind::Map)).filter(|_| net_role.is_authority());
         let mut wanted_mode: Option<AppMode> = None;
         let mut pending_edit: Option<EditAction> = None;
         // Read before the viewer borrows the timeline for the rest of the frame.
@@ -583,7 +593,7 @@ impl EditorPanels {
                         Err(e) => error!("Could not open the template for a new map: {e}"),
                     }
                 }
-                FileAction::OpenRecent(path) => match save::load(&path) {
+                FileAction::OpenPath(path) => match save::load(&path) {
                     Ok(loaded) => {
                         info!("Opened the map {}", path.display());
                         loaded_blueprint = Some(loaded);
@@ -603,6 +613,27 @@ impl EditorPanels {
                     None => ask_where_to_save(&current_file),
                 },
                 FileAction::SaveAs => ask_where_to_save(&current_file),
+                FileAction::Library => messages.library.open(DocumentKind::Map),
+                FileAction::Create(item) => {
+                    let template = PathBuf::from(format!("assets/default/{BLUEPRINTS_DIR}/new.{MAP_BLUEPRINT_EXTENSION}"));
+                    let made = save::load(&template).and_then(|mut loaded| {
+                        if let crate::common::library::NewExtra::Map(mode) = item.extra {
+                            loaded.metadata.game_mode = mode;
+                        }
+                        item.make_folder()?;
+                        save::save(&item.path, &loaded.timeline, &loaded.metadata)?;
+                        Ok(loaded)
+                    });
+                    match made {
+                        Ok(loaded) => {
+                            info!("Made the map {}", item.path.display());
+                            messages.recent.saved(DocumentKind::Map, &item.path);
+                            loaded_blueprint = Some(loaded);
+                            current_file.path = Some(item.path);
+                        }
+                        Err(e) => error!("Could not make the map {}: {e}", item.path.display()),
+                    }
+                }
                 // No unsaved-changes prompt yet.
                 FileAction::Quit => {
                     info!("Quitting from the File menu");

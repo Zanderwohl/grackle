@@ -18,6 +18,8 @@ use crate::common::assets::{default_packs, Assets};
 use crate::common::class::Class;
 use crate::common::edit_menu::{edit_menu, EditAction, EditAvailability};
 use crate::common::file_menu::{dialog_directory, file_menu, DocumentKind, FileAction};
+use crate::common::library::{pack_name, Library, NewDialog, NewOutcome};
+use crate::common::list_row::{begin_rename, confirm_delete, renamable_row, Leading, RowEvent};
 use crate::common::recent_files::RecentFiles;
 use crate::common::net::NetRole;
 use crate::common::shortcuts::chords;
@@ -34,11 +36,17 @@ impl Plugin for WeaponUiPlugin {
     fn build(&self, app: &mut App) {
         crate::common::keybind::ensure(app);
         crate::common::recent_files::ensure(app);
+        crate::common::library::ensure(app);
         app.init_resource::<WeaponPanels>()
             .init_resource::<WeaponFileDialog>()
             // A prop saved in another mode is read again.
             .add_systems(OnEnter(AppMode::Weapon), |mut panels: ResMut<WeaponPanels>| panels.browser.model = None)
-            .add_systems(bevy_egui::EguiPrimaryContextPass, panels.run_if(in_state(AppMode::Weapon)))
+            .add_systems(
+                bevy_egui::EguiPrimaryContextPass,
+                (panels, show_weapon_library.run_if(crate::common::library::showing(DocumentKind::Weapon)))
+                    .chain()
+                    .run_if(in_state(AppMode::Weapon)),
+            )
             .add_systems(Update, weapon_shortcuts.run_if(in_state(AppMode::Weapon)));
     }
 }
@@ -74,21 +82,13 @@ enum WeaponTab {
     Weapon,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Naming {
-    New,
-    Duplicate,
-    Rename,
-}
-
 /// What the browser is in the middle of. View state: not saved, not undone.
 #[derive(Default)]
 struct Browser {
-    /// Index into [`WeaponEditor::packs`]; `None` is the last, the user pack.
-    pack: Option<usize>,
-    naming: Option<(Naming, String)>,
+    new: Option<NewDialog>,
     rename_loadouts: bool,
-    deleting: bool,
+    /// Asking whether to delete this weapon.
+    deleting: Option<usize>,
     /// The selected weapon's model as its file held it, read when the name changes or the mode
     /// opens. Only for the summary: opening it reads the file again.
     model: Option<(String, Option<(PathBuf, PropDoc)>)>,
@@ -140,6 +140,7 @@ fn panels(
     role: Option<Res<NetRole>>,
     mut exit: MessageWriter<AppExit>,
     mut recent: ResMut<RecentFiles>,
+    mut library: ResMut<Library>,
 ) {
     let Some(ctx) = previews.ctx().cloned() else { return };
     let mut window_ui = Ui::new(
@@ -169,7 +170,7 @@ fn panels(
     let registry = registry.read();
     let packs = editor.packs();
     // Only asked while a rename or delete is open.
-    let asking = panels.browser.deleting || matches!(panels.browser.naming, Some((Naming::Rename, _)));
+    let asking = panels.browser.deleting.is_some() || crate::common::list_row::any_rename(&ctx);
     let pickups: Vec<(String, String)> = match asking {
         true => timeline
             .features_map()
@@ -224,6 +225,11 @@ fn panels(
     if let Some(mode) = requests.mode.or(open_mode) {
         next_mode.set(mode);
     }
+    if requests.file == Some(FileAction::Library) {
+        library.open(DocumentKind::Weapon);
+    } else if requests.file.is_none() {
+        requests.file = library.take(DocumentKind::Weapon);
+    }
     if requests.file == Some(FileAction::Quit) {
         info!("Quitting from the File menu");
         exit.write(AppExit::Success);
@@ -255,12 +261,15 @@ fn handle_files(
     let from = || selected.as_ref().and_then(|(pack, key)| dialog_directory(Some(&weapon_path(pack, key)), WEAPONS_DIR));
     let filter = get!("weapon_editor.file_filter");
     match action {
-        // A weapon's key is its file's name, so a new one is asked for its key in the browser.
-        Some(FileAction::New) => {
-            browser.naming = Some((Naming::New, String::new()));
-            browser.deleting = false;
+        // A weapon's key is its file's name, so a new one is asked for its key and pack.
+        Some(FileAction::New) => browser.new = Some(NewDialog::new(DocumentKind::Weapon)),
+        Some(FileAction::Create(item)) => {
+            if let Err(e) = item.make_folder() {
+                error!("Making a weapon: {e}");
+            }
+            editor.new_weapon(item.pack, &item.name);
         }
-        Some(FileAction::OpenRecent(path)) => open_file(editor, assets, &path),
+        Some(FileAction::OpenPath(path)) => open_file(editor, assets, &path),
         Some(FileAction::Demo(demo)) => open_file(editor, assets, Path::new(demo.path)),
         Some(FileAction::Save) => save_the_draft(editor, assets, published),
         Some(FileAction::SaveAs) => {
@@ -391,133 +400,77 @@ impl TabViewer for Tabs<'_, '_, '_> {
     }
 }
 
-fn pack_name(pack: &Path) -> String {
-    pack.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default()
+/// The rule a weapon's key has beyond its own pack: unique across every pack, ids included.
+fn taken_elsewhere(editor: &WeaponEditor, key: &str) -> Option<String> {
+    (editor.key_problem(key, None) == Some(KeyProblem::Taken)).then(|| get!("weapon_editor.key.taken"))
+}
+
+/// The Library for weapons, pictured by their models' thumbnails.
+fn show_weapon_library(
+    mut previews: PropPreviews,
+    mut library: ResMut<Library>,
+    editor: Res<WeaponEditor>,
+    assets: Res<Assets>,
+    mut models: Local<(u64, std::collections::HashMap<PathBuf, Option<String>>)>,
+) {
+    if models.0 != library.opened {
+        *models = (library.opened, default());
+    }
+    for entry in library.entries() {
+        models.1.entry(entry.path.clone()).or_insert_with(|| {
+            read_pack_weapon(&assets, &entry.pack, &entry.name).and_then(|weapon| weapon.entry.model)
+        });
+    }
+    previews.want_pictures(models.1.values().flatten().map(String::as_str));
+    let Some(ctx) = previews.ctx().cloned() else { return };
+    let models = &models.1;
+    library.show(
+        &ctx,
+        &mut |entry| models.get(&entry.path).cloned().flatten().and_then(|model| previews.picture(&model)),
+        &|key| taken_elsewhere(&editor, key),
+    );
 }
 
 impl Tabs<'_, '_, '_> {
-    fn target_pack(&self) -> PathBuf {
-        let last = self.packs.len().saturating_sub(1);
-        self.packs[self.browser.pack.unwrap_or(last).min(last)].clone()
-    }
-
     fn browser_ui(&mut self, ui: &mut Ui) {
-        let selected = self.editor.selected.filter(|index| *index < self.editor.weapons.len());
-        ui.horizontal_wrapped(|ui| {
-            if ui.button(get!("weapon_editor.browser.new")).clicked() {
-                self.browser.naming = Some((Naming::New, String::new()));
-                self.browser.deleting = false;
-            }
-            ui.add_enabled_ui(selected.is_some(), |ui| {
-                if ui.button(get!("weapon_editor.browser.duplicate")).clicked() {
-                    self.browser.naming = Some((Naming::Duplicate, String::new()));
-                    self.browser.deleting = false;
-                }
-                if ui.button(get!("weapon_editor.browser.override")).clicked()
-                    && let Some(index) = selected
-                    && self.editor.override_in(index, self.target_pack()).is_none()
-                {
-                    warn!(
-                        "{} cannot be overridden in {}",
-                        self.editor.weapons[index].key,
-                        pack_name(&self.target_pack())
-                    );
-                }
-                if ui.button(get!("weapon_editor.browser.rename")).clicked()
-                    && let Some(index) = selected
-                {
-                    self.browser.naming = Some((Naming::Rename, self.editor.weapons[index].key.clone()));
-                    self.browser.deleting = false;
-                }
-                if ui.button(get!("weapon_editor.browser.delete")).clicked() {
-                    self.browser.deleting = true;
-                    self.browser.naming = None;
-                }
-            });
-        });
-        ui.horizontal(|ui| {
-            ui.label(get!("weapon_editor.browser.pack"));
-            let target = pack_name(&self.target_pack());
-            egui::ComboBox::from_id_salt("weapon_target_pack").selected_text(target).show_ui(ui, |ui| {
-                for (index, pack) in self.packs.iter().enumerate() {
-                    let chosen = self.browser.pack.unwrap_or(self.packs.len() - 1) == index;
-                    if ui.selectable_label(chosen, pack_name(pack)).clicked() {
-                        self.browser.pack = Some(index);
-                    }
-                }
-            });
-        });
-
-        if let Some(naming) = self.browser.naming.clone() {
-            self.naming_ui(ui, naming, selected);
-        } else if self.browser.deleting
-            && let Some(index) = selected
-        {
-            self.delete_ui(ui, index);
+        if ui.button(get!("library.new.button")).clicked() {
+            self.browser.new = Some(NewDialog::new(DocumentKind::Weapon));
         }
         ui.separator();
         egui::ScrollArea::vertical().show(ui, |ui| self.list_ui(ui));
-    }
 
-    fn naming_ui(&mut self, ui: &mut Ui, (naming, mut text): (Naming, String), selected: Option<usize>) {
-        let except = if naming == Naming::Rename { selected } else { None };
-        let problem = self.editor.key_problem(&text, except);
-        let mut done = false;
-        let mut canceled = false;
-        ui.horizontal(|ui| {
-            ui.label(get!("weapon_editor.fields.key"));
-            let field = ui.text_edit_singleline(&mut text);
-            done = field.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
-            done |= ui.add_enabled(problem.is_none(), egui::Button::new(get!("weapon_editor.browser.ok"))).clicked();
-            canceled = ui.button(get!("weapon_editor.browser.cancel")).clicked();
-        });
-        if let Some(problem) = problem.filter(|_| !text.is_empty()) {
-            let why = match problem {
-                KeyProblem::Malformed => get!("weapon_editor.key.malformed"),
-                KeyProblem::Taken => get!("weapon_editor.key.taken"),
-            };
-            ui.colored_label(ui.visuals().error_fg_color, why);
-        }
-        if naming == Naming::Rename
-            && let Some(index) = selected
-        {
-            ui.checkbox(&mut self.browser.rename_loadouts, get!("weapon_editor.browser.rename_loadouts"));
-            self.dependants_ui(ui, index);
-        }
-        if canceled {
-            self.browser.naming = None;
-            return;
-        }
-        if done && problem.is_none() {
-            let pack = self.target_pack();
-            match (naming, selected) {
-                (Naming::New, _) => {
-                    self.editor.new_weapon(pack, &text);
+        let ctx = ui.ctx().clone();
+        if let Some(dialog) = self.browser.new.as_mut() {
+            let editor = &*self.editor;
+            match dialog.show(&ctx, &|key| taken_elsewhere(editor, key)) {
+                NewOutcome::Asking => {}
+                NewOutcome::Canceled => self.browser.new = None,
+                NewOutcome::Create(item) => {
+                    // A new pack has no folder yet, and the draft's packs are the folders on disk.
+                    if let Err(e) = item.make_folder() {
+                        error!("Making a weapon: {e}");
+                    }
+                    self.editor.new_weapon(item.pack, &item.name);
+                    self.browser.new = None;
                 }
-                (Naming::Duplicate, Some(index)) => {
-                    self.editor.duplicate(index, pack, &text);
-                }
-                (Naming::Rename, Some(index)) => self.editor.rename(index, &text, self.browser.rename_loadouts),
-                _ => {}
             }
-            self.browser.naming = None;
-            return;
         }
-        self.browser.naming = Some((naming, text));
-    }
-
-    fn delete_ui(&mut self, ui: &mut Ui, index: usize) {
-        self.dependants_ui(ui, index);
-        ui.horizontal(|ui| {
+        if let Some(index) = self.browser.deleting.filter(|index| *index < self.editor.weapons.len()) {
             let key = self.editor.weapons[index].key.clone();
-            if ui.button(get!("weapon_editor.browser.confirm_delete", "key", key)).clicked() {
-                self.editor.delete(index);
-                self.browser.deleting = false;
+            let id = Id::new("weapon_confirm_delete");
+            let more = |ui: &mut Ui| {
+                self.dependants_ui(ui, index);
+                ui.weak(get!("library.delete.to_trash_on_save"));
+            };
+            match confirm_delete(&ctx, id, &key, more) {
+                Some(true) => {
+                    self.editor.delete(index);
+                    self.browser.deleting = None;
+                }
+                Some(false) => self.browser.deleting = None,
+                None => {}
             }
-            if ui.button(get!("weapon_editor.browser.cancel")).clicked() {
-                self.browser.deleting = false;
-            }
-        });
+        }
     }
 
     /// What names the weapon by key: every pack's loadouts, and the open map's pickups. Blueprints
@@ -564,6 +517,10 @@ impl Tabs<'_, '_, '_> {
                 ui.label(egui::RichText::new(bucket.to_string()).strong());
             }
             for index in in_bucket {
+                // A row deleted or renamed above changes the indices; the rest are drawn next frame.
+                if index >= self.editor.weapons.len() {
+                    return;
+                }
                 self.row_ui(ui, index);
             }
         }
@@ -571,6 +528,7 @@ impl Tabs<'_, '_, '_> {
 
     fn row_ui(&mut self, ui: &mut Ui, index: usize) {
         let weapon = &self.editor.weapons[index];
+        let id = Id::new(("weapon_row", &weapon.pack, &weapon.key));
         let picture = weapon.entry.model.as_deref().and_then(|model| self.previews.picture(model));
         let broken = self.editor.problems.iter().any(|(at, _)| *at == index);
         let mut name =
@@ -579,25 +537,73 @@ impl Tabs<'_, '_, '_> {
             name = name.color(ui.visuals().warn_fg_color);
         }
         let selected = self.editor.selected == Some(index);
-        let clicked = ui
-            .horizontal(|ui| {
-                match picture {
-                    Some(texture) => {
-                        ui.image((texture, egui::vec2(THUMBNAIL, THUMBNAIL)));
-                    }
-                    None => {
-                        ui.allocate_exact_size(egui::vec2(THUMBNAIL, THUMBNAIL), egui::Sense::hover());
+        let editor = &*self.editor;
+        let problem = |key: &str| {
+            editor.key_problem(key, Some(index)).map(|problem| match problem {
+                KeyProblem::Malformed => get!("weapon_editor.key.malformed"),
+                KeyProblem::Taken => get!("weapon_editor.key.taken"),
+            })
+        };
+        let leading = Some(Leading { picture, size: THUMBNAIL });
+        match renamable_row(ui, id, selected, name, leading, problem) {
+            RowEvent::Row(response) => {
+                if response.clicked() {
+                    self.editor.selected = Some(index);
+                }
+                response.context_menu(|ui| self.row_menu(ui, index, id));
+            }
+            RowEvent::Renaming => {
+                ui.indent(id, |ui| {
+                    ui.checkbox(&mut self.browser.rename_loadouts, get!("weapon_editor.browser.rename_loadouts"));
+                    self.dependants_ui(ui, index);
+                });
+            }
+            RowEvent::Renamed(key) => {
+                if key != self.editor.weapons[index].key {
+                    self.editor.rename(index, &key, self.browser.rename_loadouts);
+                }
+            }
+            RowEvent::PutBack => {}
+        }
+    }
+
+    fn row_menu(&mut self, ui: &mut Ui, index: usize, id: Id) {
+        let weapon = self.editor.weapons[index].clone();
+        if ui.button(get!("weapon_editor.browser.rename")).clicked() {
+            self.editor.selected = Some(index);
+            begin_rename(ui.ctx(), id, &weapon.key);
+            ui.close();
+        }
+        if ui.button(get!("weapon_editor.browser.duplicate")).clicked() {
+            let key = (2..)
+                .map(|n| if n == 2 { format!("{}_copy", weapon.key) } else { format!("{}_copy{n}", weapon.key) })
+                .find(|key| self.editor.key_problem(key, None).is_none())
+                .unwrap_or_default();
+            let at = self.editor.duplicate(index, weapon.pack.clone(), &key);
+            self.editor.selected = Some(at);
+            begin_rename(ui.ctx(), Id::new(("weapon_row", &weapon.pack, &key)), &key);
+            ui.close();
+        }
+        // Only a later pack can override.
+        let rank = |pack: &PathBuf| self.packs.iter().position(|of| of == pack);
+        let later: Vec<PathBuf> = self.packs.iter().filter(|pack| rank(pack) > rank(&weapon.pack)).cloned().collect();
+        ui.add_enabled_ui(!later.is_empty(), |ui| {
+            ui.menu_button(get!("weapon_editor.browser.override"), |ui| {
+                for pack in later {
+                    if ui.button(pack_name(&pack)).clicked() {
+                        match self.editor.override_in(index, pack.clone()) {
+                            Some(at) => self.editor.selected = Some(at),
+                            None => warn!("{} cannot be overridden in {}", weapon.key, pack_name(&pack)),
+                        }
+                        ui.close();
                     }
                 }
-                ui.selectable_label(selected, name).clicked()
-            })
-            .inner;
-        if clicked {
-            self.editor.selected = Some(index);
-            self.browser.deleting = false;
-            if self.browser.naming.as_ref().is_some_and(|(naming, _)| *naming != Naming::New) {
-                self.browser.naming = None;
-            }
+            });
+        });
+        ui.separator();
+        if ui.button(get!("weapon_editor.browser.delete")).clicked() {
+            self.browser.deleting = Some(index);
+            ui.close();
         }
     }
 

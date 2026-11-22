@@ -270,7 +270,7 @@ shape is a new producer and not a rewrite of every consumer — see
 | `src/bin/` | `ensure_lang` (fills missing translation keys), `new_map_template` (writes the new-map, demo-scene, arena, cloister, waterworks and showcase blueprints), `map_stats` (bakes a blueprint's nav graph headless and prints its statistics and top-down charts of each field), `decal_images` (rasterizes the default pack's decal SVGs), `bake_body_clips` (seeds a pack's body animations from the pose functions they replace, and writes the clips `seed::WRITTEN` generates key by key), `default_materials` (writes the default pack's materials), `crate_drop`. |
 | `assets/default/` | The default pack: `lang/`, `blueprints/`, `servers/` (example `--server-config` files), `images/backgrounds/title/` (main-menu backgrounds). |
 | `assets/user/` | The user pack: gitignored, made at startup with `blueprints/`, `props/` and `images/backgrounds/title/`, last in `default_packs()` so it overrides the shipped one. A new map or prop is saved here unless the document already has a folder. Also holds `settings.toml`, the player settings, `shortcuts.toml`, `server.toml` (the Round tab) and `recent.toml` (the File menu's Recent lists). |
-| `cache/` | Gitignored, derived from the packs and maps: `thumbnail/props/{name}.png`, `nav/{hash}.bin`, `lightmap/{hash}.bin`, `postcards/{hash}/*.png`, `rounds/{map}/*.jsonl`. Safe to delete. |
+| `cache/` | Gitignored, derived from the packs and maps: `thumbnail/props/{name}.png`, `nav/{hash}.bin`, `lightmap/{hash}.bin`, `postcards/{hash}/*.png`, `rounds/{map}/*.jsonl`, `trash/{kind}/` (deleted pack files, kept 30 days). Safe to delete, though the trash is the only copy of what is in it. |
 | `logs/` | Gitignored: the log's file drain, one file per launch, and the Bakes panel's ECS dumps (`grackle_ecsdump_{stamp}.txt`, whose path the panel shows as a link that selects the file in the file manager), all deleted after the days set in Settings → Developer. |
 | `screenshots/` | Gitignored, made at startup: `F12` saves the window as drawn, HUD and egui included, as `{date}_{time}_{millisecond}.png` ([`src/common/screenshot.rs`](src/common/screenshot.rs)). |
 
@@ -597,8 +597,8 @@ carried into Play with the cursor grabbed could not be closed and would keep
 every action quiet.
 
 **Every authoring mode has the same File menu**
-([`src/common/file_menu.rs`](src/common/file_menu.rs)): New, Open, Save, Save As…, then a
-**Recent** submenu and a **Demo** submenu named for what the mode edits (Demo Maps, Demo Props,
+([`src/common/file_menu.rs`](src/common/file_menu.rs)): New, Open, Save, Save As…, then
+**Library…**, then a **Recent** submenu and a **Demo** submenu named for what the mode edits (Demo Maps, Demo Props,
 …), then Quit. Each mode answers every `FileAction`. **Recent** lists, per `DocumentKind`, the
 files that mode last saved, newest first, ten at most, in `assets/user/recent.toml`
 ([`src/common/recent_files.rs`](src/common/recent_files.rs)) — a file joins when it is saved,
@@ -609,6 +609,34 @@ demo over unsaved changes asks first (`DiscardQuestion`; the lang editor asks it
 file untitled, so a save asks where (`DocumentKind::demos`): the demo scene and the material
 showcase for maps, the rocket launcher, health pack and top hat for props, nothing yet for the
 rest, whose submenu is grayed out.
+
+**The Library** ([`src/common/library.rs`](src/common/library.rs)) is every file of the mode's
+kind in every pack (`assets/*/{folder}`, read again each time it opens) as a grid of previews in
+an `egui::Modal`, for maps, props, weapons and materials (`DocumentKind::has_library`; grayed out
+in the animation and lang editors, which list their files beside what they edit). A click opens
+the file as `FileAction::OpenPath`, which Recent sends too. It is drawn by a system of each mode's
+own (`show_map_library`, `show_prop_library`, …), so the mode's panel system, often at Bevy's
+parameter limit, only opens it and takes what was chosen (`Library::take`). Each passes its
+kind's preview: props their thumbnails, weapons their models', materials their color maps, maps
+none yet, drawn as the white "[No preview]" tile. The tile is
+[`preview_grid`](src/common/preview_grid.rs)'s, which the pickers draw too. Its **New…** button is
+the `NewDialog`, also asked by the weapon and lang editors' own New buttons and the weapon
+editor's File → New: a name, a pack (User, Default, the other folders under `assets/`, then New…
+naming a new pack), an archetype for a prop and a game mode for a map. A name taken in the chosen
+pack, or a pack name taken, is refused as it is typed. It answers `FileAction::Create`, which
+writes the file at once (a weapon joins the draft) and opens it. **Every folder under `assets/`
+is a pack**: `default_packs()` reads them, the default pack first, the user pack last and the
+rest by name between.
+
+**A listing's rows are [`list_row`](src/common/list_row.rs)s** — the animation editor's clips and
+taunts, the weapon editor's weapons, the lang editor's files: as wide as the list, picked by a
+click, with Rename, Duplicate and Delete… on the right-click menu. Rename turns the row into a
+field (`begin_rename`): Enter or leaving it commits, Escape puts it back, and a name the caller's
+check refuses keeps the field up on Enter. Delete asks first (`confirm_delete`). **A deleted file
+goes to `cache/trash/{kind}/`** ([`src/common/trash.rs`](src/common/trash.rs)), named by when it
+went, and is emptied at startup once it has been there 30 days: a lang file at once, a weapon or
+a body clip when the deletion is saved. A prop's clips and the taunts are entries in a file, so
+deleting one is an undo step only.
 
 **Every authoring mode has the same Edit menu**, just right of File:
 [`src/common/edit_menu.rs`](src/common/edit_menu.rs), with Undo, Redo and
@@ -1674,8 +1702,8 @@ The plan and what is left is
   weapon deletes its file, and a renamed one is written from its old file's
   text, so its comments carry over, before the old file goes (`Rename`). A file
   changed on disk since it was read is refused.
-- **File offers New, Open, Save and Save As**, and Recent, whose files open as Open's do. New asks for a key in the
-  browser, as its New button does; Open reads any `{pack}/weapons/{key}.toml`
+- **File offers New, Open, Save and Save As**, and Recent and the Library, whose files open as Open's do. New asks
+  for a key and a pack (the `NewDialog`), as its New button does; Open reads any `{pack}/weapons/{key}.toml`
   into the draft and selects it; Save writes every changed file; Save As writes
   only the selected weapon, as edited, to the chosen file — its pack and key
   read off the path — and puts the weapon it was back to what its own file
@@ -1886,7 +1914,7 @@ GPU path draws them ([`src/material/library.rs`](src/material/library.rs),
   `publish_choices` leaves the choices in egui's memory, and it reads the
   directories and bakes previews only while a picker is open. The widget is
   [`src/common/picker.rs`](src/common/picker.rs), one `PickerKind` per thing
-  picked: a `Prop`'s model ([`src/prop/picker.rs`](src/prop/picker.rs), every
+  picked, its tiles the Library's (`preview_grid`): a `Prop`'s model ([`src/prop/picker.rs`](src/prop/picker.rs), every
   pack's `props/` as thumbnails, badged with the archetype) and a weapon
   pickup's weapon (pictured by its model) use it too.
 - **Not sent to clients.** Materials are pack content like props, but nothing

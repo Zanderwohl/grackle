@@ -975,7 +975,8 @@ built_in = "Built-in pose"
 animate = "Animate"
 rename = "Rename"
 duplicate = "Duplicate"
-delete = "Delete"
+delete = "Delete…"
+taken = "Something here is already called \"{ name }\""
 revert = "Revert to built-in"
 blend = "Blend by heading"
 variant = "Heading { heading }"
@@ -1157,6 +1158,7 @@ new = "New"
 save = "Save"
 save_as = "Save As…"
 open = "Open"
+library = "Library…"
 recent = "Recent"
 demo_maps = "Demo Maps"
 demo_props = "Demo Props"
@@ -1211,7 +1213,7 @@ remove_item = "Remove this entry"
 no_keys = "No keys."
 
 [lang_editor.browser]
-open = "Open"
+rename = "Rename"
 duplicate = "Duplicate…"
 delete = "Delete…"
 empty = "No lang files."
@@ -1238,7 +1240,7 @@ code = "Language code"
 pack = "Pack"
 ok = "OK"
 cancel = "Cancel"
-delete = "Delete { file } from disk?"
+delete = "Move { file } to cache/trash? It is kept there for 30 days."
 unsaved = "Unsaved changes"
 discard = "Open { file } and discard the changes to this file?"
 
@@ -1666,6 +1668,7 @@ loft_start_missing = "starts a profile at a point that is not there"
 
 [editor.picker]
 search = "Search"
+no_preview = "[No preview]"
 
 [editor.material_picker]
 plain = "Default"
@@ -1735,16 +1738,11 @@ weapons = "Weapons"
 weapon = "Weapon"
 
 [weapon_editor.browser]
-new = "New"
 duplicate = "Duplicate"
 override = "Override in pack"
 rename = "Rename"
-delete = "Delete"
-pack = "Pack"
-ok = "OK"
-cancel = "Cancel"
+delete = "Delete…"
 rename_loadouts = "Rename in loadouts too"
-confirm_delete = "Delete { key }"
 
 [weapon_editor.key]
 malformed = "Lowercase letters, digits and underscores only"
@@ -2093,3 +2091,53 @@ behead = "Headshot self"
 nav_overlay = "Nav overlay"
 bot_routes = "Bot routes and senses"
 safe_zone = "Safe zone outlines"
+
+# The File menu's Library: every file of a kind in every pack, and the New dialog it opens.
+[library]
+close = "Close"
+empty = "Nothing here."
+
+[library.title]
+map = "Map Library"
+prop = "Prop Library"
+animation = "Animation Library"
+material = "Material Library"
+weapon = "Weapon Library"
+lang = "Lang File Library"
+
+# Lower case, for the middle of a sentence.
+[library.kind]
+map = "map"
+prop = "prop"
+animation = "animation"
+material = "material"
+weapon = "weapon"
+lang = "lang file"
+
+[library.pack]
+user = "User"
+default = "Default"
+new = "New…"
+
+[library.new]
+button = "New…"
+heading = "New { type }"
+name = "Name"
+pack = "Pack"
+pack_name = "Pack name"
+archetype = "Archetype"
+game_mode = "Game mode"
+create = "Create"
+cancel = "Cancel"
+no_name = "Needs a name"
+no_pack_name = "Needs a pack name"
+bad_name = "Letters, digits, spaces, underscores and hyphens only"
+pack_exists = "A pack called \"{ pack }\" already exists!"
+exists = "A { type } called \"{ name }\" already exists in \"{ pack }\"!"
+
+[library.delete]
+heading = "Delete"
+body = "Delete \"{ name }\"?"
+confirm = "Delete"
+cancel = "Cancel"
+to_trash_on_save = "Saving moves its file to cache/trash, where it is kept for 30 days."

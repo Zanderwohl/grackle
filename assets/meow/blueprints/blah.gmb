@@ -1,0 +1,147 @@
+Blueprint(
+    metadata: Metadata(
+        display_name: None,
+        authors: [
+            "anonymous",
+        ],
+        game_mode: "koth",
+        movement: Movement(
+            sprint: Always,
+            gravity: 20.0,
+        ),
+        palette: Palette(
+            roles: {},
+        ),
+        sky: Day,
+        sun: SunPosition(
+            altitude: 50.0,
+            azimuth: 135.0,
+        ),
+        brightness: Brightness(
+            ambient: 100.0,
+            sun: 1500.0,
+            sky: 600.0,
+        ),
+        music: [],
+        postcards: (None, None, None),
+    ),
+    next_id: 5,
+    features: [
+        Feature(
+            id: FeatureId(
+                _id: 0,
+            ),
+            name: Some("Map Origin"),
+            object: {
+                "global_point": GlobalPoint(
+                    location: PointRef(
+                        reference: None,
+                        point_key: "",
+                        x: Absolute(0.0),
+                        y: Absolute(0.0),
+                        z: Absolute(0.0),
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 1,
+            ),
+            name: Some("Starter Room"),
+            object: {
+                "editor_room": EditorRoom(
+                    min: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 0,
+                        )),
+                        point_key: "",
+                        x: Relative(0.0),
+                        y: Relative(0.0),
+                        z: Relative(0.0),
+                    ),
+                    max: PointRef(
+                        reference: None,
+                        point_key: "",
+                        x: Absolute(16.0),
+                        y: Absolute(4.0),
+                        z: Absolute(16.0),
+                    ),
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 2,
+            ),
+            name: Some("Spawn Point"),
+            object: {
+                "spawn_point": SpawnPoint(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 1,
+                        )),
+                        point_key: "bottom_plane_center",
+                        x: Relative(0.0),
+                        y: Relative(0.0),
+                        z: Relative(0.0),
+                    ),
+                    yaw: 0.0,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 3,
+            ),
+            name: Some("Starter Light"),
+            object: {
+                "grackle_point_light": GracklePointLight(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 1,
+                        )),
+                        point_key: "top_plane_center",
+                        x: Relative(0.0),
+                        y: Relative(-0.5),
+                        z: Relative(0.0),
+                    ),
+                    intensity: 1000000.0,
+                    radius: 0.1,
+                    range: 20.0,
+                ),
+            },
+        ),
+        Feature(
+            id: FeatureId(
+                _id: 4,
+            ),
+            name: Some("Overlook Camera"),
+            object: {
+                "spectator_camera": SpectatorCamera(
+                    location: PointRef(
+                        reference: Some(FeatureId(
+                            _id: 1,
+                        )),
+                        point_key: "top_plane_center",
+                        x: Relative(7.0),
+                        y: Relative(-0.5),
+                        z: Relative(7.0),
+                    ),
+                    rotation: Vec3(-0.33983693, 0.7853982, 0.0),
+                    fov: 90.0,
+                    order: 1000,
+                    viewers: Viewers(
+                        unassigned: true,
+                        free_for_all: true,
+                        red: true,
+                        blue: true,
+                        yellow: true,
+                        green: true,
+                        local_team: true,
+                    ),
+                ),
+            },
+        ),
+    ],
+)
