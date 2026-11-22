@@ -23,7 +23,7 @@ use crate::prop::sketch_edit::sketch_of_mut;
 pub enum Kind {
     /// A standing body, or a face standing in for one.
     Body,
-    /// One or more regions, all of one sketch.
+    /// One or more regions, all of one sketch, or one flat face.
     Regions,
     /// Two or more regions, each of a sketch of its own: a loft's profiles.
     Profiles,
@@ -81,6 +81,8 @@ pub enum Value {
     /// `regions` is empty when read off a feature, where only the sketch is
     /// needed.
     Regions { sketch: PropFeatureId, regions: Vec<Region> },
+    /// Given no plane feature, unlike a face picked for a plane.
+    ProfileFace(GeomRef),
     /// One region per sketch, in pick order.
     Profiles(Vec<(PropFeatureId, Region)>),
     Point(PointRef),
@@ -99,6 +101,7 @@ pub enum Value {
 pub enum Resolved {
     Body(PropFeatureId),
     Regions { sketch: PropFeatureId, entries: Vec<SketchId> },
+    ProfileFace(GeomRef),
     Profiles(Vec<(PropFeatureId, SketchId)>),
     Point(PointRef),
     Bound(AnyRef),
@@ -129,7 +132,8 @@ impl Kind {
     pub fn open(self, has: &[Pick]) -> bool {
         match self {
             // Whether one more is taken is the construction's question.
-            Kind::Regions | Kind::Profiles | Kind::Path | Kind::Construct(_) => true,
+            Kind::Regions => !has.iter().any(|pick| profile_face(pick).is_some()),
+            Kind::Profiles | Kind::Path | Kind::Construct(_) => true,
             Kind::Body | Kind::Point | Kind::Bound | Kind::Curve | Kind::Direction | Kind::Plane => has.is_empty(),
         }
     }
@@ -139,6 +143,9 @@ impl Kind {
         match self {
             Kind::Body => pick.body(evaluated).is_some(),
             Kind::Regions => {
+                if let Some(face) = profile_face(pick) {
+                    return has.is_empty() && flat_face(face, evaluated);
+                }
                 let Pick::Region { sketch, region } = pick else { return false };
                 let encloses = evaluated.sketch(*sketch).is_some_and(|placed| placed.arrangement.find(region).is_some());
                 let same_sketch = has.iter().all(|other| matches!(other, Pick::Region { sketch: s, .. } if s == sketch));
@@ -185,7 +192,8 @@ impl Kind {
     /// to be told it is done.
     pub fn open_ended(self, has: &[Pick]) -> bool {
         match self {
-            Kind::Regions | Kind::Profiles | Kind::Path => true,
+            Kind::Regions => !has.iter().any(|pick| profile_face(pick).is_some()),
+            Kind::Profiles | Kind::Path => true,
             Kind::Construct(construct) => construct.extendable(has),
             _ => false,
         }
@@ -196,6 +204,9 @@ impl Kind {
         Some(match self {
             Kind::Body => Value::Body(first.body(evaluated)?),
             Kind::Regions => {
+                if let Some(face) = profile_face(first) {
+                    return Some(Value::ProfileFace(face.clone()));
+                }
                 let Pick::Region { sketch, .. } = first else { return None };
                 let placed = evaluated.sketch(*sketch)?;
                 let regions = has
@@ -254,6 +265,7 @@ impl Value {
                     .unwrap_or_default();
                 Resolved::Regions { sketch, entries }
             }
+            Value::ProfileFace(face) => Resolved::ProfileFace(face),
             Value::Profiles(profiles) => Resolved::Profiles(
                 profiles
                     .into_iter()
@@ -280,6 +292,7 @@ impl Value {
         Some(match (field.slot.kind, field.refs.first()?) {
             (Kind::Body, AnyRef::Body { body }) => Value::Body(*body),
             (Kind::Regions, AnyRef::Regions { sketch, .. }) => Value::Regions { sketch: *sketch, regions: vec![] },
+            (Kind::Regions, AnyRef::Face { face }) => Value::ProfileFace(face.clone()),
             (Kind::Point, AnyRef::Point(point)) => Value::Point(point.clone()),
             (Kind::Bound, to) => Value::Bound(to.clone()),
             (Kind::Curve, AnyRef::Curve(curve)) => Value::Curve(curve.clone()),
@@ -339,6 +352,28 @@ fn straight(curve: &CurveRef, evaluated: &Evaluated) -> Option<(Vec3, Vec3)> {
     curve.resolve(&evaluated.scope())?.line()
 }
 
+fn profile_face(pick: &Pick) -> Option<&GeomRef> {
+    match pick {
+        Pick::Geom(face @ GeomRef { element: Element::Face(_), .. }) => Some(face),
+        _ => None,
+    }
+}
+
+/// A point on a flat face, and its normal out of the body.
+fn face_plane(face: &GeomRef, evaluated: &Evaluated) -> Option<(Vec3, Vec3)> {
+    match evaluated.locate(face)? {
+        located @ crate::prop::reference::Located::Face { .. } if located.is_flat() => {
+            let crate::prop::reference::Located::Face { facets, normal } = located else { return None };
+            Some((*facets.first()?.first()?, normal))
+        }
+        _ => None,
+    }
+}
+
+fn on_face_plane((origin, normal): (Vec3, Vec3), (a, b): (Vec3, Vec3)) -> bool {
+    (a - origin).dot(normal).abs() < IN_PLANE && (b - origin).dot(normal).abs() < IN_PLANE
+}
+
 fn flat_face(reference: &GeomRef, evaluated: &Evaluated) -> bool {
     matches!(reference.element, Element::Face(_))
         && evaluated.locate(reference).is_some_and(|located| located.is_flat())
@@ -355,17 +390,25 @@ pub fn another_body(cx: &SlotCx, pick: &Pick) -> bool {
     !cx.others.iter().any(|other| matches!(other, Value::Body(id) if Some(*id) == body))
 }
 
-/// A curve lying in the plane of the regions another slot holds.
+/// A curve lying in the plane of the regions or face another slot holds.
 pub fn in_the_regions_plane(cx: &SlotCx, pick: &Pick) -> bool {
     let Some(line) = pick.as_curve().and_then(|curve| straight(&curve, cx.evaluated)) else { return true };
     cx.others.iter().all(|other| match other {
         Value::Regions { sketch, .. } => cx.evaluated.sketch(*sketch).is_none_or(|placed| in_plane(&placed.plane, line)),
+        Value::ProfileFace(face) => face_plane(face, cx.evaluated).is_none_or(|plane| on_face_plane(plane, line)),
         _ => true,
     })
 }
 
-/// Regions of a sketch whose plane holds the curve another slot holds.
+/// Regions of a sketch, or a flat face, whose plane holds the curve another
+/// slot holds.
 pub fn around_the_axis(cx: &SlotCx, pick: &Pick) -> bool {
+    if let Some(plane) = profile_face(pick).and_then(|face| face_plane(face, cx.evaluated)) {
+        return cx.others.iter().all(|other| match other {
+            Value::Curve(curve) => straight(curve, cx.evaluated).is_none_or(|line| on_face_plane(plane, line)),
+            _ => true,
+        });
+    }
     let Pick::Region { sketch, .. } = pick else { return true };
     let Some(placed) = cx.evaluated.sketch(*sketch) else { return true };
     cx.others.iter().all(|other| match other {

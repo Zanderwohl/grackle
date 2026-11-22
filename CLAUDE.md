@@ -1278,7 +1278,11 @@ named by the first profile's entities and the span. The skin draws a side as
 a quad only between two copies of one loop. An **Extrude** runs along its sketch's normal or a
 picked direction, each side a distance, up to a point, plane or flat face (the
 end stays parallel to the sketch), or through every body's bounds, with an
-optional taper. Extrude, Revolve, Sweep and Loft each carry a `SweepOp` —
+optional taper. **A flat face can be the profile** of an Extrude, Revolve or Sweep
+(`ProfileSource::Face`, [`face_profile.rs`](src/prop/face_profile.rs)), picked where regions
+are: its boundary is read off the body as it stands when the feature runs, in a frame from the
+generator face's first edge, and each side face is numbered by the face across that piece of
+boundary, so a notch cut into the face renames none of them. Extrude, Revolve, Sweep and Loft each carry a `SweepOp` —
 new body, join, cut, intersect — and a `target`, which the feature eats
 through `fields` while it joins, cuts or intersects, so one feature is a cut. Its polygons come out in the order the old extrude and revolve used,
 because the BSP picks splitting planes in polygon order: moving onto it left

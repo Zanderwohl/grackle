@@ -380,8 +380,8 @@ impl Shape {
     fn swept(&self, surface: Surface) -> Swept {
         let (run, transform) = self.run();
         // A primitive's sections are always well formed.
-        let swept = skin(&run, surface).unwrap_or_else(|_| Swept { solid: Solid::default(), outline: Outline::default() });
-        Swept { solid: swept.solid.transformed(transform), outline: swept.outline.transformed(transform) }
+        let swept = skin(&run, surface).unwrap_or_else(|_| Swept { solid: Solid::default(), outline: Outline::default(), sides: vec![] });
+        Swept { solid: swept.solid.transformed(transform), outline: swept.outline.transformed(transform), sides: swept.sides }
     }
 
     /// Extrusions are midplane, revolutions whole turns.

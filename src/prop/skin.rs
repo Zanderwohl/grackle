@@ -78,6 +78,9 @@ pub struct Run {
 pub struct Swept {
     pub solid: Solid,
     pub outline: Outline,
+    /// Per side face, in outline order after the caps: the span tag and the
+    /// segment tag it was swept from.
+    pub sides: Vec<(u32, u32)>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -155,7 +158,8 @@ pub fn skin(run: &Run, surface: Surface) -> Result<Swept, SkinProblem> {
         let cutter = shell(&rings(&hole_loops, &cutter_frames), &hole_loops, &cutter_frames, run.closed, surface, &side, ends);
         solid = solid.subtract(&Solid::from_polygons(cutter));
     }
-    Ok(Swept { solid, outline: outline(run, outward) })
+    let (outline, sides) = outline(run, outward);
+    Ok(Swept { solid, outline, sides })
 }
 
 /// Which outline face each polygon is part of: the numbering
@@ -236,7 +240,7 @@ fn wound_to_authored(tagged: &TaggedLoop, i: usize) -> usize {
 }
 
 fn empty() -> Swept {
-    Swept { solid: Solid::default(), outline: Outline::default() }
+    Swept { solid: Solid::default(), outline: Outline::default(), sides: vec![] }
 }
 
 fn place(points: &[Vec2], frame: &Affine3A) -> Vec<Vec3> {
@@ -393,7 +397,7 @@ fn between(a: Affine3A, b: Affine3A, t: f32) -> Affine3A {
 
 /// The names; see the module docs. `outward` is whether the raw polygons
 /// enclosed positive volume, so whether a facet wound as they were faces out.
-fn outline(run: &Run, outward: bool) -> Outline {
+fn outline(run: &Run, outward: bool) -> (Outline, Vec<(u32, u32)>) {
     let sections = &run.sections;
     let s = sections.len();
     let loops = &sections[0].loops;
@@ -464,7 +468,8 @@ fn outline(run: &Run, outward: bool) -> Outline {
             None => groups.push((*tag, vec![k])),
         }
     }
-    for (_, group) in &groups {
+    let mut sides = Vec::new();
+    for (span_tag, group) in &groups {
         for (l, tagged) in loops.iter().enumerate() {
             // A hole's walls face into the hole, which is out of the body.
             let sign = if l == 0 { wound(l) } else { -wound(l) };
@@ -486,10 +491,11 @@ fn outline(run: &Run, outward: bool) -> Outline {
                     .map(|points_of| facet(points_of, sign))
                     .collect();
                 faces.push(OutlineFace { facets });
+                sides.push((*span_tag, tag));
             }
         }
     }
-    Outline { points, edges, faces }
+    (Outline { points, edges, faces }, sides)
 }
 
 /// Sections for a push along local `+Z`, `depth` meters; `midplane` goes half

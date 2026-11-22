@@ -12,7 +12,7 @@
 use crate::get;
 use crate::prop::construct::Making;
 use crate::prop::document::{Pick, PropDoc, PropEditor};
-use crate::prop::feature::{BooleanOp, End, Evaluated, FeatureOp, PatternKind, Profile, PropFeatureId, SweepOp};
+use crate::prop::feature::{BooleanOp, End, Evaluated, FeatureOp, PatternKind, Profile, ProfileSource, PropFeatureId, SweepOp};
 use crate::prop::path::Orient;
 use crate::prop::refs::{Curve3, PathRef, Resolve, JOINS};
 use crate::prop::sketch::Sketch;
@@ -108,11 +108,18 @@ pub const TOOLS: &[ToolSpec] = &[
     ToolSpec { tool: Tool::Sketch, name: "prop.features.sketch", icon: "pencil", slots: &[slot::PLANE], build: sketch },
 ];
 
+fn profile_source(value: Resolved) -> Option<ProfileSource> {
+    match value {
+        Resolved::Regions { sketch, entries } => Some(ProfileSource::Regions { sketch, regions: entries }),
+        Resolved::ProfileFace(face) => Some(ProfileSource::Face { face }),
+        _ => None,
+    }
+}
+
 fn extrude(values: Vec<Resolved>) -> Option<FeatureOp> {
-    let [Resolved::Regions { sketch, entries }] = <[_; 1]>::try_from(values).ok()? else { return None };
+    let [profile] = <[_; 1]>::try_from(values).ok()?;
     Some(FeatureOp::Extrude {
-        sketch,
-        regions: entries,
+        profile: profile_source(profile)?,
         taper: 0.0,
         op: SweepOp::NewBody,
         target: None,
@@ -124,10 +131,9 @@ fn extrude(values: Vec<Resolved>) -> Option<FeatureOp> {
 }
 
 fn revolve(values: Vec<Resolved>) -> Option<FeatureOp> {
-    let [Resolved::Regions { sketch, entries }, Resolved::Curve(axis)] = <[_; 2]>::try_from(values).ok()? else { return None };
+    let [profile, Resolved::Curve(axis)] = <[_; 2]>::try_from(values).ok()? else { return None };
     Some(FeatureOp::Revolve {
-        sketch,
-        regions: entries,
+        profile: profile_source(profile)?,
         degrees: 360.0,
         steps: 12,
         symmetric: false,
@@ -139,10 +145,9 @@ fn revolve(values: Vec<Resolved>) -> Option<FeatureOp> {
 }
 
 fn along(values: Vec<Resolved>) -> Option<FeatureOp> {
-    let [Resolved::Regions { sketch, entries }, Resolved::Path(path)] = <[_; 2]>::try_from(values).ok()? else { return None };
+    let [profile, Resolved::Path(path)] = <[_; 2]>::try_from(values).ok()? else { return None };
     Some(FeatureOp::Sweep {
-        sketch,
-        regions: entries,
+        profile: profile_source(profile)?,
         orient: Orient::Minimal,
         twist: 0.0,
         scale: 1.0,
@@ -700,6 +705,34 @@ mod tests {
         assert_eq!(editor.doc().features.len(), 2, "one undo takes all three");
     }
 
+    /// Fails if a picked face is given a plane feature, or the tool waits for more.
+    #[test]
+    fn a_picked_face_is_extruded_as_it_stands() {
+        let mut editor = PropEditor::default();
+        editor.open(two_cubes(), None);
+        let evaluated = editor.doc().evaluate();
+        editor.set_picks(vec![element(0, Element::Face(0))]);
+        let mut active = ActiveTool::default();
+        start(Task::Make(Tool::Extrude), &mut active, &mut editor, &evaluated, &mut SketchSession::default());
+        assert_eq!(active.0, None);
+        let ops: Vec<&FeatureOp> = editor.doc().features.iter().map(|f| &f.op).collect();
+        assert_eq!(ops.len(), 3);
+        assert!(matches!(ops[2], FeatureOp::Extrude { profile: ProfileSource::Face { .. }, .. }));
+        let extruded = editor.doc().evaluate();
+        assert!(extruded.problems.is_empty(), "{:?}", extruded.problems);
+        assert_eq!(extruded.bodies.len(), 3);
+    }
+
+    #[test]
+    fn a_face_does_not_join_regions_in_one_profile() {
+        let doc = two_cubes();
+        let evaluated = evaluate(&doc.features);
+        let task = Task::Make(Tool::Extrude);
+        let face = element(0, Element::Face(0));
+        assert!(accepts(task, &[], &face, &doc, &evaluated));
+        assert!(!accepts(task, &[face.clone()], &element(1, Element::Face(0)), &doc, &evaluated));
+    }
+
     #[test]
     fn a_row_runs_along_a_planes_normal() {
         let doc = two_cubes();
@@ -716,8 +749,7 @@ mod tests {
         let mut doc = PropDoc::new("test");
         let sketch = doc.push(FeatureOp::Sketch { on: PlaneRef::Origin(OriginPlane::Xz), sketch: Sketch::default() });
         let revolve = doc.push(FeatureOp::Revolve { op: SweepOp::NewBody, target: None,
-            sketch,
-            regions: vec![],
+            profile: ProfileSource::Regions { sketch: sketch, regions: vec![] },
             degrees: 360.0,
             steps: 12,
             symmetric: false,

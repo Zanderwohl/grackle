@@ -44,7 +44,7 @@ use crate::common::reorder;
 use crate::common::shortcuts::chords;
 use crate::common::icons;
 use crate::common::toolbar::{self, Joins, Segment};
-use crate::prop::feature::{BooleanOp, End, FeatureOp, PatternKind, PropFeatureId};
+use crate::prop::feature::{BooleanOp, End, FeatureOp, PatternKind, ProfileSource, PropFeatureId};
 use crate::prop::figure::ScaleFigure;
 use crate::prop::camera::ViewmodelPreview;
 use crate::game::muzzle_flash::FlashPreview;
@@ -1660,8 +1660,8 @@ fn feature_inspector(
         .collect();
     let datum = build.evaluated.datum(PlaneRef::Feature(selected));
     let sketch_name = match &edited.op {
-        FeatureOp::Extrude { sketch, .. } | FeatureOp::Revolve { sketch, .. } | FeatureOp::Sweep { sketch, .. } => {
-            Some(pick_label(editor, build, &Pick::Body(*sketch)))
+        FeatureOp::Extrude { profile, .. } | FeatureOp::Revolve { profile, .. } | FeatureOp::Sweep { profile, .. } => {
+            profile.sketch().map(|sketch| pick_label(editor, build, &Pick::Body(sketch)))
         }
         _ => None,
     };
@@ -1704,14 +1704,16 @@ fn feature_inspector(
                     changed |= surface_ui(ui, surface);
                 });
             }
-            FeatureOp::Sweep { sketch, regions, orient, twist, scale, op, target, surface, .. } => {
-                section(ui, "drawing", get!("prop.inspector.sections.drawing"), |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(get!("prop.inspector.sketch"));
-                        ui.label(sketch_name.clone().unwrap_or_default());
+            FeatureOp::Sweep { profile, orient, twist, scale, op, target, surface, .. } => {
+                if let ProfileSource::Regions { sketch, regions } = profile {
+                    section(ui, "drawing", get!("prop.inspector.sections.drawing"), |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(get!("prop.inspector.sketch"));
+                            ui.label(sketch_name.clone().unwrap_or_default());
+                        });
+                        region_action = sweep_regions(ui, editor, build, *sketch, regions);
                     });
-                    region_action = sweep_regions(ui, editor, build, *sketch, regions);
-                });
+                }
                 section(ui, "extent", get!("prop.inspector.sections.extent"), |ui| {
                     ui.horizontal(|ui| {
                         ui.label(get!("prop.sweep.orient"));
@@ -1751,14 +1753,16 @@ fn feature_inspector(
                     changed |= surface_ui(ui, surface);
                 });
             }
-            FeatureOp::Extrude { sketch, regions, taper, op, target, end, other, direction, surface } => {
-                section(ui, "drawing", get!("prop.inspector.sections.drawing"), |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(get!("prop.inspector.sketch"));
-                        ui.label(sketch_name.clone().unwrap_or_default());
+            FeatureOp::Extrude { profile, taper, op, target, end, other, direction, surface } => {
+                if let ProfileSource::Regions { sketch, regions } = profile {
+                    section(ui, "drawing", get!("prop.inspector.sections.drawing"), |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(get!("prop.inspector.sketch"));
+                            ui.label(sketch_name.clone().unwrap_or_default());
+                        });
+                        region_action = sweep_regions(ui, editor, build, *sketch, regions);
                     });
-                    region_action = sweep_regions(ui, editor, build, *sketch, regions);
-                });
+                }
                 section(ui, "extent", get!("prop.inspector.sections.extent"), |ui| {
                     let along = match direction {
                         Some(_) => shown[1].clone(),
@@ -1797,14 +1801,16 @@ fn feature_inspector(
                     changed |= surface_ui(ui, surface);
                 });
             }
-            FeatureOp::Revolve { sketch, degrees, steps, symmetric, op, target, surface, regions, .. } => {
-                section(ui, "drawing", get!("prop.inspector.sections.drawing"), |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(get!("prop.inspector.sketch"));
-                        ui.label(sketch_name.clone().unwrap_or_default());
+            FeatureOp::Revolve { profile, degrees, steps, symmetric, op, target, surface, .. } => {
+                if let ProfileSource::Regions { sketch, regions } = profile {
+                    section(ui, "drawing", get!("prop.inspector.sections.drawing"), |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(get!("prop.inspector.sketch"));
+                            ui.label(sketch_name.clone().unwrap_or_default());
+                        });
+                        region_action = sweep_regions(ui, editor, build, *sketch, regions);
                     });
-                    region_action = sweep_regions(ui, editor, build, *sketch, regions);
-                });
+                }
                 section(ui, "extent", get!("prop.inspector.sections.extent"), |ui| {
                     changed |= drag(ui, get!("prop.inspector.degrees"), degrees, 1.0, "°");
                     ui.horizontal(|ui| {
