@@ -4,11 +4,14 @@
 //! and one straight down, orthographic, turned in [`ANGLE_STEP_DEGREES`] steps to whichever angle
 //! lets the map's rooms and blocks fill the most of the frame.
 //!
-//! They are written to `cache/postcards/{hash}/`, each named by its [`PostcardChoice::file_stem`]:
-//! `top.png`, `camera_{feature}.png`, `camera_{feature}_copy_{image}.png`. The hash is FNV over every
-//! feature as it would be saved, the map's settings that a picture can show
-//! ([`SavedMetadata::pictured`]) and halfbright, which photographs without sunlight. Pack content
-//! (materials, props) is not in it: after editing one, delete `cache/postcards/`.
+//! They are written to `cache/postcards/{pack}/{map}/` ([`folder`]), each named by its
+//! [`PostcardChoice::file_stem`]: `top.png`, `camera_{order}_{feature}.png`,
+//! `camera_{order}_{feature}_copy_{image}.png`, beside a `hash.txt` saying what they are of. The hash is FNV
+//! over every feature as it would be saved, the map's settings that a picture can show
+//! ([`SavedMetadata::pictured`]), halfbright, which photographs without sunlight, and the folder,
+//! so a map saved somewhere new is photographed again there. A folder whose hash differs is
+//! taken again. Pack content (materials, props) is not in it: after editing one, delete
+//! `cache/postcards/`.
 //!
 //! Only the authority takes them; any machine reads a set already on disk. The set read or taken
 //! most recently is kept as [`CapturedPostcards`] for the postcard picker ([`postcard_button`]) and
@@ -23,7 +26,7 @@
 
 use std::hash::{Hash, Hasher};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::visibility::RenderLayers;
@@ -47,6 +50,7 @@ use crate::common::picker::{picker_button_or_missing, Choice, PickerKind};
 use crate::prop::thumbnail::{is_blank, ATTEMPTS, CAPTURE_TIMEOUT, RETRY_FRAMES};
 use crate::editor::editable::FeatureId;
 use crate::editor::map_metadata::{BuiltInPostcard, MapMetadata, PostcardChoice};
+use crate::editor::panels::CurrentFilePath;
 use crate::editor::save::SavedMetadata;
 use crate::game::spectate::{self, Cameras};
 use crate::get;
@@ -61,7 +65,11 @@ const ASPECT: f32 = WIDTH as f32 / HEIGHT as f32;
 /// Bump after changing how a postcard is taken, so old ones are a miss.
 const FORMAT: u32 = 2;
 
-pub const CACHE_DIR: &str = "cache/postcards";
+/// Under [`cache_path::CACHE_ROOT`](crate::common::cache_path::CACHE_ROOT).
+pub const CACHE_KIND: &str = "postcards";
+
+/// Beside the pictures in a set's folder: the hash they were taken under, in hex.
+const HASH_FILE: &str = "hash.txt";
 
 /// Pixels: a picture's height in the picker.
 pub const PREVIEW_HEIGHT: u32 = 200;
@@ -123,6 +131,8 @@ pub struct PostcardBake {
     features_stale_since: Option<f32>,
     /// The settings last hashed, and their hash, so unchanged settings are not encoded again.
     settings: Option<(SavedMetadata, u64)>,
+    /// Where the open map's set goes, from its file.
+    folder: PathBuf,
     /// `changed_at` is when `current` was first seen, in real seconds.
     current: Option<u64>,
     changed_at: f32,
@@ -156,6 +166,7 @@ impl Default for PostcardBake {
             features: None,
             features_stale_since: None,
             settings: None,
+            folder: folder(None),
             current: None,
             changed_at: 0.0,
             ready_since: None,
@@ -207,6 +218,7 @@ impl PostcardBake {
         captured: &mut CapturedPostcards,
         images: &mut Assets<Image>,
         (hash, openings): (u64, u64),
+        folder: &Path,
         saved: Result<(), String>,
         kept: Kept,
     ) {
@@ -215,13 +227,13 @@ impl PostcardBake {
             captured.keep(hash, kept, images);
         }
         match saved {
-            Ok(()) if clear => disk::remove(hash),
+            Ok(()) if clear => disk::remove(folder),
             Ok(()) => {
-                info!("Saved postcards to {}", folder(hash).display());
+                info!("Saved postcards to {}", folder.display());
                 self.baked = Some(hash);
             }
             Err(e) => {
-                warn!("Could not save postcards to {}: {e}", folder(hash).display());
+                warn!("Could not save postcards to {}: {e}", folder.display());
                 self.gave_up = Some(hash);
             }
         }
@@ -230,22 +242,23 @@ impl PostcardBake {
 
 struct Writing {
     hash: u64,
+    folder: PathBuf,
     openings: u64,
     task: Task<(Result<(), String>, Kept)>,
 }
 
 /// Halves the set on the compute pool, then writes it on the IO pool.
-fn write_and_shrink(hash: u64, pictures: Vec<(String, image::RgbaImage)>) -> Task<(Result<(), String>, Kept)> {
+fn write_and_shrink(hash: u64, folder: PathBuf, pictures: Vec<(String, image::RgbaImage)>) -> Task<(Result<(), String>, Kept)> {
     AsyncComputeTaskPool::get().spawn(async move {
         let kept = halved(&pictures);
         let written = kept.clone();
-        let saved = IoTaskPool::get().spawn(async move { disk::store(hash, &written) }).await;
+        let saved = IoTaskPool::get().spawn(async move { disk::store(&folder, hash, &written) }).await;
         (saved, with_previews(kept))
     })
 }
 
 struct Shot {
-    /// The file's stem.
+    /// The file's stem, [`PostcardChoice::file_stem`].
     name: String,
     label: String,
     transform: Transform,
@@ -255,6 +268,7 @@ struct Shot {
 
 struct Sitting {
     hash: u64,
+    folder: PathBuf,
     shots: Vec<Shot>,
     /// The shot being taken; equal to the count once all are.
     next: usize,
@@ -275,7 +289,7 @@ pub fn settings_hash(settings: &SavedMetadata) -> u64 {
     crate::common::stable_hash::of_text(&serde_json::to_string(&settings.pictured()).unwrap_or_default())
 }
 
-pub fn postcard_hash(features: u64, settings: u64, halfbright: bool) -> u64 {
+pub fn postcard_hash(features: u64, settings: u64, halfbright: bool, folder: &Path) -> u64 {
     let mut hasher = Fnv::default();
     FORMAT.hash(&mut hasher);
     HEIGHT.hash(&mut hasher);
@@ -283,11 +297,34 @@ pub fn postcard_hash(features: u64, settings: u64, halfbright: bool) -> u64 {
     features.hash(&mut hasher);
     settings.hash(&mut hasher);
     halfbright.hash(&mut hasher);
+    folder.hash(&mut hasher);
     hasher.finish()
 }
 
-pub fn folder(hash: u64) -> PathBuf {
-    PathBuf::from(CACHE_DIR).join(format!("{hash:016x}"))
+/// `cache/postcards/{pack}/{map}`, for the map saved at `file`.
+pub fn folder(file: Option<&Path>) -> PathBuf {
+    crate::common::cache_path::document_folder(CACHE_KIND, file)
+}
+
+/// The picture a Library shows for the map at `file`: its first spectator camera's, else the
+/// top-down one; `None` when neither has been taken.
+pub fn preview_file(file: &Path) -> Option<PathBuf> {
+    preview_in(&folder(Some(file)))
+}
+
+fn preview_in(folder: &Path) -> Option<PathBuf> {
+    let entries = std::fs::read_dir(folder).ok()?;
+    entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|extension| extension == "png"))
+        .filter_map(|path| {
+            let (choice, order) = PostcardChoice::from_file_stem(path.file_stem()?.to_str()?)?;
+            // A built-in sorts after every camera.
+            Some((choice.camera_rank(order).is_none(), choice.camera_rank(order), path))
+        })
+        .min_by(|a, b| (a.0, a.1).cmp(&(b.0, b.1)))
+        .map(|(_, _, path)| path)
 }
 
 /// A camera looking straight down, turned `yaw` radians about `+Y`: at zero, screen up is `-Z`
@@ -380,7 +417,7 @@ fn plan_shots(volumes: &MapVolumes, cameras: &Cameras, placed: &Query<&GlobalTra
     let mut shots = Vec::new();
     if let Some(top) = top_down(&volume_corners(volumes)) {
         shots.push(Shot {
-            name: PostcardChoice::BuiltIn(BuiltInPostcard::Top).file_stem(),
+            name: PostcardChoice::BuiltIn(BuiltInPostcard::Top).file_stem(0),
             label: get!("bakes.doing.top_down"),
             transform: top.transform,
             projection: Projection::Orthographic(OrthographicProjection {
@@ -397,7 +434,7 @@ fn plan_shots(volumes: &MapVolumes, cameras: &Cameras, placed: &Query<&GlobalTra
         let Ok(placed) = placed.get(camera) else { continue };
         let (_, rotation, translation) = placed.to_scale_rotation_translation();
         shots.push(Shot {
-            name: choice.file_stem(),
+            name: choice.file_stem(spec.order),
             label: labels.label(camera),
             transform: Transform::from_translation(translation).with_rotation(rotation),
             projection: Projection::Perspective(PerspectiveProjection { fov: spec.fov, aspect_ratio: ASPECT, ..default() }),
@@ -412,17 +449,17 @@ fn plan_shots(volumes: &MapVolumes, cameras: &Cameras, placed: &Query<&GlobalTra
 mod disk {
     use super::*;
 
-    pub fn exists(hash: u64) -> bool {
-        folder(hash).is_dir()
+    pub fn exists(folder: &Path, hash: u64) -> bool {
+        std::fs::read_to_string(folder.join(HASH_FILE)).is_ok_and(|written| written.trim() == format!("{hash:016x}"))
     }
 
-    pub fn remove(hash: u64) {
-        let _ = std::fs::remove_dir_all(folder(hash));
+    pub fn remove(folder: &Path) {
+        let _ = std::fs::remove_dir_all(folder);
     }
 
     /// The pictures, by file stem. A picture that will not decode is left out.
-    pub fn read(hash: u64) -> Vec<(String, image::RgbaImage)> {
-        let Ok(entries) = std::fs::read_dir(folder(hash)) else { return Vec::new() };
+    pub fn read(folder: &Path) -> Vec<(String, image::RgbaImage)> {
+        let Ok(entries) = std::fs::read_dir(folder) else { return Vec::new() };
         entries
             .flatten()
             .map(|entry| entry.path())
@@ -440,32 +477,35 @@ mod disk {
             .collect()
     }
 
-    /// Into a partial folder renamed into place, so a folder that exists is a whole set.
-    pub fn store(hash: u64, pictures: &[(String, image::RgbaImage)]) -> Result<(), String> {
-        let (done, partial) = (folder(hash), folder(hash).with_extension("partial"));
+    /// Into a partial folder renamed into place, so a folder with a hash is a whole set.
+    pub fn store(folder: &Path, hash: u64, pictures: &[(String, image::RgbaImage)]) -> Result<(), String> {
+        let partial = folder.with_extension("partial");
         let _ = std::fs::remove_dir_all(&partial);
         std::fs::create_dir_all(&partial).map_err(|e| e.to_string())?;
         for (name, picture) in pictures {
             picture.save(partial.join(format!("{name}.png"))).map_err(|e| e.to_string())?;
         }
-        let _ = std::fs::remove_dir_all(&done);
-        std::fs::rename(&partial, &done).map_err(|e| e.to_string())
+        std::fs::write(partial.join(HASH_FILE), format!("{hash:016x}")).map_err(|e| e.to_string())?;
+        let _ = std::fs::remove_dir_all(folder);
+        std::fs::rename(&partial, folder).map_err(|e| e.to_string())
     }
 }
 
 #[cfg(target_arch = "wasm32")]
 mod disk {
-    pub fn exists(_: u64) -> bool {
+    use std::path::Path;
+
+    pub fn exists(_: &Path, _: u64) -> bool {
         false
     }
 
-    pub fn remove(_: u64) {}
+    pub fn remove(_: &Path) {}
 
-    pub fn read(_: u64) -> Vec<(String, image::RgbaImage)> {
+    pub fn read(_: &Path) -> Vec<(String, image::RgbaImage)> {
         Vec::new()
     }
 
-    pub fn store(_: u64, _: &[(String, image::RgbaImage)]) -> Result<(), String> {
+    pub fn store(_: &Path, _: u64, _: &[(String, image::RgbaImage)]) -> Result<(), String> {
         Ok(())
     }
 }
@@ -503,7 +543,7 @@ fn bake_postcards(
     time: Res<Time<Real>>,
     (mut asks, mut clears): (MessageReader<BakePostcards>, MessageReader<ClearPostcards>),
     subjects: Subjects,
-    (role, mut captured): (Option<Res<NetRole>>, ResMut<CapturedPostcards>),
+    (role, mut captured, file): (Option<Res<NetRole>>, ResMut<CapturedPostcards>, Option<Res<CurrentFilePath>>),
     mut images: ResMut<Assets<Image>>,
     mut rigs: Query<(&mut Transform, &mut Projection, &mut Camera), Rig>,
 ) {
@@ -537,7 +577,11 @@ fn bake_postcards(
         state.settings = Some((settings, hash));
     }
     let settings = state.settings.as_ref().map_or(0, |(_, hash)| *hash);
-    let hash = postcard_hash(state.features.unwrap_or_default(), settings, sun.halfbright());
+    let at = folder(file.as_ref().and_then(|file| file.path.as_deref()));
+    if state.folder != at {
+        state.folder = at;
+    }
+    let hash = postcard_hash(state.features.unwrap_or_default(), settings, sun.halfbright(), &state.folder);
     if state.current != Some(hash) || features_stale {
         state.current = Some(hash);
         state.changed_at = now;
@@ -547,14 +591,15 @@ fn bake_postcards(
         && let Some((saved, kept)) = check_ready(&mut writing.task)
     {
         let key = (writing.hash, writing.openings);
+        let written_to = std::mem::take(&mut writing.folder);
         state.writing = None;
-        state.landed_write(&mut captured, &mut images, key, saved, kept);
+        state.landed_write(&mut captured, &mut images, key, &written_to, saved, kept);
     }
 
     if clears.read().count() > 0 {
         match &state.writing {
             Some(writing) if writing.hash == hash => state.clear_after_write = true,
-            _ => disk::remove(hash),
+            _ => disk::remove(&state.folder),
         }
         state.baked = None;
         state.looked_up = None;
@@ -590,10 +635,10 @@ fn bake_postcards(
     }
     if state.looked_up != Some(hash) {
         state.looked_up = Some(hash);
-        if disk::exists(hash) {
+        if disk::exists(&state.folder, hash) {
             state.baked = Some(hash);
             state.asked = false;
-            captured.read(hash);
+            captured.read(hash, state.folder.clone());
             return;
         }
     }
@@ -643,6 +688,7 @@ fn bake_postcards(
         .id();
     state.sitting = Some(Sitting {
         hash,
+        folder: state.folder.clone(),
         shots,
         next: 0,
         aimed: true,
@@ -668,7 +714,8 @@ fn sit(
         let sitting = state.sitting.take().unwrap();
         commands.entity(sitting.camera).despawn();
         images.remove(&sitting.target);
-        state.writing = Some(Writing { hash: sitting.hash, openings: state.openings, task: write_and_shrink(sitting.hash, sitting.developed) });
+        let task = write_and_shrink(sitting.hash, sitting.folder.clone(), sitting.developed);
+        state.writing = Some(Writing { hash: sitting.hash, folder: sitting.folder, openings: state.openings, task });
         return;
     }
     let Some(sitting) = &mut state.sitting else { return };
@@ -729,16 +776,16 @@ fn next_shot(sitting: &mut Sitting) {
     sitting.shoot_at = sitting.frames + NEXT_SHOT_FRAMES;
 }
 
-/// Each picture by file stem, with a preview at the picker's size.
+/// Each picture by [`PostcardChoice::file_stem`], with a preview at the picker's size.
 type Kept = Vec<(String, image::RgbaImage, image::RgbaImage)>;
 
 /// The set of postcards read or taken most recently.
 #[derive(Resource, Default)]
 pub struct CapturedPostcards {
     hash: Option<u64>,
-    /// The previews, by file stem.
+    /// The previews, by [`PostcardChoice::key`].
     pictures: HashMap<String, Handle<Image>>,
-    /// The pictures at [`KEPT_HEIGHT`], by file stem.
+    /// The pictures at [`KEPT_HEIGHT`], by [`PostcardChoice::key`].
     kept: HashMap<String, image::RgbaImage>,
     /// Bumped whenever `pictures` is replaced.
     generation: u64,
@@ -777,12 +824,12 @@ impl CapturedPostcards {
 
     /// The pictures on disk under `hash`, unless it is the one kept or being read: read on the
     /// IO pool, previewed on the compute pool.
-    fn read(&mut self, hash: u64) {
+    fn read(&mut self, hash: u64, folder: PathBuf) {
         if self.hash == Some(hash) || self.loading.as_ref().is_some_and(|(loading, _)| *loading == hash) {
             return;
         }
         let task = AsyncComputeTaskPool::get().spawn(async move {
-            with_previews(IoTaskPool::get().spawn(async move { disk::read(hash) }).await)
+            with_previews(IoTaskPool::get().spawn(async move { disk::read(&folder) }).await)
         });
         self.loading = Some((hash, task));
     }
@@ -790,9 +837,10 @@ impl CapturedPostcards {
     fn keep(&mut self, hash: u64, kept: Kept, images: &mut Assets<Image>) {
         self.evict(images);
         for (stem, picture, preview) in kept {
+            let Some((choice, _)) = PostcardChoice::from_file_stem(&stem) else { continue };
             let image = Image::from_dynamic(image::DynamicImage::ImageRgba8(preview), true, RenderAssetUsages::RENDER_WORLD);
-            self.pictures.insert(stem.clone(), images.add(image));
-            self.kept.insert(stem, picture);
+            self.pictures.insert(choice.key(), images.add(image));
+            self.kept.insert(choice.key(), picture);
         }
         self.hash = Some(hash);
     }
@@ -839,11 +887,11 @@ fn finish_reading_postcards(mut captured: ResMut<CapturedPostcards>, mut images:
 
 /// True when a choice was made.
 pub fn postcard_button(ui: &mut egui::Ui, slot: &mut Option<PostcardChoice>) -> bool {
-    let current = slot.map(|choice| choice.file_stem());
+    let current = slot.map(|choice| choice.key());
     let plain = get!("editor.metadata.postcard_none");
     let missing = get!("editor.metadata.postcard_missing");
     let Some(pick) = picker_button_or_missing(ui, PICKER, current.as_deref(), Some(&plain), &missing) else { return false };
-    let pick = pick.and_then(|stem| PostcardChoice::from_file_stem(&stem));
+    let pick = pick.and_then(|key| PostcardChoice::from_key(&key));
     let changed = *slot != pick;
     *slot = pick;
     changed
@@ -869,7 +917,7 @@ fn publish_postcard_choices(
     offered.extend(postcard_cameras(&cameras).into_iter().map(|(camera, choice)| (choice, labels.label(camera))));
     let mut choices = Vec::new();
     for (choice, label) in offered {
-        let stem = choice.file_stem();
+        let stem = choice.key();
         let preview = captured.get(&stem).map(|handle| {
             if !registered.1.contains(&handle.id()) {
                 registered.1.push(handle.id());
@@ -880,6 +928,52 @@ fn publish_postcard_choices(
     }
     let Ok(ctx) = contexts.ctx_mut() else { return };
     PICKER.publish(ctx, choices);
+}
+
+/// Each map's [`preview_file`], read again each time the Library opens.
+#[derive(Default)]
+pub struct MapPreviews {
+    opened: u64,
+    /// By the map's file. A map with no picture has none.
+    pictures: HashMap<PathBuf, Handle<Image>>,
+    reading: Vec<(PathBuf, Task<Option<image::RgbaImage>>)>,
+}
+
+pub fn show_map_library(
+    mut contexts: EguiContexts,
+    mut library: ResMut<crate::common::library::Library>,
+    mut images: ResMut<Assets<Image>>,
+    mut previews: Local<MapPreviews>,
+) {
+    let MapPreviews { opened, pictures, reading } = &mut *previews;
+    if *opened != library.opened {
+        *opened = library.opened;
+        for (_, handle) in pictures.drain() {
+            contexts.remove_image(handle.id());
+            images.remove(&handle);
+        }
+        *reading = library
+            .entries()
+            .iter()
+            .map(|entry| {
+                let file = entry.path.clone();
+                let task = IoTaskPool::get().spawn(async move { image::open(preview_file(&file)?).ok().map(|picture| picture.to_rgba8()) });
+                (entry.path.clone(), task)
+            })
+            .collect();
+    }
+    reading.retain_mut(|(file, task)| {
+        let Some(read) = check_ready(task) else { return true };
+        if let Some(picture) = read {
+            let image = Image::from_dynamic(image::DynamicImage::ImageRgba8(picture), true, RenderAssetUsages::RENDER_WORLD);
+            pictures.insert(file.clone(), images.add(image));
+        }
+        false
+    });
+    let textures: HashMap<PathBuf, egui::TextureId> =
+        pictures.iter().map(|(file, handle)| (file.clone(), contexts.add_image(EguiTextureHandle::Weak(handle.id())))).collect();
+    let Ok(ctx) = contexts.ctx_mut() else { return };
+    library.show(ctx, &mut |entry| textures.get(&entry.path).copied(), &|_| None);
 }
 
 fn report_postcards(state: Res<PostcardBake>, mut progress: ResMut<BakeProgress>) {
@@ -998,9 +1092,11 @@ mod tests {
     #[test]
     fn the_hash_follows_the_map_and_halfbright() {
         let settings = settings_hash(&SavedMetadata::of(&MapMetadata::default()));
-        assert_eq!(postcard_hash(1, settings, false), postcard_hash(1, settings, false));
-        assert_ne!(postcard_hash(1, settings, false), postcard_hash(1, settings, true));
-        assert_ne!(postcard_hash(1, settings, false), postcard_hash(2, settings, false));
+        let (here, there) = (Path::new("cache/postcards/user/a"), Path::new("cache/postcards/user/b"));
+        assert_eq!(postcard_hash(1, settings, false, here), postcard_hash(1, settings, false, here));
+        assert_ne!(postcard_hash(1, settings, false, here), postcard_hash(1, settings, true, here));
+        assert_ne!(postcard_hash(1, settings, false, here), postcard_hash(2, settings, false, here));
+        assert_ne!(postcard_hash(1, settings, false, here), postcard_hash(1, settings, false, there));
     }
 
     /// Breaks if choosing a postcard, renaming the map or changing its music would make every
@@ -1019,27 +1115,51 @@ mod tests {
     }
 
     #[test]
-    fn a_choice_reads_back_from_its_file_stem() {
+    fn a_choice_reads_back_from_its_key_and_its_file_stem() {
         for choice in [
             PostcardChoice::BuiltIn(BuiltInPostcard::Top),
             PostcardChoice::SpectatorCamera { feature: FeatureId::from_raw(12), copy: None },
             PostcardChoice::SpectatorCamera { feature: FeatureId::from_raw(12), copy: Some(3) },
         ] {
-            assert_eq!(PostcardChoice::from_file_stem(&choice.file_stem()), Some(choice));
+            assert_eq!(PostcardChoice::from_key(&choice.key()), Some(choice));
+            let order = if matches!(choice, PostcardChoice::BuiltIn(_)) { 0 } else { 7 };
+            assert_eq!(PostcardChoice::from_file_stem(&choice.file_stem(order)), Some((choice, order)));
         }
+        let camera = PostcardChoice::SpectatorCamera { feature: FeatureId::from_raw(12), copy: Some(3) };
+        assert_eq!(camera.file_stem(7), "camera_7_12_copy_3");
         assert_eq!(PostcardChoice::from_file_stem("camera_x"), None);
+        assert_eq!(PostcardChoice::from_file_stem("camera_12"), None);
+    }
+
+    /// Fails if the Library's preview is not the first spectator camera, or the top-down picture
+    /// without one.
+    #[test]
+    fn the_preview_is_the_first_camera_in_the_carousel() {
+        let at = std::env::temp_dir().join(format!("grackle_preview_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&at);
+        std::fs::create_dir_all(&at).unwrap();
+        let touch = |name: &str| std::fs::write(at.join(name), b"").unwrap();
+        assert_eq!(preview_in(&at), None);
+        touch("top.png");
+        assert_eq!(preview_in(&at), Some(at.join("top.png")));
+        for name in ["camera_10_3.png", "camera_2_40.png", "camera_2_9_copy_0.png", "camera_2_9.png", "hash.txt"] {
+            touch(name);
+        }
+        assert_eq!(preview_in(&at), Some(at.join("camera_2_9.png")));
+        std::fs::remove_dir_all(&at).unwrap();
     }
 
     /// Breaks if a picture of the map that was open survives into the next one.
     #[test]
     fn eviction_drops_every_picture_and_any_read_in_flight() {
         bevy::tasks::IoTaskPool::get_or_init(bevy::tasks::TaskPool::new);
+        bevy::tasks::AsyncComputeTaskPool::get_or_init(bevy::tasks::TaskPool::new);
         let mut images = Assets::<Image>::default();
         let mut captured = CapturedPostcards::default();
         let handle = images.add(Image::default());
         captured.pictures.insert("top".into(), handle.clone());
         captured.hash = Some(1);
-        captured.read(2);
+        captured.read(2, PathBuf::from("unused"));
         let generation = captured.generation;
         captured.evict(&mut images);
         assert!(captured.get("top").is_none());
@@ -1057,9 +1177,9 @@ mod tests {
     fn a_write_landing_after_an_eviction_keeps_no_pictures() {
         let (mut state, mut captured, mut images) = (PostcardBake::default(), CapturedPostcards::default(), Assets::<Image>::default());
         state.openings = 1;
-        state.landed_write(&mut captured, &mut images, (7, 0), Ok(()), kept_set());
+        state.landed_write(&mut captured, &mut images, (7, 0), Path::new("unused"), Ok(()), kept_set());
         assert!(captured.get("top").is_none(), "the old map's picture came back");
-        state.landed_write(&mut captured, &mut images, (7, 1), Ok(()), kept_set());
+        state.landed_write(&mut captured, &mut images, (7, 1), Path::new("unused"), Ok(()), kept_set());
         assert!(captured.get("top").is_some());
     }
 
@@ -1068,7 +1188,7 @@ mod tests {
     fn a_failed_write_is_not_baked() {
         let (mut state, mut captured, mut images) = (PostcardBake::default(), CapturedPostcards::default(), Assets::<Image>::default());
         state.current = Some(7);
-        state.landed_write(&mut captured, &mut images, (7, 0), Err("disk full".into()), kept_set());
+        state.landed_write(&mut captured, &mut images, (7, 0), Path::new("unused"), Err("disk full".into()), kept_set());
         assert_eq!(state.baked, None);
         assert_eq!(state.gave_up, Some(7));
         assert_eq!(state.status().state, BakeState::Stale, "auto-bake would retry a failing write every second");
@@ -1079,13 +1199,13 @@ mod tests {
     fn a_clear_during_a_write_is_honored_when_it_lands() {
         let (mut state, mut captured, mut images) = (PostcardBake::default(), CapturedPostcards::default(), Assets::<Image>::default());
         state.clear_after_write = true;
-        state.landed_write(&mut captured, &mut images, (7, 0), Ok(()), kept_set());
+        state.landed_write(&mut captured, &mut images, (7, 0), Path::new("unused"), Ok(()), kept_set());
         assert_eq!(state.baked, None);
         assert!(!state.clear_after_write);
     }
 
     #[test]
-    fn a_map_s_postcards_are_a_folder_under_its_hash() {
-        assert_eq!(folder(0xab), PathBuf::from("cache/postcards/00000000000000ab"));
+    fn a_map_s_postcards_are_a_folder_under_its_pack() {
+        assert_eq!(folder(Some(Path::new("assets/default/blueprints/arena.gmb"))), PathBuf::from("cache/postcards/default/arena"));
     }
 }

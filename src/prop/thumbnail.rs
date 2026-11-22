@@ -2,11 +2,12 @@
 //! so the prop just fits, and a cache on disk so a prop is photographed once
 //! per edit rather than once per run.
 //!
-//! A prop is looked for here whenever [`PropCache`] bakes it. If
-//! `cache/thumbnail/props/{name}.png` is a picture of the file it was baked
-//! from, taken since that file last changed, it is read back; otherwise the
-//! prop sits for a new one, which is written there. A model with no file of
-//! its own — one the server sent — is photographed and kept in memory only.
+//! A prop is looked for here whenever [`PropCache`] bakes it. The picture of
+//! `assets/{pack}/props/{name}.gpp` is `cache/thumbnails/{pack}/props/{name}.png`
+//! ([`cache_path`]); if it was taken since the file last changed it is read
+//! back, and otherwise the prop sits for a new one, which is written there. So
+//! saving a prop retakes its picture. A model with no file in a pack — one the
+//! server sent — is photographed and kept in memory only.
 //! Disk work runs on the IO pool, off the frame.
 //!
 //! Sittings are one at a time: every studio is on the same layer, so two up at
@@ -27,12 +28,12 @@ use bevy::tasks::{IoTaskPool, Task};
 
 use crate::common::render_layers;
 use crate::prop::baked::PropCache;
-use crate::prop::document::PROPS_DIR;
 
 /// Square, in pixels.
 pub const SIZE: u32 = 256;
 
-pub const CACHE_DIR: &str = "cache/thumbnail";
+/// Under [`cache_path::CACHE_ROOT`](crate::common::cache_path::CACHE_ROOT).
+pub const CACHE_KIND: &str = "thumbnails";
 
 /// Narrow, so a prop is not distorted by being close, and not orthographic,
 /// so it still has depth.
@@ -162,8 +163,12 @@ impl Thumbnails {
         if let Some(found) = self.unbaked.get(name) {
             return *found;
         }
+        let Some(picture) = cache_path(&source) else {
+            self.unbaked.insert(name.to_owned(), false);
+            return false;
+        };
         self.unbaked.insert(name.to_owned(), true);
-        let entry = CacheEntry { picture: cache_path(PROPS_DIR, name), source };
+        let entry = CacheEntry { picture, source };
         let task = IoTaskPool::get().spawn(async move { disk::read(&entry) });
         self.unbaked_reading.push((name.to_owned(), task));
         true
@@ -236,8 +241,9 @@ impl Plugin for ThumbnailPlugin {
     }
 }
 
-pub fn cache_path(folder: &str, name: &str) -> PathBuf {
-    Path::new(CACHE_DIR).join(folder).join(format!("{name}.png"))
+/// Where the picture of the pack file `source` is kept; `None` for a file under no pack.
+pub fn cache_path(source: &Path) -> Option<PathBuf> {
+    crate::common::cache_path::mirrored_file(CACHE_KIND, source, "png")
 }
 
 /// The cache is native-only: a browser tab has nowhere to keep it, so there
@@ -247,17 +253,10 @@ mod disk {
     use super::*;
     use bevy::image::{CompressedImageFormats, ImageSampler, ImageType};
 
-    /// Beside the picture: the file it is of, so a picture of an override that
-    /// has since been deleted is not taken for the file now winning.
-    fn source_note(picture: &Path) -> PathBuf {
-        picture.with_extension("source")
-    }
-
-    /// A picture of this very file, taken no earlier than its last change.
+    /// Taken no earlier than the file's last change.
     pub fn read(entry: &CacheEntry) -> Option<Image> {
         let modified = |path: &Path| std::fs::metadata(path).and_then(|m| m.modified()).ok();
-        let of = std::fs::read_to_string(source_note(&entry.picture)).ok()?;
-        if Path::new(&of) != entry.source || modified(&entry.picture)? < modified(&entry.source)? {
+        if modified(&entry.picture)? < modified(&entry.source)? {
             return None;
         }
         let bytes = std::fs::read(&entry.picture).ok()?;
@@ -278,19 +277,14 @@ mod disk {
         }
     }
 
-    /// The note goes last, so a picture interrupted halfway is not vouched for.
+    /// A picture half-written by a run that was killed fails to decode on reading, and is retaken.
     pub fn write(entry: &CacheEntry, save: impl FnOnce(&Path) -> Result<(), String>) {
-        let _ = std::fs::remove_file(source_note(&entry.picture));
         let saved = entry
             .picture
             .parent()
             .map_or(Ok(()), std::fs::create_dir_all)
             .map_err(|e| e.to_string())
-            .and_then(|()| save(&entry.picture))
-            .and_then(|()| {
-                std::fs::write(source_note(&entry.picture), entry.source.to_string_lossy().as_bytes())
-                    .map_err(|e| e.to_string())
-            });
+            .and_then(|()| save(&entry.picture));
         match saved {
             Ok(()) => debug!("Thumbnail saved to {}", entry.picture.display()),
             Err(e) => warn!("Could not save thumbnail {}: {e}", entry.picture.display()),
@@ -321,10 +315,7 @@ fn look_at_new_bakes(cache: Res<PropCache>, mut thumbnails: ResMut<Thumbnails>, 
         }
         thumbnails.looked_at.insert(name.to_owned(), baked.bake);
 
-        let save_to = baked.file.as_ref().map(|source| CacheEntry {
-            picture: cache_path(PROPS_DIR, name),
-            source: source.clone(),
-        });
+        let save_to = baked.file.as_ref().and_then(|source| Some(CacheEntry { picture: cache_path(source)?, source: source.clone() }));
         let request = Request { name: name.to_owned(), save_to };
         match &request.save_to {
             Some(entry) => {
@@ -617,10 +608,10 @@ mod tests {
     }
 
     #[test]
-    fn the_cache_is_one_file_per_prop_under_its_kind() {
+    fn the_cache_is_one_file_per_prop_under_its_pack() {
         assert_eq!(
-            cache_path(PROPS_DIR, "rocket_launcher"),
-            PathBuf::from("cache/thumbnail/props/rocket_launcher.png"),
+            cache_path(Path::new("assets/default/props/rocket_launcher.gpp")),
+            Some(PathBuf::from("cache/thumbnails/default/props/rocket_launcher.png")),
         );
     }
 }

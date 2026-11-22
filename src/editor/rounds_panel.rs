@@ -1,4 +1,4 @@
-//! The Rounds tab: the newest round files under [`ROUNDS_DIR`], read on the IO pool and listed
+//! The Rounds tab: the newest round files under `cache/rounds/{pack}/{map}/`, read on the IO pool and listed
 //! newest first, and the selected round as sortable tables
 //! ([`round_file`](crate::game::round_file)). A client writes no files, so it also lists the
 //! rounds it saw this session, as their final standings.
@@ -147,7 +147,9 @@ fn read_round_files(mut archive: ResMut<RoundArchive>, catalog: Option<Res<Weapo
 fn scan(known: &HashMap<PathBuf, Stamp>, names: &HashMap<String, String>) -> Scanned {
     use std::fs;
     let mut present: Vec<(PathBuf, Stamp)> = Vec::new();
-    for map in fs::read_dir(crate::game::telemetry::ROUNDS_DIR).into_iter().flatten().flatten() {
+    let maps = fs::read_dir(crate::game::telemetry::rounds_root()).into_iter().flatten().flatten();
+    let maps = maps.flat_map(|pack| fs::read_dir(pack.path()).into_iter().flatten().flatten());
+    for map in maps {
         for file in fs::read_dir(map.path()).into_iter().flatten().flatten() {
             let path = file.path();
             if path.extension().is_none_or(|extension| extension != "jsonl") {

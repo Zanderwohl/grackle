@@ -274,7 +274,7 @@ impl Plugin for EditorPanelPlugin {
             .add_systems(EguiPrimaryContextPass, EditorPanels::ui.run_if(in_state(AppMode::Editor)))
             .add_systems(
                 EguiPrimaryContextPass,
-                crate::common::library::show_map_library
+                crate::tool::postcard_bake::show_map_library
                     .after(EditorPanels::ui)
                     .run_if(in_state(AppMode::Editor))
                     .run_if(crate::common::library::showing(DocumentKind::Map)),

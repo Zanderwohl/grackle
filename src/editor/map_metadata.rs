@@ -25,8 +25,9 @@ pub enum PostcardChoice {
 }
 
 impl PostcardChoice {
-    /// The picture's file name without `.png`, and the name the picker stores.
-    pub fn file_stem(&self) -> String {
+    /// What the picker stores and a picture is kept by in memory. Unlike [`Self::file_stem`] it
+    /// does not change when a camera's order does.
+    pub fn key(&self) -> String {
         match self {
             PostcardChoice::BuiltIn(BuiltInPostcard::Top) => "top".into(),
             PostcardChoice::SpectatorCamera { feature, copy: None } => format!("camera_{}", feature._id()),
@@ -34,18 +35,54 @@ impl PostcardChoice {
         }
     }
 
-    /// The inverse of [`Self::file_stem`].
-    pub fn from_file_stem(stem: &str) -> Option<Self> {
-        if stem == "top" {
+    /// The inverse of [`Self::key`].
+    pub fn from_key(key: &str) -> Option<Self> {
+        if key == "top" {
             return Some(PostcardChoice::BuiltIn(BuiltInPostcard::Top));
         }
-        let rest = stem.strip_prefix("camera_")?;
-        let (feature, copy) = match rest.split_once("_copy_") {
-            Some((feature, image)) => (feature, Some(image.parse().ok()?)),
-            None => (rest, None),
-        };
-        Some(PostcardChoice::SpectatorCamera { feature: FeatureId::from_raw(feature.parse().ok()?), copy })
+        let (feature, copy) = feature_and_copy(key.strip_prefix("camera_")?)?;
+        Some(PostcardChoice::SpectatorCamera { feature, copy })
     }
+
+    /// The picture's file name without `.png`: `top`, `camera_{order}_{feature}` or
+    /// `camera_{order}_{feature}_copy_{image}`, so a camera's pictures sort as the spectator
+    /// cameras do once the numbers are read as numbers. `order` is the camera's
+    /// [`SpectatorCamera::order`](crate::editor::spectator_camera::SpectatorCamera), ignored for a
+    /// built-in.
+    pub fn file_stem(&self, order: u32) -> String {
+        match self {
+            PostcardChoice::BuiltIn(_) => self.key(),
+            PostcardChoice::SpectatorCamera { .. } => format!("camera_{order}_{}", &self.key()["camera_".len()..]),
+        }
+    }
+
+    /// The inverse of [`Self::file_stem`], with the order; zero for a built-in.
+    pub fn from_file_stem(stem: &str) -> Option<(Self, u32)> {
+        if stem == "top" {
+            return Some((PostcardChoice::BuiltIn(BuiltInPostcard::Top), 0));
+        }
+        let (order, rest) = stem.strip_prefix("camera_")?.split_once('_')?;
+        let (feature, copy) = feature_and_copy(rest)?;
+        Some((PostcardChoice::SpectatorCamera { feature, copy }, order.parse().ok()?))
+    }
+
+    /// Where the spectator cameras would put it: by order, feature, then a source before its
+    /// copies. `None` for a built-in.
+    pub fn camera_rank(&self, order: u32) -> Option<(u32, u64, u32)> {
+        match self {
+            PostcardChoice::BuiltIn(_) => None,
+            PostcardChoice::SpectatorCamera { feature, copy } => Some((order, feature._id(), copy.map_or(0, |image| image + 1))),
+        }
+    }
+}
+
+/// `{feature}` or `{feature}_copy_{image}`.
+fn feature_and_copy(text: &str) -> Option<(FeatureId, Option<u32>)> {
+    let (feature, copy) = match text.split_once("_copy_") {
+        Some((feature, image)) => (feature, Some(image.parse().ok()?)),
+        None => (text, None),
+    };
+    Some((FeatureId::from_raw(feature.parse().ok()?), copy))
 }
 
 /// Strongly typed map metadata, written at the top of a blueprint.
