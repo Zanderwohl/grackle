@@ -126,6 +126,7 @@ pub struct SketchSession {
     /// The pointer was off the plane or over the center since `arc_seen`, so
     /// how it went round in between is not known.
     arc_lost: bool,
+    snapping: bool,
     /// Oldest first, like the model's picks.
     pub picks: Vec<SketchPick>,
     hovered: Option<SketchPick>,
@@ -207,6 +208,13 @@ impl SketchSession {
             self.regions = Some((sketch.clone(), arrange(sketch)));
         }
         &self.regions.as_ref().expect("just filled").1
+    }
+
+    fn sweep(&self) -> f32 {
+        match self.snapping {
+            true => snap_sweep(self.arc_sweep),
+            false => self.arc_sweep,
+        }
     }
 
     pub fn tool(&self) -> SketchTool {
@@ -440,6 +448,7 @@ fn edit_the_sketch(
     cameras: Query<(&Camera, &GlobalTransform), With<Multicam>>,
 ) {
     let Some(id) = session.editing else { return };
+    session.snapping = actions.pressed(Action::Modify);
 
     // Before anything that needs the pointer over a viewport: a drag that
     // ends over a panel still ends.
@@ -512,13 +521,37 @@ fn edit_the_sketch(
         Some(Press { on: Some(SketchPick::Point(point)), dragging: true, .. }) => Some(point),
         _ => None,
     };
-    let cursor = placed
-        .plane
-        .hit(ray)
-        .map(|hit| snap(placed.plane.flatten(hit), &placed, &pointer, &build.evaluated.pickables, dragged));
+    let on_plane = placed.plane.hit(ray).map(|hit| placed.plane.flatten(hit));
+    let mut cursor =
+        on_plane.map(|at| snap(at, &placed, &pointer, &build.evaluated.pickables, dragged));
+    // Only a grid position squares up; a point or a model corner stays put.
+    if let (true, SketchTool::Line, Some(target), Some(from), Some(on_plane)) =
+        (session.snapping, session.tool, cursor.as_mut(), session.chain.and_then(|chain| placed.sketch.point(chain)), on_plane)
+        && target.point.is_none()
+        && target.at == (on_plane / GRID).round() * GRID
+    {
+        target.at = square_up(from, target.at);
+        if target.at == from {
+            target.point = session.chain;
+        }
+    }
     session.cursor = cursor;
+    // Before the cursor moves onto the rounded end, so winding follows the pointer.
     wind_the_arc(&mut session, &placed.sketch);
-    session.on_plane = placed.plane.hit(ray).map(|hit| placed.plane.flatten(hit));
+    if let (true, SketchTool::Arc, &[center, start]) = (session.snapping, session.tool, &session.pending[..])
+        && let (Some(c), Some(s)) = (placed.sketch.point(center), placed.sketch.point(start))
+        && let Curve2::Arc { end, .. } = arc_by(c, s, session.sweep())
+    {
+        let point = placed
+            .sketch
+            .points
+            .iter()
+            .find(|point| Vec2::from_array(point.at).distance(end) <= SAME_POINT)
+            .map(|point| point.id);
+        cursor = cursor.map(|_| Snapped { at: end, point });
+        session.cursor = cursor;
+    }
+    session.on_plane = on_plane;
     session.hovered = match (session.tool, session.press) {
         (SketchTool::Select, None) => under(&placed, &pointer),
         (SketchTool::Erase, None) => line_under(&placed, &pointer).map(SketchPick::Line),
@@ -542,7 +575,11 @@ fn edit_the_sketch(
                     session.finish_curve(&mut editor);
                     return;
                 }
-                let (tool, mut pending, sweep) = (session.tool, std::mem::take(&mut session.pending), session.arc_sweep);
+                // Keeps the center and start, which a click placing nothing would drop.
+                if session.tool == SketchTool::Arc && session.pending.len() == 2 && session.sweep().abs() < LEAST_SWEEP {
+                    return;
+                }
+                let (tool, mut pending, sweep) = (session.tool, std::mem::take(&mut session.pending), session.sweep());
                 editor.edit(|doc| {
                     let Some(sketch) = sketch_of_mut(doc, id) else { return };
                     if let (SketchTool::Circle, Some(&center)) = (tool, pending.first()) {
@@ -621,6 +658,27 @@ fn draw_to(sketch: &mut Sketch, chain: Option<SketchId>, target: Snapped) -> Opt
     let before = arrange(sketch).regions.len();
     sketch.add_line(from, landed);
     (target.point.is_none() && arrange(sketch).regions.len() <= before).then_some(landed)
+}
+
+/// Meters within which a snapped line's end is put level with or plumb over
+/// its start.
+const SQUARE_WITHIN: f32 = 0.01;
+
+/// Meters within which a snapped arc's end is an existing point.
+const SAME_POINT: f32 = GRID * 0.01;
+
+/// Radians a snapped arc turns by.
+pub const SWEEP_STEP: f32 = std::f32::consts::PI / 12.0;
+
+pub fn square_up(from: Vec2, at: Vec2) -> Vec2 {
+    // Half a grid step over, so a gap of exactly the limit squares whatever
+    // rounding the subtraction picks up.
+    let level = |from: f32, at: f32| if (at - from).abs() < SQUARE_WITHIN + GRID * 0.5 { from } else { at };
+    Vec2::new(level(from.x, at.x), level(from.y, at.y))
+}
+
+pub fn snap_sweep(sweep: f32) -> f32 {
+    ((sweep / SWEEP_STEP).round() * SWEEP_STEP).clamp(-std::f32::consts::TAU, std::f32::consts::TAU)
 }
 
 /// The nearest sketch point within [`SNAP_PX`], else the nearest model corner
@@ -848,8 +906,8 @@ fn draw_the_session(
                     dashed_line(&mut gizmos, placed.world(facet[0]), placed.world(facet[1]), HOVERED, marker, marker);
                 }
             }
-            (SketchTool::Arc, [center, start, _]) if session.arc_sweep != 0.0 => {
-                solid(&mut gizmos, &arc_by(*center, *start, session.arc_sweep));
+            (SketchTool::Arc, [center, start, _]) if session.sweep() != 0.0 => {
+                solid(&mut gizmos, &arc_by(*center, *start, session.sweep()));
             }
             (SketchTool::Bezier, points) if points.len() >= 2 => {
                 hull(&mut gizmos, &placed, points, marker);
@@ -929,6 +987,12 @@ fn distance_text(meters: f32, in_meters: bool, signed: bool) -> String {
     get!(key, "value", number)
 }
 
+pub fn degrees_text(sweep: f32) -> String {
+    let mut number = format!("{:.1}", sweep.abs().to_degrees());
+    number = number.trim_end_matches('0').trim_end_matches('.').to_string();
+    get!("prop.sketch.degrees", "value", number)
+}
+
 /// Legs along the sketch's own `x` and `y`, all in one unit, chosen from the
 /// rounded length.
 pub fn measure_text(delta: Vec2) -> String {
@@ -984,10 +1048,19 @@ fn label_the_length(
     // Not `live`, which clones the sketch.
     let Some(sketch) = sketch_of(editor.doc(), id) else { return };
     let Some(placed) = build.evaluated.sketches.iter().find(|placed| placed.id == id) else { return };
-    let Some((anchor, from)) = measured_from(&session, sketch) else { return };
-    if cursor.point == Some(anchor) {
-        return;
-    }
+    let (text, from) = match (session.tool, &session.pending[..]) {
+        (SketchTool::Arc, &[center, _]) => {
+            let Some(center) = sketch.point(center) else { return };
+            (degrees_text(session.sweep()), center)
+        }
+        _ => {
+            let Some((anchor, from)) = measured_from(&session, sketch) else { return };
+            if cursor.point == Some(anchor) {
+                return;
+            }
+            (measure_text(cursor.at - from), from)
+        }
+    };
     let Some((camera, view)) = mouse.in_camera.and_then(|camera| cameras.get(camera).ok()) else { return };
     let (Ok(at), Ok(start)) = (
         camera.world_to_viewport(view, placed.world(cursor.at)),
@@ -1004,7 +1077,7 @@ fn label_the_length(
 
     let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("sketch_length")));
     let galley = painter.layout_no_wrap(
-        measure_text(cursor.at - from),
+        text,
         egui::FontId::proportional(13.0),
         {
             let [r, g, b, _] = POINT.to_srgba().to_u8_array();
@@ -1077,14 +1150,15 @@ const LEAST_SWEEP: f32 = 1e-2;
 /// The arc round `center` from `start` by `sweep`, ending on `snapped` if the
 /// click landed on another point. A whole turn closes on its own start, as a
 /// circle does; a snap onto the start short of that is ignored, since it
-/// would read as a whole turn.
+/// would read as a whole turn, and so is a snap onto the center, which has
+/// no direction.
 fn place_arc(sketch: &mut Sketch, center: SketchId, start: SketchId, snapped: Option<SketchId>, sweep: f32) {
     if sweep.abs() < LEAST_SWEEP {
         return;
     }
     let end = match sweep.abs() >= WHOLE_TURN {
         true => start,
-        false => match snapped.filter(|point| *point != start) {
+        false => match snapped.filter(|point| *point != start && *point != center) {
             Some(point) => point,
             None => {
                 let (Some(c), Some(s)) = (sketch.point(center), sketch.point(start)) else { return };
@@ -1151,6 +1225,36 @@ mod tests {
         assert_eq!(measure_text(Vec2::new(1.2, 0.0)), "1.2 m (+1.2 m, 0 m)");
         assert_eq!(measure_text(Vec2::new(1.12, 0.5)), "1.227 m (+1.12 m, +0.5 m)");
         assert_eq!(measure_text(Vec2::new(0.99996, 0.0)), "1 m (+1 m, 0 m)");
+    }
+
+    #[test]
+    fn an_arc_reads_its_sweep_in_degrees() {
+        assert_eq!(degrees_text(std::f32::consts::FRAC_PI_2), "90°");
+        assert_eq!(degrees_text(-std::f32::consts::PI * 0.75), "135°");
+        assert_eq!(degrees_text(1.0f32.to_radians() * 12.34), "12.3°");
+    }
+
+    #[test]
+    fn a_snapped_line_squares_up_only_within_a_centimeter() {
+        let from = Vec2::new(0.1, 0.2);
+        assert_eq!(square_up(from, Vec2::new(0.105, 0.5)), Vec2::new(0.1, 0.5));
+        assert_eq!(square_up(from, Vec2::new(0.4, 0.21)), Vec2::new(0.4, 0.2));
+        assert_eq!(square_up(from, Vec2::new(0.109, 0.191)), from);
+        assert_eq!(square_up(from, Vec2::new(0.12, 0.25)), Vec2::new(0.12, 0.25));
+    }
+
+    #[test]
+    fn a_snapped_arc_turns_in_fifteen_degree_steps() {
+        let degrees = |sweep: f32| snap_sweep(sweep.to_radians()).to_degrees().round();
+        assert_eq!(degrees(37.0), 30.0);
+        assert_eq!(degrees(38.0), 45.0);
+        assert_eq!(degrees(-100.0), -105.0);
+        assert_eq!(degrees(5.0), 0.0);
+        assert_eq!(degrees(359.0), 360.0);
+        let mut session = SketchSession { arc_sweep: 50f32.to_radians(), ..default() };
+        assert_eq!(session.sweep(), session.arc_sweep);
+        session.snapping = true;
+        assert!((session.sweep() - 45f32.to_radians()).abs() < 1e-6);
     }
 
     #[test]
@@ -1271,12 +1375,13 @@ mod tests {
         place_arc(&mut sketch, center, start, Some(start), std::f32::consts::TAU);
         place_arc(&mut sketch, center, start, Some(start), 10f32.to_radians());
         place_arc(&mut sketch, center, start, None, 1e-4);
+        place_arc(&mut sketch, center, start, Some(center), 90f32.to_radians());
         let sweeps: Vec<f32> = sketch.curves().into_iter().filter_map(|(_, curve, _)| match curve {
             Curve2::Arc { sweep, .. } => Some(sweep.to_degrees()),
             _ => None,
         }).collect();
-        assert_eq!(sweeps.len(), 3, "{sweeps:?}");
-        for (got, want) in sweeps.iter().zip([270.0, 360.0, 10.0]) {
+        assert_eq!(sweeps.len(), 4, "{sweeps:?}");
+        for (got, want) in sweeps.iter().zip([270.0, 360.0, 10.0, 90.0]) {
             assert!((got - want).abs() < 0.01, "{sweeps:?}");
         }
     }

@@ -1549,6 +1549,7 @@ region_label = "Region { id }"
 measure = "{ length } ({ across }, { up })"
 centimeters = "{ value } cm"
 meters = "{ value } m"
+degrees = "{ value }°"
 
 [prop.region]
 missing = "not enclosed"
