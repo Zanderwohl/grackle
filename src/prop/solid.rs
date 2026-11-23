@@ -77,15 +77,8 @@ impl Solid {
         csg::signed_volume_x6(&self.polygons) / 6.0
     }
 
-    pub fn transformed(mut self, transform: Transform) -> Solid {
-        for polygon in &mut self.polygons {
-            for vertex in &mut polygon.vertices {
-                *vertex = transform.transform_point(*vertex);
-            }
-        }
-        self.rebuild_planes();
-        // A negative scale inverts the surface.
-        self.oriented_outward()
+    pub fn transformed(self, transform: Transform) -> Solid {
+        self.mapped(transform.to_matrix())
     }
 
     pub fn translated(self, offset: Vec3) -> Solid {
@@ -97,15 +90,9 @@ impl Solid {
         if normal == Vec3::ZERO {
             return self;
         }
-        let mut mirrored = self;
-        for polygon in &mut mirrored.polygons {
-            for vertex in &mut polygon.vertices {
-                let offset = *vertex - origin;
-                *vertex = origin + offset - 2.0 * offset.dot(normal) * normal;
-            }
-        }
-        mirrored.rebuild_planes();
-        mirrored.oriented_outward()
+        let reflect = Mat3::IDENTITY - 2.0 * Mat3::from_cols(normal * normal.x, normal * normal.y, normal * normal.z);
+        let linear = Mat4::from_mat3(reflect);
+        self.mapped(Mat4::from_translation(origin) * linear * Mat4::from_translation(-origin))
     }
 
     pub fn painted(mut self, surface: Surface) -> Solid {
@@ -125,18 +112,28 @@ impl Solid {
         self
     }
 
-    /// A face gone collinear is dropped: a stale plane makes a boolean keep
-    /// the wrong side.
-    fn rebuild_planes(&mut self) {
+    /// Each plane is carried through the transform rather than recomputed from
+    /// three vertices: the kernel's splits leave vertices partway along an
+    /// edge, and three in a line, or nearly, give no plane or a flipped one.
+    /// A transform that reverses handedness reverses each face's winding, so
+    /// its normal is negated to keep agreeing with it until
+    /// [`Solid::oriented_outward`] turns the whole solid round.
+    fn mapped(mut self, matrix: Mat4) -> Solid {
+        let linear = Mat3::from_mat4(matrix);
+        let inverse_transpose = linear.inverse().transpose();
+        let handed = if linear.determinant() < 0.0 { -1.0 } else { 1.0 };
         self.polygons.retain_mut(|polygon| {
-            match csg::Plane::from_points(polygon.vertices[0], polygon.vertices[1], polygon.vertices[2]) {
-                Some(plane) => {
-                    polygon.plane = plane;
-                    true
-                }
-                None => false,
+            for vertex in &mut polygon.vertices {
+                *vertex = matrix.transform_point3(*vertex);
             }
+            let normal = (inverse_transpose * polygon.plane.normal * handed).normalize_or_zero();
+            if normal == Vec3::ZERO || !normal.is_finite() {
+                return false;
+            }
+            polygon.plane = csg::Plane { normal, w: normal.dot(polygon.vertices[0]) };
+            true
         });
+        self.oriented_outward()
     }
 
     pub fn union(&self, other: &Solid) -> Solid {
@@ -464,6 +461,42 @@ mod tests {
             }
             for ((a, b), count) in &edges {
                 assert_eq!(edges.get(&(*b, *a)), Some(count), "{name}: edge {a} -> {b} has no twin");
+            }
+        }
+    }
+
+    /// A boolean leaves vertices partway along an edge. Moving or mirroring
+    /// a solid must neither drop a face whose first three vertices are in a
+    /// line nor turn its plane against its winding.
+    #[test]
+    fn moving_a_solid_keeps_faces_with_vertices_along_an_edge() {
+        let box_solid = Shape::Box { size: [0.3, 0.4, 0.5] }.solid(Surface::default());
+        let polygons = box_solid
+            .polygons()
+            .iter()
+            .map(|polygon| {
+                let mut polygon = polygon.clone();
+                let midpoint = (polygon.vertices[0] + polygon.vertices[1]) / 2.0;
+                polygon.vertices.insert(1, midpoint);
+                polygon
+            })
+            .collect();
+        let solid = Solid::from_polygons(polygons);
+        let volume = solid.volume();
+        let moved = [
+            ("translated", solid.clone().translated(Vec3::new(0.3, -1.2, -0.33))),
+            ("turned", solid.clone().transformed(Transform::from_rotation(Quat::from_rotation_y(0.7)))),
+            ("scaled inside out", solid.clone().transformed(Transform::from_scale(Vec3::new(-1.0, 1.0, 1.0)))),
+            ("mirrored", solid.clone().mirrored(Vec3::new(0.2, 0.0, 0.0), Vec3::new(1.0, 0.0, 1.0))),
+        ];
+        for (name, moved) in moved {
+            assert_eq!(moved.polygons().len(), solid.polygons().len(), "{name}: a face was dropped");
+            assert!((moved.volume() - volume).abs() < 1e-5, "{name}: volume {} against {volume}", moved.volume());
+            for polygon in moved.polygons() {
+                let v = &polygon.vertices;
+                let winding: Vec3 = (0..v.len()).map(|i| v[i].cross(v[(i + 1) % v.len()])).sum();
+                assert!(winding.normalize().dot(polygon.plane.normal) > 0.99, "{name}: a plane disagrees with its winding");
+                assert!(v.iter().all(|vertex| (polygon.plane.normal.dot(*vertex) - polygon.plane.w).abs() < 1e-5), "{name}: a plane is off its face");
             }
         }
     }
