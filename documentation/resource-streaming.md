@@ -380,10 +380,36 @@ Not done in this stage:
 
 ### Stage 5 — keeping and locking
 
-- [ ] `pack.toml` (authors, origin, per-file provenance), read at startup.
-- [ ] `requires` in the blueprint, written on save; resolution by lock for kept and sent maps.
-- [ ] **Keep a copy…** into a new or chosen pack; kept packs open read-only.
-- [ ] Downloads GC and the Settings entries.
+- [x] `pack.toml` ([`pack_info`](../src/common/pack_info.rs)): authors, and for a kept pack its
+      origin (server, when) and each file's hash and authors. The default pack ships one; the user
+      pack gets one crediting the player once they have a name. A manifest entry is credited by the
+      file's own authors (a map), else its pack's `pack.toml`, else the host's name.
+- [x] `requires` in the blueprint, written by every save (`save::lock_for`, the closure of the
+      map over the local packs, without the map itself or lightmaps); `Required` is a path, a hash
+      and a size.
+- [x] **Kept packs are not in `default_packs()`**, so their weapons do not join every local game's
+      catalog and their files shadow nothing by name. Opening a map in one mounts its lock as the
+      session pack (`lock::lock_kept_maps`), reading each file from the kept pack by hash, else from
+      the downloads; opening another map unmounts it. The Library lists kept maps.
+- [x] **Keep a Copy of This Round's Map** (Multiplayer menu, a client only): the round's map,
+      written with a lock naming the manifest, and every file the manifest lists, copied into
+      `assets/{server}-{date}/` with a `pack.toml` saying where it came from. A kept map's Save is a
+      Save As.
+- [x] Downloads pruned at startup by the app binary (`PruneDownloads`): a session record lists
+      every object it used, records older than **Settings → Developer → Keep downloads for** days
+      (14) go, then the oldest records while what is left is over 1 GiB, then every object no record
+      lists. **Delete All Downloads** empties the folder at once.
+
+Not done in this stage:
+
+- **A map in a pack of one's own is not told what changed since it was saved.** The lock is
+  written but nothing compares it on opening yet; the plan's Problems-panel line is still to do.
+- **A kept map saved into a pack of one's own loses its files**, which stay in the kept pack, now
+  outside the pack list. Saving it would have to copy what the lock names too.
+- **Music credits from `attribution.txt` are not read into a manifest entry's authors**; a track is
+  credited by its pack.
+- **A downloads browser**, to keep a round's map after leaving, does not exist; keeping is only
+  from the Multiplayer menu while connected, and only the latest round's map.
 
 ## Settled questions
 

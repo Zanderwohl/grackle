@@ -12,7 +12,8 @@ pub const LANG_DIR: &str = "assets/default/lang";
 pub const FALLBACK_LANG: &str = "en-US";
 
 /// The pack list until Grackle has a real one, lowest priority first: the default pack, every
-/// other folder under `assets/` by name (made by the Library's New), then the user pack. Read once
+/// other folder under `assets/` by name (made by the Library's New) but kept ones, then the user
+/// pack. Read once
 /// and kept, since it is asked every frame; [`rescan_packs`] reads it again.
 pub fn default_packs() -> Vec<PathBuf> {
     PACKS.read().unwrap_or_else(|poisoned| poisoned.into_inner()).clone()
@@ -37,7 +38,7 @@ fn packs_on_disk() -> Vec<PathBuf> {
         .flatten()
         .filter_map(Result::ok)
         .map(|entry| entry.path())
-        .filter(|path| path.is_dir() && *path != default && *path != user)
+        .filter(|path| path.is_dir() && *path != default && *path != user && !crate::common::pack_info::is_kept_pack(path))
         .collect();
     #[cfg(not(target_arch = "wasm32"))]
     others.sort();

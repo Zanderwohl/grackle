@@ -273,6 +273,7 @@ impl Plugin for EditorPanelPlugin {
             .add_plugins(crate::editor::rounds_panel::RoundArchivePlugin)
             .add_systems(Startup, EditorPanels::set_multicam_size)
             .add_systems(Startup, (crate::common::assets::create_the_user_pack, crate::common::trash::empty_old_trash))
+            .add_systems(Update, crate::common::pack_info::credit_the_player)
             .add_systems(EguiPrimaryContextPass, EditorPanels::ui.run_if(in_state(AppMode::Editor)))
             .add_systems(
                 EguiPrimaryContextPass,
@@ -611,7 +612,8 @@ impl EditorPanels {
                     }
                     Err(e) => error!("Could not open the map: {e}"),
                 },
-                FileAction::Save => match current_file.path.clone() {
+                // A kept map is the server's copy, so saving it asks where, as a new map does.
+                FileAction::Save => match current_file.path.clone().filter(|path| !crate::common::pack_info::in_a_kept_pack(path)) {
                     Some(path) => match save::save(&path, &editor_features, &map_metadata) {
                         Ok(()) => {
                             info!("Saved the map to {}", path.display());

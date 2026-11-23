@@ -14,7 +14,7 @@ use crate::common::mode::GameMode;
 use crate::common::movement_rules::MovementRules;
 use crate::common::sky::{Brightness, SkyTime, SunPosition};
 use crate::common::palette::Palette;
-use crate::constants::{MAP_BACKUP_EXTENSION, MAP_BLUEPRINT_EXTENSION};
+use crate::constants::{BLUEPRINTS_DIR, MAP_BACKUP_EXTENSION, MAP_BLUEPRINT_EXTENSION};
 use crate::editor::editable::{Feature, FeatureId, FeatureTimeline};
 use crate::editor::map_metadata::{PostcardChoice, POSTCARD_SLOTS};
 use crate::editor::map_metadata::MapMetadata;
@@ -22,6 +22,39 @@ use crate::editor::map_metadata::MapMetadata;
 pub struct LoadedBlueprint {
     pub timeline: FeatureTimeline,
     pub metadata: MapMetadata,
+    /// What it was saved against; see [`Required`].
+    pub requires: Vec<Required>,
+}
+
+/// A file a map needed when it was saved, by path and the hash of its bytes then: the map's lock.
+/// A map in a kept pack, or sent by a server, resolves its files by it; a map in a pack somebody
+/// authors resolves by name and is only told what changed. See documentation/resource-streaming.md.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct Required {
+    pub path: String,
+    /// BLAKE3, hex.
+    pub hash: String,
+    pub size: u64,
+}
+
+impl Required {
+    pub fn of(entry: &crate::common::resource::ManifestEntry) -> Self {
+        Self { path: entry.key.path.to_string(), hash: entry.key.hash.to_string(), size: entry.size }
+    }
+
+    /// `None` for a path or hash that does not read, as from a hand-edited file.
+    pub fn entry(&self) -> Option<crate::common::resource::ManifestEntry> {
+        use crate::common::resource::{ContentHash, LogicalPath, ManifestEntry, ResourceKey};
+        let path = LogicalPath::new(&self.path).ok()?;
+        let mut hash = [0u8; 32];
+        if self.hash.len() != 64 {
+            return None;
+        }
+        for (at, byte) in hash.iter_mut().enumerate() {
+            *byte = u8::from_str_radix(self.hash.get(at * 2..at * 2 + 2)?, 16).ok()?;
+        }
+        Some(ManifestEntry { key: ResourceKey { path, hash: ContentHash(hash) }, size: self.size, pack: String::new(), authors: Vec::new() })
+    }
 }
 
 pub fn map_path(dir: &Path, name: &str) -> PathBuf {
@@ -122,6 +155,8 @@ struct BlueprintOut<'a> {
     metadata: SavedMetadata,
     next_id: u64,
     features: Vec<&'a Feature>,
+    #[serde(skip_serializing_if = "<[Required]>::is_empty")]
+    requires: &'a [Required],
 }
 
 #[derive(Deserialize)]
@@ -130,10 +165,18 @@ struct BlueprintIn {
     metadata: SavedMetadata,
     next_id: u64,
     features: Vec<Feature>,
+    #[serde(default)]
+    requires: Vec<Required>,
 }
 
+/// With no lock: the live map and a round's map, which are not files a pack holds.
 pub fn to_text(features: &FeatureTimeline, metadata: &MapMetadata) -> Result<String, String> {
+    to_text_locked(features, metadata, &[])
+}
+
+pub fn to_text_locked(features: &FeatureTimeline, metadata: &MapMetadata, requires: &[Required]) -> Result<String, String> {
     let blueprint = BlueprintOut {
+        requires,
         metadata: SavedMetadata::of(metadata),
         next_id: features.id_counter(),
         features: features
@@ -163,7 +206,7 @@ pub fn parse(text: &str) -> Result<LoadedBlueprint, String> {
         }
     }
 
-    Ok(LoadedBlueprint { timeline, metadata: blueprint.metadata.into_metadata() })
+    Ok(LoadedBlueprint { timeline, metadata: blueprint.metadata.into_metadata(), requires: blueprint.requires })
 }
 
 /// What a blueprint needs besides itself: what its features name, every material a role they name
@@ -200,9 +243,31 @@ pub fn resources_named_by(timeline: &FeatureTimeline, metadata: &MapMetadata) ->
     crate::common::resource::Described { named, authors: metadata.authors.clone() }
 }
 
-/// Every error names `path`.
+/// The files `text`, a map about to be saved at `path`, needs as the local packs hold them now.
+/// Saving is native and authoring-only, so the local packs are read directly rather than through
+/// the `Assets` resource.
+pub fn lock_for(path: &Path, text: &str) -> Vec<Required> {
+    use crate::common::resource::{closure, LogicalPath, ResourceKind};
+    let stem = path.file_stem().and_then(|stem| stem.to_str()).unwrap_or("untitled");
+    let map = LogicalPath::new(&format!("{BLUEPRINTS_DIR}/{stem}.{MAP_BLUEPRINT_EXTENSION}"))
+        .or_else(|_| LogicalPath::new(&format!("{BLUEPRINTS_DIR}/untitled.{MAP_BLUEPRINT_EXTENSION}")))
+        .expect("a valid path");
+    let given = std::collections::BTreeMap::from([(map.clone(), (text.as_bytes().to_vec(), String::new()))]);
+    let assets = crate::common::assets::Assets::default();
+    let found = closure::closure(&assets, &crate::common::assets::default_packs(), &given, closure::match_roots(map));
+    found
+        .manifest
+        .entries
+        .iter()
+        .filter(|entry| !matches!(entry.key.kind(), ResourceKind::Blueprint | ResourceKind::Lightmap))
+        .map(Required::of)
+        .collect()
+}
+
+/// Every error names `path`. Writes the map's lock ([`lock_for`]).
 pub fn save(path: &Path, features: &FeatureTimeline, metadata: &MapMetadata) -> Result<(), String> {
-    let text = to_text(features, metadata).map_err(|e| format!("{}: {e}", path.display()))?;
+    let unlocked = to_text(features, metadata).map_err(|e| format!("{}: {e}", path.display()))?;
+    let text = to_text_locked(features, metadata, &lock_for(path, &unlocked)).map_err(|e| format!("{}: {e}", path.display()))?;
 
     let backup_path =
         path.with_extension(format!("{}.{}", MAP_BLUEPRINT_EXTENSION, MAP_BACKUP_EXTENSION));

@@ -271,7 +271,7 @@ shape is a new producer and not a rewrite of every consumer — see
 | `assets/default/` | The default pack: `lang/`, `blueprints/`, `servers/` (example `--server-config` files), `images/backgrounds/title/` (main-menu backgrounds). |
 | `assets/user/` | The user pack: gitignored, made at startup with `blueprints/`, `props/` and `images/backgrounds/title/`, last in `default_packs()` so it overrides the shipped one. A new map or prop is saved here unless the document already has a folder. Also holds `settings.toml`, the player settings, `shortcuts.toml`, `server.toml` (the Round tab) and `recent.toml` (the File menu's Recent lists). |
 | `cache/` | Gitignored, derived from the packs and maps: `thumbnails/{pack}/props/{name}.png`, `nav/{hash}.bin`, `lightmap/{hash}.bin`, `postcards/{pack}/{map}/*.png`, `rounds/{pack}/{map}/*.jsonl`, `trash/{kind}/` (deleted pack files, kept 30 days). What is about one pack file is filed under its pack and name ([`src/common/cache_path.rs`](src/common/cache_path.rs)); a file in no pack under `_no_pack/`, and a map with no file under `_no_pack/untitled` (its postcards in `_no_pack/untitled_{hash}`, so two unsaved maps keep a set each). Safe to delete, though the trash is the only copy of what is in it. |
-| `downloads/` | Gitignored: what servers sent, `objects/{ab}/{rest of hash}.{ext}`, never a pack (see "Naming pack files across machines"). Nothing writes to it yet. |
+| `downloads/` | Gitignored: what servers sent, `objects/{ab}/{rest of hash}.{ext}`, and a record per connection in `sessions/{server}/{started}.toml` listing its rounds' maps and every object it used; never a pack (see "Naming pack files across machines"). Pruned at startup. |
 | `logs/` | Gitignored: the log's file drain, one file per launch, and the Bakes panel's ECS dumps (`grackle_ecsdump_{stamp}.txt`, whose path the panel shows as a link that selects the file in the file manager), all deleted after the days set in Settings → Developer. |
 | `screenshots/` | Gitignored, made at startup: `F12` saves the window as drawn, HUD and egui included, as `{date}_{time}_{millisecond}.png` ([`src/common/screenshot.rs`](src/common/screenshot.rs)). |
 
@@ -603,7 +603,8 @@ or chord; a modifier let go alone is bound alone; a mouse button is bound
 only when pressed on the prompt, and a press elsewhere stops the wait; Escape
 stops it too; keys are captured from Bevy's input, not egui's) and **Developer** (the log level
 and how many days of logs to keep, in `settings.toml`, the level taking effect at the next launch
-with a note in yellow saying so; and every pack's `icons/*.svg` in a grid with its name). In Play it is opened from the pause
+with a note in yellow saying so; how many days to keep downloads, and Delete All Downloads, which
+acts at once; and every pack's `icons/*.svg` in a grid with its name). In Play it is opened from the pause
 menu (`OpenSettings`), and `MouseHeld::settings` keeps the cursor free while it
 is up. Starting a round closes it, dropping an unapplied draft, since a window
 carried into Play with the cursor grabbed could not be closed and would keep
@@ -3509,6 +3510,18 @@ tables (weapons, loadouts, classes, taunts, modes, layers, body clips) over
 machine has is never in the match. `default_packs()` is the local packs, for the editors and for
 what a client reads from its own disk (lang, fonts, menus); it never lists the server's. The
 `AssetServer` reads the store as `object://` (`Assets::asset_path`).
+
+**Keeping and locking** (stage 5): a pack's `pack.toml`
+([`pack_info`](src/common/pack_info.rs)) names its authors, and for a kept pack where it came from
+and each file's hash and authors. Every save writes the map's lock, `requires`, the paths and
+hashes it needed (`save::lock_for`). **A kept pack is left out of `default_packs()`**: opening one
+of its maps mounts its lock as the session pack ([`resource::lock`](src/common/resource/lock.rs)),
+so its files are found by hash, and nothing else ever sees them. A client's Multiplayer menu offers
+**Keep a Copy of This Round's Map**, copying the round's map (written with a lock) and every
+manifest file into `assets/{server}-{date}/`; a kept map's Save is a Save As. The app binary prunes
+`downloads/` at startup ([`resource::prune`](src/common/resource/prune.rs)): a session record lists
+the objects it used, and what no record younger than Settings → Developer → **Keep downloads for**
+(14 days) lists goes, oldest first past 1 GiB.
 
 **The server's files reach its clients** (stage 3,
 [`resource::sync`](src/common/resource/sync.rs)): the authority rebuilds a

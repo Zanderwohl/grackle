@@ -146,7 +146,11 @@ pub struct LibraryEntry {
 
 /// Authoring side only: read from disk, as a pack offers no listing of its own.
 pub fn scan(kind: DocumentKind) -> Vec<LibraryEntry> {
-    let packs = packs();
+    let mut packs = packs();
+    // A kept pack is opened through its maps, so they are listed though the pack is not searched.
+    if kind == DocumentKind::Map {
+        packs.extend(crate::common::pack_info::kept_packs());
+    }
     let mut entries = Vec::new();
     for pack in &packs {
         let Ok(files) = std::fs::read_dir(pack.join(kind.folder())) else { continue };

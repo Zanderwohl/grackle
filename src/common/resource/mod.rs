@@ -3,6 +3,8 @@
 //! documentation/resource-streaming.md.
 
 pub mod closure;
+pub mod lock;
+pub mod prune;
 pub mod sync;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod hash_index;

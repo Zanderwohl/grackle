@@ -91,6 +91,7 @@ pub fn run() {
         .insert_resource(QuitAfterRounds(editor_params.rounds))
         .insert_resource(crate::common::game_rules::PlayAs(editor_params.class))
         .init_resource::<crate::game::telemetry::RecordRounds>()
+        .init_resource::<crate::common::resource::prune::PruneDownloads>()
         .insert_resource(StartInPropEditor(editor_params.start_modeling))
         .insert_resource(StartInAnimEditor(editor_params.start_animating))
         .insert_resource(StartInMaterialEditor(editor_params.start_texturing))

@@ -822,6 +822,7 @@ host = "Host Game..."
 join = "Connect to..."
 solo = "Leave Game"
 close_server = "Close Server"
+keep_a_copy = "Keep a Copy of This Round's Map"
 
 [net.role]
 solo = "Playing alone"
@@ -1994,6 +1995,9 @@ logging = "Logging"
 log_level = "Log level"
 log_days = "Keep logs for"
 days_suffix = " days"
+downloads = "Downloads"
+download_days = "Keep downloads for"
+delete_downloads = "Delete All Downloads"
 log_level_restart = "The log level at startup was { startup }. To apply the new log level ({ chosen }), restart the application."
 
 [settings.developer.log_levels]

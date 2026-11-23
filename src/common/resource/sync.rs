@@ -85,12 +85,12 @@ impl Default for DownloadsRoot {
 
 impl DownloadsRoot {
     #[cfg(not(target_arch = "wasm32"))]
-    fn store(&self) -> Option<Box<dyn ObjectStore>> {
+    pub fn store(&self) -> Option<Box<dyn ObjectStore>> {
         Some(Box::new(crate::common::resource::store::DiskObjects::new(self.0.join("objects"))))
     }
 
     #[cfg(target_arch = "wasm32")]
-    fn store(&self) -> Option<Box<dyn ObjectStore>> {
+    pub fn store(&self) -> Option<Box<dyn ObjectStore>> {
         None
     }
 }
@@ -113,6 +113,10 @@ impl Plugin for ResourceSyncPlugin {
             .init_resource::<DownloadsRoot>()
             .init_resource::<Served>()
             .init_resource::<Fetch>()
+            .init_resource::<crate::common::resource::lock::LockedMap>()
+            .add_message::<crate::common::resource::lock::KeepACopy>()
+            .add_systems(Update, (crate::common::resource::lock::lock_kept_maps, crate::common::resource::lock::keep_a_copy))
+            .add_systems(Startup, crate::common::resource::prune::prune_old_downloads.run_if(resource_exists::<crate::common::resource::prune::PruneDownloads>))
             .add_systems(
                 OnEnter(crate::common::app_mode::AppMode::Play),
                 remember_the_rounds_map.run_if(crate::common::net::has_authority),
@@ -288,7 +292,9 @@ fn rebuild_the_manifest(
         true => match_roots(map.clone()).into_iter().skip(1).collect(),
         false => match_roots(map.clone()),
     };
-    let found = closure(&assets, &default_packs(), &given, roots);
+    // Over `packs()`, which includes a kept map's lock while one is mounted, since that is what
+    // `read_from_packs` serves from.
+    let found = closure(&assets, &assets.packs(), &given, roots);
     for problem in found.problems.iter().filter(|problem| !served.problems.contains(problem)) {
         warn!("Left out of what clients are sent: {problem}");
     }
@@ -299,7 +305,11 @@ fn rebuild_the_manifest(
 
     let mut entries = Vec::new();
     let mut sources = HashMap::new();
-    for entry in found.manifest.entries {
+    let host = server_name(None, named.1.as_deref());
+    for mut entry in found.manifest.entries {
+        if entry.authors.is_empty() && !host.is_empty() {
+            entry.authors = vec![host.clone()];
+        }
         if entry.key.kind() == ResourceKind::Blueprint {
             continue;
         }
@@ -502,10 +512,13 @@ impl Fetch {
 
 /// One connection's record in `downloads/sessions/`: which map each round played, by hash.
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
-struct SessionRecord {
+pub(crate) struct SessionRecord {
     server: String,
     started: String,
     rounds: Vec<RoundRecord>,
+    /// Every object the session used, by its name in the store; what keeps one from being pruned.
+    #[serde(default)]
+    pub(crate) objects: BTreeSet<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -792,8 +805,12 @@ fn record_rounds(root: &DownloadsRoot, role: &NetRole, fetch: &mut Fetch, manife
         server: label(role),
         started: now.format("%Y-%m-%d_%H-%M-%S").to_string(),
         rounds: Vec::new(),
+        objects: BTreeSet::new(),
     });
     let mut added = false;
+    for entry in &manifest.entries {
+        added |= record.objects.insert(crate::common::resource::store::object_name(entry.key.hash, entry.key.path.extension().unwrap_or_default()));
+    }
     for entry in manifest.entries.iter().filter(|entry| entry.key.kind() == ResourceKind::Blueprint) {
         let round = RoundRecord { seen: now.to_rfc3339(), map: entry.key.path.to_string(), hash: entry.key.hash.to_string() };
         if record.rounds.last().is_none_or(|last| last.hash != round.hash) {

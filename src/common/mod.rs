@@ -71,6 +71,7 @@ pub mod sky;
 pub mod stable_hash;
 pub mod resource;
 pub mod joining;
+pub mod pack_info;
 pub mod sunlight;
 pub mod lightmap;
 pub mod air_light;

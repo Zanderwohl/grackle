@@ -5,6 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use crate::common::assets::{AssetError, Assets};
+use crate::common::pack_info::PackInfo;
 use crate::common::resource::named::Reference;
 use crate::common::resource::{describe, ContentHash, LogicalPath, Manifest, ManifestEntry, ResourceKey, ResourceKind, TABLES};
 
@@ -41,6 +42,8 @@ pub fn match_roots(map: LogicalPath) -> Vec<Reference> {
 struct Found {
     bytes: Vec<u8>,
     pack: String,
+    /// `None` for one handed in.
+    from: Option<PathBuf>,
 }
 
 /// `packs` lowest priority first, as [`crate::common::assets::default_packs`] gives them, so the
@@ -49,6 +52,7 @@ pub fn closure(assets: &Assets, packs: &[PathBuf], given: &BTreeMap<LogicalPath,
     let mut result = Closure::default();
     let mut seen: BTreeSet<LogicalPath> = BTreeSet::new();
     let mut entries: Vec<ManifestEntry> = Vec::new();
+    let mut infos: std::collections::HashMap<PathBuf, PackInfo> = std::collections::HashMap::new();
     let mut queue: Vec<(Reference, Option<LogicalPath>)> = roots.into_iter().rev().map(|root| (root, None)).collect();
 
     while let Some((reference, named_by)) = queue.pop() {
@@ -66,10 +70,10 @@ pub fn closure(assets: &Assets, packs: &[PathBuf], given: &BTreeMap<LogicalPath,
         }
 
         let found = match given.get(&path) {
-            Some((bytes, pack)) => Lookup::Found(Found { bytes: bytes.clone(), pack: pack.clone() }),
+            Some((bytes, pack)) => Lookup::Found(Found { bytes: bytes.clone(), pack: pack.clone(), from: None }),
             None => find(assets, packs, &path, &mut result.problems),
         };
-        let Found { bytes, pack } = match found {
+        let Found { bytes, pack, from } = match found {
             Lookup::Found(found) => found,
             Lookup::Missing if !optional => {
                 result.missing.push(Missing { path, named_by });
@@ -101,12 +105,12 @@ pub fn closure(assets: &Assets, packs: &[PathBuf], given: &BTreeMap<LogicalPath,
                 Err(why) => result.problems.push(format!("{path} names a path that is refused: {why}")),
             }
         }
-        entries.push(ManifestEntry {
-            key: ResourceKey { path, hash: ContentHash::of(&bytes) },
-            size,
-            pack,
-            authors: described.authors,
-        });
+        // A file's own authors, else its pack's `pack.toml`.
+        let authors = match (described.authors.is_empty(), &from) {
+            (true, Some(from)) => infos.entry(from.clone()).or_insert_with(|| PackInfo::read(assets, from)).authors_of(path.as_str()),
+            _ => described.authors,
+        };
+        entries.push(ManifestEntry { key: ResourceKey { path, hash: ContentHash::of(&bytes) }, size, pack, authors });
     }
 
     entries.sort_by(|a, b| a.key.path.cmp(&b.key.path));
@@ -135,7 +139,7 @@ fn find(assets: &Assets, packs: &[PathBuf], path: &LogicalPath, problems: &mut V
             return Lookup::Refused;
         }
         match assets.read(pack, path.as_str()) {
-            Ok(bytes) => return Lookup::Found(Found { bytes, pack: pack_label(pack) }),
+            Ok(bytes) => return Lookup::Found(Found { bytes, pack: pack_label(pack), from: Some(pack.clone()) }),
             Err(AssetError::NotFound(_)) => {}
             Err(e) => problems.push(format!("{e}; looking in a lower pack")),
         }
@@ -216,7 +220,9 @@ mod tests {
         assert!(!closure.manifest.entries.iter().any(|entry| entry.key.path.as_str().starts_with("lang/")), "a lang file is not a match's");
         let arena = closure.manifest.get(&path("blueprints/arena.gmb")).unwrap();
         assert_eq!(arena.pack, "default");
-        assert_eq!(arena.authors, vec!["Claude".to_owned()]);
+        assert_eq!(arena.authors, vec!["Claude".to_owned()], "a map is credited by its own authors");
+        let launcher = closure.manifest.get(&path("props/rocket_launcher.gpp")).unwrap();
+        assert_eq!(launcher.authors, vec!["The Grackle contributors".to_owned()], "a prop is credited by its pack");
     }
 
     /// A role names a material per side, and a map with that role may paint any of them.
