@@ -353,7 +353,7 @@ fn put_out_the_flames(mut commands: Commands, roots: Query<Entity, With<HudFireR
     }
 }
 
-/// Added in `main.rs` beside [`crate::game::flame_jet::FlameJetPlugin`], whose
+/// Added in `launch.rs` beside [`crate::game::flame_jet::FlameJetPlugin`], whose
 /// sheet it draws, since the game's tests have no asset plugins.
 pub struct HudFirePlugin;
 

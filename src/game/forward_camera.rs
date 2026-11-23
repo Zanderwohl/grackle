@@ -12,7 +12,7 @@
 //! ([`warm_up_the_lens`]): pipelines compile on first draw, synchronously on
 //! macOS and wasm, and the first draw was otherwise picking up a scoped weapon.
 //!
-//! Added in `main.rs` beside `GamePlugin` rather than inside it, since the
+//! Added in `launch.rs` beside `GamePlugin` rather than inside it, since the
 //! game's tests run with no render plugins to give a material to.
 
 use bevy::asset::embedded_asset;

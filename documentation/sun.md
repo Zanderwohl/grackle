@@ -8,7 +8,7 @@ bottom.
 ## Where it starts (October 2026)
 
 - Rooms are lit by their `GracklePointLight`s and one `GlobalAmbientLight`
-  (white, brightness 100, in `main.rs`) that is the same in every corner of
+  (white, brightness 100, in `launch.rs`) that is the same in every corner of
   every map.
 - `skybox` slots draw `SkyMaterial`, colored by the map's `SkyTime`, and are
   `NotShadowCaster`. Nothing else knows they are sky.

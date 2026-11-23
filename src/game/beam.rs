@@ -376,7 +376,7 @@ fn clear_the_sparks(mut commands: Commands, sparks: Query<Entity, With<BeamSpark
     }
 }
 
-/// Added in `main.rs` beside `StreakPlugin`: it builds a mesh, an image,
+/// Added in `launch.rs` beside `StreakPlugin`: it builds a mesh, an image,
 /// materials and a Hanabi effect, which the game's tests have no renderer for.
 pub struct BeamPlugin;
 

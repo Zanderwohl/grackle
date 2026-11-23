@@ -41,7 +41,7 @@ pub mod lan_discovery;
 pub mod net_events;
 pub mod net_transport;
 pub mod protocol;
-// `pub` because the `editor` binary wires `PerfPlugin` up from outside the library.
+// `pub` because the `grackle` binary wires `PerfPlugin` up from outside the library.
 pub mod path_open;
 pub mod perf;
 pub mod screenshot;

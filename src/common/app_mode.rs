@@ -158,11 +158,6 @@ pub fn mode_menu(
     });
 }
 
-/// Where a bare launch of this binary starts: the map editor for `editor`, the main menu for
-/// `grackle`. Only onboarding reads it; leaving a round goes to [`CameFrom`] instead.
-#[derive(Resource, Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct Home(pub AppMode);
-
 /// The mode Play was last entered from, which F5 and the pause menu go back to. Written only by
 /// [`remember_where_play_came_from`].
 #[derive(Resource, Debug, Clone, Copy, Default, PartialEq, Eq)]

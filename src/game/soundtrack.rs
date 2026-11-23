@@ -86,7 +86,7 @@ impl Plugin for SoundtrackSyncPlugin {
     }
 }
 
-/// Added in `main.rs`, since it plays audio.
+/// Added in `launch.rs`, since it plays audio.
 pub struct SoundtrackPlugin;
 
 impl Plugin for SoundtrackPlugin {

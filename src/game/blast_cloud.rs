@@ -282,7 +282,7 @@ fn warm_up_the_cloud(mut commands: Commands, look: Res<CloudLook>) {
     ));
 }
 
-/// Added in `main.rs` beside `GustRingPlugin`: Hanabi needs a renderer, which the game's tests do
+/// Added in `launch.rs` beside `GustRingPlugin`: Hanabi needs a renderer, which the game's tests do
 /// not have.
 pub struct BlastCloudPlugin;
 

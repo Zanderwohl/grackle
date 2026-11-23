@@ -118,10 +118,6 @@ name = "grackle"
 path = "src/bin/grackle.rs"
 
 [[bin]]
-name = "editor"
-path = "src/main.rs"
-
-[[bin]]
 name = "ensure_lang"
 path = "src/bin/ensure_lang.rs"
 

@@ -12,7 +12,7 @@ checklist is at the bottom.
 
 - [`src/game/telemetry.rs`](../src/game/telemetry.rs) writes one JSON Lines
   file per round (a match's live phase) at `cache/rounds/{pack}/{map}/{started}.jsonl`, native only, when
-  the `editor` binary inserts `RecordRounds`. Events: `round_start`,
+  `launch::run` inserts `RecordRounds`. Events: `round_start`,
   `player` (with a bot's whole temperament), `spawn`, `damage` (target,
   attacker, amount, weapon, how, the hit point), `kill` (both parties'
   feet, health, armor and wants; the weapon; the distance; the life's

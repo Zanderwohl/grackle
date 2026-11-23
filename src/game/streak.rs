@@ -163,7 +163,7 @@ fn add_flight(app: &mut App) {
         .add_systems(Update, (launch_streaks.after(mark_tracers), fly_streaks).chain());
 }
 
-/// Added in `main.rs` beside `WorldPropPlugin`: it builds a mesh and a
+/// Added in `launch.rs` beside `WorldPropPlugin`: it builds a mesh and a
 /// material, which the game's tests have no assets for.
 pub struct StreakPlugin;
 

@@ -12,6 +12,8 @@ pub struct EditorParams {
     /// Defaults to `Solo`: laying out a room must not involve a socket.
     pub net: NetRole,
     pub start_playing: bool,
+    /// `--editor`: the map editor rather than the main menu.
+    pub start_editing: bool,
     pub start_animating: bool,
     pub start_modeling: bool,
     pub start_texturing: bool,
@@ -38,6 +40,7 @@ impl EditorParams {
     /// `--lang`, `--game` and `--profile` do not: a fresh profile is what onboarding is for.
     pub fn chooses_where_to_start(&self) -> bool {
         self.start_playing
+            || self.start_editing
             || self.start_animating
             || self.start_modeling
             || self.start_texturing
@@ -92,14 +95,23 @@ impl EditorParams {
                 Arg::new("play")
                     .long("play")
                     .action(ArgAction::SetTrue)
-                    .help("Start in Play rather than in the editor.")
+                    .help("Start in Play rather than on the main menu.")
+            )
+            // Nothing reads the flag: any start flag skips onboarding and the main menu, landing
+            // in `AppMode::default()`, the map editor.
+            .arg(
+                Arg::new("editor")
+                    .long("editor")
+                    .action(ArgAction::SetTrue)
+                    .conflicts_with_all(["play", "prop", "anim", "material", "weapon", "lang-editor"])
+                    .help("Open the map editor rather than the main menu.")
             )
             .arg(
                 Arg::new("prop")
                     .long("prop")
                     .action(ArgAction::SetTrue)
                     .conflicts_with("play")
-                    .help("Open the prop editor rather than the map editor.")
+                    .help("Open the prop editor rather than the main menu.")
             )
             // Separate flags rather than one `--mode=`, so a mode you can start
             // in is stated with that mode rather than in a shared list.
@@ -109,28 +121,28 @@ impl EditorParams {
                     .action(ArgAction::SetTrue)
                     .conflicts_with("play")
                     .conflicts_with("prop")
-                    .help("Open the animation editor rather than the map editor.")
+                    .help("Open the animation editor rather than the main menu.")
             )
             .arg(
                 Arg::new("material")
                     .long("material")
                     .action(ArgAction::SetTrue)
                     .conflicts_with_all(["play", "prop", "anim"])
-                    .help("Open the material editor rather than the map editor.")
+                    .help("Open the material editor rather than the main menu.")
             )
             .arg(
                 Arg::new("weapon")
                     .long("weapon")
                     .action(ArgAction::SetTrue)
                     .conflicts_with_all(["play", "prop", "anim", "material", "lang-editor"])
-                    .help("Open the weapon editor rather than the map editor.")
+                    .help("Open the weapon editor rather than the main menu.")
             )
             .arg(
                 Arg::new("lang-editor")
                     .long("lang-editor")
                     .action(ArgAction::SetTrue)
                     .conflicts_with_all(["play", "prop", "anim", "material"])
-                    .help("Open the lang editor rather than the map editor.")
+                    .help("Open the lang editor rather than the main menu.")
             )
             .arg(
                 Arg::new("connect")
@@ -240,6 +252,7 @@ impl EditorParams {
             game_id: game_id.to_owned(),
             net,
             start_playing: matches.get_flag("play"),
+            start_editing: matches.get_flag("editor"),
             start_modeling: matches.get_flag("prop"),
             start_animating: matches.get_flag("anim"),
             start_texturing: matches.get_flag("material"),
@@ -290,6 +303,7 @@ mod tests {
         }
         for chosen in [
             &["--play"][..],
+            &["--editor"],
             &["--prop"],
             &["--anim"],
             &["--material"],

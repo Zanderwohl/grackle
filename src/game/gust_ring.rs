@@ -308,7 +308,7 @@ fn warm_up_the_ring(mut commands: Commands, look: Res<RingLook>) {
     ));
 }
 
-/// Added in `main.rs` beside `FlameJetPlugin`: Hanabi needs a renderer, which the game's tests do
+/// Added in `launch.rs` beside `FlameJetPlugin`: Hanabi needs a renderer, which the game's tests do
 /// not have.
 pub struct GustRingPlugin;
 

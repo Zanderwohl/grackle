@@ -256,7 +256,7 @@ fn draw_laser_dots(
     }
 }
 
-/// Added in `main.rs`, since it builds assets the game's tests have no
+/// Added in `launch.rs`, since it builds assets the game's tests have no
 /// plugins for. `WeaponPlugin` aims the dot.
 pub struct LaserDotPlugin;
 
