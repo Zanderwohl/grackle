@@ -66,14 +66,16 @@ pub fn closure(assets: &Assets, packs: &[PathBuf], given: &BTreeMap<LogicalPath,
         }
 
         let found = match given.get(&path) {
-            Some((bytes, pack)) => Some(Found { bytes: bytes.clone(), pack: pack.clone() }),
+            Some((bytes, pack)) => Lookup::Found(Found { bytes: bytes.clone(), pack: pack.clone() }),
             None => find(assets, packs, &path, &mut result.problems),
         };
-        let Some(Found { bytes, pack }) = found else {
-            if !optional {
+        let Found { bytes, pack } = match found {
+            Lookup::Found(found) => found,
+            Lookup::Missing if !optional => {
                 result.missing.push(Missing { path, named_by });
+                continue;
             }
-            continue;
+            Lookup::Missing | Lookup::Refused => continue,
         };
 
         let kind = path.kind();
@@ -116,15 +118,29 @@ fn pack_label(pack: &std::path::Path) -> String {
     pack.file_name().map_or_else(|| pack.display().to_string(), |name| name.to_string_lossy().into_owned())
 }
 
-fn find(assets: &Assets, packs: &[PathBuf], path: &LogicalPath, problems: &mut Vec<String>) -> Option<Found> {
+enum Lookup {
+    Found(Found),
+    Missing,
+    /// Over its kind's cap, and so not read.
+    Refused,
+}
+
+fn find(assets: &Assets, packs: &[PathBuf], path: &LogicalPath, problems: &mut Vec<String>) -> Lookup {
+    let most = path.kind().max_bytes();
     for pack in packs.iter().rev() {
+        if let Some(size) = assets.size(pack, path.as_str())
+            && size > most
+        {
+            problems.push(format!("{}/{path} is {size} bytes, over the {most} a {:?} may be", pack.display(), path.kind()));
+            return Lookup::Refused;
+        }
         match assets.read(pack, path.as_str()) {
-            Ok(bytes) => return Some(Found { bytes, pack: pack_label(pack) }),
+            Ok(bytes) => return Lookup::Found(Found { bytes, pack: pack_label(pack) }),
             Err(AssetError::NotFound(_)) => {}
             Err(e) => problems.push(format!("{e}; looking in a lower pack")),
         }
     }
-    None
+    Lookup::Missing
 }
 
 /// Sorted, each path once however many packs have it.

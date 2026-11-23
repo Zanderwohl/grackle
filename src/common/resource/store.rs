@@ -92,13 +92,22 @@ impl ObjectStore for DiskObjects {
         }
         let io = |e: std::io::Error| StoreError::Io(format!("{}: {e}", path.display()));
         std::fs::create_dir_all(path.parent().expect("an object has a folder")).map_err(io)?;
-        // Written beside and renamed into place, so a reader never sees half a file.
-        let partial = path.with_extension(format!("{extension}.part-{}", std::process::id()));
+        // Written beside and renamed into place, so a reader never sees half a file. Named per
+        // call, since two paths with the same bytes may be stored at once.
+        static PUTS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let put = PUTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let partial = path.with_extension(format!("{extension}.part-{}-{put}", std::process::id()));
         std::fs::write(&partial, bytes).map_err(io)?;
-        std::fs::rename(&partial, &path).map_err(|e| {
-            let _ = std::fs::remove_file(&partial);
-            io(e)
-        })
+        match std::fs::rename(&partial, &path) {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                let _ = std::fs::remove_file(&partial);
+                match path.is_file() {
+                    true => Ok(()),
+                    false => Err(io(e)),
+                }
+            }
+        }
     }
 
     fn get(&self, hash: ContentHash, extension: &str) -> Result<Vec<u8>, StoreError> {

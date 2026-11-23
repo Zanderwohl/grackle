@@ -269,7 +269,10 @@ fn play_cues(
             continue;
         };
         let Some(path) = track.asset_path(&packs) else {
-            warn!("{} is in {}, outside {}, where the AssetServer cannot reach it", cue.track, track.pack.display(), crate::common::assets::ASSET_ROOT);
+            match crate::common::resource::session::is_session_pack(&track.pack) {
+                true => warn!("{} is not in the server's manifest, so it cannot be loaded", cue.track),
+                false => warn!("{} is in {}, outside {}, where the AssetServer cannot reach it", cue.track, track.pack.display(), crate::common::assets::ASSET_ROOT),
+            }
             continue;
         };
         let Some(asset_server) = &asset_server else { continue };

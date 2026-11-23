@@ -294,13 +294,46 @@ pub struct ManifestEntry {
     pub authors: Vec<String>,
 }
 
-/// Every file a match needs, sorted by path, one entry per path.
+/// Every file a match needs, sorted by path, one entry per path. Deserialized through
+/// [`Manifest::checked`], since one arrives from a server.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "ManifestIn")]
 pub struct Manifest {
     pub entries: Vec<ManifestEntry>,
 }
 
+#[derive(Deserialize)]
+struct ManifestIn {
+    entries: Vec<ManifestEntry>,
+}
+
+impl TryFrom<ManifestIn> for Manifest {
+    type Error = String;
+
+    fn try_from(manifest: ManifestIn) -> Result<Self, String> {
+        Manifest::checked(manifest.entries)
+    }
+}
+
+pub const MAX_MANIFEST_ENTRIES: usize = 4096;
+
 impl Manifest {
+    /// Sorted by path; refused whole for too many entries, a path listed twice, or a size over its
+    /// kind's cap.
+    pub fn checked(mut entries: Vec<ManifestEntry>) -> Result<Self, String> {
+        if entries.len() > MAX_MANIFEST_ENTRIES {
+            return Err(format!("{} entries, over the {MAX_MANIFEST_ENTRIES} a manifest may list", entries.len()));
+        }
+        if let Some(entry) = entries.iter().find(|entry| entry.size > entry.key.kind().max_bytes()) {
+            return Err(format!("{} is {} bytes, over the {} its kind may be", entry.key.path, entry.size, entry.key.kind().max_bytes()));
+        }
+        entries.sort_by(|a, b| a.key.path.cmp(&b.key.path));
+        if let Some(pair) = entries.windows(2).find(|pair| pair[0].key.path == pair[1].key.path) {
+            return Err(format!("{} is listed twice", pair[0].key.path));
+        }
+        Ok(Self { entries })
+    }
+
     pub fn get(&self, path: &LogicalPath) -> Option<&ManifestEntry> {
         self.entries.binary_search_by(|entry| entry.key.path.cmp(path)).ok().map(|at| &self.entries[at])
     }
@@ -367,11 +400,30 @@ mod tests {
     /// Breaks if the hash function changes, which would make every stored object a miss.
     #[test]
     fn the_hash_is_blake3() {
-        assert_eq!(ContentHash::of(b"grackle").short(), ContentHash::of(b"grackle").to_string()[..12]);
+        assert_eq!(ContentHash::of(b"").short(), "af1349b9f5f9");
         assert_eq!(
             ContentHash::of(b"").to_string(),
             "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262"
         );
+    }
+
+    #[test]
+    fn a_manifest_off_the_wire_is_checked() {
+        let entry = |text: &str, size: u64| ManifestEntry {
+            key: ResourceKey { path: path(text), hash: ContentHash::of(text.as_bytes()) },
+            size,
+            pack: "user".into(),
+            authors: Vec::new(),
+        };
+        // Written as the wire would carry it, bypassing `checked`.
+        let send = |entries: Vec<ManifestEntry>| postcard::to_stdvec(&Manifest { entries }).unwrap();
+
+        let unsorted = postcard::from_bytes::<Manifest>(&send(vec![entry("props/z.gpp", 1), entry("props/a.gpp", 1)])).unwrap();
+        assert!(unsorted.get(&path("props/z.gpp")).is_some() && unsorted.get(&path("props/a.gpp")).is_some());
+        assert!(postcard::from_bytes::<Manifest>(&send(vec![entry("props/a.gpp", 1), entry("props/a.gpp", 2)])).is_err());
+        assert!(postcard::from_bytes::<Manifest>(&send(vec![entry("icons/a.svg", 10 * MIB)])).is_err());
+        let many = (0..=MAX_MANIFEST_ENTRIES).map(|n| entry(&format!("props/p{n}.gpp"), 1)).collect();
+        assert!(postcard::from_bytes::<Manifest>(&send(many)).is_err());
     }
 
     #[test]

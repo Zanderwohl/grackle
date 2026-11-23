@@ -41,6 +41,11 @@ pub trait AssetSource: Send + Sync + 'static {
     /// The names of the files directly in `pack/folder`, in any order; empty when there is no
     /// such folder.
     fn list(&self, pack: &Path, folder: &str) -> Vec<String>;
+
+    /// The file's size in bytes, where it can be had without reading the file.
+    fn size(&self, _pack: &Path, _relative: &str) -> Option<u64> {
+        None
+    }
 }
 
 /// `std::fs`, relative to the working directory, so binaries run from the
@@ -69,6 +74,10 @@ impl AssetSource for NativeFiles {
             .filter_map(|entry| entry.file_name().into_string().ok())
             .collect()
     }
+
+    fn size(&self, pack: &Path, relative: &str) -> Option<u64> {
+        std::fs::metadata(pack.join(relative)).ok().filter(|metadata| metadata.is_file()).map(|metadata| metadata.len())
+    }
 }
 
 /// Where this process reads packs from: the local packs through a source the platform picks once
@@ -88,11 +97,25 @@ impl Default for Assets {
 }
 
 impl AssetSource for Assets {
+    /// A path the server's manifest lists is the server's alone: no local pack answers for it, so
+    /// an object not yet stored reads as missing rather than as a local file of another version.
     fn read(&self, pack: &Path, relative: &str) -> Result<Vec<u8>, AssetError> {
         match (is_session_pack(pack), &self.session) {
             (true, Some(session)) => session.read(relative),
             (true, None) => Err(AssetError::NotFound(format!("{relative}: no server's files are mounted"))),
+            (false, Some(session)) if session.lists(relative) => {
+                Err(AssetError::NotFound(format!("{}/{relative}: the server's copy is used instead", pack.display())))
+            }
             (false, _) => self.source.read(pack, relative),
+        }
+    }
+
+    fn size(&self, pack: &Path, relative: &str) -> Option<u64> {
+        match (is_session_pack(pack), &self.session) {
+            (true, Some(session)) => session.size(relative),
+            (true, None) => None,
+            (false, Some(session)) if session.lists(relative) => None,
+            (false, _) => self.source.size(pack, relative),
         }
     }
 
@@ -116,6 +139,10 @@ impl Assets {
 
     pub fn list(&self, pack: &Path, folder: &str) -> Vec<String> {
         AssetSource::list(self, pack, folder)
+    }
+
+    pub fn size(&self, pack: &Path, relative: &str) -> Option<u64> {
+        AssetSource::size(self, pack, relative)
     }
 
     /// Lowest priority first: the local packs, then the server's while one is mounted.

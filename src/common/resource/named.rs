@@ -102,11 +102,16 @@ pub fn describe(path: &LogicalPath, bytes: &[u8]) -> Result<Described, String> {
     }
 }
 
+fn check_toml(text: &str) -> Result<&str, String> {
+    toml::from_str::<toml::Table>(text).map(|_| text).map_err(|e| e.to_string())
+}
+
 fn describe_table(path: &LogicalPath, text: &str) -> Result<Described, String> {
     let named = match path.as_str() {
         "loadouts.toml" => crate::common::weapon_file::resources_named_in_loadouts(text)?,
         "classes.toml" => crate::common::class_file::rigs_named_in(text)?.into_iter().map(Named::Rig).collect(),
-        "taunts.toml" => crate::common::taunt::taunt_specs_in(text)
+        // `taunt_specs_in` logs a file that will not parse and reads it as empty.
+        "taunts.toml" => crate::common::taunt::taunt_specs_in(&check_toml(text)?)
             .into_iter()
             .flat_map(|(_, spec)| {
                 let clips = std::iter::once(spec.clip).chain(spec.rigs.into_values()).map(Named::Clip);

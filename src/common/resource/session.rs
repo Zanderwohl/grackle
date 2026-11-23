@@ -37,6 +37,16 @@ impl SessionPack {
             .map_err(|e| AssetError::Unreadable(format!("{}: {e}", named())))
     }
 
+    /// Whether the manifest lists `relative`, which makes it the server's alone.
+    pub fn lists(&self, relative: &str) -> bool {
+        LogicalPath::new(relative).is_ok_and(|path| self.manifest.get(&path).is_some())
+    }
+
+    /// The size the manifest states.
+    pub fn size(&self, relative: &str) -> Option<u64> {
+        Some(self.manifest.get(&LogicalPath::new(relative).ok()?)?.size)
+    }
+
     /// The names of the files directly in `folder`.
     pub fn list(&self, folder: &str) -> Vec<String> {
         let prefix = format!("{folder}/");
@@ -146,6 +156,19 @@ mod tests {
         let listings = crate::common::attribution::scan_assets(&assets, "music");
         let theirs = listings.last().expect("the server's pack is listed last");
         assert_eq!(theirs.files, vec!["music/Theirs/theme.ogg".to_owned()]);
+    }
+
+    /// An object not yet stored is missing, not replaced by the local file of the same path.
+    #[test]
+    fn a_listed_path_never_falls_back_to_a_local_file() {
+        let (store, _) = scratch_store("never_falls_back");
+        let path = LogicalPath::new("weapons/pistol.toml").unwrap();
+        let entry = ManifestEntry { key: ResourceKey { path, hash: ContentHash::of(b"not stored") }, size: 10, pack: "user".into(), authors: Vec::new() };
+        let mut assets = Assets::default();
+        assets.mount(SessionPack::new("a server".into(), Manifest { entries: vec![entry] }, Box::new(store)));
+        assert_eq!(assets.read_from_packs("weapons/pistol.toml"), None);
+        assert!(assets.read(Path::new("assets/default"), "weapons/pistol.toml").is_err());
+        assert!(assets.read(Path::new("assets/default"), "weapons/shotgun.toml").is_ok(), "an unlisted file is still local");
     }
 
     #[test]
