@@ -82,31 +82,43 @@ impl Plane {
 
     /// A coplanar polygon goes to the side its normal faces.
     fn split_polygon<S: Copy>(&self, polygon: &Polygon<S>, into: &mut Split<S>) {
+        match self.side_of(polygon) {
+            Side::CoplanarFront => into.coplanar_front.push(polygon.clone()),
+            Side::CoplanarBack => into.coplanar_back.push(polygon.clone()),
+            Side::Front => into.front.push(polygon.clone()),
+            Side::Back => into.back.push(polygon.clone()),
+            Side::Spanning(front, back) => {
+                into.front.extend(front);
+                into.back.extend(back);
+            }
+        }
+    }
+
+    fn side_of<S: Copy>(&self, polygon: &Polygon<S>) -> Side<S> {
         let mut polygon_type = COPLANAR;
-        let types: Vec<u8> = polygon
-            .vertices
-            .iter()
-            .map(|vertex| {
-                let classification = self.classify(*vertex);
-                polygon_type |= classification;
-                classification
-            })
-            .collect();
+        // Most polygons have few corners; a fixed buffer keeps this off the heap.
+        let mut types = [0u8; 16];
+        let small = polygon.vertices.len() <= types.len();
+        let mut spilled = Vec::new();
+        for (i, vertex) in polygon.vertices.iter().enumerate() {
+            let classification = self.classify(*vertex);
+            polygon_type |= classification;
+            match small {
+                true => types[i] = classification,
+                false => spilled.push(classification),
+            }
+        }
+        let types: &[u8] = if small { &types[..polygon.vertices.len()] } else { &spilled };
 
         match polygon_type {
-            COPLANAR => {
-                if self.normal.dot(polygon.plane.normal) > 0.0 {
-                    into.coplanar_front.push(polygon.clone());
-                } else {
-                    into.coplanar_back.push(polygon.clone());
-                }
-            }
-            FRONT => into.front.push(polygon.clone()),
-            BACK => into.back.push(polygon.clone()),
+            COPLANAR if self.normal.dot(polygon.plane.normal) > 0.0 => Side::CoplanarFront,
+            COPLANAR => Side::CoplanarBack,
+            FRONT => Side::Front,
+            BACK => Side::Back,
             _ => {
-                let mut front_vertices = Vec::new();
-                let mut back_vertices = Vec::new();
                 let count = polygon.vertices.len();
+                let mut front_vertices = Vec::with_capacity(count + 1);
+                let mut back_vertices = Vec::with_capacity(count + 1);
                 for i in 0..count {
                     let j = (i + 1) % count;
                     let (ti, tj) = (types[i], types[j]);
@@ -128,15 +140,29 @@ impl Plane {
 
                 // A split that shaved a corner off exactly on the plane can
                 // leave two vertices, which is not a polygon.
-                if front_vertices.len() >= 3 {
-                    into.front.push(polygon.with_vertices(front_vertices));
-                }
-                if back_vertices.len() >= 3 {
-                    into.back.push(polygon.with_vertices(back_vertices));
-                }
+                let front = (front_vertices.len() >= 3).then(|| polygon.with_vertices(front_vertices));
+                let back = (back_vertices.len() >= 3).then(|| polygon.with_vertices(back_vertices));
+                Side::Spanning(front, back)
             }
         }
     }
+}
+
+enum Side<S> {
+    CoplanarFront,
+    CoplanarBack,
+    Front,
+    Back,
+    Spanning(Option<Polygon<S>>, Option<Polygon<S>>),
+}
+
+/// What clipping left of one polygon. `Whole` keeps the polygon as it came
+/// rather than as the pieces the tree's planes cut it into, so a face that
+/// nothing removes stays one face however many planes cross it.
+enum Clipped<S> {
+    Whole,
+    Gone,
+    Pieces(Vec<Polygon<S>>),
 }
 
 /// One convex face, wound counter-clockwise seen from outside, as in
@@ -215,50 +241,56 @@ impl<S: Copy> Node<S> {
 
     /// Drop the parts of `polygons` that fall inside this solid.
     fn clip_polygons(&self, polygons: Vec<Polygon<S>>) -> Vec<Polygon<S>> {
-        let Some(plane) = self.plane else {
-            return polygons;
-        };
-
-        let mut split = Split::default();
-        for polygon in &polygons {
-            plane.split_polygon(polygon, &mut split);
-        }
-        // Keeps the shared wall between two unioned boxes from being kept twice.
-        split.front.extend(split.coplanar_front);
-        split.back.extend(split.coplanar_back);
-
-        let mut kept = match &self.front {
-            Some(node) => node.clip_polygons(split.front),
-            None => split.front,
-        };
-        // No back child means the space behind is solid, so what landed there
-        // is inside and goes away.
-        if let Some(node) = &self.back {
-            kept.extend(node.clip_polygons(split.back));
+        let mut kept = Vec::with_capacity(polygons.len());
+        for polygon in polygons {
+            match self.clip_one(&polygon) {
+                Clipped::Whole => kept.push(polygon),
+                Clipped::Gone => {}
+                Clipped::Pieces(pieces) => kept.extend(pieces),
+            }
         }
         kept
     }
 
-    /// Remove everything of ours that lies inside `other`.
-    fn clip_to(&mut self, other: &Node<S>) {
-        self.polygons = other.clip_polygons(std::mem::take(&mut self.polygons));
-        if let Some(front) = &mut self.front {
-            front.clip_to(other);
+    fn clip_one(&self, polygon: &Polygon<S>) -> Clipped<S> {
+        let Some(plane) = self.plane else {
+            return Clipped::Whole;
+        };
+        // A coplanar polygon goes with the side its normal faces, which keeps
+        // the shared wall between two unioned boxes from being kept twice. No
+        // back child means the space behind is solid, so what lands there is
+        // inside and goes away.
+        let front = |piece: &Polygon<S>| match &self.front {
+            Some(node) => node.clip_one(piece),
+            None => Clipped::Whole,
+        };
+        let back = |piece: &Polygon<S>| match &self.back {
+            Some(node) => node.clip_one(piece),
+            None => Clipped::Gone,
+        };
+        match plane.side_of(polygon) {
+            Side::Front | Side::CoplanarFront => front(polygon),
+            Side::Back | Side::CoplanarBack => back(polygon),
+            Side::Spanning(front_piece, back_piece) => {
+                let in_front = front_piece.as_ref().map(front);
+                let behind = back_piece.as_ref().map(back);
+                if let (Some(Clipped::Whole), Some(Clipped::Whole)) = (&in_front, &behind) {
+                    return Clipped::Whole;
+                }
+                let mut pieces = Vec::new();
+                for (piece, clipped) in [(front_piece, in_front), (back_piece, behind)] {
+                    match (piece, clipped) {
+                        (Some(piece), Some(Clipped::Whole)) => pieces.push(piece),
+                        (_, Some(Clipped::Pieces(more))) => pieces.extend(more),
+                        _ => {}
+                    }
+                }
+                match pieces.is_empty() {
+                    true => Clipped::Gone,
+                    false => Clipped::Pieces(pieces),
+                }
+            }
         }
-        if let Some(back) = &mut self.back {
-            back.clip_to(other);
-        }
-    }
-
-    fn all_polygons(&self) -> Vec<Polygon<S>> {
-        let mut all = self.polygons.clone();
-        if let Some(front) = &self.front {
-            all.extend(front.all_polygons());
-        }
-        if let Some(back) = &self.back {
-            all.extend(back.all_polygons());
-        }
-        all
     }
 
     /// Divides space by the first polygon's plane.
@@ -295,46 +327,103 @@ impl<S: Copy> Node<S> {
     }
 }
 
+/// Corners of the box round `polygons`, widened by the tolerance so a face
+/// lying on another solid's box still counts as touching it.
+fn bounds<S>(polygons: &[Polygon<S>]) -> Option<(Vec3, Vec3)> {
+    let mut points = polygons.iter().flat_map(|polygon| &polygon.vertices);
+    let first = *points.next()?;
+    let (min, max) = points.fold((first, first), |(min, max), p| (min.min(*p), max.max(*p)));
+    Some((min - Vec3::splat(EPSILON * 10.0), max + Vec3::splat(EPSILON * 10.0)))
+}
+
+fn overlaps((a_min, a_max): (Vec3, Vec3), (b_min, b_max): (Vec3, Vec3)) -> bool {
+    a_min.cmple(b_max).all() && b_min.cmple(a_max).all()
+}
+
+/// `polygons` clipped by `tree`, the solid inside `around`. A polygon whose
+/// box misses `around` is wholly outside the solid, so it is kept, or for an
+/// inverted tree, whose inside is everything outside the solid, dropped,
+/// without walking the tree.
+fn clip<S: Copy>(tree: &Node<S>, around: (Vec3, Vec3), inverted: bool, polygons: Vec<Polygon<S>>) -> Vec<Polygon<S>> {
+    let mut kept = Vec::with_capacity(polygons.len());
+    for polygon in polygons {
+        let near = bounds(std::slice::from_ref(&polygon)).is_some_and(|box_| overlaps(box_, around));
+        if !near {
+            if !inverted {
+                kept.push(polygon);
+            }
+            continue;
+        }
+        match tree.clip_one(&polygon) {
+            Clipped::Whole => kept.push(polygon),
+            Clipped::Gone => {}
+            Clipped::Pieces(pieces) => kept.extend(pieces),
+        }
+    }
+    kept
+}
+
+fn flipped<S: Copy>(mut polygons: Vec<Polygon<S>>) -> Vec<Polygon<S>> {
+    polygons.iter_mut().for_each(Polygon::flip);
+    polygons
+}
+
+fn inverted<S: Copy>(mut tree: Node<S>) -> Node<S> {
+    tree.invert();
+    tree
+}
+
+// The booleans are csg.js's, with the polygons kept apart from the trees:
+// a tree's planes classify, and what is returned is the operands' own
+// polygons clipped, never the pieces building a tree cut them into. Clipping
+// reads only a tree's planes, so the order of steps is csg.js's exactly.
+
 pub fn union<S: Copy>(a: &[Polygon<S>], b: &[Polygon<S>]) -> Vec<Polygon<S>> {
-    let mut a = Node::new(a.to_vec());
-    let mut b = Node::new(b.to_vec());
-    a.clip_to(&b);
-    b.clip_to(&a);
+    let (Some(a_box), Some(b_box)) = (bounds(a), bounds(b)) else {
+        return a.iter().chain(b).cloned().collect();
+    };
+    if !overlaps(a_box, b_box) {
+        return a.iter().chain(b).cloned().collect();
+    }
+    let a_tree = Node::new(a.to_vec());
+    let b_tree = Node::new(b.to_vec());
+    let mut kept = clip(&b_tree, b_box, false, a.to_vec());
+    let b_left = clip(&a_tree, a_box, false, b.to_vec());
     // Removes `b`'s coplanar faces inside the shared region; otherwise two
     // overlapping boxes keep a wall through the middle.
-    b.invert();
-    b.clip_to(&a);
-    b.invert();
-    a.build(b.all_polygons());
-    a.all_polygons()
+    kept.extend(flipped(clip(&a_tree, a_box, false, flipped(b_left))));
+    kept
 }
 
 /// Everything in `a` that is not also in `b`.
 pub fn subtract<S: Copy>(a: &[Polygon<S>], b: &[Polygon<S>]) -> Vec<Polygon<S>> {
-    let mut a = Node::new(a.to_vec());
-    let mut b = Node::new(b.to_vec());
-    a.invert();
-    a.clip_to(&b);
-    b.clip_to(&a);
-    b.invert();
-    b.clip_to(&a);
-    b.invert();
-    a.build(b.all_polygons());
-    a.invert();
-    a.all_polygons()
+    let (Some(a_box), Some(b_box)) = (bounds(a), bounds(b)) else { return a.to_vec() };
+    if !overlaps(a_box, b_box) {
+        return a.to_vec();
+    }
+    let a_tree = inverted(Node::new(a.to_vec()));
+    let b_tree = Node::new(b.to_vec());
+    let a_left = clip(&b_tree, b_box, false, flipped(a.to_vec()));
+    let b_left = clip(&a_tree, a_box, true, b.to_vec());
+    let b_left = flipped(clip(&a_tree, a_box, true, flipped(b_left)));
+    let mut kept = flipped(a_left);
+    kept.extend(flipped(b_left));
+    kept
 }
 
 pub fn intersect<S: Copy>(a: &[Polygon<S>], b: &[Polygon<S>]) -> Vec<Polygon<S>> {
-    let mut a = Node::new(a.to_vec());
-    let mut b = Node::new(b.to_vec());
-    a.invert();
-    b.clip_to(&a);
-    b.invert();
-    a.clip_to(&b);
-    b.clip_to(&a);
-    a.build(b.all_polygons());
-    a.invert();
-    a.all_polygons()
+    let (Some(a_box), Some(b_box)) = (bounds(a), bounds(b)) else { return Vec::new() };
+    if !overlaps(a_box, b_box) {
+        return Vec::new();
+    }
+    let a_tree = inverted(Node::new(a.to_vec()));
+    let b_tree = inverted(Node::new(b.to_vec()));
+    let b_left = flipped(clip(&a_tree, a_box, true, b.to_vec()));
+    let a_left = clip(&b_tree, b_box, true, flipped(a.to_vec()));
+    let b_left = clip(&a_tree, a_box, true, b_left);
+    let mut kept = flipped(a_left);
+    kept.extend(flipped(b_left));
+    kept
 }
 
 /// The parts of `polygons` outside the solid `solid`. On its surface, a

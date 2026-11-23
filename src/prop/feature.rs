@@ -1395,6 +1395,35 @@ fn resolve_regions(
     Some(found)
 }
 
+fn collider_of(feature: &PropFeature) -> Option<(PropFeatureId, Collider)> {
+    match &feature.op {
+        FeatureOp::Collider { roles, shape, placement } if feature.enabled => {
+            Some((feature.id, Collider { shape: *shape, placement: *placement, roles: roles.clone() }))
+        }
+        _ => None,
+    }
+}
+
+/// The colliders [`evaluate`] would list for `features`.
+pub fn colliders_of(features: &[PropFeature]) -> Vec<(PropFeatureId, Collider)> {
+    features.iter().filter_map(collider_of).collect()
+}
+
+/// Whether evaluating `a` and `b` gives the same geometry: they differ at most
+/// in names and colliders, which make no body and which nothing names, so
+/// one's bodies, seams and meshes stand for the other's. Collider features
+/// may not be added, removed or moved, since the list's order is compared.
+pub fn same_geometry(a: &[PropFeature], b: &[PropFeature]) -> bool {
+    a.len() == b.len()
+        && a.iter().zip(b).all(|(a, b)| {
+            a.id == b.id
+                && match (&a.op, &b.op) {
+                    (FeatureOp::Collider { .. }, FeatureOp::Collider { .. }) => true,
+                    _ => a.enabled == b.enabled && a.op == b.op,
+                }
+        })
+}
+
 /// A pure function of the list, so it runs without a `World`.
 pub fn evaluate(features: &[PropFeature]) -> Evaluated {
     let mut live: Vec<Live> = Vec::new();
@@ -1678,9 +1707,7 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
                 Some(point) => points.push(point),
                 None => problems.push(Problem { feature: feature.id, message: get!("prop.problems.no_point") }),
             },
-            FeatureOp::Collider { roles, shape, placement } => {
-                colliders.push((feature.id, Collider { shape: *shape, placement: *placement, roles: roles.clone() }));
-            }
+            FeatureOp::Collider { .. } => colliders.extend(collider_of(feature)),
             FeatureOp::Sketch { on, sketch } => {
                 match scope.plane(*on) {
                     Some(plane) => sketches.push(PlacedSketch {
@@ -2019,6 +2046,33 @@ mod tests {
 
     fn small_cube(id: u32, x: f32) -> PropFeature {
         primitive(id, Shape::Box { size: [0.1; 3] }, Vec3::new(x, 0.0, 0.0))
+    }
+
+    #[test]
+    fn only_names_and_colliders_leave_the_geometry_alone() {
+        let collider = |size: f32| {
+            PropFeature::new(
+                PropFeatureId(1),
+                FeatureOp::Collider {
+                    roles: Default::default(),
+                    shape: crate::prop::collider::ColliderShape::Box { size: [size; 3] },
+                    placement: Default::default(),
+                },
+            )
+        };
+        let before = vec![small_cube(0, 0.0), collider(0.1)];
+        let mut renamed = before.clone();
+        renamed[0].name = "Renamed".into();
+        renamed[1] = collider(0.5);
+        renamed[1].enabled = false;
+        assert!(same_geometry(&before, &renamed));
+        assert!(colliders_of(&renamed).is_empty());
+        assert_eq!(colliders_of(&before), evaluate(&before).colliders);
+
+        let mut moved = before.clone();
+        moved[0] = small_cube(0, 1.0);
+        assert!(!same_geometry(&before, &moved));
+        assert!(!same_geometry(&before, &before[..1]));
     }
 
     #[test]
