@@ -206,6 +206,13 @@ impl PropCache {
         self.baked.get(name).and_then(Option::as_ref)
     }
 
+    /// Drops every bake, so each prop is read from the packs again: their contents changed (a
+    /// server's files were mounted or unmounted).
+    pub fn forget_all(&mut self) {
+        self.baked.clear();
+        self.generation += 1;
+    }
+
     /// What is baked under this name, without baking it if it is not.
     pub fn get(&self, name: &str) -> Option<&BakedProp> {
         self.baked.get(name).and_then(Option::as_ref)

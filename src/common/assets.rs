@@ -16,6 +16,17 @@ use bevy::prelude::*;
 
 use crate::common::resource::session::{is_session_pack, SessionPack, SESSION_PACK};
 
+/// What the packs hold has changed: a server's files were mounted or unmounted. Each loader that
+/// read them at startup reads them again; a plugin reading it calls [`ensure_packs_changed`].
+#[derive(Message, Clone, Copy, Debug, Default)]
+pub struct PacksChanged;
+
+pub fn ensure_packs_changed(app: &mut App) {
+    if !app.world().contains_resource::<Messages<PacksChanged>>() {
+        app.add_message::<PacksChanged>();
+    }
+}
+
 /// Both variants carry the path, so a pack author knows which file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AssetError {
@@ -143,6 +154,16 @@ impl Assets {
 
     pub fn size(&self, pack: &Path, relative: &str) -> Option<u64> {
         AssetSource::size(self, pack, relative)
+    }
+
+    /// A local pack's file, even where the server's manifest lists the path: for comparing the
+    /// two.
+    pub fn read_local(&self, pack: &Path, relative: &str) -> Result<Vec<u8>, AssetError> {
+        self.source.read(pack, relative)
+    }
+
+    pub fn size_local(&self, pack: &Path, relative: &str) -> Option<u64> {
+        self.source.size(pack, relative)
     }
 
     /// Lowest priority first: the local packs, then the server's while one is mounted.

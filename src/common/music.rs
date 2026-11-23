@@ -214,7 +214,11 @@ pub struct MusicPlugin;
 
 impl Plugin for MusicPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Assets>().init_resource::<MusicLibrary>().add_systems(Startup, find_music);
+        crate::common::assets::ensure_packs_changed(app);
+        app.init_resource::<Assets>()
+            .init_resource::<MusicLibrary>()
+            .add_systems(Startup, find_music)
+            .add_systems(Update, find_music.run_if(on_message::<crate::common::assets::PacksChanged>));
     }
 }
 

@@ -94,7 +94,8 @@ pub fn describe(path: &LogicalPath, bytes: &[u8]) -> Result<Described, String> {
         | ResourceKind::Decal
         | ResourceKind::Icon
         | ResourceKind::Music
-        | ResourceKind::Attribution => Ok(Described::default()),
+        | ResourceKind::Attribution
+        | ResourceKind::Lightmap => Ok(Described::default()),
         ResourceKind::Prop => {
             crate::prop::document::parse(text()?).map_err(|e| e.to_string())?;
             Ok(Described::default())

@@ -129,6 +129,15 @@ impl MaterialLibrary {
         self.get(name)
     }
 
+    /// Every material, as after the packs changed.
+    pub fn forget_all(&mut self, baked: &mut BakedTextures, standard: &mut Assets<StandardMaterial>) {
+        let names: Vec<String> = self.entries.keys().cloned().collect();
+        for name in names {
+            self.forget(&name, baked, standard);
+        }
+        self.entries.clear();
+    }
+
     /// So the next room to ask bakes it again, as after a save.
     pub fn forget(&mut self, name: &str, baked: &mut BakedTextures, standard: &mut Assets<StandardMaterial>) {
         if let Some(Some(entry)) = self.entries.remove(name) {

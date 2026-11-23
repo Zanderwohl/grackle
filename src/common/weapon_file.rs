@@ -2,8 +2,8 @@
 //! name weapons by string; [`WeaponCatalog`](crate::common::weapon::WeaponCatalog)
 //! names them by hash.
 //!
-//! A client's startup catalog is replaced by the server's on connect (see
-//! [`crate::common::pack_sync`]).
+//! A client reads the server's files instead once they are mounted (see
+//! [`crate::common::resource::sync`]).
 //!
 //! Each weapon is its own file, `weapons/{key}.toml` in a pack, its key the
 //! file's stem; the loadouts are one `loadouts.toml` per pack. Reads go

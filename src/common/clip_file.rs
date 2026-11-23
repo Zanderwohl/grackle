@@ -120,6 +120,18 @@ impl NamedClips {
             .clone()
     }
 
+    /// Reads every clip asked for again, into the handles already given out.
+    pub fn reload(&mut self, assets: &Assets, clips: &mut bevy::asset::Assets<Clip>) {
+        let packs = assets.match_packs();
+        for (name, handle) in self.0.iter_mut() {
+            match (load_named_clip(assets, &packs, name), handle.as_ref()) {
+                (Some(clip), Some(held)) => crate::common::skeleton::play::refill(clips, held, &clip),
+                (Some(clip), None) => *handle = Some(clips.add(clip)),
+                (None, _) => *handle = None,
+            }
+        }
+    }
+
     pub fn publish(&mut self, clips: &mut bevy::asset::Assets<Clip>, name: &str, clip: &Clip) {
         match self.0.get(name) {
             Some(Some(handle)) => crate::common::skeleton::play::refill(clips, handle, clip),
@@ -157,6 +169,10 @@ pub fn load_clips_for_new_rigs(
             }
         }
     }
+}
+
+pub fn reload_named_clips(assets: Res<Assets>, mut named: ResMut<NamedClips>, mut clips: ResMut<bevy::asset::Assets<Clip>>) {
+    named.reload(&assets, &mut clips);
 }
 
 pub fn load_body_clips_at_startup(mut commands: Commands, assets: Res<Assets>) {

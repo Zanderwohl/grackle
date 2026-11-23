@@ -20,7 +20,6 @@ pub mod damage;
 pub mod team;
 pub mod weapon;
 pub mod weapon_file;
-pub mod pack_sync;
 pub mod class_file;
 pub mod layer_file;
 pub mod taunt;

@@ -170,14 +170,19 @@ pub fn parse(text: &str) -> Result<LoadedBlueprint, String> {
 /// paints with, the default material of each slot, and its music. For
 /// [`crate::common::resource`].
 pub fn resources_named_in(text: &str) -> Result<crate::common::resource::Described, String> {
+    let loaded = parse(text)?;
+    Ok(resources_named_by(&loaded.timeline, &loaded.metadata))
+}
+
+/// [`resources_named_in`] for a map in memory.
+pub fn resources_named_by(timeline: &FeatureTimeline, metadata: &MapMetadata) -> crate::common::resource::Described {
     use crate::common::resource::Named;
     use crate::tool::room::RoomSlot;
 
-    let loaded = parse(text)?;
-    let palette = &loaded.metadata.palette;
+    let palette = &metadata.palette;
     let mut named = Vec::new();
-    for id in loaded.timeline.feature_order() {
-        let Some(feature) = loaded.timeline.get_feature(id) else { continue };
+    for id in timeline.feature_order() {
+        let Some(feature) = timeline.get_feature(id) else { continue };
         for name in feature.object().resources_named() {
             match name {
                 Named::Material(name) => match palette.materials_of_role(&name) {
@@ -189,10 +194,10 @@ pub fn resources_named_in(text: &str) -> Result<crate::common::resource::Describ
         }
     }
     named.extend(RoomSlot::ALL.map(|slot| Named::Material(crate::material::library::default_material(slot).to_owned())));
-    named.extend(loaded.metadata.music.iter().cloned().map(Named::Music));
+    named.extend(metadata.music.iter().cloned().map(Named::Music));
     named.sort();
     named.dedup();
-    Ok(crate::common::resource::Described { named, authors: loaded.metadata.authors })
+    crate::common::resource::Described { named, authors: metadata.authors.clone() }
 }
 
 /// Every error names `path`.

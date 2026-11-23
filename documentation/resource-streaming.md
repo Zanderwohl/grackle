@@ -320,17 +320,35 @@ Noticed in this stage:
 
 ### Stage 3 — the wire
 
-- [ ] `Manifest` (with sizes) on connect and on change; `Want`, answered only for hashes in the
-      last manifest; chunked `ResourceChannel` with a per-tick budget. No client-to-server
-      resource message.
-- [ ] Each round's map serialized, hashed and added to the manifest at round start; stored by
-      every client and listed per round in the session record.
-- [ ] Lightmaps offered as derived resources keyed by the sun bake's input hash.
-- [ ] Background fetches after joining; rounds wait on them in `round_prep`.
-- [ ] Replace `pack_sync`'s tables and `prop::sync`'s texts with files from the manifest, loaded by
-      the same loaders on both machines. Remove both modules.
-- [ ] A test with a host and a client over real sockets, where the client's user pack has a
-      different `props/crate.gpp`: the client draws the host's, and its own file is untouched.
+- [x] `ManifestMessage` (with sizes and a generation) on connect and on change; `Want`, answered
+      only for hashes in the current manifest; `Chunk`s on `ResourceChannel`, 32 KiB each, 128 KiB
+      per client per frame. No message carries content from a client
+      ([`resource::sync`](../src/common/resource/sync.rs)).
+- [x] The manifest is rebuilt when what the live map names changes (read from the features
+      without the closure), a prop is saved, the catalog changes, a round starts, the sun bake
+      changes or the server starts, at most every 0.25 s. The live map is walked for its
+      dependencies and not sent.
+- [x] Each round's map serialized as it stands on entering Play, hashed and added to the
+      manifest; every client stores it and lists it in `downloads/sessions/{server}/{started}.toml`.
+- [x] The sun bake standing on the server offered as `lightmap/{input hash}.bin`; a client puts
+      it where its sun bake looks and looks again.
+- [x] A client compares by size then hash with its store and its local packs, copies a matching
+      local file into the store, fetches the rest, mounts once all are stored, and writes
+      `PacksChanged`: the tables, body and named clips, layers and music read again, and the prop
+      cache and material library forget their bakes. Not being a client unmounts.
+- [x] `pack_sync` and `prop::sync` removed; the client builds its tables from the server's files.
+- [x] Real-socket tests: a client whose own `weapons/pistol.toml` differs ends up reading the
+      host's, fetches only that file, and its own is untouched; a client keeps the map a round
+      started on and records it.
+
+Left for stage 4 or later:
+
+- **A round started while a client is still fetching is not held back.** `round_prep` holds the
+  authority's own round for its bakes; holding a client is the joining state's job.
+- **The comparison is synchronous**, reading and hashing on the main thread when a manifest
+  arrives, and does not use `HashIndex` yet. Stage 4 spreads it over frames for the 0–5% band.
+- **A file whose bytes fail the hash is asked for again three times**, then given up on; it
+  reads as missing, and nothing tells the player yet.
 
 ### Stage 4 — joining
 

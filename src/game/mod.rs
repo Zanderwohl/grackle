@@ -115,6 +115,7 @@ pub struct GamePlugin;
 impl Plugin for GamePlugin {
     fn build(&self, app: &mut App) {
         crate::common::keybind::ensure(app);
+        crate::common::assets::ensure_packs_changed(app);
         app
             // Here rather than beside the damage layer: it is physics, on the
             // same fixed steps and `CollisionWorld` as the player step.
@@ -137,13 +138,13 @@ impl Plugin for GamePlugin {
             // A browser build replaces this line and nothing else.
             .init_resource::<crate::common::assets::Assets>()
             // Here rather than in `WeaponPlugin` because `spawn_player` reads
-            // it. On a client it is replaced by the server's on connect.
+            // it. A client reads it again from the server's files once they are mounted.
             .init_resource::<crate::common::weapon::WeaponCatalog>()
             .add_systems(
                 Startup,
                 crate::common::weapon_file::load_catalog_at_startup,
             )
-            // Bodies are rigged from it; replaced by the server's on connect.
+            // Bodies are rigged from it; read again from the server's files, as the catalog is.
             .init_resource::<crate::common::class::ClassBuilds>()
             .add_systems(Startup, crate::common::class_file::load_builds_at_startup)
             .init_resource::<crate::common::taunt::Taunts>()
@@ -157,6 +158,17 @@ impl Plugin for GamePlugin {
                 crate::common::clip_file::load_body_clips_at_startup,
             )
             .add_systems(Update, crate::common::clip_file::load_clips_for_new_rigs)
+            .add_systems(
+                Update,
+                (
+                    crate::common::weapon_file::load_catalog_at_startup,
+                    crate::common::class_file::load_builds_at_startup,
+                    crate::common::taunt::load_taunts_at_startup,
+                    crate::common::game_rules::load_modes_at_startup,
+                    crate::common::clip_file::load_body_clips_at_startup,
+                )
+                    .run_if(on_message::<crate::common::assets::PacksChanged>),
+            )
 
             .init_resource::<CollisionWorld>()
             .init_resource::<MovementRules>()

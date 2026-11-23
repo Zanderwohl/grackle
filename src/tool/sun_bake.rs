@@ -48,7 +48,7 @@ use crate::tool::room::{Block, Room, RoomSlot, RoomSurfaces};
 
 const FORMAT: u32 = 3;
 
-const CACHE_FOLDER: &str = "lightmap";
+pub const CACHE_FOLDER: &str = "lightmap";
 
 #[derive(Resource)]
 pub struct SunBake {
@@ -90,6 +90,17 @@ impl SunBake {
 
     pub fn auto(&self) -> bool {
         self.bake.auto()
+    }
+
+    /// The hash of the light standing now, whether baked here or read back from disk.
+    pub fn baked_hash(&self) -> Option<u64> {
+        self.bake.baked()
+    }
+
+    /// After a bake was put on disk by other means (a server's), so a miss already looked up is
+    /// read again.
+    pub fn look_on_disk_again(&mut self) {
+        self.looked_up = None;
     }
 
     pub fn set_auto(&mut self, auto: bool) {

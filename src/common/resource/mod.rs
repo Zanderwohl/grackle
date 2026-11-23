@@ -3,6 +3,7 @@
 //! documentation/resource-streaming.md.
 
 pub mod closure;
+pub mod sync;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod hash_index;
 mod named;
@@ -181,6 +182,10 @@ pub enum ResourceKind {
     Music,
     /// A music folder's `attribution.txt`.
     Attribution,
+    /// A sun bake the server made, `lightmap/{input hash:016x}.bin`, offered so a client need not
+    /// bake it. Derived, so not checkable without baking it; trusted, since nothing gameplay-related
+    /// reads a lightmap.
+    Lightmap,
 }
 
 const KIB: u64 = 1024;
@@ -189,7 +194,7 @@ const MIB: u64 = 1024 * KIB;
 pub const TABLES: [&str; 5] = ["loadouts.toml", "classes.toml", "taunts.toml", "modes.toml", "layers.toml"];
 
 impl ResourceKind {
-    pub const ALL: [ResourceKind; 11] = [
+    pub const ALL: [ResourceKind; 12] = [
         ResourceKind::Blueprint,
         ResourceKind::Prop,
         ResourceKind::Weapon,
@@ -201,6 +206,7 @@ impl ResourceKind {
         ResourceKind::Icon,
         ResourceKind::Music,
         ResourceKind::Attribution,
+        ResourceKind::Lightmap,
     ];
 
     /// The pack folder the kind lives under; empty for the tables at a pack's root.
@@ -216,6 +222,7 @@ impl ResourceKind {
             ResourceKind::Decal => "decals",
             ResourceKind::Icon => "icons",
             ResourceKind::Music | ResourceKind::Attribution => "music",
+            ResourceKind::Lightmap => crate::tool::sun_bake::CACHE_FOLDER,
         }
     }
 
@@ -230,6 +237,7 @@ impl ResourceKind {
             ResourceKind::Icon => &["svg"],
             ResourceKind::Music => &["mp3", "flac", "wav", "ogg"],
             ResourceKind::Attribution => &["txt"],
+            ResourceKind::Lightmap => &["bin"],
         }
     }
 
@@ -242,6 +250,7 @@ impl ResourceKind {
             ResourceKind::Decal => 8 * MIB,
             ResourceKind::Music => 32 * MIB,
             ResourceKind::Attribution => 64 * KIB,
+            ResourceKind::Lightmap => 64 * MIB,
         }
     }
 
