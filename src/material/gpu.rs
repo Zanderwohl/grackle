@@ -131,6 +131,11 @@ pub struct BevyDevice<'w> {
 }
 
 impl BevyDevice<'_> {
+    /// Whether the renderer has made what a bake needs, without making a baker.
+    pub fn ready(&self) -> bool {
+        self.adapter.is_some() && self.device.is_some() && self.queue.is_some()
+    }
+
     pub fn baker(&self) -> Option<Baker> {
         let ctx = DeviceCtx::from_shared(
             Arc::new((**self.adapter.as_deref()?).clone()),

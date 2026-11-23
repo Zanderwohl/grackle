@@ -132,6 +132,7 @@ pub fn run() {
         .add_plugins(RoundSettingsFilePlugin { path: server_files.saved.clone(), seed: server_files.shipped.clone() })
         .add_plugins((crate::main_menu::MainMenuPlugin, crate::common::lan_discovery::LanDiscoveryPlugin, crate::server_browser::ServerBrowserPlugin))
         .add_plugins(crate::onboarding::OnboardingPlugin { skip: editor_params.chooses_where_to_start() })
+        .add_plugins(crate::joining_screen::JoiningScreenPlugin)
         .add_systems(Startup, move || {
             // Read before the log existed, so said now.
             if let Some(problem) = &settings_problem {

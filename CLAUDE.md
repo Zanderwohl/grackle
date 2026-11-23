@@ -465,8 +465,19 @@ in a team mode is still a gamemode question.
 ## Editor and game in one process
 
 `AppMode` ([`src/common/app_mode.rs`](src/common/app_mode.rs)) is `Editor`,
-`Prop`, `Animation`, `Material`, `Weapon`, `Lang`, `Play`, `MainMenu` or `Onboarding`, iterable in that order, which is
-the Mode menu's order, with a separator above Play and above the main menu. **`Onboarding`** ([`src/onboarding.rs`](src/onboarding.rs)) is never in the
+`Prop`, `Animation`, `Material`, `Weapon`, `Lang`, `Play`, `MainMenu`, `Onboarding` or `Joining`, iterable in that order, which is
+the Mode menu's order, with a separator above Play and above the main menu (`AppMode::in_the_menu`
+leaves out the last two). **`Joining`** ([`src/common/joining.rs`](src/common/joining.rs),
+[`src/joining_screen.rs`](src/joining_screen.rs)) is where a client is from the moment its role
+becomes a client until the server's files are fetched and built: `follow_the_server` records the
+server's mode in `ServerMode` instead of switching while it lasts, and `finish_joining` goes there
+once the server's pack is mounted, every prop and material its manifest lists is baked (a frame
+each), the server's map is in and the room and sun bakes have settled. Its screen is a small egui
+window over a picture from `images/backgrounds/loading/` (the title screen's while that holds
+none; never the last one shown): "Joining {server}", a progress bar — comparing to 5%,
+downloading by bytes to 80%, building by weighted steps to 100% (`joining::progress`) — a line
+naming the phase and file, and Disconnect, which leaves as the pause menu's does and drops
+everything held for the server. **`Onboarding`** ([`src/onboarding.rs`](src/onboarding.rs)) is never in the
 menu: it is the *initial* state, inserted by `OnboardingPlugin` when the saved player name is
 blank and the command line names nothing to open or play (`EditorParams::chooses_where_to_start`:
 any mode flag (`--editor` among them), `--map`, `--serve`, `--connect`, `--server-config`, `--server-profile`, `--spectate`, `--rounds` or
@@ -3514,7 +3525,7 @@ lightmap goes where the sun bake looks. Each round's map is kept and listed in
 `downloads/sessions/{server}/{started}.toml`. Not being a client any more
 unmounts it. Client-to-server messages carry hashes only, and a `Want` is
 answered only for hashes in the current manifest. `Fetch` is the client's
-progress, which the joining screen (stage 4) will draw.
+progress, which the joining screen draws; the comparison runs 8 MiB of local reads a frame.
 
 ### Finding a server on the LAN
 

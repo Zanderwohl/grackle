@@ -33,6 +33,18 @@ pub struct ManifestMessage {
     pub manifest: Manifest,
     /// Bumped by the server whenever the manifest changes.
     pub generation: u64,
+    /// The server's listed name, or its host's player name; cut to [`MAX_SERVER_NAME`] characters
+    /// on arrival.
+    pub server: String,
+}
+
+pub const MAX_SERVER_NAME: usize = 64;
+
+fn server_name(listing: Option<&crate::common::round_settings::ServerListing>, player: Option<&crate::common::player_settings::PlayerSettings>) -> String {
+    match listing.map(|listing| listing.name.trim()).unwrap_or_default() {
+        "" => player.map(|player| player.name.trim().to_owned()).unwrap_or_default(),
+        name => name.to_owned(),
+    }
 }
 
 /// The hashes a client lacks. Answered only for hashes in the server's current manifest.
@@ -109,7 +121,7 @@ impl Plugin for ResourceSyncPlugin {
                 Update,
                 (
                     (rebuild_the_manifest, send_the_manifest_to_new_clients, take_wants, send_chunks).chain(),
-                    (forget_the_server_when_not_a_client, read_manifests, read_chunks, mount_when_everything_is_stored).chain(),
+                    (forget_the_server_when_not_a_client, read_manifests, compare_some, read_chunks, mount_when_everything_is_stored).chain(),
                 ),
             );
     }
@@ -210,6 +222,7 @@ fn rebuild_the_manifest(
     catalog: Option<Res<crate::common::weapon::WeaponCatalog>>,
     editor: Option<Res<crate::prop::document::PropEditor>>,
     sun: Option<Res<crate::tool::sun_bake::SunBake>>,
+    named: (Option<Res<crate::common::round_settings::ServerListing>>, Option<Res<crate::common::player_settings::PlayerSettings>>),
     server: Option<Single<&Endpoint, With<Server>>>,
     mut served: ResMut<Served>,
     mut sender: ServerMultiMessageSender,
@@ -289,20 +302,24 @@ fn rebuild_the_manifest(
     served.generation += 1;
     served.manifest = manifest;
     info!("Clients need {} files, {} bytes (manifest {})", served.manifest.entries.len(), served.manifest.total_bytes(), served.generation);
-    let message = ManifestMessage { manifest: served.manifest.clone(), generation: served.generation };
+    let server_name = server_name(named.0.as_deref(), named.1.as_deref());
+    let message = ManifestMessage { manifest: served.manifest.clone(), generation: served.generation, server: server_name };
     sender.send::<_, ResourceChannel>(&message, &server, &NetworkTarget::All)?;
     Ok(())
 }
 
 fn send_the_manifest_to_new_clients(
     served: Res<Served>,
+    listing: Option<Res<crate::common::round_settings::ServerListing>>,
+    player: Option<Res<crate::common::player_settings::PlayerSettings>>,
     joined: Query<Entity, (With<ClientOf>, Added<Connected>)>,
     mut sender: ServerMultiMessageSender,
 ) -> Result {
     if joined.is_empty() || served.generation == 0 {
         return Ok(());
     }
-    let message = ManifestMessage { manifest: served.manifest.clone(), generation: served.generation };
+    let server = server_name(listing.as_deref(), player.as_deref());
+    let message = ManifestMessage { manifest: served.manifest.clone(), generation: served.generation, server };
     for client in &joined {
         sender.send_to_entities::<_, ResourceChannel>(&message, core::iter::once(client))?;
     }
@@ -395,22 +412,36 @@ fn send_chunks(
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum FetchPhase {
+    /// No manifest yet.
     #[default]
     Idle,
+    /// Checking the manifest against the store and the local packs, a few files a frame.
+    Comparing,
     Downloading,
     /// Every file is stored and the server's pack is mounted.
     Mounted,
 }
 
+/// Local bytes read and hashed per frame while comparing, so a manifest naming music does not
+/// stall a frame.
+const COMPARE_BYTES_PER_FRAME: u64 = 8 * 1024 * 1024;
+
 /// What a client is fetching from its server, for the join screen.
 #[derive(Resource, Default)]
 pub struct Fetch {
     pub phase: FetchPhase,
+    /// The server's name as its manifest gave it.
+    pub server: String,
+    pub entries: usize,
+    pub entries_checked: usize,
     pub bytes_wanted: u64,
     pub bytes_received: u64,
+    pub files_wanted: usize,
     /// The file being received now.
     pub current: Option<LogicalPath>,
     manifest: Option<Manifest>,
+    /// Entries still to compare.
+    comparing: VecDeque<ManifestEntry>,
     generation: u64,
     /// By hash: its size, and a path it is listed at, for messages and its extension.
     wanted: BTreeMap<ContentHash, (u64, LogicalPath)>,
@@ -420,6 +451,17 @@ pub struct Fetch {
     partial: HashMap<ContentHash, Vec<u8>>,
     mounted: Option<u64>,
     record: Option<SessionRecord>,
+}
+
+impl Fetch {
+    pub fn files_received(&self) -> usize {
+        self.files_wanted.saturating_sub(self.wanted.len())
+    }
+
+    /// The server's files, once a manifest is in.
+    pub fn manifest(&self) -> Option<&Manifest> {
+        self.manifest.as_ref()
+    }
 }
 
 /// One connection's record in `downloads/sessions/`: which map each round played, by hash.
@@ -481,35 +523,64 @@ fn local_copy(assets: &PackAssets, entry: &ManifestEntry) -> Option<Vec<u8>> {
 
 fn read_manifests(
     role: Res<NetRole>,
-    assets: Res<PackAssets>,
-    root: Res<DownloadsRoot>,
     mut fetch: ResMut<Fetch>,
     mut receivers: Query<&mut MessageReceiver<ManifestMessage>, With<Client>>,
-    mut senders: Query<&mut MessageSender<Want>, (With<Client>, With<Connected>)>,
 ) {
     if role.is_authority() {
         return;
     }
     let Some(message) = receivers.iter_mut().flat_map(|mut receiver| receiver.receive().collect::<Vec<_>>()).last() else { return };
-    let Some(store) = root.store() else { return };
+    info!("The server's manifest {} lists {} files", message.generation, message.manifest.entries.len());
+    fetch.server = message.server.chars().take(MAX_SERVER_NAME).collect();
+    fetch.entries = message.manifest.entries.len();
+    fetch.entries_checked = 0;
+    fetch.comparing = message.manifest.entries.iter().cloned().collect();
+    fetch.manifest = Some(message.manifest);
+    fetch.generation = message.generation;
+    fetch.phase = FetchPhase::Comparing;
+}
 
-    let mut wanted = BTreeMap::new();
-    for entry in &message.manifest.entries {
+/// Compares a frame's worth of entries; once all are compared, asks for what is lacking.
+fn compare_some(
+    role: Res<NetRole>,
+    assets: Res<PackAssets>,
+    root: Res<DownloadsRoot>,
+    mut fetch: ResMut<Fetch>,
+    mut senders: Query<&mut MessageSender<Want>, (With<Client>, With<Connected>)>,
+) {
+    if role.is_authority() || fetch.phase != FetchPhase::Comparing {
+        return;
+    }
+    let Some(store) = root.store() else { return };
+    let Fetch { comparing, wanted, entries_checked, .. } = &mut *fetch;
+    if *entries_checked == 0 {
+        wanted.clear();
+    }
+    let mut read = 0;
+    while read < COMPARE_BYTES_PER_FRAME {
+        let Some(entry) = comparing.pop_front() else { break };
+        *entries_checked += 1;
         let extension = entry.key.path.extension().unwrap_or_default();
         if store.has(entry.key.hash, extension) || wanted.contains_key(&entry.key.hash) {
             continue;
         }
-        if let Some(bytes) = local_copy(&assets, entry)
+        read += entry.size;
+        if let Some(bytes) = local_copy(&assets, &entry)
             && store.put(entry.key.hash, extension, &bytes).is_ok()
         {
             continue;
         }
         wanted.insert(entry.key.hash, (entry.size, entry.key.path.clone()));
     }
+    if !fetch.comparing.is_empty() {
+        return;
+    }
+
+    let wanted = std::mem::take(&mut fetch.wanted);
     fetch.partial.retain(|hash, _| wanted.contains_key(hash));
     fetch.asked.retain(|hash| wanted.contains_key(hash));
     let ask: Vec<ContentHash> = wanted.keys().filter(|hash| !fetch.asked.contains(*hash)).copied().collect();
-    info!("The server's manifest {} lists {} files; {} to fetch", message.generation, message.manifest.entries.len(), wanted.len());
+    info!("{} of the server's files to fetch, {} bytes", wanted.len(), wanted.values().map(|(size, _)| size).sum::<u64>());
     if !ask.is_empty() {
         for mut sender in &mut senders {
             sender.send::<ResourceChannel>(Want { hashes: ask.clone() });
@@ -518,10 +589,9 @@ fn read_manifests(
     }
     fetch.bytes_wanted = wanted.values().map(|(size, _)| size).sum();
     fetch.bytes_received = fetch.partial.values().map(|bytes| bytes.len() as u64).sum();
-    fetch.phase = FetchPhase::Downloading;
+    fetch.files_wanted = wanted.len();
     fetch.wanted = wanted;
-    fetch.manifest = Some(message.manifest);
-    fetch.generation = message.generation;
+    fetch.phase = FetchPhase::Downloading;
 }
 
 fn read_chunks(
@@ -567,6 +637,10 @@ fn read_chunks(
         }
     }
 
+    // While comparing, `wanted` is still being filled and nothing in it has been asked for yet.
+    if fetch.phase != FetchPhase::Downloading {
+        return;
+    }
     let mut again = Vec::new();
     let unasked: Vec<ContentHash> = fetch.wanted.keys().filter(|hash| !fetch.asked.contains(*hash)).copied().collect();
     for hash in unasked {
@@ -625,7 +699,7 @@ fn mount_when_everything_is_stored(
     sun: Option<ResMut<crate::tool::sun_bake::SunBake>>,
     mut changed: MessageWriter<PacksChanged>,
 ) {
-    if role.is_authority() || !fetch.wanted.is_empty() || fetch.mounted == Some(fetch.generation) {
+    if role.is_authority() || fetch.phase != FetchPhase::Downloading || !fetch.wanted.is_empty() || fetch.mounted == Some(fetch.generation) {
         return;
     }
     let Some(manifest) = fetch.manifest.clone() else { return };
@@ -687,7 +761,7 @@ mod tests {
         let path = LogicalPath::new("props/crate.gpp").unwrap();
         let hash = ContentHash::of(b"crate");
         let manifest = Manifest::checked(vec![ManifestEntry { key: ResourceKey { path, hash }, size: 5, pack: "user".into(), authors: vec![] }]).unwrap();
-        let message = ManifestMessage { manifest, generation: 3 };
+        let message = ManifestMessage { manifest, generation: 3, server: "a server".into() };
         assert_eq!(postcard::from_bytes::<ManifestMessage>(&postcard::to_stdvec(&message).unwrap()).unwrap(), message);
         let want = Want { hashes: vec![hash] };
         assert_eq!(postcard::from_bytes::<Want>(&postcard::to_stdvec(&want).unwrap()).unwrap(), want);

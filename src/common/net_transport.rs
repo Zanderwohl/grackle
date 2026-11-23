@@ -119,6 +119,7 @@ impl Plugin for NetTransportPlugin {
             .add_plugins(crate::common::map_sync::MapSyncPlugin)
             // The server's files: weapons, models, tables, clips, materials and a round's map.
             .add_plugins(crate::common::resource::sync::ResourceSyncPlugin)
+            .add_plugins(crate::common::joining::JoiningPlugin)
             .add_plugins(crate::common::net_events::NetEventsPlugin)
             .add_plugins(crate::game::spray::SpraySyncPlugin)
             .add_plugins(crate::common::postcard_sync::PostcardSyncPlugin)
@@ -771,8 +772,11 @@ mod tests {
         assert!(run_until(&mut [&mut host], 2.0, |apps| matches!(*apps[0].world().resource::<NetStatus>(), NetStatus::Hosting { .. })));
         client.world_mut().write_message(NetRequest::Join { host: "127.0.0.1".into(), port });
 
-        let mounted = |apps: &[&mut App]| apps[1].world().resource::<Fetch>().phase == FetchPhase::Mounted;
-        assert!(run_until(&mut [&mut host, &mut client], 15.0, mounted), "the server's files were never mounted");
+        let joining = |apps: &[&mut App]| *apps[1].world().resource::<State<AppMode>>().get() == AppMode::Joining;
+        assert!(run_until(&mut [&mut host, &mut client], 5.0, joining), "the client never showed the joining screen");
+        let joined = |apps: &[&mut App]| *apps[1].world().resource::<State<AppMode>>().get() == AppMode::Editor;
+        assert!(run_until(&mut [&mut host, &mut client], 15.0, joined), "the client never left the joining screen for the server's mode");
+        assert_eq!(client.world().resource::<Fetch>().phase, FetchPhase::Mounted, "the client left joining before mounting");
 
         let theirs = std::fs::read("assets/default/weapons/pistol.toml").unwrap();
         let assets = client.world().resource::<crate::common::assets::Assets>();

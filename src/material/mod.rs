@@ -269,6 +269,7 @@ impl Plugin for MaterialEditorPlugin {
             .init_resource::<pit::Pit>()
             // Ungated: rooms are drawn in the editor and in a round alike.
             .add_systems(Update, (publish_saved_materials, forget_materials_for_new_packs, library::paint_rooms).chain())
+            .add_systems(Update, library::bake_a_material_for_joining.run_if(in_state(AppMode::Joining)))
             // Ungated: it has to run in whatever mode the process started in.
             .add_systems(Update, start_in_the_material_editor)
             .add_systems(Update, picker::publish_choices.run_if(in_state(AppMode::Editor)))

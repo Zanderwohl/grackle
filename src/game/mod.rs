@@ -287,7 +287,7 @@ fn toggle_mode(
             );
             return;
         }
-        AppMode::Onboarding | AppMode::MainMenu => return,
+        AppMode::Onboarding | AppMode::MainMenu | AppMode::Joining => return,
     });
 }
 
@@ -308,7 +308,7 @@ fn leave_a_round_without_a_server(
         for entity in &sent {
             commands.entity(entity).try_despawn();
         }
-        if *mode.get() == AppMode::Play {
+        if matches!(*mode.get(), AppMode::Play | AppMode::Joining) {
             let back = joined.as_deref().copied().unwrap_or_default().after_leaving();
             info!("No longer connected to a server; back to {}", back.name());
             next.set(back);

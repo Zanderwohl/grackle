@@ -1133,6 +1133,18 @@ name = "Name"
 field_of_view = "Field of view"
 continue = "Continue"
 
+# The screen between connecting to a server and its first screen.
+[joining]
+title = "Joining { server }"
+waiting = "Waiting for the server"
+comparing = "Comparing files ({ done } of { total })"
+downloading = "Downloading { file } ({ done } of { total })"
+building_prop = "Building { file }"
+baking_material = "Baking { file }"
+rooms = "Building rooms"
+light = "Lighting the map"
+disconnect = "Disconnect"
+
 [main_menu]
 window_title = "Grackle"
 title = "Grackle"
@@ -1189,6 +1201,7 @@ lang = "Lang Editor"
 main_menu = "Main Menu"
 play = "Play"
 onboarding = "Onboarding"
+joining = "Joining"
 
 # Every authoring mode's File pulldown. The entries mean whatever the thing
 # you are editing makes of them — a blueprint, a prop, a set of clips — which

@@ -70,6 +70,7 @@ pub mod postcard_sync;
 pub mod sky;
 pub mod stable_hash;
 pub mod resource;
+pub mod joining;
 pub mod sunlight;
 pub mod lightmap;
 pub mod air_light;

@@ -352,16 +352,31 @@ Left for stage 4 or later:
 
 ### Stage 4 — joining
 
-- [ ] `AppMode::Joining`, entered as a client connects, left for the server's `MatchMode` once
-      everything is fetched and built.
-- [ ] The join's progress: the three bands (0–5% comparing, 5–80% downloading by bytes, 80–100%
-      building by weighted steps) and the phase line naming the asset, through `joining.*` strings.
-- [ ] The window: "Joining {server name}", the bar, the phase line and Disconnect, which drops
-      everything held in memory for the server.
-- [ ] Backgrounds from `images/backgrounds/loading/`, never the previous load's picture.
-- [ ] The build band does every bake the first frame would otherwise do: props, tables,
-      materials, rooms, light, postcards. A test that the first frame after `Joining` bakes
-      nothing.
+- [x] `AppMode::Joining`, entered in the frame the role becomes a client (before
+      `back_to_the_map_editor_when_networked` can move it), left for the mode the server last
+      stated (`ServerMode`) once the files are mounted and built. `follow_the_server` records the
+      mode instead of switching while joining. Losing the link, or Disconnect, goes back to where
+      the client joined from.
+- [x] The three bands (`joining::progress`): comparing by entries checked, now spread over frames
+      at 8 MiB of local reads each; downloading by bytes received of the wanted files' manifest
+      sizes; building by weighted steps (a prop 1, a material 2, rooms 2, light 4). The phase line
+      names the file, through `joining.*` strings. The manifest carries the server's name.
+- [x] The window ([`joining_screen`](../src/joining_screen.rs)): "Joining {server}" (its address
+      while the manifest has not named it), the bar, the phase line and Disconnect.
+- [x] Backgrounds from `images/backgrounds/loading/`, never the previous load's picture; the title
+      screen's stand in while the folder holds none (no picture ships there yet).
+- [x] The build band bakes every prop (`PropCache::ensure`) and material
+      (`bake_a_material_for_joining`, once the device exists) the manifest lists, waits for the
+      server's map to be adopted, and for the room and sun bakes to settle.
+
+Not done in this stage:
+
+- **No test proves the first frame after joining bakes nothing.** The socket tests run without a
+  renderer, so props and materials are passed over there; the test covers the state flow (a
+  client shows Joining, mounts, then goes to the server's mode).
+- **Postcards are not waited for.** They arrive on their own channel and the HUD shows them when
+  they do.
+- **The joining screen has not been looked at in a running game.**
 
 ### Stage 5 — keeping and locking
 

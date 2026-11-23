@@ -3,6 +3,8 @@ pub const MAP_BLUEPRINT_EXTENSION: &str = "gmb";
 pub const BLUEPRINTS_DIR: &str = "blueprints";
 /// The main menu's background pictures inside a pack.
 pub const TITLE_BACKGROUNDS_DIR: &str = "images/backgrounds/title";
+/// The joining screen's; the title screen's stand in while this holds none.
+pub const LOADING_BACKGROUNDS_DIR: &str = "images/backgrounds/loading";
 pub const MAP_BACKUP_EXTENSION: &str = "bak";
 
 /// What `--serve` binds and a bare hostname connects to. Unregistered, and

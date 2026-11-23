@@ -170,6 +170,25 @@ fn find(name: &str, packs: &PackAssets) -> Option<(Graph, PathBuf)> {
 /// for the device) or go away (a name cleared), and there are three slots a room. A slot painted
 /// [`SKYBOX`] swaps its `StandardMaterial` for the [`Sky`]; one painted [`PIT`] takes the [`Pit`].
 #[allow(clippy::too_many_arguments)]
+/// One of the materials the server's manifest lists a frame, so a room drawn after joining finds
+/// it baked. Without a device yet it waits.
+pub fn bake_a_material_for_joining(
+    mut build: ResMut<crate::common::joining::JoinBuild>,
+    mut library: ResMut<MaterialLibrary>,
+    mut baked: ResMut<BakedTextures>,
+    mut standard: ResMut<Assets<StandardMaterial>>,
+    packs: Res<PackAssets>,
+    device: BevyDevice,
+    _main_thread: bevy::ecs::system::NonSendMarker,
+) {
+    if !build.props.is_empty() || !device.ready() {
+        return;
+    }
+    let Some(name) = build.materials.pop_front() else { return };
+    library.ensure(&name, &packs, &device, &mut baked, &mut standard);
+    build.current = Some((crate::common::resource::ResourceKind::Material, name));
+}
+
 pub fn paint_rooms(
     mut commands: Commands,
     mut library: ResMut<MaterialLibrary>,

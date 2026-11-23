@@ -59,7 +59,7 @@ impl Plugin for MatchStatePlugin {
         app.register_message::<ServerClosing>()
             .add_direction(NetworkDirection::ServerToClient);
 
-        app.add_systems(
+        app.init_resource::<ServerMode>().add_systems(
             Update,
             (
                 announce_mode_change.run_if(state_changed::<AppMode>),
@@ -76,7 +76,7 @@ impl Plugin for MatchStatePlugin {
 
 /// Somebody modeling a prop when they start hosting or join goes back to the
 /// map editor, as the Mode menu offers nothing else while networked.
-fn back_to_the_map_editor_when_networked(
+pub fn back_to_the_map_editor_when_networked(
     role: Res<NetRole>,
     mode: Res<State<AppMode>>,
     mut next: ResMut<NextState<AppMode>>,
@@ -118,14 +118,24 @@ fn tell_new_clients(
     Ok(())
 }
 
+/// The mode the server last stated, which a client still joining goes to once it is done.
+#[derive(Resource, Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ServerMode(pub Option<AppMode>);
+
 fn follow_the_server(
     mut receivers: Query<&mut MessageReceiver<MatchMode>>,
     current: Res<State<AppMode>>,
     mut next: ResMut<NextState<AppMode>>,
+    mut server_mode: ResMut<ServerMode>,
 ) {
     for mut receiver in &mut receivers {
         for message in receiver.receive() {
             let wanted = AppMode::from(message);
+            server_mode.0 = Some(wanted);
+            if *current.get() == AppMode::Joining || matches!(*next, NextState::Pending(AppMode::Joining)) {
+                debug!("Server says the match is {wanted:?}, which joining goes to once it is done");
+                continue;
+            }
             // `set` runs the transition even for the same state, and
             // `OnEnter(Play)` rebuilds the match; a restatement must not
             // restart the round.

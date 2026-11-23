@@ -155,7 +155,7 @@ fn spawn_the_menu(commands: &mut Commands, camera: Option<Entity>, font: &Handle
     };
     let mut root = commands.spawn((
         MainMenuRoot,
-        crate::title_background::WantsTitleBackground,
+        crate::title_background::WantsBackground(crate::title_background::BackgroundSet::Title),
         GlobalZIndex(MENU_LAYER),
         full_screen.clone(),
         BackgroundColor(BACKGROUND),
