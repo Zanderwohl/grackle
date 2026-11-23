@@ -97,7 +97,7 @@ pub enum Problem {
     Note(Note),
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(from = "FootprintFile")]
 pub struct FootprintRoom {
     /// The footprint's own origin: its `y` is the floor, and every corner
@@ -683,6 +683,9 @@ impl FeatureTrait for FootprintRoom {
     }
 
     fn tool(&self) -> Option<crate::tool::Tools> { Some(crate::tool::Tools::Footprint) }
+    fn transmogrify(&self, into: &crate::tool::Tools) -> Option<Box<dyn FeatureTrait>> {
+        Some(crate::editor::transmogrify::footprint_as(into, self.clone()))
+    }
     fn type_key(&self) -> &'static str {
         "footprint_room"
     }

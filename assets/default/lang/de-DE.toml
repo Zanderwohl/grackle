@@ -117,6 +117,9 @@ postcard_slot = "Platz { number }"
 postcard_none = "Keine"
 postcard_missing = "Kamera fehlt"
 
+[editor.features.transmogrify]
+title = "Transmogrifizieren"
+
 [editor.features.global_point]
 title = "Globaler Punkt"
 

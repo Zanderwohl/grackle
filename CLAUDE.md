@@ -4046,6 +4046,13 @@ follows. Consequences to respect when adding a feature type:
 - **A Mirror offers its copies' points** as `{source}@{image}/{key}`, so a
   feature after it can stand on a copy's corner. A key naming a copy that no
   longer stands does not resolve.
+- **Kinds that share a shape transmogrify**: a room, block and trigger are one
+  box, and a footprint and footprint block one drawing
+  ([`transmogrify.rs`](src/editor/transmogrify.rs), one family each). The
+  inspector's last section turns the feature into another of its family in
+  place, keeping its id, so what names its points still resolves; it is an
+  ordinary undo step. A kind joins a family by answering
+  `FeatureTrait::transmogrify`, and its tool builds through the same function.
 - To make it visible, add its Show switch in [`show.rs`](src/tool/show.rs)
   (`GizmoVisibility` plus both matches). To make it clickable, answer
   `picked_by` if it is not a point-like marker (the default), and `pick_boxes`;

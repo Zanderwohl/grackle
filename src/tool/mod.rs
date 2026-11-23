@@ -3,7 +3,7 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 use strum_macros::{Display, EnumIter};
 use crate::common::icons;
-use crate::common::toolbar::{self, Joins, Segment};
+use crate::common::toolbar::{self, Joins};
 use crate::get;
 use crate::tool::animation_grid::AnimationGridPlugin;
 use crate::tool::bakes::BakePlugin;
@@ -201,22 +201,18 @@ impl Tools {
         toolbar::row(ui, |ui| {
             for group in TOOLBAR {
                 match group {
-                    ToolGroup::One(tool) => {
-                        if toolbar::button(ui, tool.icon(), tool.name(), current == tool, Joins::NONE).clicked() {
-                            chosen = Some(tool.clone());
-                        }
+                    ToolGroup::Run(members) => {
+                        toolbar::cluster(ui, |ui| {
+                            for (index, member) in members.iter().enumerate() {
+                                if let Some(tool) = member.ui(ui, current, Joins::in_run(index, members.len())) {
+                                    chosen = Some(tool);
+                                }
+                            }
+                        });
                     }
-                    ToolGroup::Split(id, tools) => {
-                        let active = tools.iter().position(|tool| tool == current);
-                        let label = |index: usize| (tools[index].icon(), tools[index].name());
-                        if let Some(index) = toolbar::split_button(ui, id, tools.len(), label, active, Joins::NONE) {
-                            chosen = Some(tools[index].clone());
-                        }
-                    }
-                    ToolGroup::Cluster(tools) => {
-                        let segments = tools.iter().map(|tool| Segment::new(tool.icon(), tool.name()).selected(current == tool));
-                        if let Some(index) = toolbar::clicked(&toolbar::joined(ui, segments)) {
-                            chosen = Some(tools[index].clone());
+                    group => {
+                        if let Some(tool) = group.ui(ui, current, Joins::NONE) {
+                            chosen = Some(tool);
                         }
                     }
                 }
@@ -232,7 +228,32 @@ enum ToolGroup {
     One(Tools),
     /// The id keeps which one was last used.
     Split(&'static str, &'static [Tools]),
-    Cluster(&'static [Tools]),
+    /// Ones and splits sharing their edges, in a row that does not wrap.
+    Run(&'static [ToolGroup]),
+}
+
+impl ToolGroup {
+    /// Draws nothing for a run: its caller draws it, since only the caller knows each member's joins.
+    fn ui(&self, ui: &mut egui::Ui, current: &Tools, joins: Joins) -> Option<Tools> {
+        match self {
+            Self::One(tool) => toolbar::button(ui, tool.icon(), tool.name(), current == tool, joins).clicked().then(|| tool.clone()),
+            Self::Split(id, tools) => {
+                let active = tools.iter().position(|tool| tool == current);
+                let label = |index: usize| (tools[index].icon(), tools[index].name());
+                toolbar::split_button(ui, id, tools.len(), label, active, joins).map(|index| tools[index].clone())
+            }
+            Self::Run(_) => None,
+        }
+    }
+
+    #[cfg(test)]
+    fn tools(&self) -> Vec<Tools> {
+        match self {
+            Self::One(tool) => vec![tool.clone()],
+            Self::Split(_, tools) => tools.to_vec(),
+            Self::Run(members) => members.iter().flat_map(Self::tools).collect(),
+        }
+    }
 }
 
 /// Every tool but the hidden ones, once each.
@@ -240,7 +261,11 @@ const TOOLBAR: &[ToolGroup] = &[
     ToolGroup::One(Tools::Select),
     ToolGroup::Split("points", &[Tools::Point, Tools::PointLight, Tools::SpawnPoint, Tools::SpectatorCamera, Tools::Decal]),
     ToolGroup::Split("props", &[Tools::Prop, Tools::WeaponPickup]),
-    ToolGroup::Cluster(&[Tools::Room, Tools::Block, Tools::Trigger, Tools::Footprint, Tools::FootprintBlock, Tools::Stairs]),
+    ToolGroup::Run(&[
+        ToolGroup::Split("boxes", &[Tools::Room, Tools::Block, Tools::Trigger]),
+        ToolGroup::Split("footprints", &[Tools::Footprint, Tools::FootprintBlock]),
+        ToolGroup::One(Tools::Stairs),
+    ]),
     ToolGroup::One(Tools::Mirror),
     ToolGroup::Split("animation", &[Tools::AnimationDisplay, Tools::AnimationGrid]),
 ];
@@ -272,11 +297,10 @@ mod tests {
 
     #[test]
     fn every_tool_is_on_the_toolbar_once() {
-        let mut shown = Vec::new();
+        let shown: Vec<Tools> = TOOLBAR.iter().flat_map(ToolGroup::tools).collect();
         for group in TOOLBAR {
-            match group {
-                ToolGroup::One(tool) => shown.push(tool.clone()),
-                ToolGroup::Split(_, tools) | ToolGroup::Cluster(tools) => shown.extend(tools.iter().cloned()),
+            if let ToolGroup::Run(members) = group {
+                assert!(!members.iter().any(|member| matches!(member, ToolGroup::Run(_))), "a run inside a run is not drawn");
             }
         }
         for tool in Tools::iter() {

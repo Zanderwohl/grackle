@@ -7,8 +7,6 @@ use crate::common::triangulate::triangulate;
 use crate::common::app_mode::AppMode;
 use crate::editor::editable::{EditEvent, FeatureId, FeatureTimeline, FeatureTrait};
 use crate::editor::editor_room::EditorRoom;
-use crate::editor::trigger::EditorTrigger;
-use crate::editor::block::EditorBlock;
 use crate::editor::input::CurrentMouseInput;
 use crate::editor::multicam::{on_top, HandleMaterial};
 use crate::tool::map_wizard::MapPick;
@@ -54,11 +52,7 @@ pub fn box_build(tool: &Tools, steps: &[Vec<MapPick>], _: &FeatureTimeline) -> O
         true => EditorRoom::from_min_and_size(min.clone(), *max_at - *min_at),
         false => EditorRoom::from_point_refs(min.clone(), max.clone()),
     };
-    Some(match tool {
-        Tools::Trigger => Box::new(EditorTrigger::from_room(room)),
-        Tools::Block => Box::new(EditorBlock::from_room(room)),
-        _ => Box::new(room),
-    })
+    Some(crate::editor::transmogrify::box_as(tool, room))
 }
 
 pub fn box_preview(gizmos: &mut Gizmos, points: &[Vec3], at: Vec3) {
