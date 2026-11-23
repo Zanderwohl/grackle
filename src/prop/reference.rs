@@ -401,7 +401,8 @@ fn closest_on_segment(origin: Vec3, direction: Vec3, a: Vec3, b: Vec3) -> Vec3 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::prop::feature::{evaluate, BooleanOp, FeatureOp, PropFeature};
+    use crate::prop::feature::BodyRef;
+    use crate::prop::feature::{evaluate, FeatureOp, PropFeature};
     use crate::prop::profile::Placement;
     use crate::prop::solid::Shape;
     use crate::prop::surface::Surface;
@@ -453,7 +454,7 @@ mod tests {
         let build = |tool_size: f32| {
             let drilled = PropFeature::new(
                 PropFeatureId(2),
-                FeatureOp::Boolean { op: BooleanOp::Subtract, target: PropFeatureId(0), tool: PropFeatureId(1) },
+                FeatureOp::Subtract { targets: vec![BodyRef::whole(PropFeatureId(0))], tools: vec![BodyRef::whole(PropFeatureId(1))] },
             );
             evaluate(&[cube(0, 0.2, Vec3::ZERO), cube(1, tool_size, Vec3::splat(0.1)), drilled])
         };
@@ -469,7 +470,7 @@ mod tests {
     fn a_corner_cut_away_resolves_but_is_not_offered() {
         let drilled = PropFeature::new(
             PropFeatureId(2),
-            FeatureOp::Boolean { op: BooleanOp::Subtract, target: PropFeatureId(0), tool: PropFeatureId(1) },
+            FeatureOp::Subtract { targets: vec![BodyRef::whole(PropFeatureId(0))], tools: vec![BodyRef::whole(PropFeatureId(1))] },
         );
         let evaluated = evaluate(&[cube(0, 0.2, Vec3::ZERO), cube(1, 0.1, Vec3::splat(0.1)), drilled]);
         // The target's +X+Y+Z corner, inside the tool.
@@ -488,7 +489,7 @@ mod tests {
             PropFeature::new(
                 PropFeatureId(1),
                 FeatureOp::Mirror {
-                    target: PropFeatureId(0),
+                    targets: vec![BodyRef::whole(PropFeatureId(0))],
                     about: crate::prop::plane::PlaneRef::Origin(crate::prop::plane::OriginPlane::Yz),
                     offset: 0.0,
                     keep_original,
@@ -584,7 +585,7 @@ mod tests {
     fn a_click_on_a_box_lands_on_the_face_it_hit() {
         let evaluated = evaluate(&[cube(0, 0.2, Vec3::ZERO)]);
         let (body, face) = evaluated.surface_under(Ray3d::new(Vec3::new(0.03, 0.02, 1.0), Dir3::NEG_Z)).unwrap();
-        assert_eq!(body, PropFeatureId(0));
+        assert_eq!(body.feature, PropFeatureId(0));
         let Some(Located::Face { normal, .. }) = evaluated.locate(&face.expect("a face")) else { panic!() };
         assert!(normal.distance(Vec3::Z) < 1e-6, "{normal}");
     }
@@ -596,7 +597,7 @@ mod tests {
         let ball = primitive(0, Shape::Sphere { sides: 8, rings: 5, radius: 0.2 }, Vec3::ZERO);
         let evaluated = evaluate(&[ball]);
         let (body, face) = evaluated.surface_under(Ray3d::new(Vec3::new(0.05, 0.07, 1.0), Dir3::NEG_Z)).unwrap();
-        assert_eq!(body, PropFeatureId(0));
+        assert_eq!(body.feature, PropFeatureId(0));
         let Some(Located::Face { facets, .. }) = evaluated.locate(&face.expect("a face")) else { panic!() };
         assert_eq!(facets.len(), 8, "one facet per step round the axis");
     }
@@ -607,14 +608,14 @@ mod tests {
     fn a_holes_wall_is_the_tools_face() {
         let drilled = PropFeature::new(
             PropFeatureId(2),
-            FeatureOp::Boolean { op: BooleanOp::Subtract, target: PropFeatureId(0), tool: PropFeatureId(1) },
+            FeatureOp::Subtract { targets: vec![BodyRef::whole(PropFeatureId(0))], tools: vec![BodyRef::whole(PropFeatureId(1))] },
         );
         let bore = primitive(1, Shape::Box { size: [0.1, 0.1, 0.4] }, Vec3::ZERO);
         let evaluated = evaluate(&[cube(0, 0.2, Vec3::ZERO), bore, drilled]);
         // Along the bore, just inside its -X wall, aimed at it.
         let ray = Ray3d::new(Vec3::new(0.0, 0.0, 0.0), Dir3::NEG_X);
         let (body, face) = evaluated.surface_under(ray).unwrap();
-        assert_eq!(body, PropFeatureId(2));
+        assert_eq!(body.feature, PropFeatureId(2));
         assert_eq!(face.expect("a face").source.feature, PropFeatureId(1));
     }
 

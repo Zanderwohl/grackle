@@ -9,14 +9,13 @@ use crate::common::class::{TALLEST_CLASS_EYE_HEIGHT, TALLEST_CLASS_HEIGHT};
 use crate::editor::editable::{FeatureTrait, PointRef};
 use crate::editor::spawn_point::{SpawnPoint, SpawnPointMarker};
 use crate::tool::postcard_bake::PostcardBake;
-use crate::tool::point_placement::{add_point_placement_tool, PlaceablePoint};
+use crate::tool::point_placement::PlaceablePoint;
 use crate::tool::Tools;
 
 pub struct SpawnPointPlugin;
 
 impl Plugin for SpawnPointPlugin {
     fn build(&self, app: &mut App) {
-        add_point_placement_tool::<SpawnPoint>(app);
         // Ungated: it has to notice the mode changing.
         app.add_systems(Update, hide_spawn_bodies_while_playing)
             .add_systems(Update, draw_spawn_sides.run_if(in_state(AppMode::Editor)));

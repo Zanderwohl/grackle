@@ -5,20 +5,14 @@ use strum_macros::{Display, EnumIter};
 use crate::common::icons;
 use crate::common::toolbar::{self, Joins, Segment};
 use crate::get;
-use crate::tool::animation_display::AnimationDisplayPlugin;
 use crate::tool::animation_grid::AnimationGridPlugin;
 use crate::tool::bakes::BakePlugin;
-use crate::tool::footprint::FootprintPlugin;
 use crate::tool::footprint_drag::FootprintDragPlugin;
-use crate::tool::mirror::MirrorPlugin;
 use crate::tool::movement::MovementPlugin;
-use crate::tool::point::PointPlugin;
 use crate::tool::spawn_point::SpawnPointPlugin;
 use crate::tool::point_drag::PointDragPlugin;
 use crate::tool::prop::PropPlugin;
 use crate::tool::rotate_drag::RotateDragPlugin;
-use crate::tool::point_light::PointLightPlugin;
-use crate::tool::retarget::RetargetPlugin;
 use crate::tool::room::RoomPlugin;
 use crate::tool::selection::SelectionPlugin;
 use crate::tool::show::ShowPlugin;
@@ -40,7 +34,8 @@ pub mod weapon_pickup;
 pub mod spectator_camera;
 pub mod decal;
 pub mod rotate_drag;
-pub mod retarget;
+pub mod map_wizard;
+pub mod map_products;
 pub mod room;
 pub mod footprint;
 pub mod footprint_drag;
@@ -64,6 +59,7 @@ impl Plugin for ToolPlugin {
         crate::common::keybind::ensure(app);
         app
             .init_resource::<ToolData>()
+            .init_resource::<map_products::MapProducts>()
             .init_state::<Tools>()
             .add_plugins(ShowPlugin)
             .add_plugins(BakePlugin)
@@ -72,22 +68,14 @@ impl Plugin for ToolPlugin {
             .add_plugins(nav_overlay::NavOverlayPlugin)
             .add_plugins(MovementPlugin)
             .add_plugins(SelectionPlugin)
-            .add_plugins(PointPlugin)
             .add_plugins(SpawnPointPlugin)
-            .add_plugins(stairs::StairsToolPlugin)
-            .add_plugins(PointLightPlugin)
+            .add_plugins(map_wizard::MapWizardPlugin)
             .add_plugins(PointDragPlugin)
             .add_plugins(RotateDragPlugin)
             .add_plugins(PropPlugin)
-            .add_plugins(spectator_camera::SpectatorCameraPlugin)
-            .add_plugins(decal::DecalToolPlugin)
             .add_plugins(weapon_pickup::WeaponPickupPlugin)
-            .add_plugins(MirrorPlugin)
-            .add_plugins(AnimationDisplayPlugin)
             .add_plugins(AnimationGridPlugin)
-            .add_plugins(RetargetPlugin)
             .add_plugins(RoomPlugin)
-            .add_plugins(FootprintPlugin)
             .add_plugins(FootprintDragPlugin)
             .add_systems(Update, spectate_while_a_client);
     }
@@ -141,6 +129,8 @@ pub enum Tools {
     Stairs,
     Mirror,
     Retarget,
+    /// Re-picks a Mirror's sources, from its panel.
+    MirrorSources,
     /// A client's: no tool runs under it.
     Spectate,
 }
@@ -165,7 +155,8 @@ impl Tools {
             Self::FootprintBlock => get!("tools.footprint_block"),
             Self::Stairs => get!("tools.stairs"),
             Self::Mirror => get!("tools.mirror"),
-            Self::Retarget => "Retarget".into(),
+            Self::Retarget => get!("tools.retarget"),
+            Self::MirrorSources => get!("tools.mirror_sources"),
             Self::Spectate => "Spectate".into(),
         }
     }
@@ -190,14 +181,14 @@ impl Tools {
             Self::FootprintBlock => "double_pennant_solid",
             Self::Stairs => "stairs",
             Self::Mirror => "square_mirrored",
-            Self::Retarget => icons::FALLBACK,
+            Self::Retarget | Self::MirrorSources => icons::FALLBACK,
             Self::Spectate => icons::FALLBACK,
         }
     }
 
     #[cfg(test)]
     fn is_hidden(&self) -> bool {
-        matches!(self, Self::Retarget | Self::Spectate)
+        matches!(self, Self::Retarget | Self::MirrorSources | Self::Spectate)
     }
 
     pub fn ui(

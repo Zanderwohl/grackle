@@ -44,7 +44,7 @@ use crate::common::reorder;
 use crate::common::shortcuts::chords;
 use crate::common::icons;
 use crate::common::toolbar::{self, Joins, Segment};
-use crate::prop::feature::{BooleanOp, End, FeatureOp, PatternKind, ProfileSource, PropFeatureId};
+use crate::prop::feature::{BodyRef, BooleanOp, End, FeatureOp, PatternKind, ProfileSource, PropFeatureId};
 use crate::prop::figure::ScaleFigure;
 use crate::prop::camera::ViewmodelPreview;
 use crate::game::muzzle_flash::FlashPreview;
@@ -59,7 +59,7 @@ use crate::prop::construct::{Construct, Making};
 use crate::prop::plane::PlaneDef;
 use crate::prop::refs::{axis_name, AnyRef, CurveRef, DirectionRef, PointRef, Resolve};
 use crate::prop::tool::add_making;
-use crate::prop::tool::{advance, cancel, can_chain, chain, fill, is_ready, prompt, put_down, start, ActiveTool, Task, Tool};
+use crate::prop::tool::{advance, back, cancel, can_chain, can_move_on, chain, fill, is_ready, prompt, put_down, start, ActiveTool, Task, Tool};
 use crate::prop::path::Orient;
 
 /// What a file dialog came back with. A background thread, like the map
@@ -184,6 +184,7 @@ struct PropTabs<'a> {
     requests: &'a mut PropRequests,
     session: &'a mut SketchSession,
     tool: Option<Task>,
+    moved_on: &'a [Pick],
     taunts: Option<&'a Taunts>,
 }
 
@@ -314,7 +315,7 @@ fn panels(
     mut picking: Picking,
     mut figure: ResMut<ScaleFigure>,
     mut handles: Handles,
-    mut previews: Previews,
+    previews: Previews,
     mut multicam: ResMut<MulticamState>,
     windows: Query<&Window, With<PrimaryWindow>>,
     dialog: Res<PropFileDialog>,
@@ -352,7 +353,8 @@ fn panels(
         flash_preview: &mut flash_preview,
         requests: &mut requests,
         session: &mut session,
-        tool: picking.tool.0,
+        tool: picking.tool.task,
+        moved_on: &picking.tool.moved_on,
         taunts: shared.taunts.as_deref(),
     };
     let workspace = layout.workspace;
@@ -402,7 +404,7 @@ fn panels(
                 match (sketching, workspace) {
                     (true, _) => sketch_toolbar(ui, tabs.editor, tabs.session, &mut tabs.requests.frame),
                     (false, Workspace::Model) => {
-                        toolbar(ui, tabs.editor, tabs.build, tabs.plane, tabs.requests, tabs.tool)
+                        toolbar(ui, tabs.editor, tabs.build, tabs.plane, tabs.requests, tabs.tool, tabs.moved_on)
                     }
                     (false, Workspace::Fit) => fit_toolbar(ui, tabs.figure, &mut tabs.requests.frame),
                 }
@@ -617,7 +619,8 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild, session
             }
         })
         .collect();
-    let live: Vec<PropFeatureId> = build.evaluated.bodies.iter().map(|(id, _)| *id).collect();
+    // Weak only once every body a feature made is eaten.
+    let live: Vec<PropFeatureId> = build.evaluated.bodies.iter().map(|(body, _)| body.feature).collect();
     let broken: Vec<PropFeatureId> =
         build.evaluated.problems.iter().map(|problem| problem.feature).collect();
 
@@ -809,7 +812,7 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild, session
 
                 // Starts from the body's current surface, so adding it changes
                 // nothing yet.
-                let standing = build.evaluated.bodies.iter().find(|(body, _)| *body == id);
+                let standing = build.evaluated.bodies.iter().find(|(body, _)| body.feature == id);
                 let repaint = ui.add_enabled(
                     standing.is_some(),
                     egui::Button::new(get!("prop.tree.repaint")),
@@ -818,8 +821,10 @@ fn feature_tree(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild, session
                 if repaint.clicked() {
                     ui.close_kind(UiKind::Menu);
                     let surface = standing.map(|(_, solid)| solid.dominant_surface()).unwrap_or_default();
+                    let targets: Vec<BodyRef> =
+                        build.evaluated.bodies.iter().map(|(body, _)| *body).filter(|body| body.feature == id).collect();
                     pending = Some(Box::new(move |editor: &mut PropEditor| {
-                        let added = editor.add(FeatureOp::Paint { target: id, surface });
+                        let added = editor.add(FeatureOp::Paint { targets, surface });
                         editor.select(added);
                     }));
                 }
@@ -922,6 +927,7 @@ fn toolbar(
     plane: Option<Plane>,
     requests: &mut PropRequests,
     active: Option<Task>,
+    moved_on: &[Pick],
 ) {
     let mut added: Option<FeatureOp> = None;
 
@@ -973,17 +979,22 @@ fn toolbar(
 
     if let Some(task) = active {
         ui.separator();
-        let filled = fill(task, editor.picks(), editor.doc(), &build.evaluated);
+        let filled = fill(task, editor.picks(), moved_on, editor.doc(), &build.evaluated);
         ui.label(egui::RichText::new(task.name(editor.doc())).strong());
         let asked = prompt(task, &filled, editor.doc(), &build.evaluated);
         ui.label(egui::RichText::new(asked).color(ui.visuals().warn_fg_color));
         let ready = is_ready(task, &filled, editor.doc(), &build.evaluated);
+        let next = can_move_on(task, &filled, editor.doc(), &build.evaluated);
         if can_chain(task, &filled, editor.doc())
             && toolbar::clicked(&toolbar::joined(ui, [Segment::new("square_along_path", get!("prop.tool.chain"))])).is_some()
         {
-            chain(task, editor, &build.evaluated);
+            chain(task, moved_on, editor, &build.evaluated);
         }
-        let done = ready.then(|| Segment::new("check_mark", get!("prop.tool.done")));
+        // Enter moves on where it can, so the button shows what Enter does.
+        let done = match next {
+            true => Some(Segment::new("chevron_right", get!("prop.tool.next"))),
+            false => ready.then(|| Segment::new("check_mark", get!("prop.tool.done"))),
+        };
         let segments: Vec<Segment> = done.into_iter().chain([Segment::new("trash_can", get!("prop.tool.cancel"))]).collect();
         let last = segments.len() - 1;
         match toolbar::clicked(&toolbar::joined(ui, segments)) {
@@ -1312,7 +1323,8 @@ fn inspector(
             Some(Task::Repick { feature, .. }) => feature_inspector(ui, editor, build, feature, requests, tool),
             _ => prop_overview(ui, editor, build),
         },
-        Some(Pick::Body(id) | Pick::Plane(PlaneRef::Feature(id)) | Pick::DatumAxis(id) | Pick::DatumPoint(id)) => {
+        Some(Pick::Body(body)) => feature_inspector(ui, editor, build, body.feature, requests, tool),
+        Some(Pick::Plane(PlaneRef::Feature(id)) | Pick::DatumAxis(id) | Pick::DatumPoint(id)) => {
             feature_inspector(ui, editor, build, id, requests, tool)
         }
         Some(Pick::Plane(PlaneRef::Origin(which))) => origin_plane_inspector(ui, which),
@@ -1365,7 +1377,7 @@ fn inspector(
             element_inspector(ui, editor, build, &reference);
             // A face stands for its body, so the body's numbers follow.
             if let Some(body) = Pick::Geom(reference).body(&build.evaluated) {
-                feature_inspector(ui, editor, build, body, requests, tool);
+                feature_inspector(ui, editor, build, body.feature, requests, tool);
             }
         }
     }
@@ -1396,17 +1408,25 @@ fn selection_list(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
     }
 }
 
+fn feature_name(editor: &PropEditor, id: PropFeatureId) -> String {
+    editor.doc().feature(id).map(|feature| feature.name.clone()).unwrap_or_else(|| get!("prop.inspector.missing", "id", id))
+}
+
+/// A body by its feature's name, numbered from one when the feature made several.
+fn body_name(editor: &PropEditor, body: BodyRef) -> String {
+    let name = feature_name(editor, body.feature);
+    match body.of {
+        1 => name,
+        of => get!("prop.inspector.body_of", "name", name, "index", body.index + 1, "of", of),
+    }
+}
+
 /// Elements are counted from one, as a person counts corners.
 fn pick_label(editor: &PropEditor, build: &PropBuild, pick: &Pick) -> String {
-    let name = |id: PropFeatureId| {
-        editor
-            .doc()
-            .feature(id)
-            .map(|feature| feature.name.clone())
-            .unwrap_or_else(|| get!("prop.inspector.missing", "id", id))
-    };
+    let name = |id: PropFeatureId| feature_name(editor, id);
     let reference = match pick {
-        Pick::Body(id) | Pick::Plane(PlaneRef::Feature(id)) | Pick::DatumAxis(id) | Pick::DatumPoint(id) => {
+        Pick::Body(body) => return body_name(editor, *body),
+        Pick::Plane(PlaneRef::Feature(id)) | Pick::DatumAxis(id) | Pick::DatumPoint(id) => {
             return name(*id);
         }
         Pick::Plane(PlaneRef::Origin(which)) => return which.name(),
@@ -1585,33 +1605,10 @@ fn feature_inspector(
     requests: &mut PropRequests,
     tool: Option<Task>,
 ) {
-    let Some(index) = editor.doc().index_of(selected) else {
+    if editor.doc().index_of(selected).is_none() {
         prop_overview(ui, editor, build);
         return;
-    };
-    // What was live when this feature ran, as recorded by the evaluator. Past
-    // the rollback bar there is no record, so everything above the feature
-    // stands in; re-evaluating here would run the kernel every frame.
-    let choices: Vec<PropFeatureId> = build
-        .evaluated
-        .live_before
-        .get(index)
-        .cloned()
-        .unwrap_or_else(|| editor.doc().features[..index].iter().map(|f| f.id).collect());
-    let names: Vec<(PropFeatureId, String)> = choices
-        .iter()
-        .map(|id| {
-            (*id, editor.doc().feature(*id).map(|f| f.name.clone()).unwrap_or_else(|| id.to_string()))
-        })
-        .collect();
-    // Past the rollback bar `choices` is every earlier feature; a sweep's
-    // target must be one that makes a body.
-    let bodies: Vec<(PropFeatureId, String)> = names
-        .iter()
-        .filter(|(id, _)| editor.doc().feature(*id).is_some_and(|f| f.op.makes_body()))
-        .cloned()
-        .collect();
-
+    }
     // Drawn against a copy: calling `PropEditor::doc_mut` marks the document
     // changed, which would rebuild the viewport and mark it dirty every frame.
     let Some(mut edited) = editor.doc().feature(selected).cloned() else { return };
@@ -1625,7 +1622,7 @@ fn feature_inspector(
             .map(|entry| entry.label.clone())
             .filter(|label| !label.is_empty())
             .unwrap_or_else(|| get!("prop.sketch.region_label", "id", region));
-        format!("{} {}", pick_label(editor, build, &Pick::Body(sketch)), label)
+        format!("{} {}", feature_name(editor, sketch), label)
     };
     let any_label = |reference: &AnyRef| match (reference, Pick::of_any(reference)) {
         (AnyRef::Regions { sketch, entries }, _) => {
@@ -1661,7 +1658,7 @@ fn feature_inspector(
     let datum = build.evaluated.datum(PlaneRef::Feature(selected));
     let sketch_name = match &edited.op {
         FeatureOp::Extrude { profile, .. } | FeatureOp::Revolve { profile, .. } | FeatureOp::Sweep { profile, .. } => {
-            profile.sketch().map(|sketch| pick_label(editor, build, &Pick::Body(sketch)))
+            profile.sketch().map(|sketch| feature_name(editor, sketch))
         }
         _ => None,
     };
@@ -1704,7 +1701,7 @@ fn feature_inspector(
                     changed |= surface_ui(ui, surface);
                 });
             }
-            FeatureOp::Sweep { profile, orient, twist, scale, op, target, surface, .. } => {
+            FeatureOp::Sweep { profile, orient, twist, scale, op, targets, surface, .. } => {
                 if let ProfileSource::Regions { sketch, regions } = profile {
                     section(ui, "drawing", get!("prop.inspector.sections.drawing"), |ui| {
                         ui.horizontal(|ui| {
@@ -1726,13 +1723,13 @@ fn feature_inspector(
                     *scale = scale.max(0.01);
                 });
                 section(ui, "result", get!("prop.inspector.sections.result"), |ui| {
-                    changed |= sweep_op_ui(ui, op, target, &bodies);
+                    changed |= sweep_op_ui(ui, op, targets, selected, 2, requests);
                 });
                 section(ui, "material", get!("prop.inspector.sections.material"), |ui| {
                     changed |= surface_ui(ui, surface);
                 });
             }
-            FeatureOp::Loft { closed, op, target, profiles, surface } => {
+            FeatureOp::Loft { closed, op, targets, profiles, surface } => {
                 section(ui, "profiles", get!("prop.inspector.sections.profiles"), |ui| {
                     for (index, ((name, start), profile)) in profile_rows.iter().zip(profiles.iter_mut()).enumerate() {
                         ui.label(egui::RichText::new(format!("{}. {name}", index + 1)).strong());
@@ -1747,13 +1744,13 @@ fn feature_inspector(
                     changed |= ui.checkbox(closed, get!("prop.loft.closed")).changed();
                 });
                 section(ui, "result", get!("prop.inspector.sections.result"), |ui| {
-                    changed |= sweep_op_ui(ui, op, target, &bodies);
+                    changed |= sweep_op_ui(ui, op, targets, selected, profiles.len() + 1, requests);
                 });
                 section(ui, "material", get!("prop.inspector.sections.material"), |ui| {
                     changed |= surface_ui(ui, surface);
                 });
             }
-            FeatureOp::Extrude { profile, taper, op, target, end, other, direction, surface } => {
+            FeatureOp::Extrude { profile, taper, op, targets, end, other, direction, surface } => {
                 if let ProfileSource::Regions { sketch, regions } = profile {
                     section(ui, "drawing", get!("prop.inspector.sections.drawing"), |ui| {
                         ui.horizontal(|ui| {
@@ -1795,13 +1792,13 @@ fn feature_inspector(
                     *taper = taper.clamp(-80.0, 80.0);
                 });
                 section(ui, "result", get!("prop.inspector.sections.result"), |ui| {
-                    changed |= sweep_op_ui(ui, op, target, &bodies);
+                    changed |= sweep_op_ui(ui, op, targets, selected, 4, requests);
                 });
                 section(ui, "material", get!("prop.inspector.sections.material"), |ui| {
                     changed |= surface_ui(ui, surface);
                 });
             }
-            FeatureOp::Revolve { profile, degrees, steps, symmetric, op, target, surface, .. } => {
+            FeatureOp::Revolve { profile, degrees, steps, symmetric, op, targets, surface, .. } => {
                 if let ProfileSource::Regions { sketch, regions } = profile {
                     section(ui, "drawing", get!("prop.inspector.sections.drawing"), |ui| {
                         ui.horizontal(|ui| {
@@ -1820,30 +1817,31 @@ fn feature_inspector(
                     changed |= ui.checkbox(symmetric, get!("prop.inspector.symmetric")).changed();
                 });
                 section(ui, "result", get!("prop.inspector.sections.result"), |ui| {
-                    changed |= sweep_op_ui(ui, op, target, &bodies);
+                    changed |= sweep_op_ui(ui, op, targets, selected, 2, requests);
                 });
                 section(ui, "material", get!("prop.inspector.sections.material"), |ui| {
                     changed |= surface_ui(ui, surface);
                 });
             }
-            FeatureOp::Boolean { op, target, tool } => {
+            boolean @ (FeatureOp::Union { .. } | FeatureOp::Subtract { .. } | FeatureOp::Intersect { .. }) => {
                 section(ui, "operands", get!("prop.inspector.sections.operands"), |ui| {
+                    let mut op = match boolean {
+                        FeatureOp::Union { .. } => BooleanOp::Union,
+                        FeatureOp::Subtract { .. } => BooleanOp::Subtract,
+                        _ => BooleanOp::Intersect,
+                    };
                     ui.horizontal(|ui| {
                         ui.label(get!("prop.inspector.operation"));
                         for candidate in BooleanOp::ALL {
-                            changed |= ui
-                                .selectable_value(op, candidate, candidate.name())
-                                .changed();
+                            if ui.selectable_value(&mut op, candidate, candidate.name()).changed() {
+                                *boolean = reshaped(boolean, candidate);
+                                changed = true;
+                            }
                         }
                     });
-                    changed |= body_picker(ui, get!("prop.inspector.target"), target, &names);
-                    changed |= body_picker(ui, get!("prop.inspector.tool"), tool, &names);
                 });
             }
-            FeatureOp::Mirror { target, offset, keep_original, .. } => {
-                section(ui, "operands", get!("prop.inspector.sections.operands"), |ui| {
-                    changed |= body_picker(ui, get!("prop.inspector.target"), target, &names);
-                });
+            FeatureOp::Mirror { offset, keep_original, .. } => {
                 section(ui, "mirror", get!("prop.inspector.sections.mirror"), |ui| {
                     changed |= drag(ui, get!("prop.inspector.offset"), offset, 0.001, "m");
                     changed |= ui
@@ -1851,18 +1849,12 @@ fn feature_inspector(
                         .changed();
                 });
             }
-            FeatureOp::Paint { target, surface } => {
-                section(ui, "operands", get!("prop.inspector.sections.operands"), |ui| {
-                    changed |= body_picker(ui, get!("prop.inspector.target"), target, &names);
-                });
+            FeatureOp::Paint { surface, .. } => {
                 section(ui, "material", get!("prop.inspector.sections.material"), |ui| {
                     changed |= surface_ui(ui, surface);
                 });
             }
-            FeatureOp::Pattern { target, count, along } => {
-                section(ui, "operands", get!("prop.inspector.sections.operands"), |ui| {
-                    changed |= body_picker(ui, get!("prop.inspector.target"), target, &names);
-                });
+            FeatureOp::Pattern { count, along, .. } => {
                 section(ui, "pattern", get!("prop.inspector.sections.pattern"), |ui| {
                     changed |= pattern_ui(ui, count, along);
                 });
@@ -2183,16 +2175,12 @@ fn bones_ui(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
     let mut changed = false;
     let mut renamed: Option<(String, String)> = None;
     let mut remove = None;
-    let bodies: Vec<(PropFeatureId, String)> = build
-        .evaluated
-        .bodies
-        .iter()
-        .map(|(id, _)| (*id, editor.doc().feature(*id).map_or_else(|| id.to_string(), |f| f.name.clone())))
-        .collect();
+    let bodies: Vec<(BodyRef, String)> =
+        build.evaluated.bodies.iter().map(|(body, _)| (*body, body_name(editor, *body))).collect();
     // Ticked for the bone a body rides on, which may come through a feature it ate.
     let riding = crate::prop::rig::bone_of_each_body(editor.shown(), &bones, &build.evaluated);
     let lineages: Vec<Vec<PropFeatureId>> =
-        bodies.iter().map(|(id, _)| crate::prop::rig::lineage(*id, editor.shown())).collect();
+        bodies.iter().map(|(body, _)| crate::prop::rig::lineage(body.feature, editor.shown())).collect();
 
     egui::ScrollArea::vertical().show(ui, |ui| {
         for index in 0..bones.len() {
@@ -2245,7 +2233,7 @@ fn bones_ui(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
                     if ui.checkbox(&mut bound, name).changed() {
                         changed = true;
                         match bound {
-                            true => bone.parts.push(*id),
+                            true => bone.parts.push(id.feature),
                             // Whichever binding reached it.
                             false => bone.parts.retain(|part| !lineages[body].contains(part)),
                         }
@@ -2278,7 +2266,7 @@ fn bones_ui(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
         }
 
         if ui.button(get!("prop.bones.add")).clicked() {
-            let picked: Vec<PropFeatureId> =
+            let picked: Vec<BodyRef> =
                 editor.picks().iter().filter_map(|pick| pick.body(&build.evaluated)).collect();
             let pivot = build.evaluated.bounds_of_bodies(&picked).map_or(Vec3::ZERO, |(min, max)| (min + max) / 2.0);
             let name = (1..)
@@ -2286,7 +2274,8 @@ fn bones_ui(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
                 .find(|name| !bones.iter().any(|bone| &bone.name == name))
                 .unwrap_or_default();
             editor.edit(|doc| {
-                doc.bones.push(crate::prop::rig::PropBone { parts: picked, ..crate::prop::rig::PropBone::new(name, pivot) })
+                let parts = picked.iter().map(|body| body.feature).collect();
+                doc.bones.push(crate::prop::rig::PropBone { parts, ..crate::prop::rig::PropBone::new(name, pivot) })
             });
             changed = false;
             remove = None;
@@ -3057,12 +3046,15 @@ fn pattern_ui(ui: &mut Ui, count: &mut u32, along: &mut PatternKind) -> bool {
     changed
 }
 
-/// Choosing an operation with no target takes the latest body.
+/// Choosing an operation with no target starts picking targets, as choosing
+/// "Up to" starts picking a bound; choosing a new body forgets them.
 fn sweep_op_ui(
     ui: &mut Ui,
     op: &mut SweepOp,
-    target: &mut Option<PropFeatureId>,
-    names: &[(PropFeatureId, String)],
+    targets: &mut Vec<BodyRef>,
+    feature: PropFeatureId,
+    field: usize,
+    requests: &mut PropRequests,
 ) -> bool {
     let mut changed = false;
     ui.horizontal(|ui| {
@@ -3071,19 +3063,29 @@ fn sweep_op_ui(
             changed |= ui.selectable_value(op, candidate, candidate.name()).changed();
         }
     });
-    if *op != SweepOp::NewBody {
-        if target.is_none() {
-            *target = names.last().map(|(id, _)| *id);
-            changed |= target.is_some();
-        }
-        match target {
-            Some(target) => changed |= body_picker(ui, get!("prop.inspector.target"), target, names),
-            None => {
-                ui.label(get!("prop.problems.missing_body"));
-            }
-        }
+    if changed && crate::prop::tool::chose_operation(*op, targets) {
+        requests.task = Some(Task::Repick { feature, field });
     }
     changed
+}
+
+/// A boolean as another operation, keeping its operands in order: the first
+/// is a subtraction's target and the rest its tools.
+fn reshaped(op: &FeatureOp, to: BooleanOp) -> FeatureOp {
+    let all: Vec<BodyRef> = match op {
+        FeatureOp::Union { bodies } | FeatureOp::Intersect { bodies } => bodies.clone(),
+        FeatureOp::Subtract { targets, tools } => targets.iter().chain(tools).copied().collect(),
+        _ => return op.clone(),
+    };
+    match to {
+        BooleanOp::Union => FeatureOp::Union { bodies: all },
+        BooleanOp::Intersect => FeatureOp::Intersect { bodies: all },
+        BooleanOp::Subtract => {
+            let mut targets = all;
+            let tools = targets.split_off(targets.len().min(1));
+            FeatureOp::Subtract { targets, tools }
+        }
+    }
 }
 
 /// Choosing "Up to" starts a pick, since an up-to end needs something to go
@@ -3119,32 +3121,6 @@ fn end_ui(
         End::UpTo { .. } => reference_row(ui, get!("prop.extrude.up_to"), shown.to_string(), feature, field, tool, requests),
         End::ThroughAll => {}
     }
-    changed
-}
-
-fn body_picker(
-    ui: &mut Ui,
-    label: String,
-    value: &mut PropFeatureId,
-    names: &[(PropFeatureId, String)],
-) -> bool {
-    let mut changed = false;
-    ui.horizontal(|ui| {
-        ui.label(&label);
-        let selected = names
-            .iter()
-            .find(|(id, _)| id == value)
-            .map(|(_, name)| name.clone())
-            // Not the first entry: that would silently repoint the feature.
-            .unwrap_or_else(|| get!("prop.inspector.missing", "id", *value));
-        egui::ComboBox::from_id_salt(format!("prop_body_{label}"))
-            .selected_text(selected)
-            .show_ui(ui, |ui| {
-                for (id, name) in names {
-                    changed |= ui.selectable_value(value, *id, name).changed();
-                }
-            });
-    });
     changed
 }
 
@@ -3228,9 +3204,9 @@ fn prop_shortcuts(
     mut recent: ResMut<RecentFiles>,
 ) {
     use crate::common::keybind::Action;
-    if tool.0.is_some() {
+    if tool.task.is_some() {
         if actions.just_pressed(Action::Cancel) {
-            cancel(&mut tool, &mut editor);
+            back(&mut tool, &mut editor, &build.evaluated);
         } else if actions.just_pressed(Action::Confirm) {
             advance(&mut tool, &mut editor, &build.evaluated, &mut session, true);
         }

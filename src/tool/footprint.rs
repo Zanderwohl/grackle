@@ -1,21 +1,17 @@
 //! Drawing a footprint room: corners clicked on the floor plane, chained into
-//! a loop, closed on the first. Every drawing is a footprint of its own, of
+//! a loop, closed on the first, picked by [`crate::tool::map_wizard`]. Every drawing is a footprint of its own, of
 //! air under `Tools::Footprint` and solid under `Tools::FootprintBlock`.
 //! See `documentation/footprint-rooms.md`.
 
-use crate::common::keybind::{Action, Actions};
-use bevy::app::App;
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 
-use crate::common::app_mode::AppMode;
 use crate::editor::editable::{Feature, FeatureId, FeatureTimeline, FeatureTrait, PointRef};
 use crate::editor::footprint_block::FootprintBlock;
 use crate::editor::footprint_room::{ChainCorner, FootprintRoom, DEFAULT_HEIGHT, LINE_COLOR};
 use crate::editor::input::CurrentMouseInput;
-use crate::editor::multicam::Multicam;
 use crate::prop::sketch_edit::hatch;
-use crate::tool::room::MapVolumes;
+use crate::tool::map_wizard::MapPick;
 use crate::tool::tool_helpers::*;
 use crate::tool::Tools;
 
@@ -28,33 +24,11 @@ const CLOSE_RADIUS: f32 = 0.3;
 /// Hatching across a loop that would close into a room, in meters.
 const HATCH_SPACING: f32 = 0.5;
 
-pub struct FootprintPlugin;
-
-impl Plugin for FootprintPlugin {
-    fn build(&self, app: &mut App) {
-        crate::common::keybind::ensure(app);
-        app.init_resource::<FootprintTool>()
-            .add_systems(
-                Update,
-                (FootprintTool::interface, FootprintTool::draw_gizmos)
-                    .chain()
-                    .run_if(drawing_a_footprint)
-                    .run_if(in_state(AppMode::Editor)),
-            )
-            .add_systems(OnExit(Tools::Footprint), FootprintTool::on_exit)
-            .add_systems(OnExit(Tools::FootprintBlock), FootprintTool::on_exit);
-    }
-}
-
 fn made_by(tool: &Tools, room: FootprintRoom) -> Box<dyn FeatureTrait> {
     match tool {
         Tools::FootprintBlock => Box::new(FootprintBlock::from_footprint(room)),
         _ => Box::new(room),
     }
-}
-
-fn drawing_a_footprint(tool: Res<State<Tools>>) -> bool {
-    matches!(tool.get(), Tools::Footprint | Tools::FootprintBlock)
 }
 
 /// The loop being drawn. Plain data, so what a click does is testable without
@@ -113,167 +87,73 @@ impl Draft {
     }
 }
 
-#[derive(Resource)]
-struct FootprintTool {
-    draft: Draft,
-    /// Where the next corner would go, on the floor plane.
-    cursor: Option<Vec3>,
-    /// A feature's point under the pointer while Shift is held.
-    hovered_point: Option<(FeatureId, String, Vec3)>,
-    /// What the last one was stood up to, for the next.
-    height: f32,
+/// Where the pointer is on the floor plane at height `floor`. A side view
+/// looking along the plane keeps the axis it cannot see from `last`, the last
+/// corner.
+pub fn floor_cursor(floor: f32, last: Vec3, mouse_input: &CurrentMouseInput) -> Option<Vec3> {
+    let ray = mouse_input.world_pos?;
+    let direction = Vec3::from(ray.direction);
+    let on_plane = if direction.y.abs() > 0.05 {
+        let t = (floor - ray.origin.y) / direction.y;
+        if t < 0.0 {
+            return None;
+        }
+        ray.origin + direction * t
+    } else if direction.x.abs() > direction.z.abs() {
+        Vec3::new(last.x, floor, ray.origin.z)
+    } else {
+        Vec3::new(ray.origin.x, floor, last.z)
+    };
+    let snapped = snap_vec3(on_plane, SNAP);
+    Some(Vec3::new(snapped.x, floor, snapped.z))
 }
 
-impl Default for FootprintTool {
-    fn default() -> Self {
-        Self {
-            draft: Draft::default(),
-            cursor: None,
-            hovered_point: None,
-            height: DEFAULT_HEIGHT,
-        }
-    }
+/// Whether a corner put at `at` would close the loop through `points` instead.
+pub fn closes(points: &[Vec3], at: Vec3) -> bool {
+    points.len() >= 3 && points[0].xz().distance(at.xz()) <= CLOSE_RADIUS
 }
 
-impl FootprintTool {
-    fn on_exit(mut tool: ResMut<Self>) {
-        tool.draft = Draft::default();
-        tool.cursor = None;
-        tool.hovered_point = None;
+pub fn build(tool: &Tools, steps: &[Vec<MapPick>], features: &FeatureTimeline) -> Option<Box<dyn FeatureTrait>> {
+    let mut draft = Draft::default();
+    for pick in steps.first()? {
+        match pick {
+            MapPick::Point { at, absolute: true, .. } => draft.push(*at, PointRef::absolute(at.x, at.y, at.z)),
+            MapPick::Point { point, at, .. } => draft.push(*at, point.clone()),
+            _ => {}
+        }
     }
+    Some(made_by(tool, draft.finish(DEFAULT_HEIGHT, features.features_map())?))
+}
 
-    /// Where the pointer is on the floor plane. Before the first corner there
-    /// is no plane yet, so it is wherever a click would land on the map's
-    /// walls, as for the Room tool. A side view looking along the plane keeps
-    /// the axis it cannot see from the last corner.
-    fn floor_cursor(
-        &self,
-        mouse_input: &CurrentMouseInput,
-        cameras: &Query<(Entity, &Multicam)>,
-        rooms: &MapVolumes,
-    ) -> Option<Vec3> {
-        let Some(floor) = self.draft.floor() else {
-            let start = Vec3::ZERO;
-            return compute_cursor(mouse_input, cameras, start, true, SNAP, rooms);
-        };
-        let ray = mouse_input.world_pos?;
-        let direction = Vec3::from(ray.direction);
-        let last = self.draft.points().last().unwrap_or(Vec2::ZERO);
-        let on_plane = if direction.y.abs() > 0.05 {
-            let t = (floor - ray.origin.y) / direction.y;
-            if t < 0.0 {
-                return None;
-            }
-            ray.origin + direction * t
-        } else if direction.x.abs() > direction.z.abs() {
-            Vec3::new(last.x, floor, ray.origin.z)
-        } else {
-            Vec3::new(ray.origin.x, floor, last.y)
-        };
-        let snapped = snap_vec3(on_plane, SNAP);
-        Some(Vec3::new(snapped.x, floor, snapped.z))
+/// The corners so far, the next going to `next`, and the room the loop would
+/// make if it closed there.
+pub fn preview(gizmos: &mut Gizmos, points: &[Vec3], next: Vec3) {
+    let drawn = LINE_COLOR;
+    let pending = Color::srgb_u8(60, 120, 255);
+    let closing = Color::srgb_u8(100, 255, 100);
+    let Some(first) = points.first() else { return };
+    let floor = first.y;
+    let at = |p: Vec2| Vec3::new(p.x, floor, p.y);
+    let points: Vec<Vec2> = points.iter().map(|p| p.xz()).collect();
+    for pair in points.windows(2) {
+        gizmos.line(at(pair[0]), at(pair[1]), drawn);
     }
-
-    fn interface(
-        mut tool: ResMut<Self>,
-        cameras: Query<(Entity, &Multicam)>,
-        mouse_input: Res<CurrentMouseInput>,
-        actions: Res<Actions>,
-        mut features: ResMut<FeatureTimeline>,
-        rooms: MapVolumes,
-        current_tool: Res<State<Tools>>,
-        mut next_tool: ResMut<NextState<Tools>>,
-    ) {
-        if actions.just_pressed(Action::Cancel) {
-            tool.draft = Draft::default();
-            return;
-        }
-        if actions.just_pressed(Action::Delete) {
-            tool.draft.pop();
-            return;
-        }
-
-        tool.cursor = tool.floor_cursor(&mouse_input, &cameras, &rooms);
-        let shift_held = actions.pressed(Action::Modify);
-
-        // With Shift, a feature's point under the pointer; with none there,
-        // Shift changes nothing and the click goes on the grid.
-        tool.hovered_point = mouse_input
-            .world_pos
-            .filter(|_| shift_held)
-            .and_then(|ray| find_hovered_point(&ray, &features, PICK_RADIUS));
-        let placed = match tool.hovered_point.clone() {
-            Some((feature, key, at)) => (mouse_input.released == Some(MouseButton::Left)).then(|| {
-                let mut point = PointRef::reference(feature);
-                point.point_key = key;
-                (at, point)
-            }),
-            None => tool
-                .cursor
-                .filter(|_| commit_at_cursor(&mouse_input, &actions))
-                .map(|at| (at, PointRef::absolute(at.x, at.y, at.z))),
-        };
-        let Some((at, corner)) = placed else { return };
-        if !tool.draft.closes_at(Vec2::new(at.x, at.z)) {
-            tool.draft.push(at, corner);
-            return;
-        }
-        if let Some(room) = tool.draft.finish(tool.height, features.features_map()) {
-            let id = features.apply_feature(made_by(current_tool.get(), room));
-            features.select(Some(id));
-        }
-        tool.draft = Draft::default();
-        next_tool.set(Tools::Select);
+    let next = next.xz();
+    let closes = points.len() >= 3 && points[0].distance(next) <= CLOSE_RADIUS;
+    if let Some(last) = points.last() {
+        dashed_line(gizmos, at(*last), at(if closes { points[0] } else { next }), pending, 0.15, 0.1);
     }
-
-    fn draw_gizmos(
-        tool: Res<FootprintTool>,
-        features: Res<FeatureTimeline>,
-        mouse_input: Res<CurrentMouseInput>,
-        mut gizmos: Gizmos,
-    ) {
-        let drawn = LINE_COLOR;
-        let pending = Color::srgb_u8(60, 120, 255);
-        let closing = Color::srgb_u8(100, 255, 100);
-
-        if let Some(ray) = mouse_input.world_pos.filter(|_| tool.hovered_point.is_some()) {
-            draw_picking_gizmos(&mut gizmos, &ray, &features, &tool.hovered_point);
+    gizmos.sphere(Isometry3d::from_translation(at(points[0])), 0.15, if closes { closing } else { drawn });
+    let mut outline = points.clone();
+    if !closes {
+        outline.push(next);
+    }
+    if outline.len() >= 3 {
+        if let Some(last) = outline.last() {
+            dashed_line(gizmos, at(*last), at(outline[0]), pending, 0.15, 0.1);
         }
-
-        let Some(floor) = tool.draft.floor() else {
-            if let Some(cursor) = tool.cursor {
-                gizmos.sphere(Isometry3d::from_translation(cursor), 0.15, pending);
-            }
-            return;
-        };
-        let at = |p: Vec2| Vec3::new(p.x, floor, p.y);
-        let points: Vec<Vec2> = tool.draft.points().collect();
-        for pair in points.windows(2) {
-            gizmos.line(at(pair[0]), at(pair[1]), drawn);
-        }
-
-        let next = tool.hovered_point.as_ref().map(|(_, _, p)| *p).or(tool.cursor);
-        let Some(next) = next else { return };
-        let next = Vec2::new(next.x, next.z);
-        let closes = tool.draft.closes_at(next);
-        if let Some(last) = points.last() {
-            dashed_line(&mut gizmos, at(*last), at(if closes { points[0] } else { next }), pending, 0.15, 0.1);
-        }
-        gizmos.sphere(Isometry3d::from_translation(at(points[0])), 0.15, if closes { closing } else { drawn });
-        gizmos.sphere(Isometry3d::from_translation(at(next)), 0.12, pending);
-
-        // What would be a room if the loop closed here.
-        let mut outline = points.clone();
-        if !closes {
-            outline.push(next);
-        }
-        if outline.len() >= 3 {
-            if let Some(last) = outline.last() {
-                dashed_line(&mut gizmos, at(*last), at(outline[0]), pending, 0.15, 0.1);
-            }
-            for (a, b) in hatch(&outline, &[], HATCH_SPACING) {
-                gizmos.line(at(a), at(b), if closes { closing } else { pending.with_alpha(0.4) });
-            }
+        for (a, b) in hatch(&outline, &[], HATCH_SPACING) {
+            gizmos.line(at(a), at(b), if closes { closing } else { pending.with_alpha(0.4) });
         }
     }
 }

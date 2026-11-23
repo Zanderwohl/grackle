@@ -245,6 +245,7 @@ impl FeatureTrait for EditorStairs {
 
     fn tool(&self) -> Option<crate::tool::Tools> { Some(crate::tool::Tools::Stairs) }
     fn type_key(&self) -> &'static str { "stairs" }
+    fn picked_by(&self) -> crate::editor::editable::PickedBy { crate::editor::editable::PickedBy::Outside }
 
     fn debug_gizmos(&self, gizmos: &mut Gizmos) {
         for (point, at) in self.points().into_iter().zip(self.resolved) {

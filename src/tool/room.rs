@@ -1,18 +1,17 @@
 use bevy::app::App;
-use crate::common::keybind::Actions;
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use crate::common::world_surface::{self, Fill, Volume};
 use crate::common::csg::{self, Polygon};
 use crate::common::triangulate::triangulate;
 use crate::common::app_mode::AppMode;
-use crate::editor::editable::{EditEvent, FeatureId, FeatureTimeline, FeatureTrait, PointRef};
+use crate::editor::editable::{EditEvent, FeatureId, FeatureTimeline, FeatureTrait};
 use crate::editor::editor_room::EditorRoom;
 use crate::editor::trigger::EditorTrigger;
 use crate::editor::block::EditorBlock;
 use crate::editor::input::CurrentMouseInput;
-use crate::editor::multicam::{on_top, HandleMaterial, Multicam};
-use crate::tool::point_picker::{Picked, PointPicker};
+use crate::editor::multicam::{on_top, HandleMaterial};
+use crate::tool::map_wizard::MapPick;
 use crate::tool::tool_helpers::*;
 use crate::tool::Tools;
 
@@ -24,16 +23,8 @@ impl Plugin for RoomPlugin {
     fn build(&self, app: &mut App) {
         crate::common::keybind::ensure(app);
         app
-            .init_resource::<RoomTool>()
             .init_resource::<RoomDragState>()
-            .add_systems(Update, (
-                RoomTool::interface,
-                RoomTool::draw_gizmos,
-                RoomTool::draw_room_bounds,
-            ).chain().run_if(drawing_a_box).run_if(in_state(AppMode::Editor)))
-            .add_systems(OnExit(Tools::Room), RoomTool::on_exit)
-            .add_systems(OnExit(Tools::Trigger), RoomTool::on_exit)
-            .add_systems(OnExit(Tools::Block), RoomTool::on_exit)
+            .add_systems(Update, draw_room_bounds.run_if(drawing_a_box).run_if(in_state(AppMode::Editor)))
             .add_systems(Update, (
                 RoomDragState::spawn_handles_system,
                 RoomDragState::handle_dragging,
@@ -49,167 +40,39 @@ fn drawing_a_box(tool: Res<State<Tools>>) -> bool {
     matches!(tool.get(), Tools::Room | Tools::Trigger | Tools::Block)
 }
 
-enum FarCorner {
-    FromMin(Vec3),
-    Point(PointRef),
+/// A room, block or trigger from its first corner and its far one. A far
+/// corner clicked at the cursor is a size measured from the first, so moving
+/// the first moves the box; one on a named point is that point.
+pub fn box_build(tool: &Tools, steps: &[Vec<MapPick>], _: &FeatureTimeline) -> Option<Box<dyn FeatureTrait>> {
+    let [first, far] = steps else { return None };
+    let (MapPick::Point { point: min, at: min_at, .. }, MapPick::Point { point: max, at: max_at, absolute }) =
+        (first.first()?, far.first()?)
+    else {
+        return None;
+    };
+    let room = match absolute {
+        true => EditorRoom::from_min_and_size(min.clone(), *max_at - *min_at),
+        false => EditorRoom::from_point_refs(min.clone(), max.clone()),
+    };
+    Some(match tool {
+        Tools::Trigger => Box::new(EditorTrigger::from_room(room)),
+        Tools::Block => Box::new(EditorBlock::from_room(room)),
+        _ => Box::new(room),
+    })
 }
 
-#[derive(Resource)]
-struct RoomTool {
-    picker: PointPicker,
-    last_min: Vec3,
-    /// The last room's far corner from its first, so the next is suggested at
-    /// that size from wherever its own first corner went.
-    last_size: Vec3,
-    cursor: Option<Vec3>,
-    /// The first corner, once picked; the next pick is the far one.
-    min_point: Option<PointRef>,
-    min_resolved: Option<Vec3>,
-    snap: bool,
-    snap_granularity: f32,
-}
-
-impl Default for RoomTool {
-    fn default() -> Self {
-        Self {
-            picker: PointPicker::default(),
-            last_min: Vec3::new(-1.0, 0.0, -1.0),
-            last_size: Vec3::new(2.0, 2.0, 2.0),
-            cursor: None,
-            min_point: None,
-            min_resolved: None,
-            snap: true,
-            snap_granularity: DEFAULT_SNAP_GRANULARITY,
-        }
+pub fn box_preview(gizmos: &mut Gizmos, points: &[Vec3], at: Vec3) {
+    if let [first] = points {
+        bounds_gizmo(gizmos, *first, at, Color::srgb_u8(40, 40, 200));
+        draw_taxicab_path(gizmos, *first, at);
     }
 }
 
-impl RoomTool {
-    fn on_exit(mut tool: ResMut<Self>) {
-        tool.picker.reset();
-        tool.cursor = None;
-        tool.min_point = None;
-        tool.min_resolved = None;
-    }
-
-    fn suggestion(&self) -> Vec3 {
-        match self.min_resolved {
-            None => self.last_min,
-            Some(min) => min + self.last_size,
-        }
-    }
-
-    fn interface(
-        mut tool: ResMut<Self>,
-        cameras: Query<(Entity, &Multicam)>,
-        mouse_input: Res<CurrentMouseInput>,
-        actions: Res<Actions>,
-        mut features: ResMut<FeatureTimeline>,
-        rooms: MapVolumes,
-        mut next_tool: ResMut<NextState<Tools>>,
-        current_tool: Res<State<Tools>>,
-    ) {
-        let drawing = current_tool.get().clone();
-        let suggestion = tool.suggestion();
-        tool.cursor = compute_cursor(
-            &mouse_input, &cameras, suggestion,
-            tool.snap, tool.snap_granularity, &rooms,
-        );
-        let snap = tool.snap.then_some(tool.snap_granularity);
-        let cursor = tool.cursor;
-        let picked = tool.picker.update(&mouse_input, &actions, &features, cursor, snap, Some);
-        let (point, at) = match (picked, tool.min_resolved) {
-            (Picked::Nothing, _) => return,
-            // Escape while placing the far corner discards the first.
-            (Picked::Canceled, _) => {
-                tool.min_point = None;
-                tool.min_resolved = None;
-                return;
-            }
-            // The far corner is a size, measured from the first.
-            (Picked::Absolute(at), Some(min)) => {
-                Self::create_room(&mut tool, &mut features, &mut next_tool, &drawing, FarCorner::FromMin(at - min), at);
-                return;
-            }
-            (Picked::Absolute(at), None) => (PointRef::absolute(at.x, at.y, at.z), at),
-            (Picked::Relative(point, at), Some(_)) => {
-                Self::create_room(&mut tool, &mut features, &mut next_tool, &drawing, FarCorner::Point(point), at);
-                return;
-            }
-            (Picked::Relative(point, at), None) => (point, at),
-        };
-        tool.min_point = Some(point);
-        tool.min_resolved = Some(at);
-        tool.last_min = at;
-    }
-
-    fn create_room(
-        tool: &mut ResMut<Self>,
-        features: &mut ResMut<FeatureTimeline>,
-        next_tool: &mut ResMut<NextState<Tools>>,
-        drawing: &Tools,
-        max: FarCorner,
-        max_resolved: Vec3,
-    ) {
-        if let Some(min_point) = tool.min_point.take() {
-            let room = match max {
-                FarCorner::FromMin(size) => EditorRoom::from_min_and_size(min_point, size),
-                FarCorner::Point(max_point) => EditorRoom::from_point_refs(min_point, max_point),
-            };
-            let feature: Box<dyn FeatureTrait> = match drawing {
-                Tools::Trigger => Box::new(EditorTrigger::from_room(room)),
-                Tools::Block => Box::new(EditorBlock::from_room(room)),
-                _ => Box::new(room),
-            };
-            let id = features.apply_feature(feature);
-            features.select(Some(id));
-            if let Some(min) = tool.min_resolved {
-                tool.last_size = max_resolved - min;
-            }
-            tool.min_resolved = None;
-            next_tool.set(Tools::Select);
-        }
-    }
-
-    fn draw_gizmos(
-        tool: Res<RoomTool>,
-        features: Res<FeatureTimeline>,
-        mouse_input: Res<CurrentMouseInput>,
-        mut gizmos: Gizmos,
-    ) {
-        let from_min = tool.min_resolved.filter(|_| tool.picker.reference().is_none() && !tool.picker.is_picking());
-        let is_relative = from_min.is_some() || tool.picker.reference().is_some();
-
-        if let Some(cursor) = tool.cursor {
-            let color = if is_relative {
-                Color::srgb_u8(80, 140, 255)
-            } else {
-                Color::srgb_u8(60, 120, 255)
-            };
-            gizmos.sphere(Isometry3d::from_translation(cursor), 0.15, color);
-
-            if let Some(min_resolved) = tool.min_resolved {
-                let min_color = Color::srgb_u8(100, 255, 100);
-                gizmos.sphere(Isometry3d::from_translation(min_resolved), 0.15, min_color);
-                let preview_color = Color::srgb_u8(40, 40, 200);
-                bounds_gizmo(&mut gizmos, min_resolved, cursor, preview_color);
-            }
-            if let Some(min) = from_min {
-                draw_taxicab_path(&mut gizmos, min, cursor);
-            }
-        }
-        tool.picker.draw(&mut gizmos, &mouse_input, &features, tool.cursor);
-    }
-
-    fn draw_room_bounds(
-        mut gizmos: Gizmos,
-        rooms: Query<(Entity, &Room)>,
-    ) {
-        let color = Color::srgb_u8(100, 100, 100);
-        for (_, room) in rooms {
-            for (a, b) in room.edges() {
-                gizmos.line(a, b, color);
-            }
+fn draw_room_bounds(mut gizmos: Gizmos, rooms: Query<&Room>) {
+    let color = Color::srgb_u8(100, 100, 100);
+    for room in &rooms {
+        for (a, b) in room.edges() {
+            gizmos.line(a, b, color);
         }
     }
 }

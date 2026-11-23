@@ -41,7 +41,7 @@ use crate::common::path_open::{PathOpen, RequestPathOpen};
 use crate::tool::sun_bake::{BakeSunlight, ClearSunlight, SunBake};
 use crate::tool::postcard_bake::PostcardPanel;
 use crate::tool::nav_overlay::{NavCommands, NavPanel};
-use crate::tool::retarget::RetargetState;
+use crate::tool::map_wizard::MapWizard;
 use crate::tool::show::{ShowPlugin, GizmoVisibility};
 use crate::tool::room::{CalculateRoomGeometry, ClearRoomGeometry};
 
@@ -183,6 +183,7 @@ struct TabViewerAndResources<'a> {
     gizmo_visibility: &'a mut GizmoVisibility,
     pending_edits: &'a mut PendingEditEvents,
     retarget_request: &'a mut Option<(FeatureId, String)>,
+    wizard: &'a mut MapWizard,
     /// Whether the Features panel changed the timeline, which it holds with
     /// change detection bypassed.
     timeline_touched: bool,
@@ -228,6 +229,7 @@ impl<'a> TabViewer for TabViewerAndResources<'a> {
         match tab {
             TabKinds::Tools => {
                 Tools::ui(ui, self.current_tool, self.next_tool);
+                crate::tool::map_wizard::status_ui(ui, self.current_tool.get(), self.wizard, self.editor_features);
             }
             TabKinds::Bakes => {
                 *self.bake_commands = BakePlugin::ui(ui, self.bake_commands, self.nav_commands, self.bake_progress, self.ecs_dump);
@@ -358,7 +360,7 @@ impl EditorPanels {
         mut editor_features: ResMut<FeatureTimeline>,
         mut gizmo_visibility: ResMut<GizmoVisibility>,
         mut messages: PanelMessages,
-        mut retarget_state: ResMut<RetargetState>,
+        mut wizard: ResMut<MapWizard>,
         mut current_file: ResMut<CurrentFilePath>,
         mut map_metadata: ResMut<MapMetadata>,
         net_role: Res<NetRole>,
@@ -422,6 +424,7 @@ impl EditorPanels {
             gizmo_visibility: &mut *gizmo_visibility,
             pending_edits: &mut pending_edits,
             retarget_request: &mut retarget_request,
+            wizard: &mut wizard,
             timeline_touched: false,
             spectating: !net_role.is_authority(),
             rounds: messages.rounds.view(),
@@ -730,12 +733,15 @@ impl EditorPanels {
         }
 
         if let Some((feature_id, label)) = retarget_request {
-            retarget_state.target_feature = Some(feature_id);
-            retarget_state.target_point_ref_key = label;
-            retarget_state.hovered_point = None;
             // `set_if_different`, not `set`: a same-state `set` still runs the transition, and
-            // `OnExit(Tools::Retarget)` would clear the `RetargetState` just filled in.
-            next_tool.set_if_different(Tools::Retarget);
+            // starting a tool clears the wizard, re-target and all.
+            if label == crate::editor::mirror::PICK_SOURCES {
+                wizard.pick_sources(feature_id);
+                next_tool.set_if_different(Tools::MirrorSources);
+            } else {
+                wizard.retarget(feature_id, label);
+                next_tool.set_if_different(Tools::Retarget);
+            }
         }
 
         for event in pending_edits.events.drain(..) {

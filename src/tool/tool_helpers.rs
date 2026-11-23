@@ -22,7 +22,6 @@ pub fn camera_dragging(mouse: &CurrentMouseInput) -> bool {
 pub fn commit_at_cursor(mouse: &CurrentMouseInput, actions: &Actions) -> bool {
     mouse.released == Some(MouseButton::Left) || actions.just_pressed(Action::Confirm)
 }
-const SELECT_POINT_RADIUS: f32 = 0.3;
 
 /// The `s` for which `axis_origin + s * axis_dir` is the point on that line
 /// closest to the ray. `None` when the ray is nearly parallel to the axis.
@@ -129,7 +128,7 @@ impl PickCache {
         (last_changed, features.entity_generation())
     }
 
-    fn of(features: &FeatureTimeline, key: (bevy::ecs::change_detection::Tick, u64)) -> Self {
+    pub(crate) fn of(features: &FeatureTimeline, key: (bevy::ecs::change_detection::Tick, u64)) -> Self {
         // Hidden volumes too: they still cut their neighbors. A Mirror's copies
         // are unpickable, but they cut, at their source's place.
         let positions = crate::editor::volume_order::positions(features);
@@ -155,16 +154,17 @@ impl PickCache {
         PickCache { key, volumes, owned, shares }
     }
 
-    /// Kept if `features` is still at `key`, rebuilt otherwise.
-    pub fn refresh<'a>(cache: &'a mut Option<PickCache>, features: &FeatureTimeline, key: (bevy::ecs::change_detection::Tick, u64)) -> &'a mut PickCache {
-        if cache.as_ref().is_none_or(|cache| cache.key != key) {
-            *cache = Some(PickCache::of(features, key));
-        }
-        cache.as_mut().expect("filled above")
+    /// The volumes `feature` owns, by index, ascending.
+    pub(crate) fn owned(&self, feature: FeatureId) -> Vec<usize> {
+        self.owned.get(&feature).cloned().unwrap_or_default()
+    }
+
+    pub(crate) fn key_of(&self) -> (bevy::ecs::change_detection::Tick, u64) {
+        self.key
     }
 
     /// [`wall_hit`], cutting the share only once.
-    fn wall_hit(&mut self, index: usize, ray: &Ray3d) -> Option<(f32, Vec3)> {
+    pub(crate) fn wall_hit(&mut self, index: usize, ray: &Ray3d) -> Option<(f32, Vec3)> {
         let (min, max) = self.volumes[index].shape.bounds();
         if !ray_intersects_aabb(ray, min, max) {
             return None;
@@ -326,82 +326,12 @@ pub fn bounds_gizmo(gizmos: &mut Gizmos, min: Vec3, max: Vec3, color: Color) {
     gizmos.line(Vec3::new(min.x, max.y, min.z), Vec3::new(min.x, max.y, max.z), color);
 }
 
-/// The nearest visible feature hit by a ray, as its id and the hit position.
-/// Rooms are tested against solid wall seen from inside, so a room never hides
-/// what stands in it; everything else by pick boxes and by proximity to its
-/// point.
+/// The nearest visible feature hit by a ray, as its id and the hit position;
+/// see [`crate::tool::map_products::MapProducts::hit`].
 pub fn find_nearest_feature_hit(
     ray: &Ray3d,
     features: &FeatureTimeline,
     visibility: &GizmoVisibility,
 ) -> Option<(FeatureId, Vec3)> {
-    let mut cache = PickCache::of(features, Default::default());
-    find_nearest_feature_hit_in(ray, features, visibility, &mut cache)
-}
-
-/// [`find_nearest_feature_hit`] against volumes already gathered for this state of `features`.
-pub fn find_nearest_feature_hit_in(
-    ray: &Ray3d,
-    features: &FeatureTimeline,
-    visibility: &GizmoVisibility,
-    cache: &mut PickCache,
-) -> Option<(FeatureId, Vec3)> {
-    let dir = Vec3::from(ray.direction);
-    let mut best_t = f32::MAX;
-    let mut best: Option<(FeatureId, Vec3)> = None;
-
-    for (feature_id, feature) in features.active_features() {
-        let key = feature.object().type_key();
-        let visible = visibility.shows(key);
-        if !visible { continue; }
-
-        match key {
-            _ if cache.owned.contains_key(&feature_id) => {
-                let own = cache.owned[&feature_id].clone();
-                for index in own {
-                    if let Some((t, hit)) = cache.wall_hit(index, ray) {
-                        if t < best_t {
-                            best_t = t;
-                            best = Some((feature_id, hit));
-                        }
-                    }
-                }
-            }
-            // From outside only: a camera inside one would pick it with every click.
-            "trigger" | "stairs" => {
-                for pick_box in feature.object().pick_boxes() {
-                    if let Some(t) = pick_box.ray_distance(ray).filter(|t| *t > 0.0)
-                        && t < best_t
-                    {
-                        best_t = t;
-                        best = Some((feature_id, ray.origin + dir * t));
-                    }
-                }
-            }
-            "global_point" | "grackle_point_light" | "spawn_point" | "spectator_camera" | "decal" | "prop" | "weapon_pickup" | "animation_display" | "animation_grid" | "mirror" => {
-                // Both: a grid's point is between bodies, inside none.
-                for pick_box in feature.object().pick_boxes() {
-                    if let Some(t) = pick_box.ray_distance(ray) {
-                        if t < best_t {
-                            best_t = t;
-                            best = Some((feature_id, ray.origin + dir * t));
-                        }
-                    }
-                }
-                if let Ok(pos) = feature.object().get_point("") {
-                    let dist = ray_point_distance(ray, pos);
-                    if dist < SELECT_POINT_RADIUS {
-                        let t = (pos - ray.origin).dot(dir);
-                        if t > 0.0 && t < best_t {
-                            best_t = t;
-                            best = Some((feature_id, pos));
-                        }
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-
-    best
+    crate::tool::map_products::MapProducts::of(features).hit(ray, visibility)
 }

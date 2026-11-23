@@ -10,14 +10,13 @@ use crate::common::picker::Choice;
 use crate::editor::weapon_pickup::{self, WeaponPickup, WEAPONS};
 use crate::prop::picker::PropPreviews;
 use crate::get;
-use crate::tool::point_placement::{add_point_placement_tool, PlaceablePoint};
+use crate::tool::point_placement::PlaceablePoint;
 use crate::tool::Tools;
 
 pub struct WeaponPickupPlugin;
 
 impl Plugin for WeaponPickupPlugin {
     fn build(&self, app: &mut App) {
-        add_point_placement_tool::<WeaponPickup>(app);
         app.add_systems(
             EguiPrimaryContextPass,
             offer_the_catalog.run_if(in_state(AppMode::Editor)),

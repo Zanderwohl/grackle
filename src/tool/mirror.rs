@@ -1,19 +1,10 @@
 //! Places a [`Mirror`] at its center. Its sources and teams are picked in its panel.
 
-use bevy::app::App;
 use bevy::prelude::*;
 use crate::editor::editable::{FeatureTrait, PointRef};
 use crate::editor::mirror::Mirror;
-use crate::tool::point_placement::{add_point_placement_tool, PlaceablePoint};
+use crate::tool::point_placement::PlaceablePoint;
 use crate::tool::Tools;
-
-pub struct MirrorPlugin;
-
-impl Plugin for MirrorPlugin {
-    fn build(&self, app: &mut App) {
-        add_point_placement_tool::<Mirror>(app);
-    }
-}
 
 impl PlaceablePoint for Mirror {
     const TOOL: Tools = Tools::Mirror;

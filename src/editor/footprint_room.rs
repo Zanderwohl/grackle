@@ -686,6 +686,7 @@ impl FeatureTrait for FootprintRoom {
     fn type_key(&self) -> &'static str {
         "footprint_room"
     }
+    fn picked_by(&self) -> crate::editor::editable::PickedBy { crate::editor::editable::PickedBy::Walls }
 
     fn debug_gizmos(&self, gizmos: &mut Gizmos) {
         self.draw(gizmos, Color::srgb_u8(100, 100, 100));

@@ -9,12 +9,13 @@
 //! only picks that fit. The picks a tool is collecting are the selection, so
 //! there is one list of what is picked rather than two that can disagree.
 
+use crate::common::wizard;
 use crate::get;
 use crate::prop::construct::Making;
 use crate::prop::document::{Pick, PropDoc, PropEditor};
-use crate::prop::feature::{BooleanOp, End, Evaluated, FeatureOp, PatternKind, Profile, ProfileSource, PropFeatureId, SweepOp};
+use crate::prop::feature::{BodyRef, BooleanOp, End, PropFeature, Evaluated, FeatureOp, PatternKind, Profile, ProfileSource, PropFeatureId, SweepOp};
 use crate::prop::path::Orient;
-use crate::prop::refs::{Curve3, PathRef, Resolve, JOINS};
+use crate::prop::refs::{AnyRef, Curve3, PathRef, Resolve, JOINS};
 use crate::prop::sketch::Sketch;
 use crate::prop::sketch_edit::SketchSession;
 use crate::prop::slot::{self, plane_through_face, Resolved, Slot, SlotCx, Value};
@@ -70,36 +71,36 @@ pub const TOOLS: &[ToolSpec] = &[
         tool: Tool::Combine(BooleanOp::Union),
         name: "prop.boolean.union",
         icon: "venn_union",
-        slots: &[slot::BODY, slot::SECOND_BODY],
+        slots: &[slot::BODIES_2],
         build: |values| combine(BooleanOp::Union, values),
     },
     ToolSpec {
         tool: Tool::Combine(BooleanOp::Subtract),
         name: "prop.boolean.subtract",
         icon: "venn_subtract",
-        slots: &[slot::BODY, slot::SECOND_BODY],
+        slots: &[slot::TARGETS, slot::TOOLS],
         build: |values| combine(BooleanOp::Subtract, values),
     },
     ToolSpec {
         tool: Tool::Combine(BooleanOp::Intersect),
         name: "prop.boolean.intersect",
         icon: "venn_intersect",
-        slots: &[slot::BODY, slot::SECOND_BODY],
+        slots: &[slot::BODIES_2],
         build: |values| combine(BooleanOp::Intersect, values),
     },
-    ToolSpec { tool: Tool::Mirror, name: "prop.features.mirror", icon: "square_mirrored", slots: &[slot::BODY, slot::PLANE], build: mirror },
+    ToolSpec { tool: Tool::Mirror, name: "prop.features.mirror", icon: "square_mirrored", slots: &[slot::BODIES, slot::PLANE], build: mirror },
     ToolSpec {
         tool: Tool::LinearPattern,
         name: "prop.features.linear_pattern",
         icon: "two_squares",
-        slots: &[slot::BODY, slot::DIRECTION],
+        slots: &[slot::BODIES, slot::DIRECTION],
         build: row,
     },
     ToolSpec {
         tool: Tool::RadialPattern,
         name: "prop.features.radial_pattern",
         icon: "squares_in_circle",
-        slots: &[slot::BODY, slot::AXIS],
+        slots: &[slot::BODIES, slot::AXIS],
         build: circle,
     },
     ToolSpec { tool: Tool::Plane, name: "prop.features.plane", icon: "ground_square", slots: &[slot::MAKE_PLANE], build: made },
@@ -122,7 +123,7 @@ fn extrude(values: Vec<Resolved>) -> Option<FeatureOp> {
         profile: profile_source(profile)?,
         taper: 0.0,
         op: SweepOp::NewBody,
-        target: None,
+        targets: vec![],
         end: End::Distance { distance: End::DEFAULT_DISTANCE },
         other: None,
         direction: None,
@@ -138,7 +139,7 @@ fn revolve(values: Vec<Resolved>) -> Option<FeatureOp> {
         steps: 12,
         symmetric: false,
         op: SweepOp::NewBody,
-        target: None,
+        targets: vec![],
         axis,
         surface: Surface::default(),
     })
@@ -152,7 +153,7 @@ fn along(values: Vec<Resolved>) -> Option<FeatureOp> {
         twist: 0.0,
         scale: 1.0,
         op: SweepOp::NewBody,
-        target: None,
+        targets: vec![],
         path,
         surface: Surface::default(),
     })
@@ -161,27 +162,33 @@ fn along(values: Vec<Resolved>) -> Option<FeatureOp> {
 fn loft(values: Vec<Resolved>) -> Option<FeatureOp> {
     let [Resolved::Profiles(profiles)] = <[_; 1]>::try_from(values).ok()? else { return None };
     let profiles = profiles.into_iter().map(|(sketch, region)| Profile { sketch, region, start: None }).collect();
-    Some(FeatureOp::Loft { closed: false, op: SweepOp::NewBody, target: None, profiles, surface: Surface::default() })
+    Some(FeatureOp::Loft { closed: false, op: SweepOp::NewBody, targets: vec![], profiles, surface: Surface::default() })
 }
 
 fn combine(op: BooleanOp, values: Vec<Resolved>) -> Option<FeatureOp> {
-    let [Resolved::Body(target), Resolved::Body(tool)] = <[_; 2]>::try_from(values).ok()? else { return None };
-    Some(FeatureOp::Boolean { op, target, tool })
+    Some(match (op, &values[..]) {
+        (BooleanOp::Union, [Resolved::Bodies(bodies)]) => FeatureOp::Union { bodies: bodies.clone() },
+        (BooleanOp::Intersect, [Resolved::Bodies(bodies)]) => FeatureOp::Intersect { bodies: bodies.clone() },
+        (BooleanOp::Subtract, [Resolved::Bodies(targets), Resolved::Bodies(tools)]) => {
+            FeatureOp::Subtract { targets: targets.clone(), tools: tools.clone() }
+        }
+        _ => return None,
+    })
 }
 
 fn mirror(values: Vec<Resolved>) -> Option<FeatureOp> {
-    let [Resolved::Body(target), Resolved::Plane(about)] = <[_; 2]>::try_from(values).ok()? else { return None };
-    Some(FeatureOp::Mirror { target, offset: 0.0, keep_original: true, about })
+    let [Resolved::Bodies(targets), Resolved::Plane(about)] = <[_; 2]>::try_from(values).ok()? else { return None };
+    Some(FeatureOp::Mirror { targets, offset: 0.0, keep_original: true, about })
 }
 
 fn row(values: Vec<Resolved>) -> Option<FeatureOp> {
-    let [Resolved::Body(target), Resolved::Direction(direction)] = <[_; 2]>::try_from(values).ok()? else { return None };
-    Some(FeatureOp::Pattern { target, count: 3, along: PatternKind::Linear { spacing: 0.05, direction } })
+    let [Resolved::Bodies(targets), Resolved::Direction(direction)] = <[_; 2]>::try_from(values).ok()? else { return None };
+    Some(FeatureOp::Pattern { targets, count: 3, along: PatternKind::Linear { spacing: 0.05, direction } })
 }
 
 fn circle(values: Vec<Resolved>) -> Option<FeatureOp> {
-    let [Resolved::Body(target), Resolved::Curve(axis)] = <[_; 2]>::try_from(values).ok()? else { return None };
-    Some(FeatureOp::Pattern { target, count: 6, along: PatternKind::Radial { degrees: 360.0, axis } })
+    let [Resolved::Bodies(targets), Resolved::Curve(axis)] = <[_; 2]>::try_from(values).ok()? else { return None };
+    Some(FeatureOp::Pattern { targets, count: 6, along: PatternKind::Radial { degrees: 360.0, axis } })
 }
 
 fn made(values: Vec<Resolved>) -> Option<FeatureOp> {
@@ -229,103 +236,140 @@ fn repicked(doc: &PropDoc, feature: PropFeatureId, field: usize) -> Option<slot:
 }
 
 #[derive(Resource, Default)]
-pub struct ActiveTool(pub Option<Task>);
+pub struct ActiveTool {
+    pub task: Option<Task>,
+    /// The picks after which the tool was moved on to its next slot; see
+    /// [`wizard::move_on`].
+    pub moved_on: Vec<Pick>,
+}
 
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct Filled(pub Vec<Vec<Pick>>);
-
-impl Filled {
-    pub fn picks(&self) -> impl Iterator<Item = &Pick> {
-        self.0.iter().flatten()
+impl ActiveTool {
+    fn set(&mut self, task: Option<Task>) {
+        self.task = task;
+        self.moved_on.clear();
     }
 }
 
-/// Each pick, in order, into the first open slot it fits. A pick that fits
-/// nowhere is dropped, so a selection made for something else does not stop a
-/// tool starting.
-pub fn fill(task: Task, picks: &[Pick], doc: &PropDoc, evaluated: &Evaluated) -> Filled {
-    let slots = task.slots(doc);
-    let mut filled = Filled(vec![Vec::new(); slots.len()]);
-    for pick in picks {
-        let at = (0..slots.len()).find(|&i| {
-            slots[i].kind.open(&filled.0[i]) && fits(task, &slots, i, pick, &filled, doc, evaluated)
-        });
-        if let Some(at) = at {
-            filled.0[at].push(pick.clone());
+pub type Filled = wizard::Filled<Pick>;
+
+/// A task's slots as wizard steps, against the document and its evaluation.
+struct PropSteps<'a> {
+    task: Task,
+    slots: Vec<Slot>,
+    doc: &'a PropDoc,
+    evaluated: &'a Evaluated,
+}
+
+impl<'a> PropSteps<'a> {
+    fn new(task: Task, doc: &'a PropDoc, evaluated: &'a Evaluated) -> Self {
+        PropSteps { task, slots: task.slots(doc), doc, evaluated }
+    }
+
+    /// What the other slots hold, for a check to compare against: the tool's
+    /// other slots, or a re-picked feature's other fields.
+    fn others(&self, slot: usize, filled: &Filled) -> Vec<Value> {
+        match self.task {
+            Task::Make(_) => (0..self.slots.len())
+                .filter(|&i| i != slot)
+                .filter_map(|i| self.slots[i].kind.value(&filled.has[i], self.evaluated))
+                .collect(),
+            Task::Repick { feature, field } => self
+                .doc
+                .feature(feature)
+                .map(|f| f.op.fields())
+                .unwrap_or_default()
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| *i != field)
+                .filter_map(|(_, f)| Value::of_field(f))
+                .collect(),
         }
     }
-    filled
 }
 
-/// What the other slots hold, for a check to compare against: the tool's
-/// other slots, or a re-picked feature's other fields.
-fn others(task: Task, slots: &[Slot], slot: usize, filled: &Filled, doc: &PropDoc, evaluated: &Evaluated) -> Vec<Value> {
-    match task {
-        Task::Make(_) => (0..slots.len())
-            .filter(|&i| i != slot)
-            .filter_map(|i| slots[i].kind.value(&filled.0[i], evaluated))
-            .collect(),
-        Task::Repick { feature, field } => doc
-            .feature(feature)
-            .map(|f| f.op.fields())
-            .unwrap_or_default()
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| *i != field)
-            .filter_map(|(_, f)| Value::of_field(f))
-            .collect(),
+impl wizard::Steps for PropSteps<'_> {
+    type Pick = Pick;
+
+    fn count(&self) -> usize {
+        self.slots.len()
     }
-}
 
-fn fits(task: Task, slots: &[Slot], slot: usize, pick: &Pick, filled: &Filled, doc: &PropDoc, evaluated: &Evaluated) -> bool {
-    // Re-picking may only name what already stands when the feature runs.
-    if let Task::Repick { feature, .. } = task {
-        let Some(at) = doc.index_of(feature) else { return false };
-        if !pick.features().all(|id| doc.index_of(id).is_some_and(|index| index < at)) {
+    fn answered(&self, step: usize, has: &[Pick]) -> bool {
+        self.slots[step].kind.answered(has, self.evaluated)
+    }
+
+    fn open(&self, step: usize, has: &[Pick]) -> bool {
+        self.slots[step].kind.open(has)
+    }
+
+    fn waits(&self, step: usize, has: &[Pick]) -> bool {
+        self.slots[step].kind.waits(has)
+    }
+
+    fn fits(&self, step: usize, pick: &Pick, filled: &Filled) -> bool {
+        // Re-picking may only name what already stands when the feature runs.
+        if let Task::Repick { feature, .. } = self.task {
+            let Some(at) = self.doc.index_of(feature) else { return false };
+            if !pick.features().all(|id| self.doc.index_of(id).is_some_and(|index| index < at)) {
+                return false;
+            }
+        }
+        let slot = &self.slots[step];
+        if !slot.kind.fits(&filled.has[step], pick, self.evaluated) {
             return false;
         }
+        let others = self.others(step, filled);
+        let cx = SlotCx { evaluated: self.evaluated, others: &others };
+        slot.checks.iter().all(|check| check(&cx, pick))
     }
-    if !slots[slot].kind.fits(&filled.0[slot], pick, evaluated) {
-        return false;
-    }
-    let others = others(task, slots, slot, filled, doc, evaluated);
-    let cx = SlotCx { evaluated, others: &others };
-    slots[slot].checks.iter().all(|check| check(&cx, pick))
+}
+
+pub fn fill(task: Task, picks: &[Pick], moved_on: &[Pick], doc: &PropDoc, evaluated: &Evaluated) -> Filled {
+    wizard::fill(&PropSteps::new(task, doc, evaluated), picks, moved_on)
+}
+
+pub fn filled(active: &ActiveTool, picks: &[Pick], doc: &PropDoc, evaluated: &Evaluated) -> Option<Filled> {
+    Some(fill(active.task?, picks, &active.moved_on, doc, evaluated))
+}
+
+/// Whether Enter or Next would close the slot under way and move on.
+pub fn can_move_on(task: Task, filled: &Filled, doc: &PropDoc, evaluated: &Evaluated) -> bool {
+    wizard::can_move_on(&PropSteps::new(task, doc, evaluated), filled)
+}
+
+pub fn move_on(active: &mut ActiveTool, editor: &PropEditor, evaluated: &Evaluated) {
+    let Some(task) = active.task else { return };
+    wizard::move_on(&PropSteps::new(task, editor.doc(), evaluated), editor.picks(), &mut active.moved_on);
 }
 
 pub fn is_ready(task: Task, filled: &Filled, doc: &PropDoc, evaluated: &Evaluated) -> bool {
-    task.slots(doc).iter().zip(&filled.0).all(|(slot, has)| !slot.kind.waiting(has, evaluated))
+    wizard::is_ready(&PropSteps::new(task, doc, evaluated), filled)
 }
 
 /// Ready, and nothing more could be added: a last slot taking any number of
 /// regions, or a construction another pick would change, waits to be told it
 /// is done.
 pub fn is_finished(task: Task, filled: &Filled, doc: &PropDoc, evaluated: &Evaluated) -> bool {
-    let slots = task.slots(doc);
-    let open_ended = slots.last().zip(filled.0.last()).is_some_and(|(slot, has)| slot.kind.open_ended(has));
-    is_ready(task, filled, doc, evaluated) && !open_ended
+    wizard::is_finished(&PropSteps::new(task, doc, evaluated), filled)
 }
 
-/// The first slot still wanting a pick, or the open-ended last one.
+/// The slot under way, or the open-ended last one.
 pub fn prompt(task: Task, filled: &Filled, doc: &PropDoc, evaluated: &Evaluated) -> String {
-    let slots = task.slots(doc);
-    let first = slots.iter().zip(&filled.0).find(|(slot, has)| slot.kind.waiting(has, evaluated));
-    match first {
-        Some((slot, _)) => get!(slot.prompt),
-        None if matches!(slots.last(), Some(Slot { kind: slot::Kind::Regions, .. })) => get!("prop.tool.pick.more_regions"),
-        None if matches!(slots.last(), Some(Slot { kind: slot::Kind::Profiles, .. })) => get!("prop.tool.pick.more_profiles"),
-        None => get!("prop.tool.pick.more"),
+    let steps = PropSteps::new(task, doc, evaluated);
+    match wizard::under_way(&steps, filled) {
+        Some(step) => get!(steps.slots[step].prompt),
+        None => match steps.slots.last().map(|slot| slot.kind) {
+            Some(slot::Kind::Regions) => get!("prop.tool.pick.more_regions"),
+            Some(slot::Kind::Profiles) => get!("prop.tool.pick.more_profiles"),
+            Some(slot::Kind::Bodies(_)) => get!("prop.tool.pick.more_bodies"),
+            _ => get!("prop.tool.pick.more"),
+        },
     }
 }
 
 /// Whether clicking `candidate` would do anything: unpick it, or fill a slot.
-pub fn accepts(task: Task, picks: &[Pick], candidate: &Pick, doc: &PropDoc, evaluated: &Evaluated) -> bool {
-    if picks.contains(candidate) {
-        return true;
-    }
-    let mut with = picks.to_vec();
-    with.push(candidate.clone());
-    fill(task, &with, doc, evaluated).picks().any(|pick| pick == candidate)
+pub fn accepts(task: Task, picks: &[Pick], moved_on: &[Pick], candidate: &Pick, doc: &PropDoc, evaluated: &Evaluated) -> bool {
+    wizard::accepts(&PropSteps::new(task, doc, evaluated), picks, moved_on, candidate)
 }
 
 /// Keeps only what `task` can use of the selection, and finishes at once if
@@ -340,18 +384,68 @@ pub fn start(
     match task {
         // The selection was the feature being edited; what it is about is
         // picked fresh.
-        Task::Repick { .. } => editor.clear_selection(),
+        // A list starts from what the field names, so a click adds to it and
+        // Escape takes one back; anything else is picked fresh.
+        Task::Repick { feature, field } => {
+            let preloaded = repicked(editor.doc(), feature, field)
+                .filter(|field| matches!(field.slot.kind, slot::Kind::Bodies(_) | slot::Kind::Path))
+                .map(|field| field.refs.iter().flat_map(picks_of).collect())
+                .unwrap_or_default();
+            editor.set_picks(preloaded);
+            active.set(Some(task));
+        }
         Task::Make(_) => {
-            let filled = fill(task, editor.picks(), editor.doc(), evaluated);
-            editor.set_picks(filled.picks().cloned().collect());
+            let (filled, moved_on) = wizard::seed(&PropSteps::new(task, editor.doc(), evaluated), editor.picks());
+            let kept: Vec<Pick> = editor.picks().iter().filter(|pick| filled.picks().any(|held| held == *pick)).cloned().collect();
+            editor.set_picks(kept);
             if is_ready(task, &filled, editor.doc(), evaluated) {
-                active.0 = None;
+                active.set(None);
                 finish(task, &filled, editor, evaluated, session);
                 return;
             }
+            active.set(Some(task));
+            active.moved_on = moved_on;
         }
     }
-    active.0 = Some(task);
+}
+
+/// The features as they would stand if Enter were pressed now, and the id of
+/// the feature it would add, while every slot is answered and the last still
+/// takes more. Built on a copy, as [`finish`] builds on the document.
+pub fn would_make(active: &ActiveTool, editor: &PropEditor, evaluated: &Evaluated) -> Option<(Vec<PropFeature>, PropFeatureId)> {
+    let Some(task @ Task::Make(tool)) = active.task else { return None };
+    let doc = editor.doc();
+    let filled = fill(task, editor.picks(), &active.moved_on, doc, evaluated);
+    if !is_ready(task, &filled, doc, evaluated) || is_finished(task, &filled, doc, evaluated) {
+        return None;
+    }
+    let values: Vec<Value> =
+        task.slots(doc).iter().zip(&filled.has).map(|(slot, has)| slot.kind.value(has, evaluated)).collect::<Option<_>>()?;
+    let mut draft = doc.clone();
+    draft.features.truncate(editor.shown().len());
+    let planes: Vec<PropFeatureId> = values.iter().flat_map(Value::faces).map(|face| draft.push(plane_through_face(face))).collect();
+    let mut planes = planes.into_iter();
+    let resolved = values.into_iter().map(|value| value.resolve(&mut planes, &mut draft)).collect();
+    // A datum makes no body, so there would be nothing to draw.
+    let op = (tool.spec().build)(resolved).filter(FeatureOp::makes_body)?;
+    let id = draft.push(op);
+    Some((draft.features, id))
+}
+
+/// The picks that name `reference`.
+fn picks_of(reference: &AnyRef) -> Vec<Pick> {
+    match reference {
+        AnyRef::Path(path) => path.curves.iter().map(Pick::of_curve).collect(),
+        other => Pick::of_any(other).into_iter().collect(),
+    }
+}
+
+/// What the view stops at while a re-pick is up: the feature before the one
+/// re-picked, so the bodies it eats stand and can be clicked.
+pub fn peeked(active: &ActiveTool, doc: &PropDoc) -> Option<PropFeatureId> {
+    let Some(Task::Repick { feature, .. }) = active.task else { return None };
+    let at = doc.index_of(feature)?;
+    at.checked_sub(1).map(|before| doc.features[before].id)
 }
 
 /// Finishes the task once its picks are all in; with `confirm`, once it is
@@ -363,51 +457,91 @@ pub fn advance(
     session: &mut SketchSession,
     confirm: bool,
 ) {
-    let Some(task) = active.0 else { return };
+    let Some(task) = active.task else { return };
     if let Task::Repick { feature, .. } = task
         && editor.doc().feature(feature).is_none()
     {
-        active.0 = None;
+        active.set(None);
         return;
     }
-    let filled = fill(task, editor.picks(), editor.doc(), evaluated);
+    // A marker whose pick was clicked off would close a slot if it came back.
+    active.moved_on.retain(|marker| editor.picks().contains(marker));
+    let filled = fill(task, editor.picks(), &active.moved_on, editor.doc(), evaluated);
+    if confirm && can_move_on(task, &filled, editor.doc(), evaluated) {
+        move_on(active, editor, evaluated);
+        return;
+    }
     let done = match confirm {
         true => is_ready(task, &filled, editor.doc(), evaluated),
         false => is_finished(task, &filled, editor.doc(), evaluated),
     };
     if done {
-        active.0 = None;
+        active.set(None);
         finish(task, &filled, editor, evaluated, session);
     }
 }
 
 /// Puts the tool down, leaving the selection as it is.
 pub fn put_down(active: &mut ActiveTool) {
-    active.0 = None;
+    active.set(None);
 }
 
-/// Puts the tool down, restoring the selection from before a re-pick.
+/// Escape: takes back moving on or the last pick, and with nothing picked
+/// puts the tool down as [`cancel`] does.
+pub fn back(active: &mut ActiveTool, editor: &mut PropEditor, evaluated: &Evaluated) {
+    let Some(filled) = filled(active, editor.picks(), editor.doc(), evaluated) else { return };
+    // Picks no slot holds (a feature-list click mid-tool) go first, so the
+    // press always takes back something the tool was using.
+    let mut picks: Vec<Pick> = editor.picks().iter().filter(|pick| filled.picks().any(|held| held == *pick)).cloned().collect();
+    match wizard::back(&mut picks, &mut active.moved_on) {
+        wizard::Back::Took(_) | wizard::Back::Reopened => editor.set_picks(picks),
+        wizard::Back::Exit => cancel(active, editor),
+    }
+}
+
+/// Puts the tool down, restoring the selection from before a re-pick. A
+/// sweep left joining or cutting nothing, its targets never picked, goes back
+/// to making a new body.
 pub fn cancel(active: &mut ActiveTool, editor: &mut PropEditor) {
-    if let Some(Task::Repick { feature, .. }) = active.0.take()
-        && editor.doc().feature(feature).is_some()
-    {
-        editor.select(feature);
+    let task = active.task;
+    active.set(None);
+    let Some(Task::Repick { feature, .. }) = task else { return };
+    let Some(standing) = editor.doc().feature(feature) else { return };
+    if standing.op.sweep_with_no_targets() {
+        editor.edit(|doc| {
+            if let Some(op) = doc.feature_mut(feature).and_then(|f| f.op.sweep_op_mut()) {
+                *op = SweepOp::NewBody;
+            }
+        });
+    }
+    editor.select(feature);
+}
+
+/// After choosing a sweep's operation: a new body forgets its targets, and
+/// `true` means it now needs targets picked.
+pub fn chose_operation(op: SweepOp, targets: &mut Vec<BodyRef>) -> bool {
+    match op {
+        SweepOp::NewBody => {
+            targets.clear();
+            false
+        }
+        _ => targets.is_empty(),
     }
 }
 
 /// Whether `task` has a path slot with a curve in it to carry on from.
 pub fn can_chain(task: Task, filled: &Filled, doc: &PropDoc) -> bool {
-    task.slots(doc).iter().zip(&filled.0).any(|(slot, has)| slot.kind == slot::Kind::Path && !has.is_empty())
+    task.slots(doc).iter().zip(&filled.has).any(|(slot, has)| slot.kind == slot::Kind::Path && !has.is_empty())
 }
 
 /// Carries the path slot's curves on, at both ends, along every curve that
 /// joins without a corner: offered seams and edges, and sketch lines and
 /// curves. What it finds is picked, so the path is stored as the plain list
 /// of curves and no rule is kept to chain differently later.
-pub fn chain(task: Task, editor: &mut PropEditor, evaluated: &Evaluated) {
+pub fn chain(task: Task, moved_on: &[Pick], editor: &mut PropEditor, evaluated: &Evaluated) {
     let slots = task.slots(editor.doc());
-    let filled = fill(task, editor.picks(), editor.doc(), evaluated);
-    let Some(has) = slots.iter().zip(&filled.0).find(|(slot, _)| slot.kind == slot::Kind::Path).map(|(_, has)| has.clone())
+    let filled = fill(task, editor.picks(), moved_on, editor.doc(), evaluated);
+    let Some(has) = slots.iter().zip(&filled.has).find(|(slot, _)| slot.kind == slot::Kind::Path).map(|(_, has)| has.clone())
     else {
         return;
     };
@@ -490,7 +624,7 @@ pub fn add_making(editor: &mut PropEditor, making: &Making) -> PropFeatureId {
 fn finish(task: Task, filled: &Filled, editor: &mut PropEditor, evaluated: &Evaluated, session: &mut SketchSession) {
     let slots = task.slots(editor.doc());
     let Some(values): Option<Vec<Value>> =
-        slots.iter().zip(&filled.0).map(|(slot, has)| slot.kind.value(has, evaluated)).collect()
+        slots.iter().zip(&filled.has).map(|(slot, has)| slot.kind.value(has, evaluated)).collect()
     else {
         return;
     };
@@ -531,6 +665,7 @@ fn finish(task: Task, filled: &Filled, editor: &mut PropEditor, evaluated: &Eval
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::prop::feature::BodyRef;
     use crate::prop::feature::{evaluate, Axis};
     use crate::prop::plane::OriginPlane;
     use crate::prop::profile::Placement;
@@ -566,10 +701,11 @@ mod tests {
         let doc = two_cubes();
         let evaluated = evaluate(&doc.features);
         let task = Task::Make(Tool::Mirror);
-        let picks = [Pick::Axis(Axis::X), Pick::Body(PropFeatureId(1)), Pick::Body(PropFeatureId(0))];
-        let filled = fill(task, &picks, &doc, &evaluated);
-        assert_eq!(filled.0[0], vec![Pick::Body(PropFeatureId(1))], "the first body that fits is the target");
-        assert!(filled.0[1].is_empty(), "a second body is no plane, and an axis is not either");
+        let picks = [Pick::Axis(Axis::X), Pick::Body(BodyRef::whole(PropFeatureId(1))), Pick::Body(BodyRef::whole(PropFeatureId(0)))];
+        let filled = fill(task, &picks, &[], &doc, &evaluated);
+        let bodies = vec![Pick::Body(BodyRef::whole(PropFeatureId(1))), Pick::Body(BodyRef::whole(PropFeatureId(0)))];
+        assert_eq!(filled.has[0], bodies, "both bodies are targets, in pick order");
+        assert!(filled.has[1].is_empty(), "an axis is not a plane");
         assert_eq!(prompt(task, &filled, &doc, &evaluated), get!("prop.tool.pick.plane"));
         assert!(!is_ready(task, &filled, &doc, &evaluated));
     }
@@ -579,7 +715,7 @@ mod tests {
         let doc = two_cubes();
         let evaluated = evaluate(&doc.features);
         let task = Task::Make(Tool::RadialPattern);
-        let filled = fill(task, &[Pick::Axis(Axis::Y), Pick::Body(PropFeatureId(0))], &doc, &evaluated);
+        let filled = fill(task, &[Pick::Axis(Axis::Y), Pick::Body(BodyRef::whole(PropFeatureId(0)))], &[], &doc, &evaluated);
         assert!(is_finished(task, &filled, &doc, &evaluated));
     }
 
@@ -589,9 +725,9 @@ mod tests {
         let evaluated = evaluate(&doc.features);
         let task = Task::Make(Tool::Combine(BooleanOp::Union));
         let face = element(0, Element::Face(0));
-        assert!(!accepts(task, &[Pick::Body(PropFeatureId(0))], &face, &doc, &evaluated), "a face of the same body");
-        assert!(accepts(task, &[Pick::Body(PropFeatureId(0))], &Pick::Body(PropFeatureId(1)), &doc, &evaluated));
-        assert!(accepts(task, &[Pick::Body(PropFeatureId(0))], &Pick::Body(PropFeatureId(0)), &doc, &evaluated), "unpicking always works");
+        assert!(!accepts(task, &[Pick::Body(BodyRef::whole(PropFeatureId(0)))], &[], &face, &doc, &evaluated), "a face of the same body");
+        assert!(accepts(task, &[Pick::Body(BodyRef::whole(PropFeatureId(0)))], &[], &Pick::Body(BodyRef::whole(PropFeatureId(1))), &doc, &evaluated));
+        assert!(accepts(task, &[Pick::Body(BodyRef::whole(PropFeatureId(0)))], &[], &Pick::Body(BodyRef::whole(PropFeatureId(0))), &doc, &evaluated), "unpicking always works");
     }
 
     #[test]
@@ -599,14 +735,14 @@ mod tests {
         let doc = two_cubes();
         let evaluated = evaluate(&doc.features);
         let sketch = Task::Make(Tool::Sketch);
-        assert!(accepts(sketch, &[], &Pick::Plane(PlaneRef::Origin(OriginPlane::Xy)), &doc, &evaluated));
-        assert!(accepts(sketch, &[], &element(0, Element::Face(0)), &doc, &evaluated));
-        assert!(!accepts(sketch, &[], &element(0, Element::Edge(0)), &doc, &evaluated));
+        assert!(accepts(sketch, &[], &[], &Pick::Plane(PlaneRef::Origin(OriginPlane::Xy)), &doc, &evaluated));
+        assert!(accepts(sketch, &[], &[], &element(0, Element::Face(0)), &doc, &evaluated));
+        assert!(!accepts(sketch, &[], &[], &element(0, Element::Edge(0)), &doc, &evaluated));
         let pattern = Task::Make(Tool::LinearPattern);
-        let picks = [Pick::Body(PropFeatureId(0))];
-        assert!(accepts(pattern, &picks, &element(1, Element::Edge(0)), &doc, &evaluated));
-        assert!(accepts(pattern, &picks, &Pick::Axis(Axis::Z), &doc, &evaluated));
-        assert!(!accepts(pattern, &picks, &element(1, Element::Point(0)), &doc, &evaluated));
+        let picks = [Pick::Body(BodyRef::whole(PropFeatureId(0)))];
+        assert!(accepts(pattern, &picks, &[], &element(1, Element::Edge(0)), &doc, &evaluated));
+        assert!(accepts(pattern, &picks, &[], &Pick::Axis(Axis::Z), &doc, &evaluated));
+        assert!(!accepts(pattern, &picks, &[], &element(1, Element::Point(0)), &doc, &evaluated));
     }
 
     #[test]
@@ -615,8 +751,8 @@ mod tests {
         let evaluated = evaluate(&doc.features);
         let task = Task::Make(Tool::Plane);
         let corners: Vec<Pick> = (0..3).map(|i| element(0, Element::Point(i))).collect();
-        assert!(!is_ready(task, &fill(task, &corners[..2], &doc, &evaluated), &doc, &evaluated));
-        assert!(is_finished(task, &fill(task, &corners, &doc, &evaluated), &doc, &evaluated));
+        assert!(!is_ready(task, &fill(task, &corners[..2], &[], &doc, &evaluated), &doc, &evaluated));
+        assert!(is_finished(task, &fill(task, &corners, &[], &doc, &evaluated), &doc, &evaluated));
     }
 
     #[test]
@@ -624,13 +760,13 @@ mod tests {
         let mut editor = PropEditor::default();
         editor.open(two_cubes(), None);
         let evaluated = editor.doc().evaluate();
-        editor.set_picks(vec![Pick::Body(PropFeatureId(0)), Pick::Plane(PlaneRef::Origin(OriginPlane::Yz))]);
+        editor.set_picks(vec![Pick::Body(BodyRef::whole(PropFeatureId(0))), Pick::Plane(PlaneRef::Origin(OriginPlane::Yz))]);
         let mut active = ActiveTool::default();
         start(Task::Make(Tool::Mirror), &mut active, &mut editor, &evaluated, &mut SketchSession::default());
-        assert_eq!(active.0, None);
+        assert_eq!(active.task, None);
         assert!(matches!(
             editor.doc().features.last().map(|f| &f.op),
-            Some(FeatureOp::Mirror { target: PropFeatureId(0), about: PlaneRef::Origin(OriginPlane::Yz), .. })
+            Some(FeatureOp::Mirror { targets, about: PlaneRef::Origin(OriginPlane::Yz), .. }) if *targets == vec![BodyRef::whole(PropFeatureId(0))]
         ));
     }
 
@@ -640,12 +776,14 @@ mod tests {
         editor.open(two_cubes(), None);
         let evaluated = editor.doc().evaluate();
         let mut active = ActiveTool::default();
-        editor.set_picks(vec![Pick::Body(PropFeatureId(1))]);
+        editor.set_picks(vec![Pick::Body(BodyRef::whole(PropFeatureId(1)))]);
         start(Task::Make(Tool::Mirror), &mut active, &mut editor, &evaluated, &mut SketchSession::default());
-        assert_eq!(active.0, Some(Task::Make(Tool::Mirror)), "still wants a plane");
+        assert_eq!(active.task, Some(Task::Make(Tool::Mirror)), "still wants a plane");
+        // A face would join the bodies as cube 0; Enter moves on to the plane.
+        advance(&mut active, &mut editor, &evaluated, &mut SketchSession::default(), true);
         editor.toggle(element(0, Element::Face(0)));
         advance(&mut active, &mut editor, &evaluated, &mut SketchSession::default(), false);
-        assert_eq!(active.0, None);
+        assert_eq!(active.task, None);
         let ops: Vec<&FeatureOp> = editor.doc().features.iter().map(|f| &f.op).collect();
         assert!(matches!(ops[2], FeatureOp::Plane { .. }));
         assert!(matches!(ops[3], FeatureOp::Mirror { about: PlaneRef::Feature(_), .. }));
@@ -663,7 +801,7 @@ mod tests {
         editor.set_picks(vec![element(0, Element::Point(0)), element(1, Element::Point(0))]);
         let mut active = ActiveTool::default();
         start(Task::Make(Tool::Axis), &mut active, &mut editor, &evaluated, &mut SketchSession::default());
-        assert_eq!(active.0, None);
+        assert_eq!(active.task, None);
         let made = editor.doc().features.last().unwrap().id;
         assert_eq!(editor.picks(), &[Pick::DatumAxis(made)], "picked as an axis, so it can be used as one");
         let evaluated = editor.doc().evaluate();
@@ -676,12 +814,13 @@ mod tests {
         let doc = two_cubes();
         let evaluated = evaluate(&doc.features);
         let task = Task::Make(Tool::Point);
-        let edge = fill(task, &[element(0, Element::Edge(0))], &doc, &evaluated);
+        let edge = fill(task, &[element(0, Element::Edge(0))], &[], &doc, &evaluated);
         assert!(is_ready(task, &edge, &doc, &evaluated), "its middle, if Done");
         assert!(!is_finished(task, &edge, &doc, &evaluated));
         let with_plane = fill(
             task,
             &[element(0, Element::Edge(8)), Pick::Plane(PlaneRef::Origin(OriginPlane::Xy))],
+            &[],
             &doc,
             &evaluated,
         );
@@ -696,7 +835,7 @@ mod tests {
         editor.set_picks(vec![element(0, Element::Face(0)), element(0, Element::Face(1))]);
         let mut active = ActiveTool::default();
         start(Task::Make(Tool::Plane), &mut active, &mut editor, &evaluated, &mut SketchSession::default());
-        assert_eq!(active.0, None);
+        assert_eq!(active.task, None);
         let ops: Vec<&FeatureOp> = editor.doc().features.iter().map(|f| &f.op).collect();
         assert_eq!(ops.len(), 5);
         assert!(matches!(ops[4], FeatureOp::Plane { def: PlaneDef::Midplane { .. } }));
@@ -714,7 +853,7 @@ mod tests {
         editor.set_picks(vec![element(0, Element::Face(0))]);
         let mut active = ActiveTool::default();
         start(Task::Make(Tool::Extrude), &mut active, &mut editor, &evaluated, &mut SketchSession::default());
-        assert_eq!(active.0, None);
+        assert_eq!(active.task, None);
         let ops: Vec<&FeatureOp> = editor.doc().features.iter().map(|f| &f.op).collect();
         assert_eq!(ops.len(), 3);
         assert!(matches!(ops[2], FeatureOp::Extrude { profile: ProfileSource::Face { .. }, .. }));
@@ -729,8 +868,8 @@ mod tests {
         let evaluated = evaluate(&doc.features);
         let task = Task::Make(Tool::Extrude);
         let face = element(0, Element::Face(0));
-        assert!(accepts(task, &[], &face, &doc, &evaluated));
-        assert!(!accepts(task, &[face.clone()], &element(1, Element::Face(0)), &doc, &evaluated));
+        assert!(accepts(task, &[], &[], &face, &doc, &evaluated));
+        assert!(!accepts(task, &[face.clone()], &[], &element(1, Element::Face(0)), &doc, &evaluated));
     }
 
     #[test]
@@ -738,7 +877,7 @@ mod tests {
         let doc = two_cubes();
         let evaluated = evaluate(&doc.features);
         let task = Task::Make(Tool::LinearPattern);
-        let filled = fill(task, &[Pick::Body(PropFeatureId(0)), Pick::Plane(PlaneRef::Origin(OriginPlane::Xz))], &doc, &evaluated);
+        let filled = fill(task, &[Pick::Body(BodyRef::whole(PropFeatureId(0))), Pick::Plane(PlaneRef::Origin(OriginPlane::Xz))], &[], &doc, &evaluated);
         assert!(is_finished(task, &filled, &doc, &evaluated));
     }
 
@@ -748,7 +887,7 @@ mod tests {
     fn a_repicked_axis_still_has_to_lie_in_the_sketch() {
         let mut doc = PropDoc::new("test");
         let sketch = doc.push(FeatureOp::Sketch { on: PlaneRef::Origin(OriginPlane::Xz), sketch: Sketch::default() });
-        let revolve = doc.push(FeatureOp::Revolve { op: SweepOp::NewBody, target: None,
+        let revolve = doc.push(FeatureOp::Revolve { op: SweepOp::NewBody, targets: vec![],
             profile: ProfileSource::Regions { sketch: sketch, regions: vec![] },
             degrees: 360.0,
             steps: 12,
@@ -759,8 +898,8 @@ mod tests {
         let evaluated = evaluate(&doc.features);
         let task = Task::Repick { feature: revolve, field: 1 };
         assert_eq!(task.name(&doc), get!("prop.inspector.axis"));
-        assert!(accepts(task, &[], &Pick::Axis(Axis::Z), &doc, &evaluated));
-        assert!(!accepts(task, &[], &Pick::Axis(Axis::Y), &doc, &evaluated), "Y stands off the XZ plane");
+        assert!(accepts(task, &[], &[], &Pick::Axis(Axis::Z), &doc, &evaluated));
+        assert!(!accepts(task, &[], &[], &Pick::Axis(Axis::Y), &doc, &evaluated), "Y stands off the XZ plane");
     }
 
     #[test]
@@ -777,7 +916,7 @@ mod tests {
         start(Task::Repick { feature: plane, field: 0 }, &mut active, &mut editor, &evaluated, &mut session);
         editor.toggle(Pick::Plane(PlaneRef::Origin(OriginPlane::Xz)));
         advance(&mut active, &mut editor, &evaluated, &mut session, true);
-        assert_eq!(active.0, None);
+        assert_eq!(active.task, None);
         assert_eq!(
             editor.doc().feature(plane).map(|f| &f.op),
             Some(&FeatureOp::Plane { def: PlaneDef::Offset { distance: 0.3, from: PlaneRef::Origin(OriginPlane::Xz) } })
@@ -813,10 +952,10 @@ mod tests {
         let task = Task::Make(Tool::Sweep);
         // Entities are numbered after the seven points.
         let (line, arc, last, apart) = (piece(7), piece(8), piece(9), piece(10));
-        assert!(accepts(task, &[arc.clone()], &line, &doc, &evaluated), "joins the arc's start");
-        assert!(accepts(task, &[arc.clone()], &last, &doc, &evaluated), "joins the arc's end");
-        assert!(!accepts(task, &[arc], &apart, &doc, &evaluated));
-        assert!(!accepts(task, &[line], &last, &doc, &evaluated), "touches neither end");
+        assert!(accepts(task, &[arc.clone()], &[], &line, &doc, &evaluated), "joins the arc's start");
+        assert!(accepts(task, &[arc.clone()], &[], &last, &doc, &evaluated), "joins the arc's end");
+        assert!(!accepts(task, &[arc], &[], &apart, &doc, &evaluated));
+        assert!(!accepts(task, &[line], &[], &last, &doc, &evaluated), "touches neither end");
     }
 
     #[test]
@@ -825,7 +964,7 @@ mod tests {
         editor.open(bent_path(), None);
         let evaluated = editor.doc().evaluate();
         editor.set_picks(vec![piece(7)]);
-        chain(Task::Make(Tool::Sweep), &mut editor, &evaluated);
+        chain(Task::Make(Tool::Sweep), &[], &mut editor, &evaluated);
         // The arc carries on from the line; the last line turns a corner.
         assert_eq!(editor.picks(), &[piece(7), piece(8)]);
     }
@@ -834,13 +973,258 @@ mod tests {
     fn a_repick_only_offers_what_stands_before_the_feature() {
         let mut doc = two_cubes();
         let pattern = doc.insert_at(1, FeatureOp::Pattern {
-            target: PropFeatureId(0),
+            targets: vec![BodyRef::whole(PropFeatureId(0))],
             count: 2,
             along: PatternKind::Linear { spacing: 0.2, direction: DirectionRef::Along { curve: CurveRef::Axis { axis: Axis::X } } },
         });
         let evaluated = evaluate(&doc.features);
         let task = Task::Repick { feature: pattern, field: 1 };
-        assert!(accepts(task, &[], &Pick::Axis(Axis::Y), &doc, &evaluated));
-        assert!(!accepts(task, &[], &element(1, Element::Edge(0)), &doc, &evaluated), "cube 1 comes after");
+        assert!(accepts(task, &[], &[], &Pick::Axis(Axis::Y), &doc, &evaluated));
+        assert!(!accepts(task, &[], &[], &element(1, Element::Edge(0)), &doc, &evaluated), "cube 1 comes after");
+    }
+
+    #[test]
+    fn escape_takes_seeded_picks_back_one_at_a_time_then_puts_the_tool_down() {
+        let mut editor = PropEditor::default();
+        editor.open(two_cubes(), None);
+        let evaluated = editor.doc().evaluate();
+        let corners: Vec<Pick> = (0..2).map(|i| element(0, Element::Point(i))).collect();
+        editor.set_picks(corners.clone());
+        let mut active = ActiveTool::default();
+        start(Task::Make(Tool::Plane), &mut active, &mut editor, &evaluated, &mut SketchSession::default());
+        assert_eq!(active.task, Some(Task::Make(Tool::Plane)), "two corners make no plane yet");
+        back(&mut active, &mut editor, &evaluated);
+        assert_eq!(editor.picks(), &corners[..1]);
+        editor.toggle(Pick::Body(BodyRef::whole(PropFeatureId(1))));
+        back(&mut active, &mut editor, &evaluated);
+        assert!(editor.picks().is_empty(), "a body no slot holds goes with the corner");
+        assert!(active.task.is_some(), "the tool stays up with nothing picked");
+        back(&mut active, &mut editor, &evaluated);
+        assert_eq!(active.task, None);
+    }
+
+    #[test]
+    fn escape_out_of_a_repick_selects_the_feature_again() {
+        let mut editor = PropEditor::default();
+        let mut doc = two_cubes();
+        let pattern = doc.insert_at(1, FeatureOp::Pattern {
+            targets: vec![BodyRef::whole(PropFeatureId(0))],
+            count: 2,
+            along: PatternKind::Linear { spacing: 0.2, direction: DirectionRef::Along { curve: CurveRef::Axis { axis: Axis::X } } },
+        });
+        editor.open(doc, None);
+        let evaluated = editor.doc().evaluate();
+        editor.select(pattern);
+        let mut active = ActiveTool::default();
+        let task = Task::Repick { feature: pattern, field: 1 };
+        assert_eq!(task.slots(editor.doc()).len(), 1, "the direction is a real field");
+        start(task, &mut active, &mut editor, &evaluated, &mut SketchSession::default());
+        assert!(editor.picks().is_empty());
+        back(&mut active, &mut editor, &evaluated);
+        assert_eq!(active.task, None);
+        assert_eq!(editor.picks(), &[Pick::Body(BodyRef::whole(pattern))]);
+    }
+
+    /// Two squares apart on the XZ plane, and a pick of each region.
+    fn two_squares() -> (PropDoc, Vec<Pick>) {
+        let mut drawn = Sketch::default();
+        for x in [0.1, 0.3] {
+            let points: Vec<_> = [[x, 0.0], [x + 0.1, 0.0], [x + 0.1, 0.1], [x, 0.1]]
+                .iter()
+                .map(|corner| drawn.add_point(Vec2::from_array(*corner)))
+                .collect();
+            for i in 0..4 {
+                drawn.add_line(points[i], points[(i + 1) % 4]);
+            }
+        }
+        let regions = crate::prop::region::arrange(&drawn).regions;
+        let mut doc = PropDoc::new("test");
+        let sketch = doc.push(FeatureOp::Sketch { on: PlaneRef::Origin(OriginPlane::Xz), sketch: drawn });
+        let picks = regions.into_iter().map(|region| Pick::Region { sketch, region: region.name }).collect();
+        (doc, picks)
+    }
+
+    #[test]
+    fn next_closes_the_regions_so_only_the_axis_is_left() {
+        let (doc, regions) = two_squares();
+        assert_eq!(regions.len(), 2);
+        let mut editor = PropEditor::default();
+        editor.open(doc, None);
+        let evaluated = editor.doc().evaluate();
+        let mut active = ActiveTool::default();
+        start(Task::Make(Tool::Revolve), &mut active, &mut editor, &evaluated, &mut SketchSession::default());
+        editor.toggle(regions[0].clone());
+        let task = Task::Make(Tool::Revolve);
+        let filled = fill(task, editor.picks(), &active.moved_on, editor.doc(), &evaluated);
+        assert!(can_move_on(task, &filled, editor.doc(), &evaluated));
+        advance(&mut active, &mut editor, &evaluated, &mut SketchSession::default(), true);
+        assert_eq!(active.moved_on, vec![regions[0].clone()], "Enter moved on rather than finishing");
+        assert!(!accepts(task, editor.picks(), &active.moved_on, &regions[1], editor.doc(), &evaluated));
+        assert!(accepts(task, editor.picks(), &active.moved_on, &Pick::Axis(Axis::Z), editor.doc(), &evaluated));
+
+        back(&mut active, &mut editor, &evaluated);
+        assert_eq!(editor.picks(), &regions[..1], "Escape takes back moving on, not the region");
+        assert!(accepts(task, editor.picks(), &active.moved_on, &regions[1], editor.doc(), &evaluated));
+    }
+
+    #[test]
+    fn a_seeded_list_stops_where_a_later_slot_wants_the_same_pick() {
+        let (doc, regions) = two_squares();
+        let evaluated = evaluate(&doc.features);
+        let steps = PropSteps::new(Task::Make(Tool::Revolve), &doc, &evaluated);
+        let (filled, moved_on) = wizard::seed(&steps, &regions);
+        assert_eq!(filled.has[0], regions, "the axis slot takes no region, so both stay in the first");
+        assert!(moved_on.is_empty());
+    }
+
+    #[test]
+    fn every_tool_fills_the_frame_after_it_starts_as_it_was_seeded() {
+        let selection = vec![
+            Pick::Body(BodyRef::whole(PropFeatureId(0))),
+            Pick::Body(BodyRef::whole(PropFeatureId(1))),
+            element(0, Element::Face(0)),
+            element(1, Element::Edge(0)),
+            Pick::Axis(Axis::X),
+            Pick::Plane(PlaneRef::Origin(OriginPlane::Xy)),
+        ];
+        for spec in TOOLS {
+            let task = Task::Make(spec.tool);
+            let mut editor = PropEditor::default();
+            editor.open(two_cubes(), None);
+            let evaluated = editor.doc().evaluate();
+            let (seeded, _) = wizard::seed(&PropSteps::new(task, editor.doc(), &evaluated), &selection);
+            editor.set_picks(selection.clone());
+            let mut active = ActiveTool::default();
+            start(task, &mut active, &mut editor, &evaluated, &mut SketchSession::default());
+            if active.task.is_none() {
+                continue;
+            }
+            let next_frame = fill(task, editor.picks(), &active.moved_on, editor.doc(), &evaluated);
+            assert_eq!(next_frame.has, seeded.has, "{:?} lost its seeded split", spec.tool);
+        }
+    }
+
+    #[test]
+    fn subtract_from_three_selected_bodies_cuts_the_last_two_from_the_first() {
+        let mut doc = two_cubes();
+        doc.push(cube(Vec3::X * 0.05));
+        let mut editor = PropEditor::default();
+        editor.open(doc, None);
+        let evaluated = editor.doc().evaluate();
+        let [a, b, c] = [0, 1, 2].map(|id| Pick::Body(BodyRef::whole(PropFeatureId(id))));
+        editor.set_picks(vec![a, b, c]);
+        let mut active = ActiveTool::default();
+        start(Task::Make(Tool::Combine(BooleanOp::Subtract)), &mut active, &mut editor, &evaluated, &mut SketchSession::default());
+        assert_eq!(active.task, None, "every slot was answered");
+        let whole = |id| BodyRef::whole(PropFeatureId(id));
+        assert_eq!(
+            editor.doc().features.last().map(|f| &f.op),
+            Some(&FeatureOp::Subtract { targets: vec![whole(0)], tools: vec![whole(1), whole(2)] })
+        );
+    }
+
+    #[test]
+    fn repicking_a_list_starts_from_it_and_shows_the_prop_before_the_feature() {
+        let mut doc = two_cubes();
+        doc.push(cube(Vec3::X * 0.05));
+        let whole = |id| BodyRef::whole(PropFeatureId(id));
+        let cut = doc.push(FeatureOp::Subtract { targets: vec![whole(0)], tools: vec![whole(1)] });
+        let mut editor = PropEditor::default();
+        editor.open(doc, None);
+        editor.select(cut);
+        let mut active = ActiveTool::default();
+        let task = Task::Repick { feature: cut, field: 1 };
+        let evaluated = editor.doc().evaluate();
+        start(task, &mut active, &mut editor, &evaluated, &mut SketchSession::default());
+        assert_eq!(editor.picks(), &[Pick::Body(whole(1))], "the tools it names now");
+        assert_eq!(peeked(&active, editor.doc()), Some(PropFeatureId(2)), "the cube before the cut");
+        editor.peek_at(peeked(&active, editor.doc()));
+        let before = crate::prop::feature::evaluate(editor.shown());
+        assert_eq!(before.bodies.len(), 3, "every cube stands, the eaten two included");
+
+        editor.toggle(Pick::Body(whole(2)));
+        advance(&mut active, &mut editor, &before, &mut SketchSession::default(), false);
+        assert_eq!(active.task, Some(task), "a list waits for Enter");
+        advance(&mut active, &mut editor, &before, &mut SketchSession::default(), true);
+        assert_eq!(active.task, None);
+        let tools = |editor: &PropEditor| match &editor.doc().feature(cut).unwrap().op {
+            FeatureOp::Subtract { tools, .. } => tools.clone(),
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(tools(&editor), vec![whole(1), whole(2)]);
+        editor.undo();
+        assert_eq!(tools(&editor), vec![whole(1)], "one undo step");
+    }
+
+    #[test]
+    fn escaping_a_preloaded_repick_takes_its_picks_back_then_keeps_the_field() {
+        let mut doc = two_cubes();
+        let whole = |id| BodyRef::whole(PropFeatureId(id));
+        let union = doc.push(FeatureOp::Union { bodies: vec![whole(0), whole(1)] });
+        let mut editor = PropEditor::default();
+        editor.open(doc.clone(), None);
+        let mut active = ActiveTool::default();
+        let evaluated = editor.doc().evaluate();
+        start(Task::Repick { feature: union, field: 0 }, &mut active, &mut editor, &evaluated, &mut SketchSession::default());
+        for _ in 0..3 {
+            back(&mut active, &mut editor, &crate::prop::feature::evaluate(&doc.features[..2]));
+        }
+        assert_eq!(active.task, None);
+        assert_eq!(editor.doc(), &doc, "the field is as it was");
+        assert_eq!(editor.picks(), &[Pick::Body(whole(union.0))]);
+    }
+
+    #[test]
+    fn a_sweep_operation_wants_targets_only_while_it_has_none() {
+        let mut targets = vec![];
+        assert!(chose_operation(SweepOp::Cut, &mut targets));
+        targets.push(BodyRef::whole(PropFeatureId(0)));
+        assert!(!chose_operation(SweepOp::Join, &mut targets));
+        assert!(!chose_operation(SweepOp::NewBody, &mut targets));
+        assert!(targets.is_empty(), "a new body forgets its targets");
+    }
+
+    #[test]
+    fn escaping_a_targets_pick_puts_the_sweep_back_to_a_new_body() {
+        let (mut doc, _) = two_squares();
+        let sketch = doc.features[0].id;
+        let extrude = doc.push(FeatureOp::Extrude {
+            profile: ProfileSource::Regions { sketch, regions: vec![] },
+            taper: 0.0,
+            op: SweepOp::Cut,
+            targets: vec![],
+            end: End::Distance { distance: 0.1 },
+            other: None,
+            direction: None,
+            surface: Surface::default(),
+        });
+        let mut editor = PropEditor::default();
+        editor.open(doc, None);
+        let mut active = ActiveTool::default();
+        let evaluated = editor.doc().evaluate();
+        start(Task::Repick { feature: extrude, field: 4 }, &mut active, &mut editor, &evaluated, &mut SketchSession::default());
+        back(&mut active, &mut editor, &evaluated);
+        assert_eq!(active.task, None);
+        assert!(matches!(editor.doc().feature(extrude).unwrap().op, FeatureOp::Extrude { op: SweepOp::NewBody, .. }));
+    }
+
+    #[test]
+    fn a_tool_waiting_on_enter_shows_what_it_would_make() {
+        let mut doc = two_cubes();
+        doc.push(cube(Vec3::X * 0.05));
+        let mut editor = PropEditor::default();
+        editor.open(doc, None);
+        let evaluated = editor.doc().evaluate();
+        let active = ActiveTool { task: Some(Task::Make(Tool::Combine(BooleanOp::Union))), moved_on: vec![] };
+        let body = |id| Pick::Body(BodyRef::whole(PropFeatureId(id)));
+        editor.set_picks(vec![body(0)]);
+        assert!(would_make(&active, &editor, &evaluated).is_none(), "one body is not a union");
+        editor.set_picks(vec![body(0), body(2)]);
+        let (features, made) = would_make(&active, &editor, &evaluated).expect("two bodies are");
+        let previewed = crate::prop::feature::evaluate(&features);
+        let joined: Vec<f32> = previewed.bodies.iter().filter(|(b, _)| b.feature == made).map(|(_, solid)| solid.volume()).collect();
+        assert_eq!(joined.len(), 1);
+        assert!((joined[0] - 0.15 * 0.1 * 0.1).abs() < 1e-7, "{joined:?}");
+        assert_eq!(editor.doc().features.len(), 3, "the document is untouched");
     }
 }

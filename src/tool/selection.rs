@@ -35,18 +35,20 @@ impl SelectionPlugin {
         room_drag: Res<RoomDragState>,
         footprint_drag: Res<FootprintDragState>,
         rotate_drag: Res<RotateDragState>,
-        mut cache: Local<Option<PickCache>>,
+        mut products: ResMut<crate::tool::map_products::MapProducts>,
         mut last: Local<Option<LastPick>>,
+        actions: Res<crate::common::keybind::Actions>,
     ) {
         state.hovered = None;
+        state.hovered_point = None;
 
         if let Some(ray) = mouse_input.world_pos {
             let key = PickCache::key(features.last_changed(), &features);
             let hovered = match &*last {
                 Some(seen) if seen.ray == ray && seen.key == key && seen.visibility == *visibility => seen.hovered,
                 _ => {
-                    let cache = PickCache::refresh(&mut cache, &features, key);
-                    let hovered = find_nearest_feature_hit_in(&ray, &features, &visibility, cache);
+                    products.refresh(&features, key);
+                    let hovered = products.hit(&ray, &visibility);
                     *last = Some(LastPick { ray, key, visibility: visibility.clone(), hovered });
                     hovered
                 }
@@ -57,7 +59,20 @@ impl SelectionPlugin {
                 || room_drag.is_dragging()
                 || footprint_drag.is_dragging()
                 || rotate_drag.is_dragging();
+            // With Shift, a named point: what a tool started next measures from.
+            if actions.pressed(crate::common::keybind::Action::Modify) {
+                products.refresh(&features, key);
+                state.hovered_point = products.point_under(&features, &ray, PICK_RADIUS);
+                if mouse_input.released == Some(MouseButton::Left) && !any_drag {
+                    state.point = match state.hovered_point.clone() {
+                        Some((id, _)) if state.point.as_ref() == Some(&id) => None,
+                        picked => picked.map(|(id, _)| id),
+                    };
+                }
+                return;
+            }
             if mouse_input.released == Some(MouseButton::Left) && !any_drag {
+                state.point = None;
                 let selection = state.hovered.map(|(id, _)| id);
                 // Not an edit, so not a change to the undo checkpoint or `map_sync`.
                 features.bypass_change_detection().select(selection);
@@ -70,10 +85,18 @@ impl SelectionPlugin {
         features: Res<FeatureTimeline>,
         mut gizmos: Gizmos,
     ) {
+        let highlight = Color::srgb_u8(0, 230, 0);
+        // From the timeline, which an edit made from a panel has already moved.
+        let selected_point = state.point.as_ref().and_then(|id| {
+            let mut point = crate::editor::editable::PointRef::reference(id.feature);
+            point.point_key = id.key.clone();
+            point.resolve(features.features_map()).ok()
+        });
+        for at in selected_point.into_iter().chain(state.hovered_point.as_ref().map(|(_, at)| *at)) {
+            gizmos.sphere(Isometry3d::from_translation(at), 0.12, highlight);
+        }
         let Some((feature_id, hit_pos)) = state.hovered else { return; };
         let Some(feature) = features.get_feature(&feature_id) else { return; };
-
-        let highlight = Color::srgb_u8(0, 230, 0);
 
         let volumes = feature.object().volumes();
         if !volumes.is_empty() {
@@ -111,4 +134,8 @@ pub struct EditorSelectable {
 #[derive(Resource, Default)]
 pub struct SelectionState {
     pub hovered: Option<(FeatureId, Vec3)>,
+    /// A named point picked with Shift, beside the feature selection; a plain
+    /// click clears it.
+    pub point: Option<crate::tool::map_products::PointId>,
+    pub hovered_point: Option<(crate::tool::map_products::PointId, Vec3)>,
 }

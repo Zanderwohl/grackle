@@ -390,7 +390,8 @@ fn straighten(points: Vec<Vec3>, closed: bool) -> Vec<Vec3> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::prop::feature::{evaluate, BooleanOp, FeatureOp, PropFeature};
+    use crate::prop::feature::BodyRef;
+    use crate::prop::feature::{evaluate, FeatureOp, PropFeature};
     use crate::prop::plane::{OriginPlane, PlaneRef};
     use crate::prop::profile::Placement;
     use crate::prop::refs::{CurveRef, Resolve};
@@ -488,9 +489,9 @@ mod tests {
             let shape = Shape::Prism { sides: 6, radius: 0.04, height: 0.4 };
             feature(id, FeatureOp::Primitive { shape, placement: Placement::at(0.05, 0.0, 0.0), surface })
         };
-        let bored = feature(2, FeatureOp::Boolean { op: BooleanOp::Subtract, target: PropFeatureId(0), tool: PropFeatureId(1) });
+        let bored = feature(2, FeatureOp::Subtract { targets: vec![BodyRef::whole(PropFeatureId(0))], tools: vec![BodyRef::whole(PropFeatureId(1))] });
         let about = PlaneRef::Origin(OriginPlane::Yz);
-        let mirror = feature(3, FeatureOp::Mirror { target: PropFeatureId(2), offset: 0.0, keep_original: false, about });
+        let mirror = feature(3, FeatureOp::Mirror { targets: vec![BodyRef::whole(PropFeatureId(2))], offset: 0.0, keep_original: false, about });
         let original = evaluate(&[cube(0), rod(1), bored.clone()]);
         let mirrored = evaluate(&[cube(0), rod(1), bored, mirror]);
         let offered: Vec<&Seam> = original.seams().iter().filter(|seam| seam.offered).collect();

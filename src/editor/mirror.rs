@@ -214,7 +214,19 @@ pub struct Mirror {
     is_copy: bool,
 }
 
+/// What a Mirror's panel asks for, in place of a point key, to pick its
+/// sources in the viewport.
+pub const PICK_SOURCES: &str = "@sources";
+
 impl Mirror {
+    pub fn sources(&self) -> &[FeatureId] {
+        &self.sources
+    }
+
+    pub fn set_sources(&mut self, sources: Vec<FeatureId>) {
+        self.sources = sources;
+    }
+
     pub fn new(center: PointRef) -> Self {
         Self {
             center,
@@ -463,7 +475,12 @@ impl FeatureTrait for Mirror {
         }
 
         ui.separator();
-        ui.label(egui::RichText::new(get!("editor.features.mirror.sources")).strong());
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new(get!("editor.features.mirror.sources")).strong());
+            if ui.button(get!("editor.features.mirror.pick_sources")).clicked() {
+                *retarget_request = Some(PICK_SOURCES.into());
+            }
+        });
         let mut dropped = None;
         for (index, id) in self.sources.iter().enumerate() {
             ui.horizontal(|ui| {
@@ -673,6 +690,10 @@ impl FeatureTrait for Mirror {
     }
 
     fn mirror_mut(&mut self) -> Option<&mut Mirror> {
+        Some(self)
+    }
+
+    fn as_mirror(&self) -> Option<&Mirror> {
         Some(self)
     }
 

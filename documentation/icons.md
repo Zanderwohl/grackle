@@ -51,6 +51,7 @@ When an icon ships, check its box.
 | [x] | `pencil` | Pencil | Sketch |
 | [x] | `film_camera` | Film camera with a big reel on top | Frame, Frame selected, Spectator Camera |
 | [x] | `check_mark` | Check mark | Done, Finish sketch |
+| [x] | `chevron_right` | Chevron pointing right | Next (moving a tool on to its next step) |
 | [x] | `trash_can` | Trash can, macOS style | Cancel, Delete |
 | [x] | `diagonal_line` | Diagonal line from lower left to top right | Line |
 | [x] | `eraser` | Square rubber eraser | Erase |

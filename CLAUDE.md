@@ -959,9 +959,10 @@ and each is a decision rather than a shortcut:
   rather than `0.05000000074505806`. Lossless by construction — the round trip
   is pinned by a test — and the whole reason a text format was worth having.
 
-**One rule runs the evaluator: a feature that consumes bodies produces one,
-under its own id.** A boolean eats two and leaves one; a mirror eats one and
-leaves one; a primitive eats none. What is left standing is what gets drawn.
+**One rule runs the evaluator: a feature that consumes bodies produces bodies
+under its own id, numbered in the order of the targets they came from.** A
+Union eats every body it names and leaves one; a Subtract leaves one per
+target; a Mirror, Pattern or Paint one per target; a primitive eats none. What is left standing is what gets drawn.
 Without the consuming half, subtracting a bore from a barrel would draw the
 barrel, the bore *and* the result, visible only where they disagree. Two
 consequences:
@@ -974,6 +975,19 @@ consequences:
   taking it are two steps for exactly this reason: a boolean that took its
   first operand and then failed to find its second would delete a body it
   never used, and the half that vanishes is not the feature that looks wrong.
+
+**A body is named by a `BodyRef`, not by its feature** (`feature.rs`): the
+feature, the body's index among those it made, and how many it made (`of`). A
+reference whose `of` no longer matches is a Problem rather than a quiet swap to
+another body. A feature's only body is written as its bare feature id
+(`index: 0, of: 1`). `FeatureOp::bodies_made` is the count every `of` carries,
+and `source_of` which target a body came from, which a body's bone follows.
+`consumes` answers which features are eaten, for ordering; `eats` which bodies.
+**Operands are lists** (`Union { bodies }`, `Subtract { targets, tools }`,
+`targets` on Mirror, Paint, Pattern and the sweeps); `document::parse` reads the
+single `target` and the old `boolean` feature into them, the one old form read,
+so the shipped props still name one. See
+[documentation/tool-wizards.md](documentation/tool-wizards.md).
 
 The kernel ([`src/common/csg.rs`](src/common/csg.rs), shared with the map's
 surface and generic over what a face is made of) is the `csg.js` BSP
@@ -1204,7 +1218,13 @@ order, drops whatever fits none, and asks for the rest in the toolbar ("Pick a
 plane or a flat face"). While it waits, the viewport hovers and takes only
 picks that fit: over a body's corner when a body is wanted, the body is what
 lights. It finishes the moment every slot is full; a last slot taking any
-number of regions waits for **Done** or `Enter`, and `Escape` puts it down.
+number of regions waits for **Done** or `Enter`. Where an answered slot would take more and a
+later one is empty, `Enter` and a **Next** button move on instead, closing that slot. `Escape`
+takes back the last thing done, a pick or moving on, and with nothing picked puts the tool down;
+the trash button puts it down at once. While a tool waits on Enter, the view draws what it would
+make as a wireframe (`tool::would_make`, `view::preview_the_result`). Filling, readiness and
+stepping back are [`src/common/wizard.rs`](src/common/wizard.rs)'s, which the map editor's
+tools are planned to share ([documentation/tool-wizards.md](documentation/tool-wizards.md)).
 Undo and redo are on an **Edit** menu.
 
 The picks a tool is collecting **are the selection** rather than a list of its
@@ -1230,9 +1250,13 @@ pickable thing is a variant and its arms in one file. A revolve turns about a
 dropdown: the Inspector's References section has a **Pick** button per field
 of `FeatureOp::fields` marked `picked`, which is the same machinery as a tool
 with one slot (`Task::Repick { feature, field }`), its checks seeing the
-feature's other fields. Body operands are not picked there, since one this
-feature eats cannot be clicked; they are lists. A re-pick offers only what
-stands before the feature, since that is all it could resolve against. A revolve's axis must lie in its sketch's plane, which the hover
+feature's other fields. While a re-pick is up the view stops just before the
+feature (`tool::peeked`, the peek's one writer being `keep_the_session`), so
+the bodies it eats stand and can be clicked, and body operands are Pick rows
+like any field. A list field (bodies, a path) starts from what it names, so a
+click adds and Escape takes one back, and Enter finishes; a single field is
+picked fresh. A re-pick offers only what stands before the feature, since that
+is all it could resolve against. A revolve's axis must lie in its sketch's plane, which the hover
 checks and the evaluator reports.
 
 **The selection is an ordered list of `Pick`s** — bodies, named corners,
@@ -1426,10 +1450,9 @@ three ways and are not the same thing: **struck through** is suppressed,
 **weak** is a body a later feature has already eaten, **orange** is broken.
 
 **What a boolean may point at is what was live when it ran**, not what is live
-now — and the evaluator records that (`Evaluated::live_before`) rather than the
-panel working it out. Two implementations of the consuming rule is two that
-drift, and the symptom would be a dropdown offering bodies that have already
-been eaten.
+now — so a re-pick shows the prop as it stood just before the feature and offers
+what is standing there, rather than the panel working the consuming rule out a
+second time.
 
 `assets/default/props/rocket_launcher.gpp` is the example, and the prop editor
 opens onto it: an empty modeling tool is a blank screen with no sense of
@@ -2395,9 +2418,8 @@ own marked `BakedStairs` (painted, lit and decaled as a room's), baked under the
 auto-bake switch and settle wait, while its collider joins `CollisionWorld` straight from the
 `Stairs` component, as a room's walls do from `Room`. Collision from the map is
 `CollisionWorld::rebuild_map(volumes, stairs)`, which the game, the nav bake and `map_stats` call. The Stairs tool
-([`src/tool/stairs.rs`](src/tool/stairs.rs)) picks the four points one at a time as the Room tool
-picks corners, previewing the run, the width and then the ramp, and keeps the height point at
-least 0.1 m above the footprint. The steepness
+([`src/tool/stairs.rs`](src/tool/stairs.rs)) is a wizard entry of four points, previewing the
+run, the width and then the ramp, and keeps the height point at least 0.1 m above the footprint. The steepness
 warning is `WALKABLE`, which every class shares.
 
 A `Room` is a prism — a floor plan, not necessarily convex and possibly with
@@ -4024,11 +4046,10 @@ follows. Consequences to respect when adding a feature type:
 - **A Mirror offers its copies' points** as `{source}@{image}/{key}`, so a
   feature after it can stand on a copy's corner. A key naming a copy that no
   longer stands does not resolve.
-- To make it visible and clickable, also add arms in
-  [`show.rs`](src/tool/show.rs) (`GizmoVisibility` plus both matches),
-  [`tool_helpers.rs`](src/tool/tool_helpers.rs) (`find_nearest_feature_hit`),
-  and [`point_drag.rs`](src/tool/point_drag.rs) (`is_point_like`) if it is
-  point-shaped.
+- To make it visible, add its Show switch in [`show.rs`](src/tool/show.rs)
+  (`GizmoVisibility` plus both matches). To make it clickable, answer
+  `picked_by` if it is not a point-like marker (the default), and `pick_boxes`;
+  [`MapProducts`](src/tool/map_products.rs) reads them.
 
 **Undo is whole-map snapshots in memory**, the prop editor's model: each
 feature's serialized form, in order, and the map's settings (`SavedMetadata`)
@@ -4168,9 +4189,22 @@ failure; nothing on wasm.
 
 ## Conventions
 
-- Each tool is a `Plugin` in `src/tool/`, added in `ToolPlugin::build`, gated on
-  the `Tools` state. Follow that shape rather than adding systems to the editor
-  directly.
+- **A map tool is a wizard entry** ([`src/tool/map_wizard.rs`](src/tool/map_wizard.rs)): a
+  `Tools` variant and a row in `ENTRIES` naming its steps (a point, a loop of corners, features,
+  or a named point), where a point may land (`place`), what it builds and its preview. One
+  driver picks for every tool: a point through `PointPicker` (a click at the cursor, or Shift and
+  a named point, which adds an offset step answered by a second click or a right click for
+  none), Escape takes back the last pick and leaves with none, Enter moves on or finishes, the
+  Tools tab shows the step's prompt with Next or Done, and a tool starts from the selection (a
+  selected point-like feature for a point step, other features for a feature step) unless that
+  would finish it, since finishing selects what was made. Shift-click in Select picks a named
+  point, which the next tool takes first, and which may finish it. What a feature offers to clicks is
+  `FeatureTrait::picked_by` (walls, a box from outside, a marker or nothing), gathered with its
+  boxes and named points into `MapProducts` (`src/tool/map_products.rs`) once per state of the
+  timeline; hover and the wizard ask it rather than matching on `type_key`. Retarget and
+  a Mirror's sources (its panel's **Pick**) are hidden entries that edit a feature, a feature
+  step taking only what comes before it. Other editor systems are still `Plugin`s gated on a
+  `Tools` state; add those to `ToolPlugin::build` rather than to the editor directly.
 - Every render layer is named in
   [`src/common/render_layers.rs`](src/common/render_layers.rs), with what draws
   it. Claim a new one there rather than writing a number at the call site;

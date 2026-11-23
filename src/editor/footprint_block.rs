@@ -45,6 +45,7 @@ impl FeatureTrait for FootprintBlock {
 
     fn tool(&self) -> Option<crate::tool::Tools> { Some(crate::tool::Tools::FootprintBlock) }
     fn type_key(&self) -> &'static str { "footprint_block" }
+    fn picked_by(&self) -> crate::editor::editable::PickedBy { crate::editor::editable::PickedBy::Walls }
 
     fn debug_gizmos(&self, gizmos: &mut Gizmos) {
         self.plan.draw(gizmos, BLOCK_COLOR);

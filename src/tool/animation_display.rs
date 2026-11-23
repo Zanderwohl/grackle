@@ -6,16 +6,8 @@ use bevy::prelude::*;
 use crate::common::skeleton::{default_humanoid, draw_skeleton, Pose, SkeletonPalette};
 use crate::editor::animation_display::AnimationDisplay;
 use crate::editor::editable::{FeatureTrait, PointRef};
-use crate::tool::point_placement::{add_point_placement_tool, PlaceablePoint};
+use crate::tool::point_placement::PlaceablePoint;
 use crate::tool::Tools;
-
-pub struct AnimationDisplayPlugin;
-
-impl Plugin for AnimationDisplayPlugin {
-    fn build(&self, app: &mut App) {
-        add_point_placement_tool::<AnimationDisplay>(app);
-    }
-}
 
 impl PlaceablePoint for AnimationDisplay {
     const TOOL: Tools = Tools::AnimationDisplay;

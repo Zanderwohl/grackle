@@ -28,7 +28,7 @@ use crate::prop::figure::{clear_the_figure, pose_the_figure, refresh_the_figure,
 use crate::prop::document::{Pick, PropEditor};
 use crate::prop::gizmo::HoveredPick;
 use crate::prop::plane::draw_square;
-use crate::prop::feature::{Axis, FeatureOp, PatternKind, PropFeatureId};
+use crate::prop::feature::{Axis, BodyRef, FeatureOp, PatternKind, PropFeatureId};
 use crate::prop::refs::{CurveRef, Resolve};
 use crate::prop::tool::ActiveTool;
 use crate::prop::region::RegionRef;
@@ -152,6 +152,7 @@ impl Plugin for PropViewPlugin {
                     carry_the_prop,
                     draw_the_bench,
                     ghost_the_operands,
+                    preview_the_result,
                 )
                     .chain()
                     .in_set(PropSceneSystems::Build)
@@ -443,7 +444,7 @@ fn draw_the_bench(
         Some(pick @ (Pick::SketchCurve { .. } | Pick::SketchPoint { .. } | Pick::Seam(_) | Pick::Junction(_))) => {
             draw_reference(&mut gizmos, &build, pick, marker * 0.8, HOVERED);
         }
-        Some(Pick::Body(body)) if tool.0.is_some() => draw_body_box(&mut gizmos, &build, *body, HOVERED),
+        Some(Pick::Body(body)) if tool.task.is_some() => draw_body_box(&mut gizmos, &build, *body, HOVERED),
         _ => {}
     }
     let picked_features = editor.picked_features(&build.evaluated);
@@ -540,7 +541,7 @@ const PLANE: Color = Color::srgb(0.55, 0.55, 0.55);
 const SKETCH: Color = Color::srgb(0.92, 0.92, 0.98);
 
 /// An eaten feature has no body and is not outlined.
-fn draw_body_box(gizmos: &mut Gizmos, build: &PropBuild, body: PropFeatureId, color: Color) {
+fn draw_body_box(gizmos: &mut Gizmos, build: &PropBuild, body: BodyRef, color: Color) {
     let bounds = build.evaluated.bodies.iter().find(|(id, _)| *id == body).and_then(|(_, solid)| solid.bounds());
     if let Some((min, max)) = bounds {
         gizmos.cube(Transform::from_translation((min + max) / 2.0).with_scale(max - min), color);
@@ -619,7 +620,7 @@ struct GhostCache {
     /// What the edges were drawn from: the features before the selected one and
     /// the operands it consumes. Not the selected feature itself, so dragging
     /// one of its numbers does not re-evaluate an unchanged prefix.
-    input: Option<(Vec<PropFeature>, Vec<crate::prop::feature::PropFeatureId>)>,
+    input: Option<(Vec<PropFeature>, Vec<crate::prop::feature::BodyRef>)>,
     edges: Vec<(Vec3, Vec3)>,
 }
 
@@ -644,7 +645,7 @@ fn ghost_the_operands(
         let features = editor.shown();
         let at = features.iter().position(|feature| feature.id == selected);
         let (before, operands) = match at {
-            Some(at) => (&features[..at], features[at].op.consumes()),
+            Some(at) => (&features[..at], features[at].op.eats()),
             None => (&[][..], Vec::new()),
         };
         let unchanged = cache
@@ -672,11 +673,86 @@ fn ghost_the_operands(
     }
 }
 
+#[derive(Default)]
+struct PreviewCache {
+    key: Option<(u64, Vec<Pick>, Vec<Pick>, crate::prop::tool::Task)>,
+    edges: Vec<(Vec3, Vec3)>,
+}
+
+const PREVIEW: Color = Color::srgba(1.0, 0.85, 0.35, 0.6);
+
+/// Wireframe of what Enter would make while a tool waits on it. Skipped for a
+/// prop whose rebuild is held back for cost, since it evaluates the whole list
+/// in the frame.
+fn preview_the_result(
+    mut gizmos: Gizmos,
+    editor: Res<PropEditor>,
+    build: Res<PropBuild>,
+    tool: Res<ActiveTool>,
+    mut cache: Local<PreviewCache>,
+) {
+    let Some(task) = tool.task.filter(|_| build.cost <= REBUILD_BUDGET) else {
+        if cache.key.is_some() {
+            *cache = PreviewCache::default();
+        }
+        return;
+    };
+    let same = cache.key.as_ref().is_some_and(|(generation, picks, moved_on, was)| {
+        *generation == editor.generation() && picks == editor.picks() && *moved_on == tool.moved_on && *was == task
+    });
+    if !same {
+        cache.key = Some((editor.generation(), editor.picks().to_vec(), tool.moved_on.clone(), task));
+        cache.edges = preview_edges(&tool, &editor, &build.evaluated);
+    }
+    for (a, b) in &cache.edges {
+        gizmos.line(*a, *b, PREVIEW);
+    }
+}
+
+fn preview_edges(tool: &ActiveTool, editor: &PropEditor, evaluated: &Evaluated) -> Vec<(Vec3, Vec3)> {
+    let Some((features, made)) = crate::prop::tool::would_make(tool, editor, evaluated) else { return vec![] };
+    let previewed = crate::prop::feature::evaluate(&features);
+    let mut edges = Vec::new();
+    for (_, solid) in previewed.bodies.iter().filter(|(body, _)| body.feature == made) {
+        for polygon in solid.polygons() {
+            let v = &polygon.vertices;
+            for i in 0..v.len() {
+                edges.push((v[i], v[(i + 1) % v.len()]));
+            }
+        }
+    }
+    edges
+}
+
 #[cfg(test)]
 mod tests {
     use bevy::ecs::system::RunSystemOnce;
 
     use super::*;
+
+    #[test]
+    fn the_preview_draws_only_what_enter_would_make() {
+        use crate::prop::feature::{BodyRef, BooleanOp, FeatureOp};
+        use crate::prop::tool::{Task, Tool};
+        let cube = |x: f32| FeatureOp::Primitive {
+            shape: crate::prop::solid::Shape::Box { size: [0.1; 3] },
+            placement: crate::prop::profile::Placement::at(x, 0.0, 0.0),
+            surface: crate::prop::surface::Surface::default(),
+        };
+        let mut doc = crate::prop::document::PropDoc::new("preview");
+        let [a, b] = [doc.push(cube(0.0)), doc.push(cube(0.05))];
+        doc.push(cube(1.0));
+        let mut editor = PropEditor::default();
+        editor.open(doc, None);
+        editor.set_picks(vec![Pick::Body(BodyRef::whole(a)), Pick::Body(BodyRef::whole(b))]);
+        let evaluated = editor.doc().evaluate();
+        let mut tool = ActiveTool { task: Some(Task::Make(Tool::Combine(BooleanOp::Union))), moved_on: vec![] };
+        let edges = preview_edges(&tool, &editor, &evaluated);
+        assert!(!edges.is_empty());
+        assert!(edges.iter().all(|(p, q)| p.x < 0.2 && q.x < 0.2), "the far cube is not drawn");
+        tool.task = None;
+        assert!(preview_edges(&tool, &editor, &evaluated).is_empty());
+    }
 
     /// Covers a loose root, a child, the prop scene, a UI node and something
     /// already hidden; fails if any is hidden or restored wrongly.

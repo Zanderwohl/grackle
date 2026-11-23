@@ -209,6 +209,7 @@ impl FeatureTrait for EditorRoom {
 
     fn tool(&self) -> Option<crate::tool::Tools> { Some(crate::tool::Tools::Room) }
     fn type_key(&self) -> &'static str { "editor_room" }
+    fn picked_by(&self) -> crate::editor::editable::PickedBy { crate::editor::editable::PickedBy::Walls }
 
     fn debug_gizmos(&self, gizmos: &mut Gizmos) {
         self.draw_box(gizmos, Color::srgb_u8(200, 200, 200));

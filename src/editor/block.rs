@@ -52,6 +52,7 @@ impl FeatureTrait for EditorBlock {
 
     fn tool(&self) -> Option<crate::tool::Tools> { Some(crate::tool::Tools::Block) }
     fn type_key(&self) -> &'static str { "block" }
+    fn picked_by(&self) -> crate::editor::editable::PickedBy { crate::editor::editable::PickedBy::Walls }
 
     fn debug_gizmos(&self, gizmos: &mut Gizmos) {
         self.volume.draw_box(gizmos, BLOCK_COLOR);

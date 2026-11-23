@@ -295,7 +295,8 @@ fn inside(polygon: &[Vec2], point: Vec2) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use crate::prop::feature::{evaluate, BooleanOp, End, Evaluated, FeatureOp, ProfileSource, PropFeature, PropFeatureId, SweepOp};
+    use crate::prop::feature::BodyRef;
+    use crate::prop::feature::{evaluate, End, Evaluated, FeatureOp, ProfileSource, PropFeature, PropFeatureId, SweepOp};
     use crate::prop::profile::Placement;
     use crate::prop::reference::{Element, GeomRef, Located, Source};
     use crate::prop::refs::CurveRef;
@@ -313,7 +314,7 @@ mod tests {
     fn cut(id: u32, target: u32, tool: u32) -> PropFeature {
         PropFeature::new(
             PropFeatureId(id),
-            FeatureOp::Boolean { op: BooleanOp::Subtract, target: PropFeatureId(target), tool: PropFeatureId(tool) },
+            FeatureOp::Subtract { targets: vec![BodyRef::whole(PropFeatureId(target))], tools: vec![BodyRef::whole(PropFeatureId(tool))] },
         )
     }
 
@@ -334,7 +335,7 @@ mod tests {
             FeatureOp::Extrude {
                 taper: 0.0,
                 op,
-                target: target.map(PropFeatureId),
+                targets: target.map(|id| BodyRef::whole(PropFeatureId(id))).into_iter().collect(),
                 end: End::Distance { distance },
                 other: None,
                 direction: None,
@@ -345,7 +346,7 @@ mod tests {
     }
 
     fn volume_of(evaluated: &Evaluated, id: u32) -> f32 {
-        evaluated.bodies.iter().find(|(body, _)| *body == PropFeatureId(id)).expect("the body").1.volume()
+        evaluated.bodies.iter().find(|(body, _)| body.feature == PropFeatureId(id)).expect("the body").1.volume()
     }
 
     fn top_of_the_cube(features: &[PropFeature]) -> GeomRef {
@@ -412,7 +413,7 @@ mod tests {
         features.push(extruded(9, top, 1.0, SweepOp::NewBody, None));
         let evaluated = evaluate(&features);
         assert!(evaluated.problems.iter().any(|problem| problem.feature == PropFeatureId(9)));
-        assert!(evaluated.bodies.iter().all(|(body, _)| *body != PropFeatureId(9)));
+        assert!(evaluated.bodies.iter().all(|(body, _)| body.feature != PropFeatureId(9)));
     }
 
     #[test]
@@ -434,7 +435,7 @@ mod tests {
                 steps: 12,
                 symmetric: false,
                 op: SweepOp::NewBody,
-                target: None,
+                targets: vec![],
                 axis: CurveRef::Edge { edge },
                 profile: ProfileSource::Face { face: east },
                 surface: Surface::default(),
@@ -507,7 +508,7 @@ mod tests {
         features.push(extruded(9, top, 1.0, SweepOp::NewBody, None));
         let evaluated = evaluate(&features);
         assert!(evaluated.problems.is_empty(), "{:?}", evaluated.problems);
-        let (_, solid) = evaluated.bodies.iter().find(|(body, _)| *body == PropFeatureId(9)).unwrap();
+        let (_, solid) = evaluated.bodies.iter().find(|(body, _)| body.feature == PropFeatureId(9)).unwrap();
         for polygon in solid.polygons() {
             let name = evaluated.faces.name(polygon.surface.tag).expect("a named face").clone();
             let Some(Located::Face { facets, normal }) = evaluated.locate(&name) else { panic!("{name:?} does not resolve") };

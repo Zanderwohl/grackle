@@ -326,17 +326,21 @@ impl Plugin for SketchEditPlugin {
     }
 }
 
-/// Show the prop as it stood at the open sketch, leave a sketch that has gone
+/// Show the prop as it stood at the open sketch or before the feature being
+/// re-picked, leave a sketch that has gone
 /// — deleted, or undone away — and forget picks and a chain naming points
 /// that have.
 fn keep_the_session(
     mut session: ResMut<SketchSession>,
     mut editor: ResMut<PropEditor>,
     mut hovered: ResMut<HoveredPick>,
+    tool: Res<crate::prop::tool::ActiveTool>,
 ) {
-    // Compared first: a `ResMut` written every frame reads as changed.
-    if editor.peek() != session.editing {
-        editor.peek_at(session.editing);
+    // The one writer of the peek. Compared first: a `ResMut` written every
+    // frame reads as changed.
+    let peek = session.editing.or_else(|| crate::prop::tool::peeked(&tool, editor.doc()));
+    if editor.peek() != peek {
+        editor.peek_at(peek);
     }
     let Some(id) = session.editing else { return };
     if hovered.0.is_some() {
@@ -1213,6 +1217,32 @@ pub fn hatch(outer: &[Vec2], holes: &[Vec<Vec2>], spacing: f32) -> Vec<(Vec2, Ve
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_repick_stops_the_view_before_its_feature_until_it_ends() {
+        use crate::prop::tool::{ActiveTool, Task};
+        let mut doc = PropDoc::new("peek");
+        let shape = |x: f32| FeatureOp::Primitive {
+            shape: crate::prop::solid::Shape::default(),
+            placement: crate::prop::profile::Placement::at(x, 0.0, 0.0),
+            surface: crate::prop::surface::Surface::default(),
+        };
+        let first = doc.push(shape(0.0));
+        let second = doc.push(shape(1.0));
+        let mut editor = PropEditor::default();
+        editor.open(doc, None);
+        let mut app = App::new();
+        app.insert_resource(editor)
+            .init_resource::<SketchSession>()
+            .init_resource::<HoveredPick>()
+            .insert_resource(ActiveTool { task: Some(Task::Repick { feature: second, field: 0 }), moved_on: vec![] })
+            .add_systems(Update, keep_the_session);
+        app.update();
+        assert_eq!(app.world().resource::<PropEditor>().peek(), Some(first));
+        app.world_mut().resource_mut::<ActiveTool>().task = None;
+        app.update();
+        assert_eq!(app.world().resource::<PropEditor>().peek(), None);
+    }
 
     fn snapped(at: Vec2, point: Option<SketchId>) -> Snapped {
         Snapped { at, point }

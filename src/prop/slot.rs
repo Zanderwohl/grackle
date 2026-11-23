@@ -9,7 +9,7 @@ use bevy::prelude::*;
 
 use crate::prop::construct::{Construct, Making};
 use crate::prop::document::{Pick, PlaneSource, PropDoc};
-use crate::prop::feature::{Evaluated, FeatureOp, PropFeatureId, IN_PLANE};
+use crate::prop::feature::{BodyRef, Evaluated, FeatureOp, PropFeatureId, IN_PLANE};
 use crate::prop::plane::{Plane, PlaneDef, PlaneRef};
 use crate::prop::reference::{Element, GeomRef};
 use std::collections::VecDeque;
@@ -21,8 +21,9 @@ use crate::prop::sketch_edit::sketch_of_mut;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
-    /// A standing body, or a face standing in for one.
-    Body,
+    /// Standing bodies, each also pickable by a face on it, at least this
+    /// many and each once.
+    Bodies(usize),
     /// One or more regions, all of one sketch, or one flat face.
     Regions,
     /// Two or more regions, each of a sketch of its own: a loft's profiles.
@@ -60,8 +61,10 @@ pub struct SlotCx<'a> {
     pub others: &'a [Value],
 }
 
-pub const BODY: Slot = Slot { kind: Kind::Body, prompt: "prop.tool.pick.body", checks: &[another_body] };
-pub const SECOND_BODY: Slot = Slot { kind: Kind::Body, prompt: "prop.tool.pick.second_body", checks: &[another_body] };
+pub const BODIES: Slot = Slot { kind: Kind::Bodies(1), prompt: "prop.tool.pick.bodies", checks: &[another_body] };
+pub const BODIES_2: Slot = Slot { kind: Kind::Bodies(2), prompt: "prop.tool.pick.bodies", checks: &[another_body] };
+pub const TARGETS: Slot = Slot { kind: Kind::Bodies(1), prompt: "prop.tool.pick.targets", checks: &[another_body] };
+pub const TOOLS: Slot = Slot { kind: Kind::Bodies(1), prompt: "prop.tool.pick.tools", checks: &[another_body] };
 pub const REGIONS: Slot = Slot { kind: Kind::Regions, prompt: "prop.tool.pick.region", checks: &[around_the_axis] };
 pub const AXIS: Slot = Slot { kind: Kind::Curve, prompt: "prop.tool.pick.axis", checks: &[in_the_regions_plane] };
 pub const DIRECTION: Slot = Slot { kind: Kind::Direction, prompt: "prop.tool.pick.direction", checks: &[] };
@@ -77,7 +80,7 @@ pub const MAKE_POINT: Slot = Slot { kind: Kind::Construct(Construct::Point), pro
 /// What a slot's picks come to, before any face is given its plane feature.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Value {
-    Body(PropFeatureId),
+    Bodies(Vec<BodyRef>),
     /// `regions` is empty when read off a feature, where only the sketch is
     /// needed.
     Regions { sketch: PropFeatureId, regions: Vec<Region> },
@@ -99,7 +102,7 @@ pub enum Value {
 /// onto their sketch.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Resolved {
-    Body(PropFeatureId),
+    Bodies(Vec<BodyRef>),
     Regions { sketch: PropFeatureId, entries: Vec<SketchId> },
     ProfileFace(GeomRef),
     Profiles(Vec<(PropFeatureId, SketchId)>),
@@ -120,28 +123,48 @@ pub struct Field {
     pub slot: Slot,
     /// Eaten when the feature runs: a body operand.
     pub consumed: bool,
-    /// Offered as a Pick row in the Inspector. Body operands are chosen from
-    /// a list, since one already eaten cannot be clicked, and regions have
-    /// rows of their own.
+    /// Offered as a Pick row in the Inspector. Regions have rows of their own.
+    /// A re-pick shows the prop as it stood before the feature, so a body it
+    /// eats can be clicked.
     pub picked: bool,
     pub refs: Vec<AnyRef>,
 }
 
 impl Kind {
+    /// Enough to build from.
+    pub fn answered(self, has: &[Pick], evaluated: &Evaluated) -> bool {
+        match self {
+            Kind::Construct(construct) => construct.making(has, &evaluated.scope()).is_some(),
+            Kind::Profiles => has.len() >= 2,
+            Kind::Bodies(least) => has.len() >= least,
+            _ => !has.is_empty(),
+        }
+    }
+
     /// Whether another pick may go in, before its fit is asked.
     pub fn open(self, has: &[Pick]) -> bool {
         match self {
-            // Whether one more is taken is the construction's question.
             Kind::Regions => !has.iter().any(|pick| profile_face(pick).is_some()),
-            Kind::Profiles | Kind::Path | Kind::Construct(_) => true,
-            Kind::Body | Kind::Point | Kind::Bound | Kind::Curve | Kind::Direction | Kind::Plane => has.is_empty(),
+            // Whether one more is taken is the construction's question.
+            Kind::Profiles | Kind::Path | Kind::Construct(_) | Kind::Bodies(_) => true,
+            Kind::Point | Kind::Bound | Kind::Curve | Kind::Direction | Kind::Plane => has.is_empty(),
+        }
+    }
+
+    /// Answered, but likely to take another pick that changes what it comes
+    /// to, so a tool waits to be told it is done. One face makes a plane
+    /// through it and so does not wait, though a second may still join it.
+    pub fn waits(self, has: &[Pick]) -> bool {
+        match self {
+            Kind::Construct(construct) => construct.extendable(has),
+            _ => self.open(has),
         }
     }
 
     /// Whether `pick` is this kind of thing, and resolves.
     pub fn fits(self, has: &[Pick], pick: &Pick, evaluated: &Evaluated) -> bool {
         match self {
-            Kind::Body => pick.body(evaluated).is_some(),
+            Kind::Bodies(_) => pick.body(evaluated).is_some_and(|body| !has.iter().any(|held| held.body(evaluated) == Some(body))),
             Kind::Regions => {
                 if let Some(face) = profile_face(pick) {
                     return has.is_empty() && flat_face(face, evaluated);
@@ -179,30 +202,10 @@ impl Kind {
         }
     }
 
-    /// Short of what it needs.
-    pub fn waiting(self, has: &[Pick], evaluated: &Evaluated) -> bool {
-        match self {
-            Kind::Construct(construct) => construct.making(has, &evaluated.scope()).is_none(),
-            Kind::Profiles => has.len() < 2,
-            _ => has.is_empty(),
-        }
-    }
-
-    /// Could take another pick that changes what it comes to, so a tool waits
-    /// to be told it is done.
-    pub fn open_ended(self, has: &[Pick]) -> bool {
-        match self {
-            Kind::Regions => !has.iter().any(|pick| profile_face(pick).is_some()),
-            Kind::Profiles | Kind::Path => true,
-            Kind::Construct(construct) => construct.extendable(has),
-            _ => false,
-        }
-    }
-
     pub fn value(self, has: &[Pick], evaluated: &Evaluated) -> Option<Value> {
         let first = has.first()?;
         Some(match self {
-            Kind::Body => Value::Body(first.body(evaluated)?),
+            Kind::Bodies(_) => Value::Bodies(has.iter().map(|pick| pick.body(evaluated)).collect::<Option<_>>()?),
             Kind::Regions => {
                 if let Some(face) = profile_face(first) {
                     return Some(Value::ProfileFace(face.clone()));
@@ -258,7 +261,7 @@ impl Value {
     /// adopts regions onto their sketch in `doc`.
     pub fn resolve(self, planes: &mut impl Iterator<Item = PropFeatureId>, doc: &mut PropDoc) -> Resolved {
         match self {
-            Value::Body(id) => Resolved::Body(id),
+            Value::Bodies(list) => Resolved::Bodies(list),
             Value::Regions { sketch, regions } => {
                 let entries = sketch_of_mut(doc, sketch)
                     .map(|drawn| regions.iter().map(|region| drawn.adopt_region(region)).collect())
@@ -290,7 +293,12 @@ impl Value {
     /// construction's field has none.
     pub fn of_field(field: &Field) -> Option<Value> {
         Some(match (field.slot.kind, field.refs.first()?) {
-            (Kind::Body, AnyRef::Body { body }) => Value::Body(*body),
+            (Kind::Bodies(_), AnyRef::Body { .. }) => Value::Bodies(
+                field.refs.iter().filter_map(|reference| match reference {
+                    AnyRef::Body { body } => Some(*body),
+                    _ => None,
+                }).collect(),
+            ),
             (Kind::Regions, AnyRef::Regions { sketch, .. }) => Value::Regions { sketch: *sketch, regions: vec![] },
             (Kind::Regions, AnyRef::Face { face }) => Value::ProfileFace(face.clone()),
             (Kind::Point, AnyRef::Point(point)) => Value::Point(point.clone()),
@@ -387,7 +395,7 @@ fn in_plane(plane: &Plane, (a, b): (Vec3, Vec3)) -> bool {
 /// would be broken on arrival.
 pub fn another_body(cx: &SlotCx, pick: &Pick) -> bool {
     let body = pick.body(cx.evaluated);
-    !cx.others.iter().any(|other| matches!(other, Value::Body(id) if Some(*id) == body))
+    !cx.others.iter().any(|other| matches!(other, Value::Bodies(list) if body.is_some_and(|body| list.contains(&body))))
 }
 
 /// A curve lying in the plane of the regions or face another slot holds.
