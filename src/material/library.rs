@@ -21,7 +21,7 @@ use super::pit::{Pit, PIT};
 use super::sky::{Sky, SkyMaterial};
 use crate::common::sky::SKYBOX;
 use super::{FILE_EXTENSION, MATERIALS_DIR};
-use crate::common::assets::{default_packs, Assets as PackAssets};
+use crate::common::assets::{Assets as PackAssets};
 use crate::tool::bakes::{RoomBake, RoomSlotMesh};
 use crate::common::palette::Palette;
 use crate::tool::room::RoomSlot;
@@ -129,6 +129,15 @@ impl MaterialLibrary {
         self.get(name)
     }
 
+    /// Every material, as after the packs changed.
+    pub fn forget_all(&mut self, baked: &mut BakedTextures, standard: &mut Assets<StandardMaterial>) {
+        let names: Vec<String> = self.entries.keys().cloned().collect();
+        for name in names {
+            self.forget(&name, baked, standard);
+        }
+        self.entries.clear();
+    }
+
     /// So the next room to ask bakes it again, as after a save.
     pub fn forget(&mut self, name: &str, baked: &mut BakedTextures, standard: &mut Assets<StandardMaterial>) {
         if let Some(Some(entry)) = self.entries.remove(name) {
@@ -144,7 +153,7 @@ impl MaterialLibrary {
 fn find(name: &str, packs: &PackAssets) -> Option<(Graph, PathBuf)> {
     let relative = format!("{MATERIALS_DIR}/{name}.{FILE_EXTENSION}");
     let mut found = None;
-    for pack in default_packs() {
+    for pack in packs.packs() {
         let Ok(bytes) = packs.read(&pack, &relative) else { continue };
         let parsed = String::from_utf8(bytes)
             .map_err(|e| e.to_string())
@@ -161,6 +170,25 @@ fn find(name: &str, packs: &PackAssets) -> Option<(Graph, PathBuf)> {
 /// for the device) or go away (a name cleared), and there are three slots a room. A slot painted
 /// [`SKYBOX`] swaps its `StandardMaterial` for the [`Sky`]; one painted [`PIT`] takes the [`Pit`].
 #[allow(clippy::too_many_arguments)]
+/// One of the materials the server's manifest lists a frame, so a room drawn after joining finds
+/// it baked. Without a device yet it waits.
+pub fn bake_a_material_for_joining(
+    mut build: ResMut<crate::common::joining::JoinBuild>,
+    mut library: ResMut<MaterialLibrary>,
+    mut baked: ResMut<BakedTextures>,
+    mut standard: ResMut<Assets<StandardMaterial>>,
+    packs: Res<PackAssets>,
+    device: BevyDevice,
+    _main_thread: bevy::ecs::system::NonSendMarker,
+) {
+    if !build.props.is_empty() || !device.ready() {
+        return;
+    }
+    let Some(name) = build.materials.pop_front() else { return };
+    library.ensure(&name, &packs, &device, &mut baked, &mut standard);
+    build.current = Some((crate::common::resource::ResourceKind::Material, name));
+}
+
 pub fn paint_rooms(
     mut commands: Commands,
     mut library: ResMut<MaterialLibrary>,

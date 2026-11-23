@@ -35,6 +35,9 @@ pub enum AppMode {
     MainMenu,
     /// A name and a field of view, for somebody with no name saved. Never offered by the Mode menu.
     Onboarding,
+    /// Between connecting to a server and its first screen: fetching its files and building them.
+    /// Never offered by the Mode menu. See [`crate::common::joining`].
+    Joining,
 }
 
 impl AppMode {
@@ -83,6 +86,7 @@ impl AppMode {
             AppMode::MainMenu => get!("app_mode.main_menu"),
             AppMode::Play => get!("app_mode.play"),
             AppMode::Onboarding => get!("app_mode.onboarding"),
+            AppMode::Joining => get!("app_mode.joining"),
         }
     }
 
@@ -101,8 +105,14 @@ impl AppMode {
         true
     }
 
+    /// Onboarding and joining are passed through, never chosen.
+    pub fn in_the_menu(self) -> bool {
+        !matches!(self, AppMode::Onboarding | AppMode::Joining)
+    }
+
+    /// Joining is not offered, but a client is in it while networked.
     pub fn offered_networked(self) -> bool {
-        matches!(self, AppMode::Editor | AppMode::Play)
+        matches!(self, AppMode::Editor | AppMode::Play | AppMode::Joining)
     }
 }
 
@@ -136,7 +146,7 @@ pub fn mode_menu(
     request: &mut Option<AppMode>,
 ) {
     ui.menu_button(get!("app_mode.menu.title"), |ui| {
-        for mode in AppMode::iter().filter(|mode| *mode != AppMode::Onboarding) {
+        for mode in AppMode::iter().filter(|mode| mode.in_the_menu()) {
             if matches!(mode, AppMode::Play | AppMode::MainMenu) {
                 ui.separator();
             }
@@ -168,7 +178,7 @@ impl CameFrom {
     pub fn after_a_round(self, role: Option<&NetRole>) -> AppMode {
         let online = role.is_some_and(NetRole::is_online);
         match self.0 {
-            AppMode::Play | AppMode::Onboarding => AppMode::Editor,
+            AppMode::Play | AppMode::Onboarding | AppMode::Joining => AppMode::Editor,
             mode if online && !mode.offered_networked() => AppMode::Editor,
             mode => mode,
         }
@@ -309,7 +319,7 @@ mod tests {
     /// Fails if the Mode menu's order drifts: the authoring modes, Play, then the main menu.
     #[test]
     fn the_menu_lists_the_editors_then_play_then_the_main_menu() {
-        let modes: Vec<AppMode> = AppMode::iter().filter(|mode| *mode != AppMode::Onboarding).collect();
+        let modes: Vec<AppMode> = AppMode::iter().filter(|mode| mode.in_the_menu()).collect();
         assert_eq!(
             modes,
             [

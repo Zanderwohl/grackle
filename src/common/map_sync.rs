@@ -254,6 +254,11 @@ fn adopt_the_servers_map(
     // The server's `adoptions`, as last received.
     mut opened: Local<Option<u64>>,
 ) {
+    // A new connection is told its map afresh, even one identical to the last server's.
+    if role.is_changed() {
+        last.clear();
+        *opened = None;
+    }
     if role.is_authority() {
         return;
     }

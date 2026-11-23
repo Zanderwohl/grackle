@@ -486,7 +486,7 @@ pub fn write_taunts(existing: Option<&str>, specs: &[(String, TauntSpec)]) -> St
 
 /// In every process: a client's is replaced by the server's on connect.
 pub fn load_taunts_at_startup(assets: Res<Assets>, mut taunts: ResMut<Taunts>) {
-    *taunts = load_taunts(&assets, &crate::common::assets::default_packs());
+    *taunts = load_taunts(&assets, &assets.match_packs());
     info!("Loaded {} taunts", taunts.0.len());
 }
 

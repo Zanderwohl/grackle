@@ -233,6 +233,25 @@ fn share_bevys_gpu(mut material: NonSendMut<MaterialEditor>, device: gpu::BevyDe
 
 /// Saving a material is publishing it: without this, a wall drawn before the save keeps the old
 /// bake for the rest of the process.
+fn forget_materials_for_new_packs(
+    mut changed: MessageReader<crate::common::assets::PacksChanged>,
+    mut library: ResMut<library::MaterialLibrary>,
+    mut baked: ResMut<gpu::BakedTextures>,
+    mut standard: ResMut<Assets<StandardMaterial>>,
+) {
+    for changed in changed.read() {
+        match &changed.only {
+            None => library.forget_all(&mut baked, &mut standard),
+            Some(paths) => {
+                for path in paths {
+                    let Some(name) = path.strip_prefix(&format!("{MATERIALS_DIR}/")).and_then(|rest| rest.strip_suffix(&format!(".{FILE_EXTENSION}"))) else { continue };
+                    library.forget(name, &mut baked, &mut standard);
+                }
+            }
+        }
+    }
+}
+
 fn publish_saved_materials(
     mut material: NonSendMut<MaterialEditor>,
     mut library: ResMut<library::MaterialLibrary>,
@@ -251,12 +270,14 @@ pub struct MaterialEditorPlugin;
 
 impl Plugin for MaterialEditorPlugin {
     fn build(&self, app: &mut App) {
+        crate::common::assets::ensure_packs_changed(app);
         app.insert_non_send(MaterialEditor::default())
             .init_resource::<StartInMaterialEditor>()
             .init_resource::<library::MaterialLibrary>()
             .init_resource::<pit::Pit>()
             // Ungated: rooms are drawn in the editor and in a round alike.
-            .add_systems(Update, (publish_saved_materials, library::paint_rooms).chain())
+            .add_systems(Update, (publish_saved_materials, forget_materials_for_new_packs, library::paint_rooms).chain())
+            .add_systems(Update, library::bake_a_material_for_joining.run_if(in_state(AppMode::Joining)))
             // Ungated: it has to run in whatever mode the process started in.
             .add_systems(Update, start_in_the_material_editor)
             .add_systems(Update, picker::publish_choices.run_if(in_state(AppMode::Editor)))

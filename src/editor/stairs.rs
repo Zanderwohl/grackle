@@ -184,6 +184,10 @@ const DEFAULT_SIZE: f32 = 2.0;
 
 #[typetag::serde(name = "stairs")]
 impl FeatureTrait for EditorStairs {
+    fn resources_named(&self) -> Vec<crate::common::resource::Named> {
+        self.surfaces.named()
+    }
+
     fn get_point(&self, key: &str) -> Result<Vec3, PointResolutionError> {
         if let Some(index) = KEYS.iter().position(|k| *k == key) {
             return Ok(self.resolved[index]);

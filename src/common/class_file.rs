@@ -58,6 +58,15 @@ pub fn load_builds(assets: &Assets, packs: &[PathBuf]) -> ClassBuilds {
     builds
 }
 
+/// The rig files a `classes.toml` names, for [`crate::common::resource`].
+pub fn rigs_named_in(text: &str) -> Result<Vec<String>, String> {
+    let file: ClassFile = toml::from_str(text).map_err(|e| e.to_string())?;
+    let mut rigs: Vec<String> = file.builds.into_values().filter_map(|build| build.rig).collect();
+    rigs.sort();
+    rigs.dedup();
+    Ok(rigs)
+}
+
 fn load_pack(assets: &Assets, pack: &Path, builds: &mut ClassBuilds) {
     let named = format!("{}/{CLASSES_FILE}", pack.display());
     let text = match assets.read(pack, CLASSES_FILE) {
@@ -163,7 +172,7 @@ fn check_proportions(build: &Proportions) -> Result<(), String> {
 
 /// In every process: a client's is replaced by the server's on connect.
 pub fn load_builds_at_startup(assets: Res<Assets>, mut builds: ResMut<ClassBuilds>) {
-    let loaded = load_builds(&assets, &crate::common::assets::default_packs());
+    let loaded = load_builds(&assets, &assets.match_packs());
     info!("Loaded builds for {} classes and {} rigs", loaded.builds.len(), loaded.rigs.len());
     *builds = loaded;
 }

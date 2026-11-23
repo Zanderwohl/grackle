@@ -175,6 +175,10 @@ impl EditorRoom {
 
 #[typetag::serde(name = "editor_room")]
 impl FeatureTrait for EditorRoom {
+    fn resources_named(&self) -> Vec<crate::common::resource::Named> {
+        self.surfaces.named()
+    }
+
     fn get_point(&self, key: &str) -> Result<Vec3, PointResolutionError> {
         let min = self.resolved_min.min(self.resolved_max);
         let max = self.resolved_min.max(self.resolved_max);

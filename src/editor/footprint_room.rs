@@ -579,6 +579,10 @@ impl FootprintRoom {
 
 #[typetag::serde(name = "footprint_room")]
 impl FeatureTrait for FootprintRoom {
+    fn resources_named(&self) -> Vec<crate::common::resource::Named> {
+        self.surfaces.named()
+    }
+
     fn get_point(&self, key: &str) -> Result<Vec3, PointResolutionError> {
         if key == "origin" {
             return Ok(self.resolved_origin);

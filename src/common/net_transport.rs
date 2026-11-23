@@ -117,9 +117,9 @@ impl Plugin for NetTransportPlugin {
             .add_plugins(crate::game::team_choice::TeamChoiceSyncPlugin)
             .add_plugins(crate::game::class_choice::ClassChoiceSyncPlugin)
             .add_plugins(crate::common::map_sync::MapSyncPlugin)
-            .add_plugins(crate::common::pack_sync::PackSyncPlugin)
-            // A client told about a weapon but not its model draws empty hands.
-            .add_plugins(crate::prop::sync::PropSyncPlugin)
+            // The server's files: weapons, models, tables, clips, materials and a round's map.
+            .add_plugins(crate::common::resource::sync::ResourceSyncPlugin)
+            .add_plugins(crate::common::joining::JoiningPlugin)
             .add_plugins(crate::common::net_events::NetEventsPlugin)
             .add_plugins(crate::game::spray::SpraySyncPlugin)
             .add_plugins(crate::common::postcard_sync::PostcardSyncPlugin)
@@ -735,6 +735,128 @@ mod tests {
             lost(&client),
             [LinkLost { loss: LinkLoss::Disconnected, message: get!("net.lost.stopped_answering") }],
         );
+    }
+
+    /// The default pack, with this machine's own pistol: the file the host also has, changed.
+    struct OwnPistol;
+
+    const OUR_PISTOL: &str = "name_key = \"weapon.names.pistol\"\n# this machine's own\n";
+
+    impl crate::common::assets::AssetSource for OwnPistol {
+        fn read(&self, pack: &std::path::Path, relative: &str) -> Result<Vec<u8>, crate::common::assets::AssetError> {
+            match relative == "weapons/pistol.toml" && pack == std::path::Path::new("assets/default") {
+                true => Ok(OUR_PISTOL.as_bytes().to_vec()),
+                false => crate::common::assets::NativeFiles.read(pack, relative),
+            }
+        }
+
+        fn list(&self, pack: &std::path::Path, folder: &str) -> Vec<String> {
+            crate::common::assets::NativeFiles.list(pack, folder)
+        }
+    }
+
+    /// Fails if a client keeps its own copy of a file the host has another version of, if it
+    /// fetches files it already has, or if its own file is written to.
+    #[test]
+    fn a_client_fetches_the_hosts_version_and_nothing_it_has() {
+        use crate::common::resource::sync::{DownloadsRoot, Fetch, FetchPhase};
+        use crate::common::app_mode::AppMode;
+        let port = free_port();
+        let mut host = networked_app(AppMode::Editor);
+        host.world_mut().write_message(NetRequest::Host { port });
+        let mut client = networked_app(AppMode::Editor);
+        let root = std::env::temp_dir().join(format!("grackle-downloads-{}-fetches", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        client.world_mut().insert_resource(DownloadsRoot(root));
+        client.world_mut().insert_resource(crate::common::assets::Assets::new(Box::new(OwnPistol)));
+        assert!(run_until(&mut [&mut host], 2.0, |apps| matches!(*apps[0].world().resource::<NetStatus>(), NetStatus::Hosting { .. })));
+        client.world_mut().write_message(NetRequest::Join { host: "127.0.0.1".into(), port });
+
+        let joining = |apps: &[&mut App]| *apps[1].world().resource::<State<AppMode>>().get() == AppMode::Joining;
+        assert!(run_until(&mut [&mut host, &mut client], 5.0, joining), "the client never showed the joining screen");
+        let joined = |apps: &[&mut App]| *apps[1].world().resource::<State<AppMode>>().get() == AppMode::Editor;
+        assert!(run_until(&mut [&mut host, &mut client], 15.0, joined), "the client never left the joining screen for the server's mode");
+        assert_eq!(client.world().resource::<Fetch>().phase, FetchPhase::Mounted, "the client left joining before mounting");
+
+        let theirs = std::fs::read("assets/default/weapons/pistol.toml").unwrap();
+        let assets = client.world().resource::<crate::common::assets::Assets>();
+        assert_eq!(assets.read_from_packs("weapons/pistol.toml").unwrap(), theirs, "the client kept its own pistol");
+        assert_eq!(assets.read_local(std::path::Path::new("assets/default"), "weapons/pistol.toml").unwrap(), OUR_PISTOL.as_bytes());
+        let fetch = client.world().resource::<Fetch>();
+        assert_eq!(fetch.bytes_wanted, theirs.len() as u64, "the client fetched files it already had");
+        let catalog = crate::common::weapon_file::load_catalog(assets, &assets.match_packs());
+        assert!(catalog.weapons.iter().any(|weapon| weapon.key == "pistol"), "the server's pistol does not load");
+    }
+
+    /// Fails if a client does not keep the map each round started on, or records no session.
+    #[test]
+    fn a_client_keeps_each_rounds_map() {
+        use crate::common::app_mode::AppMode;
+        use crate::common::resource::sync::{DownloadsRoot, Fetch, FetchPhase};
+        use crate::common::resource::{ContentHash, ResourceKind};
+        let port = free_port();
+        let mut host = networked_app(AppMode::Editor);
+        let loaded = crate::editor::save::parse(&std::fs::read_to_string("assets/default/blueprints/new.gmb").unwrap()).unwrap();
+        let played = crate::editor::save::to_text(&loaded.timeline, &loaded.metadata).unwrap();
+        host.world_mut().insert_resource(loaded.timeline);
+        host.world_mut().insert_resource(loaded.metadata);
+        host.world_mut().write_message(NetRequest::Host { port });
+        let mut client = networked_app(AppMode::Editor);
+        let root = std::env::temp_dir().join(format!("grackle-downloads-{}-rounds", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        client.world_mut().insert_resource(DownloadsRoot(root.clone()));
+        assert!(run_until(&mut [&mut host], 2.0, |apps| matches!(*apps[0].world().resource::<NetStatus>(), NetStatus::Hosting { .. })));
+        client.world_mut().write_message(NetRequest::Join { host: "127.0.0.1".into(), port });
+        let mounted = |apps: &[&mut App]| apps[1].world().resource::<Fetch>().phase == FetchPhase::Mounted;
+        assert!(run_until(&mut [&mut host, &mut client], 15.0, mounted), "the server's files were never mounted");
+
+        host.world_mut().resource_mut::<NextState<AppMode>>().set(AppMode::Play);
+        let hash = ContentHash::of(played.as_bytes());
+        let kept = |apps: &[&mut App]| {
+            let assets = apps[1].world().resource::<crate::common::assets::Assets>();
+            assets.session().is_some_and(|session| {
+                session.manifest.entries.iter().any(|entry| entry.key.kind() == ResourceKind::Blueprint && entry.key.hash == hash)
+            }) && apps[1].world().resource::<Fetch>().phase == FetchPhase::Mounted
+        };
+        assert!(run_until(&mut [&mut host, &mut client], 15.0, kept), "the round's map never reached the client");
+        let stored = root.join("objects").join(crate::common::resource::store::object_name(hash, "gmb"));
+        assert_eq!(std::fs::read(&stored).unwrap(), played.as_bytes(), "the round's map was not stored");
+        let sessions = std::fs::read_dir(root.join("sessions")).unwrap().flatten().flat_map(|server| std::fs::read_dir(server.path()).unwrap().flatten());
+        let record: Vec<String> = sessions.map(|file| std::fs::read_to_string(file.path()).unwrap()).collect();
+        assert!(record.iter().any(|text| text.contains(&hash.to_string())), "no session record names the round: {record:?}");
+    }
+
+    /// Fails if a client that leaves a server and joins it again, with its map unchanged, is held
+    /// on the joining screen waiting for a map it already has.
+    #[test]
+    fn a_client_that_rejoins_an_unchanged_map_finishes_joining() {
+        use crate::common::app_mode::AppMode;
+        use crate::common::resource::sync::DownloadsRoot;
+        let port = free_port();
+        let mut host = networked_app(AppMode::Editor);
+        let loaded = crate::editor::save::parse(&std::fs::read_to_string("assets/default/blueprints/new.gmb").unwrap()).unwrap();
+        host.world_mut().insert_resource(loaded.timeline);
+        host.world_mut().insert_resource(loaded.metadata);
+        host.world_mut().write_message(NetRequest::Host { port });
+        let mut client = networked_app(AppMode::Editor);
+        client.world_mut().insert_resource(crate::editor::editable::FeatureTimeline::default());
+        client.world_mut().insert_resource(crate::editor::map_metadata::MapMetadata::default());
+        client.add_message::<crate::tool::room::CalculateRoomGeometry>();
+        let root = std::env::temp_dir().join(format!("grackle-downloads-{}-rejoin", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        client.world_mut().insert_resource(DownloadsRoot(root));
+        assert!(run_until(&mut [&mut host], 2.0, |apps| matches!(*apps[0].world().resource::<NetStatus>(), NetStatus::Hosting { .. })));
+
+        let in_mode = |want: AppMode| move |apps: &[&mut App]| *apps[1].world().resource::<State<AppMode>>().get() == want;
+        for attempt in ["first", "second"] {
+            client.world_mut().write_message(NetRequest::Join { host: "127.0.0.1".into(), port });
+            assert!(run_until(&mut [&mut host, &mut client], 5.0, in_mode(AppMode::Joining)), "{attempt} join: never joining");
+            assert!(run_until(&mut [&mut host, &mut client], 15.0, in_mode(AppMode::Editor)), "{attempt} join: held on the joining screen");
+            client.world_mut().write_message(NetRequest::GoSolo);
+            let solo = |apps: &[&mut App]| *apps[1].world().resource::<NetRole>() == NetRole::Solo;
+            assert!(run_until(&mut [&mut host, &mut client], 5.0, solo), "{attempt} join: never left");
+            assert!(run_until(&mut [&mut host, &mut client], 5.0, |apps| matches!(*apps[0].world().resource::<NetStatus>(), NetStatus::Hosting { clients: 0 })));
+        }
     }
 
     /// Losing the port would connect to the right machine on the wrong port.

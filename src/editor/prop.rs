@@ -42,6 +42,13 @@ pub struct Prop {
 
 #[typetag::serde(name = "prop")]
 impl FeatureTrait for Prop {
+    fn resources_named(&self) -> Vec<crate::common::resource::Named> {
+        match self.model.is_empty() {
+            true => Vec::new(),
+            false => vec![crate::common::resource::Named::Prop(self.model.clone())],
+        }
+    }
+
     fn get_point(&self, _key: &str) -> Result<Vec3, PointResolutionError> {
         Ok(self.resolved_location)
     }

@@ -59,6 +59,7 @@ pub struct SkeletonPlugin;
 impl Plugin for SkeletonPlugin {
     fn build(&self, app: &mut App) {
         crate::common::keybind::ensure(app);
+        crate::common::assets::ensure_packs_changed(app);
         app
             // Need the same renderer resources this plugin does.
             .add_plugins((HitboxPlugin, WeaponPlugin))
@@ -82,6 +83,11 @@ impl Plugin for SkeletonPlugin {
             .init_resource::<crate::common::skeleton::play::LayerBlends>()
             .init_resource::<crate::common::skeleton::play::LayerClaims>()
             .add_systems(Startup, crate::common::layer_file::load_layers_at_startup)
+            .add_systems(
+                Update,
+                (crate::common::layer_file::load_layers_at_startup, crate::common::clip_file::reload_named_clips)
+                    .run_if(on_message::<crate::common::assets::PacksChanged>),
+            )
             .add_systems(Update, (
                 describe_player_bodies
                     .run_if(crate::common::app_mode::simulating)

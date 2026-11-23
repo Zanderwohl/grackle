@@ -26,6 +26,8 @@ pub struct ConnectDialog {
     pub endpoint: String,
     /// Filled in on a refused submit, cleared on the next keystroke.
     pub error: Option<String>,
+    /// The Multiplayer menu's Keep a Copy, passed on as a `KeepACopy` the next frame.
+    pub keep_asked: bool,
 }
 
 impl Default for ConnectDialog {
@@ -35,6 +37,7 @@ impl Default for ConnectDialog {
             mode: ConnectMode::Join,
             endpoint: format!("localhost:{DEFAULT_PORT}"),
             error: None,
+            keep_asked: false,
         }
     }
 }
@@ -79,7 +82,8 @@ impl Plugin for NetMenuPlugin {
         app.init_resource::<ConnectDialog>()
             .init_resource::<LinkNotice>()
             .add_message::<LinkLost>()
-            .add_systems(Update, go_back_after_a_lost_link)
+            .add_message::<crate::common::resource::lock::KeepACopy>()
+            .add_systems(Update, (go_back_after_a_lost_link, pass_on_keep_a_copy))
             .add_systems(
                 EguiPrimaryContextPass,
                 (
@@ -204,6 +208,10 @@ pub fn network_menu(
             ui.close_kind(UiKind::Menu);
             dialog.show(ConnectMode::Join);
         }
+        if matches!(role, NetRole::Client { .. }) && ui.button(get!("net.menu.keep_a_copy")).clicked() {
+            ui.close_kind(UiKind::Menu);
+            dialog.keep_asked = true;
+        }
         ui.separator();
         if ui
             .add_enabled(role.is_online(), egui::Button::new(get!("net.menu.solo")))
@@ -213,6 +221,12 @@ pub fn network_menu(
             requests.write(NetRequest::GoSolo);
         }
     });
+}
+
+fn pass_on_keep_a_copy(mut dialog: ResMut<ConnectDialog>, mut keep: MessageWriter<crate::common::resource::lock::KeepACopy>) {
+    if std::mem::take(&mut dialog.keep_asked) {
+        keep.write(crate::common::resource::lock::KeepACopy);
+    }
 }
 
 fn connect_dialog(
@@ -313,6 +327,7 @@ mod tests {
             mode,
             endpoint: text.to_owned(),
             error: None,
+            keep_asked: false,
         }
     }
 

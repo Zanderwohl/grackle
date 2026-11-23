@@ -22,15 +22,18 @@ pub struct Settings {
     pub log_level: LogLevel,
     /// Files in `logs/` older than this are deleted at startup.
     pub log_days: u32,
+    /// What servers sent and no session in this many days used is deleted at startup.
+    pub download_days: u32,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { language: None, log_level: LogLevel::default(), log_days: DEFAULT_LOG_DAYS }
+        Settings { language: None, log_level: LogLevel::default(), log_days: DEFAULT_LOG_DAYS, download_days: DEFAULT_DOWNLOAD_DAYS }
     }
 }
 
 pub const DEFAULT_LOG_DAYS: u32 = 7;
+pub const DEFAULT_DOWNLOAD_DAYS: u32 = 14;
 pub const LOG_DAYS_RANGE: std::ops::RangeInclusive<u32> = 1..=365;
 
 /// The least severe level written to the console and to `logs/`.
@@ -106,7 +109,7 @@ mod tests {
 
     #[test]
     fn settings_round_trip() {
-        let settings = Settings { language: Some("de-DE".to_owned()), log_level: LogLevel::Debug, log_days: 30 };
+        let settings = Settings { language: Some("de-DE".to_owned()), log_level: LogLevel::Debug, log_days: 30, download_days: 3 };
         let text = toml::to_string_pretty(&settings).unwrap();
         assert_eq!(toml::from_str::<Settings>(&text).unwrap(), settings);
     }

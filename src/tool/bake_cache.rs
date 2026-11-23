@@ -72,6 +72,20 @@ mod disk {
         std::fs::rename(&partial, &path).map_err(|e| e.to_string())
     }
 
+    /// The file a bake is kept in, whose bytes a server offers its clients as they are.
+    pub fn file(folder: &str, hash: u64) -> PathBuf {
+        path(folder, hash)
+    }
+
+    /// A bake another machine made, written as it came. A file that does not decode is ignored
+    /// when read, as any damaged one is.
+    pub fn put_bytes(folder: &str, hash: u64, bytes: &[u8]) -> Result<(), String> {
+        let (path, partial) = (path(folder, hash), path(folder, hash).with_extension("partial"));
+        std::fs::create_dir_all(dir(folder)).map_err(|e| e.to_string())?;
+        std::fs::write(&partial, bytes).map_err(|e| e.to_string())?;
+        std::fs::rename(&partial, &path).map_err(|e| e.to_string())
+    }
+
     #[cfg(test)]
     pub fn spoil(folder: &str, hash: u64) {
         std::fs::write(path(folder, hash), b"not postcard").unwrap();
@@ -92,6 +106,8 @@ mod disk {
 }
 
 pub use disk::{read, write};
+#[cfg(not(target_arch = "wasm32"))]
+pub use disk::{file, put_bytes};
 #[cfg(all(test, not(target_arch = "wasm32")))]
 pub use disk::{spoil, store};
 

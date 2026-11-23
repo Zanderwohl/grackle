@@ -75,7 +75,6 @@ pub mod skin;
 pub mod slot;
 pub mod solid;
 pub mod stand_in;
-pub mod sync;
 pub mod surface;
 pub mod thumbnail;
 pub mod tool;

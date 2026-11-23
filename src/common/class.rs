@@ -145,11 +145,10 @@ impl Class {
 }
 
 /// What each class is built like, read from a pack's `classes.toml` by
-/// [`crate::common::class_file`]. Held by the authority and sent to clients
-/// with the weapon catalog, so every machine builds the same rigs.
+/// [`crate::common::class_file`]. A client builds it from the server's
+/// `classes.toml` and rigs once they are mounted, so every machine builds the same rigs.
 ///
-/// Keyed by [`Class::key`] in a `BTreeMap` so two equal tables compare equal;
-/// see [`crate::common::pack_sync`].
+/// Keyed by [`Class::key`] in a `BTreeMap` so two equal tables compare equal.
 #[derive(Resource, Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ClassBuilds {
     pub builds: BTreeMap<String, Build>,

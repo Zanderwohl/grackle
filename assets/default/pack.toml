@@ -1,0 +1,3 @@
+# Who made this pack. A file whose own format names authors (a map) is credited by those; a
+# kept pack also records where it came from and what each file was. See src/common/pack_info.rs.
+authors = ["The Grackle contributors"]

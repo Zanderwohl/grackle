@@ -476,6 +476,18 @@ impl SettingsWindow {
             ui.add(egui::DragValue::new(&mut self.draft.log_days).range(super::LOG_DAYS_RANGE).suffix(get!("settings.developer.days_suffix")));
             ui.end_row();
         });
+        ui.add_space(15.0);
+        ui.heading(get!("settings.developer.downloads"));
+        ui.add_space(5.0);
+        egui::Grid::new("settings_downloads").num_columns(2).spacing([10.0, 8.0]).show(ui, |ui| {
+            ui.label(get!("settings.developer.download_days"));
+            ui.add(egui::DragValue::new(&mut self.draft.download_days).range(super::LOG_DAYS_RANGE).suffix(get!("settings.developer.days_suffix")));
+            ui.end_row();
+        });
+        // At once rather than on Apply: it is an action, not a setting.
+        if ui.button(get!("settings.developer.delete_downloads")).clicked() {
+            crate::common::resource::prune::delete_all_downloads(std::path::Path::new(crate::common::resource::store::DOWNLOADS_ROOT));
+        }
         if let Some(startup) = crate::common::log_file::startup_level()
             && startup != self.draft.log_level
         {

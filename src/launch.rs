@@ -57,6 +57,7 @@ pub fn run() {
     App::new()
         // Before `DefaultPlugins`: the log file's layer reads how many days of logs to keep.
         .insert_resource(settings)
+        .add_plugins(crate::common::resource::ObjectSourcePlugin)
         .add_plugins(DefaultPlugins
             .set(WindowPlugin {
                primary_window: Some(Window {
@@ -90,6 +91,7 @@ pub fn run() {
         .insert_resource(QuitAfterRounds(editor_params.rounds))
         .insert_resource(crate::common::game_rules::PlayAs(editor_params.class))
         .init_resource::<crate::game::telemetry::RecordRounds>()
+        .init_resource::<crate::common::resource::prune::PruneDownloads>()
         .insert_resource(StartInPropEditor(editor_params.start_modeling))
         .insert_resource(StartInAnimEditor(editor_params.start_animating))
         .insert_resource(StartInMaterialEditor(editor_params.start_texturing))
@@ -131,6 +133,7 @@ pub fn run() {
         .add_plugins(RoundSettingsFilePlugin { path: server_files.saved.clone(), seed: server_files.shipped.clone() })
         .add_plugins((crate::main_menu::MainMenuPlugin, crate::common::lan_discovery::LanDiscoveryPlugin, crate::server_browser::ServerBrowserPlugin))
         .add_plugins(crate::onboarding::OnboardingPlugin { skip: editor_params.chooses_where_to_start() })
+        .add_plugins(crate::joining_screen::JoiningScreenPlugin)
         .add_systems(Startup, move || {
             // Read before the log existed, so said now.
             if let Some(problem) = &settings_problem {

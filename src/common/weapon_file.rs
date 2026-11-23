@@ -2,8 +2,8 @@
 //! name weapons by string; [`WeaponCatalog`](crate::common::weapon::WeaponCatalog)
 //! names them by hash.
 //!
-//! A client's startup catalog is replaced by the server's on connect (see
-//! [`crate::common::pack_sync`]).
+//! A client reads the server's files instead once they are mounted (see
+//! [`crate::common::resource::sync`]).
 //!
 //! Each weapon is its own file, `weapons/{key}.toml` in a pack, its key the
 //! file's stem; the loadouts are one `loadouts.toml` per pack. Reads go
@@ -228,6 +228,22 @@ pub fn read_loadouts(assets: &Assets, packs: &[PathBuf]) -> LoadoutFiles {
     LoadoutFiles(files)
 }
 
+/// The hats and weapons a `loadouts.toml` names, for [`crate::common::resource`].
+pub fn resources_named_in_loadouts(text: &str) -> Result<Vec<crate::common::resource::Named>, String> {
+    use crate::common::resource::Named;
+    let file: LoadoutFile = toml::from_str(text).map_err(|e| e.to_string())?;
+    let mut named = Vec::new();
+    for entry in file.loadouts.into_values() {
+        named.extend(entry.hat.map(Named::Prop));
+        for slot in entry.slots.into_values() {
+            named.extend(slot.permitted.into_iter().chain(slot.default).map(Named::Weapon));
+        }
+    }
+    named.sort();
+    named.dedup();
+    Ok(named)
+}
+
 /// The catalog these weapons make, with every pack's loadouts read against
 /// them. A weapon with a [`WeaponProblem`] is left out, with a line saying why.
 pub fn catalog_of(assets: &Assets, packs: &[PathBuf], weapons: &[PackWeapon]) -> WeaponCatalog {
@@ -410,7 +426,7 @@ fn slot_choices(
 /// In every process and not authority-gated: a process starts `Solo` and may
 /// become a host, and a body can be handed out as soon as a round starts.
 pub fn load_catalog_at_startup(assets: Res<Assets>, mut catalog: ResMut<WeaponCatalog>) {
-    let loaded = load_catalog(&assets, &crate::common::assets::default_packs());
+    let loaded = load_catalog(&assets, &assets.match_packs());
     info!(
         "Loaded {} weapons and {} class loadouts",
         loaded.weapons.len(),
@@ -637,7 +653,7 @@ mod tests {
         use crate::common::music::tests::MemoryFiles;
         let shipped = std::fs::read_to_string("assets/default/weapons/pistol.toml").unwrap();
         let retuned = shipped.replace("deploy = 0.35", "deploy = 2.0");
-        let assets = Assets(Box::new(MemoryFiles(
+        let assets = Assets::new(Box::new(MemoryFiles(
             [
                 ("low/weapons/pistol.toml".to_owned(), shipped.into_bytes()),
                 ("high/weapons/pistol.toml".to_owned(), retuned.into_bytes()),

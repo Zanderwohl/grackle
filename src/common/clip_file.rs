@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use bevy::prelude::*;
 use strum::IntoEnumIterator;
 
-use crate::common::assets::{default_packs, AssetError, Assets};
+use crate::common::assets::{AssetError, Assets};
 use crate::common::skeleton::clip::{Clip, StateAnimation};
 use crate::common::skeleton::state::{AnimationState, ClipLibrary};
 
@@ -116,8 +116,20 @@ impl NamedClips {
     ) -> Option<Handle<Clip>> {
         self.0
             .entry(name.to_string())
-            .or_insert_with(|| load_named_clip(assets, &default_packs(), name).map(|clip| clips.add(clip)))
+            .or_insert_with(|| load_named_clip(assets, &assets.match_packs(), name).map(|clip| clips.add(clip)))
             .clone()
+    }
+
+    /// Reads every clip asked for again, into the handles already given out.
+    pub fn reload(&mut self, assets: &Assets, clips: &mut bevy::asset::Assets<Clip>) {
+        let packs = assets.match_packs();
+        for (name, handle) in self.0.iter_mut() {
+            match (load_named_clip(assets, &packs, name), handle.as_ref()) {
+                (Some(clip), Some(held)) => crate::common::skeleton::play::refill(clips, held, &clip),
+                (Some(clip), None) => *handle = Some(clips.add(clip)),
+                (None, _) => *handle = None,
+            }
+        }
     }
 
     pub fn publish(&mut self, clips: &mut bevy::asset::Assets<Clip>, name: &str, clip: &Clip) {
@@ -147,7 +159,7 @@ pub fn load_clips_for_new_rigs(
         }
         library.add_rig(rig);
         let dir = rig_clips_dir(rig);
-        for pack in default_packs() {
+        for pack in assets.match_packs() {
             for state in AnimationState::iter() {
                 match read_state_clip(&assets, &pack, &dir, state) {
                     Ok(Some(clip)) => library.insert_for(rig, state, clip),
@@ -159,8 +171,12 @@ pub fn load_clips_for_new_rigs(
     }
 }
 
+pub fn reload_named_clips(assets: Res<Assets>, mut named: ResMut<NamedClips>, mut clips: ResMut<bevy::asset::Assets<Clip>>) {
+    named.reload(&assets, &mut clips);
+}
+
 pub fn load_body_clips_at_startup(mut commands: Commands, assets: Res<Assets>) {
-    let library = load_body_clips(&assets, &default_packs());
+    let library = load_body_clips(&assets, &assets.match_packs());
     if library.is_empty() {
         info!("No body animations on disk; every state is a built-in pose");
     } else {

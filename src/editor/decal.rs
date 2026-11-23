@@ -45,6 +45,10 @@ pub struct EditorDecal {
 
 #[typetag::serde(name = "decal")]
 impl FeatureTrait for EditorDecal {
+    fn resources_named(&self) -> Vec<crate::common::resource::Named> {
+        vec![crate::common::resource::Named::Decal(self.picture.clone())]
+    }
+
     fn get_point(&self, _key: &str) -> Result<Vec3, PointResolutionError> {
         Ok(self.resolved_location)
     }

@@ -77,6 +77,10 @@ skrifa = { version = "0.44", default-features = false, features = ["std"] }
 # and nowhere else, which is a silent bug on a live connection.
 postcard = { version = "1.1.3", features = ["use-std"] }
 
+# Names a resource across machines by its bytes (documentation/resource-streaming.md); a server's
+# hash has to resist a crafted collision, which FNV does not. Already in the tree.
+blake3 = "1.8"
+
 # Stamps each launch's log and each round's record; already in the tree.
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 # Writes screenshots into a file opened with `create_new`; already in the tree under Bevy.

@@ -105,7 +105,7 @@ pub fn load_layers_at_startup(
     mut blends: ResMut<LayerBlends>,
     mut claims: ResMut<LayerClaims>,
 ) {
-    (*blends, *claims) = load_layers(&assets, &crate::common::assets::default_packs());
+    (*blends, *claims) = load_layers(&assets, &assets.match_packs());
 }
 
 impl LayerClaims {

@@ -271,6 +271,7 @@ shape is a new producer and not a rewrite of every consumer — see
 | `assets/default/` | The default pack: `lang/`, `blueprints/`, `servers/` (example `--server-config` files), `images/backgrounds/title/` (main-menu backgrounds). |
 | `assets/user/` | The user pack: gitignored, made at startup with `blueprints/`, `props/` and `images/backgrounds/title/`, last in `default_packs()` so it overrides the shipped one. A new map or prop is saved here unless the document already has a folder. Also holds `settings.toml`, the player settings, `shortcuts.toml`, `server.toml` (the Round tab) and `recent.toml` (the File menu's Recent lists). |
 | `cache/` | Gitignored, derived from the packs and maps: `thumbnails/{pack}/props/{name}.png`, `nav/{hash}.bin`, `lightmap/{hash}.bin`, `postcards/{pack}/{map}/*.png`, `rounds/{pack}/{map}/*.jsonl`, `trash/{kind}/` (deleted pack files, kept 30 days). What is about one pack file is filed under its pack and name ([`src/common/cache_path.rs`](src/common/cache_path.rs)); a file in no pack under `_no_pack/`, and a map with no file under `_no_pack/untitled` (its postcards in `_no_pack/untitled_{hash}`, so two unsaved maps keep a set each). Safe to delete, though the trash is the only copy of what is in it. |
+| `downloads/` | Gitignored: what servers sent, `objects/{ab}/{rest of hash}.{ext}`, and a record per connection in `sessions/{server}/{started}.toml` listing its rounds' maps and every object it used; never a pack (see "Naming pack files across machines"). Pruned at startup. |
 | `logs/` | Gitignored: the log's file drain, one file per launch, and the Bakes panel's ECS dumps (`grackle_ecsdump_{stamp}.txt`, whose path the panel shows as a link that selects the file in the file manager), all deleted after the days set in Settings → Developer. |
 | `screenshots/` | Gitignored, made at startup: `F12` saves the window as drawn, HUD and egui included, as `{date}_{time}_{millisecond}.png` ([`src/common/screenshot.rs`](src/common/screenshot.rs)). |
 
@@ -464,8 +465,19 @@ in a team mode is still a gamemode question.
 ## Editor and game in one process
 
 `AppMode` ([`src/common/app_mode.rs`](src/common/app_mode.rs)) is `Editor`,
-`Prop`, `Animation`, `Material`, `Weapon`, `Lang`, `Play`, `MainMenu` or `Onboarding`, iterable in that order, which is
-the Mode menu's order, with a separator above Play and above the main menu. **`Onboarding`** ([`src/onboarding.rs`](src/onboarding.rs)) is never in the
+`Prop`, `Animation`, `Material`, `Weapon`, `Lang`, `Play`, `MainMenu`, `Onboarding` or `Joining`, iterable in that order, which is
+the Mode menu's order, with a separator above Play and above the main menu (`AppMode::in_the_menu`
+leaves out the last two). **`Joining`** ([`src/common/joining.rs`](src/common/joining.rs),
+[`src/joining_screen.rs`](src/joining_screen.rs)) is where a client is from the moment its role
+becomes a client until the server's files are fetched and built: `follow_the_server` records the
+server's mode in `ServerMode` instead of switching while it lasts, and `finish_joining` goes there
+once the server's pack is mounted, every prop and material its manifest lists is baked (a frame
+each), the server's map is in and the room and sun bakes have settled. Its screen is a small egui
+window over a picture from `images/backgrounds/loading/` (the title screen's while that holds
+none; never the last one shown): "Joining {server}", a progress bar — comparing to 5%,
+downloading by bytes to 80%, building by weighted steps to 100% (`joining::progress`) — a line
+naming the phase and file, and Disconnect, which leaves as the pause menu's does and drops
+everything held for the server. **`Onboarding`** ([`src/onboarding.rs`](src/onboarding.rs)) is never in the
 menu: it is the *initial* state, inserted by `OnboardingPlugin` when the saved player name is
 blank and the command line names nothing to open or play (`EditorParams::chooses_where_to_start`:
 any mode flag (`--editor` among them), `--map`, `--serve`, `--connect`, `--server-config`, `--server-profile`, `--spectate`, `--rounds` or
@@ -591,7 +603,8 @@ or chord; a modifier let go alone is bound alone; a mouse button is bound
 only when pressed on the prompt, and a press elsewhere stops the wait; Escape
 stops it too; keys are captured from Bevy's input, not egui's) and **Developer** (the log level
 and how many days of logs to keep, in `settings.toml`, the level taking effect at the next launch
-with a note in yellow saying so; and every pack's `icons/*.svg` in a grid with its name). In Play it is opened from the pause
+with a note in yellow saying so; how many days to keep downloads, and Delete All Downloads, which
+acts at once; and every pack's `icons/*.svg` in a grid with its name). In Play it is opened from the pause
 menu (`OpenSettings`), and `MouseHeld::settings` keeps the cursor free while it
 is up. Starting a round closes it, dropping an unapplied draft, since a window
 carried into Play with the cursor grabbed could not be closed and would keep
@@ -1473,15 +1486,12 @@ about.
 **A message carrying an internally tagged enum cannot cross the wire.**
 Lightyear encodes with postcard, which refuses `deserialize_any` — what
 `#[serde(tag = "kind")]` needs to read itself back — and that tagging is
-exactly what makes `weapons/{key}.toml` and a `.gpp` readable. So
-[`pack_sync`](src/common/pack_sync.rs) sends the catalog as JSON bytes
-and [`prop::sync`](src/prop/sync.rs) sends a model as the text its file holds,
-the way [`map_sync`](src/common/map_sync.rs) already sent bytes for its own
-reason. **It failed in the way nobody notices**: the send reports success, the
-receive errors inside Lightyear, and both machines already had the same files —
-so the catalog sync was a no-op in the only arrangement anybody ran. Two
-tests encode the way the wire does and assert the typed value still would not,
-so putting it back fails there rather than on somebody's server.
+exactly what makes `weapons/{key}.toml` and a `.gpp` readable. It fails in the
+way nobody notices: the send reports success and the receive errors inside
+Lightyear. So pack files cross as the bytes of the files
+([`resource::sync`](src/common/resource/sync.rs)), and
+[`map_sync`](src/common/map_sync.rs) sends the timeline as bytes; a new message
+of typed pack content gets a postcard round-trip test.
 
 **A weapon's model reaches the hand, and nothing else about it is built yet.**
 `Weapon.model` names a prop; [`prop::baked`](src/prop/baked.rs) bakes it once
@@ -1585,8 +1595,9 @@ the shape it had for the rest of the process — you save, press F5, and are
 holding the old barrel. `publish_the_saved_prop` adopts the document the moment
 it is written, through the same `PropCache::adopt` the server's models come
 through, and the generation bump is what makes every body redress. On a listen
-server `broadcast_model_changes` fires on the same counter, so a host who
-retouches a barrel between rounds is not the only person holding the new shape.
+server the same counter rebuilds the clients' manifest
+([`resource::sync`](src/common/resource/sync.rs)), so a host who retouches a
+barrel between rounds is not the only person holding the new shape.
 
 The trigger is a **count of saves, not `Res::is_changed`**: every frame of a
 drag changes the editor, and re-baking a boolean kernel at frame rate for
@@ -1599,9 +1610,9 @@ be holding.
 viewport and a weapon in somebody's hand go through it alike; two bakers for
 one format would show up as a weapon that looks one way in the editor it was
 modeled in and another in a match. `Weapon.model`
-is an `Option<String>` naming a prop under a pack's `props/`; it crosses the
-wire with the rest of the catalog, so each machine builds the model from its
-own pack — the same arrangement `Equipped` already has, one level down.
+is an `Option<String>` naming a prop under a pack's `props/`; a client is sent
+the prop file with the weapon's, and each machine builds the model itself — the
+same arrangement `Equipped` already has, one level down.
 Nothing draws it. That is the next piece, not a gap in this one.
 
 **A prop may have bones** ([`src/prop/rig.rs`](src/prop/rig.rs)): a
@@ -3105,11 +3116,11 @@ because a player's body has a `Class` too now and that system inserts no
 the ground.
 
 **The catalog and the class builds are one description each, held by the
-authority.** [`src/common/pack_sync.rs`](src/common/pack_sync.rs) sends both to
-each client on connect, `map_sync` style — so a server can ship its own weapons
-and builds and nobody else needs the files. It is one set of systems generic
-over `PackTable`, so a third table is an `impl` and a line in the plugin. There
-is no resend interval, because nothing edits these at frame rate.
+authority.** A client is sent the files they are read from — the weapon files,
+`loadouts.toml`, `classes.toml`, the rigs — and once the server's files are
+mounted it reads them with the same loaders the server used
+([`resource::sync`](src/common/resource/sync.rs), `Assets::match_packs`), so a
+server can ship its own weapons and builds and nobody else needs the files.
 
 A client rigs its bodies from its own pack until the server's builds arrive,
 which can be after the bodies did, so `rebuild_rigs_for_new_builds` re-rigs any
@@ -3117,12 +3128,8 @@ body whose rig no longer matches its class. Corpses are left alone: they keep
 the build they died with.
 
 Its collections are **lists and not maps**, and the on-disk types are
-`BTreeMap`s, because the catalog is compared for equality to decide whether
-to send it and a `HashMap` walks in an order nobody chose. Filled in hash
-order, two reads of the same file compared unequal — often enough to broadcast
-the whole catalog at frame rate, rarely enough to ship.
-`only_a_change_puts_a_table_on_the_wire` caught it the day it was
-written.
+`BTreeMap`s, because a `HashMap` walks in an order nobody chose and two reads
+of the same files would compare unequal.
 
 **A body carries ids, never numbers.** `Equipped` — the carried `WeaponId`s,
 starting weapons first and pickups after, and the one held — and `Ammo`,
@@ -3481,6 +3488,57 @@ Two rules, and both are easy to undo:
   already routes through the place that will do it. It also declines to write a
   role equal to the one already set, because the transport will hang off
   `Changed<NetRole>` and re-picking "Host" must not drop everybody connected.
+
+### Naming pack files across machines
+
+[`src/common/resource/`](src/common/resource/mod.rs) is stage 1 of
+[documentation/resource-streaming.md](documentation/resource-streaming.md); nothing sends with it
+yet. A file is a `LogicalPath` inside a pack (`props/crate.gpp`, checked on construction and when
+deserialized, so a path off the wire never leaves a pack) and the BLAKE3 hash of its bytes; two
+files with one path and different hashes are different resources. `closure` walks what each file
+names from `match_roots(map)` — the map, the tables, every weapon file and the top-level clips —
+into a `Manifest`, reading names through the loader that owns each format: a feature answers
+`FeatureTrait::resources_named`, so **a feature that names a pack file must list it there**, or
+it is not sent. A role brings every material it paints with. `HashIndex` (`cache/hashes.bin`)
+keeps each local file's hash by size and modified time.
+
+**The server's files are a pack in `Assets`** (stage 2): a `SessionPack` — a manifest over the
+`downloads/objects/` store, named by hash and extension — mounted with `Assets::mount` and listed
+as `<server>` above every local pack. Read game content over `assets.packs()`, and the gameplay
+tables (weapons, loadouts, classes, taunts, modes, layers, body clips) over
+`assets.match_packs()`, which is the server's pack alone while one is mounted, so a file only this
+machine has is never in the match. `default_packs()` is the local packs, for the editors and for
+what a client reads from its own disk (lang, fonts, menus); it never lists the server's. The
+`AssetServer` reads the store as `object://` (`Assets::asset_path`).
+
+**Keeping and locking** (stage 5): a pack's `pack.toml`
+([`pack_info`](src/common/pack_info.rs)) names its authors, and for a kept pack where it came from
+and each file's hash and authors. Every save writes the map's lock, `requires`, the paths and
+hashes it needed (`save::lock_for`). **A kept pack is left out of `default_packs()`**: opening one
+of its maps mounts its lock as the session pack ([`resource::lock`](src/common/resource/lock.rs)),
+so its files are found by hash, and nothing else ever sees them. A client's Multiplayer menu offers
+**Keep a Copy of This Round's Map**, copying the round's map (written with a lock) and every
+manifest file into `assets/{server}-{date}/`; a kept map's Save is a Save As. The app binary prunes
+`downloads/` at startup ([`resource::prune`](src/common/resource/prune.rs)): a session record lists
+the objects it used, and what no record younger than Settings → Developer → **Keep downloads for**
+(14 days) lists goes, oldest first past 1 GiB.
+
+**The server's files reach its clients** (stage 3,
+[`resource::sync`](src/common/resource/sync.rs)): the authority rebuilds a
+`Manifest` — the closure of the live map, which is walked but not sent, plus the
+map each round started on and the sun bake standing, as `lightmap/{hash}.bin` —
+when what the map names, a saved prop, the catalog, a round or the sun bake
+changes, and sends it on connect and on change. A client compares it with its
+store and its own packs (by size, then hash; a local file with the same bytes
+is copied into the store), sends a `Want` naming only the hashes it lacks,
+takes `Chunk`s (128 KiB per client per frame) and, once every file is stored,
+mounts the session pack and writes `PacksChanged`, on which each loader reads
+again, the prop cache and the material library forget what they baked, and a
+lightmap goes where the sun bake looks. Each round's map is kept and listed in
+`downloads/sessions/{server}/{started}.toml`. Not being a client any more
+unmounts it. Client-to-server messages carry hashes only, and a `Want` is
+answered only for hashes in the current manifest. `Fetch` is the client's
+progress, which the joining screen draws; the comparison runs 8 MiB of local reads a frame.
 
 ### Finding a server on the LAN
 
