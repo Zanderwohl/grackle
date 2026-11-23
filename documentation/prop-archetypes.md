@@ -8,36 +8,65 @@ other things a prop can be, and the checklist of what has landed.
 A prop names an **archetype**, which decides what the *game* builds from it.
 The archetype is a preset over components, not a class hierarchy: what a
 breakable crate is, in the ECS, is a placed model with a `Damageable`,
-`Hitboxes` and a collider; a health pack is a placed model with a `Pickup`.
+`Hitboxes` and colliders; a health pack is a placed model with a `Pickup`.
 
 | Archetype | Where it goes | What it carries in a match |
 | --- | --- | --- |
 | `held` | a body's hands | — (the default; every prop before this was one) |
 | `hat` | a body's head | — (cosmetic) |
-| `obstacle` | placed in a map | colliders that block movement |
+| `obstacle` | placed in a map | colliders |
 | `breakable` | placed in a map | colliders, `Damageable`, `Hitboxes` |
-| `pickup` | placed in a map | a `Pickup` and a trigger volume |
+| `pickup` | placed in a map | a `Pickup`, taken through its trigger colliders |
 
 The data each archetype reads lives in its own section of the `.gpp` —
-`colliders`, `[breakable]`, `[pickup]`, `[hat]` — and every section is kept
-whatever the archetype, so flipping archetype in the editor and back loses
-nothing.
+`[breakable]`, `[pickup]`, `[hat]` — and every section is kept whatever the
+archetype, so flipping archetype in the editor and back loses nothing.
+Colliders are features, so they are kept too.
 
 ### Colliders
 
-A collider is a **rounded box**: a core box plus a radius. A box has radius
-zero, a sphere a zero core, an upright capsule a core that is only tall. That is
-one shape for the collision world to answer for rather than three, and the
-per-axis sweep `move_and_slide` already does turns out to need only one extra
-number per shape (how far the rounding reaches given where the body is on the
-other two axes).
+A collider is a **feature** in the prop's list (`FeatureOp::Collider`,
+[`src/prop/collider.rs`](../src/prop/collider.rs)) that makes no body: a box, a
+sphere or a capsule, each with a `Placement` (origin and turn, edited as
+"points along" and "spin" as a primitive's is) and any number of **roles**:
+
+| Role | What touching it does | Read by |
+| --- | --- | --- |
+| `trigger` | sets off the prop's own effect: a pickup is taken through it | `take_pickups` |
+| `shots` | stops bullets, projectiles, blasts and sight, and is what a breakable is shot through | `CollisionWorld::shots`, `box_breakables` |
+| `solid` | bodies walk into it and stand on it | `CollisionWorld::props` |
+| `ignites` | sets a body alight with the flamethrower's afterburn, credited to the map | `act_on_bodies_touching_props` |
+| `kills` | kills a body outright, as a Kill trigger does | `act_on_bodies_touching_props` |
+
+A new collider plays `trigger` on a pickup and `shots` and `solid` on anything
+else. They are made from the toolbar's collider group (Box, Sphere, Capsule,
+the last one used on the button), resized and moved by the same handles as a
+primitive, and drawn in the color of their most drastic role. A collider
+suppressed or past the rollback bar is not there, as any feature is not.
+
+A capsule lies along its placement's `Y`; its `height` is end to end, caps
+included, and is never less than the two caps.
+
+**In the world a collider is exact however it is turned**
+([`src/game/collision/shape.rs`](../src/game/collision/shape.rs)): a box is a
+`Hull`, so the body's box sweeps against it as against a turned wall, and a
+capsule (a sphere is one whose ends meet) is swept as its segment grown by the
+body's box and then by its radius. Each instance's colliders are placed once
+per move or bake, by role, in `PlacedColliders`, which everything above reads.
+A taken pickup has none.
+
+A ray that starts inside or on a shot collider is not stopped by it, so a shot
+from inside a bush, or a blast on a crate's face, goes on out.
+
+A breakable is still *damaged* through the box round its shot colliders
+(`Hitboxes`), while the shapes themselves stop the shot. A shot through the
+corner of that box that misses a turned or round collider counts as a hit.
 
 A placed prop's origin is where it stands on the floor, so a mapper puts the
 feature's point on the floor.
 
-Colliders are axis-aligned in the prop's frame. A placed prop that is turned
-collides as the world-space bounding box of its turned core, keeping its
-radius — exact for spheres and quarter turns, a little generous otherwise.
+Files from before colliders were features have a `colliders` section; it is
+read as collider features at the end of the list (`read_collider_section`).
 
 ### Who builds what
 
@@ -81,19 +110,25 @@ hat stays at the origin and the figure is placed under it.
 
 ## Checklist
 
-- [x] `archetype`, `colliders`, `[breakable]`, `[pickup]`, `[hat]` in the `.gpp`
-- [x] Rounded-box colliders in `CollisionWorld` (sweep, `fits`, overlap)
+- [x] `archetype`, `[breakable]`, `[pickup]`, `[hat]` in the `.gpp`
+- [x] Colliders as features: turned boxes, spheres and capsules with roles
+- [x] Exact turned colliders in `CollisionWorld` (sweep, `fits`, overlap, rays)
 - [x] `Hitboxes::head` optional, so a crate has no head
 - [x] Map `Prop` feature names a model; authority stands `WorldProp`s up
-- [x] Obstacle and breakable colliders block movement on every machine
+- [x] Solid colliders block movement on every machine
+- [x] Shot colliders stop shots, projectiles, blasts and sight
+- [x] Igniting and killing colliders
 - [x] Breakables take damage, break, stay broken for the round
 - [x] Health and ammo pickups, respawning on a timer
 - [x] Pickup style: Quake (sits) or TF2 (hovers and turns)
 - [x] Hats on heads, from `loadouts.toml`, hidden in first person
-- [x] Prop editor: archetype, colliders (drawn), breakable, pickup, hat panels
+- [x] Prop editor: archetype, breakable, pickup, hat panels; a collider tool group
 - [x] Example props: a hat, a crate, a health pack, an ammo pack
-- [ ] Colliders stopping shots and projectiles for obstacles
-- [ ] Viewport handles for colliders and the hat fit
+- [x] Viewport handles for colliders
+- [ ] Viewport handles for the hat fit
+- [ ] Picking a collider in the viewport (today: from the feature list)
+- [ ] A weapon pickup taken through its model's trigger colliders rather than a fixed sphere
+- [ ] A breakable damaged through its exact shot colliders rather than their bounding box
 - [ ] Armor: a pool in the damage layer
 - [ ] Flag: carried, dropped on death, returned
 - [ ] Picking a map prop's model from a list rather than typing its name

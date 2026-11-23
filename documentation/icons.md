@@ -58,4 +58,7 @@ When an icon ships, check its box.
 | [x] | `arc_dots` | Quarter arc, a dot at its center and at each end, dashed radii to the ends | Arc (sketch) |
 | [x] | `circle_dot` | Circle with a dot at its center | Circle (sketch) |
 | [x] | `curve_handles` | S-curve with a dashed handle from each end to a dot | Bézier (sketch) |
+| [x] | `cube_dashed` | `cube_hollow` drawn in dashed lines | Box Collider |
+| [x] | `sphere_dashed` | Circle with an equator ellipse, both dashed | Sphere Collider |
+| [x] | `capsule_dashed` | Upright capsule with two ring ellipses where its caps meet its side, all dashed | Capsule Collider |
 | [x] | `curve_hull` | Wavy curve inside a dashed zigzag of control points | NURBS (sketch) |

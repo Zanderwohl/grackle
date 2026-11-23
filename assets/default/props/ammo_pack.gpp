@@ -1,6 +1,6 @@
 name_key = "prop.names.ammo_pack"
 archetype = "pickup"
-next_id = 5
+next_id = 6
 
 [[features]]
 id = 0
@@ -84,12 +84,22 @@ op = "union"
 target = 3
 tool = 2
 
-[[colliders]]
-origin = [0.0, 0.2, 0.0]
+[[features]]
+id = 5
+name = "Box Collider"
+enabled = true
 
-[colliders.shape]
+[features.op]
+feature = "collider"
+roles = ["trigger"]
+
+[features.op.shape]
 kind = "box"
 size = [0.5, 0.4, 0.4]
+
+[features.op.placement]
+origin = [0.0, 0.2, 0.0]
+rotation = [0.0, 0.0, 0.0]
 
 [pickup]
 kind = "ammo"

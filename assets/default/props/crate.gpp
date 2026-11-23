@@ -1,6 +1,6 @@
 name_key = "prop.names.crate"
 archetype = "breakable"
-next_id = 3
+next_id = 4
 
 [[features]]
 id = 0
@@ -53,12 +53,22 @@ op = "union"
 target = 0
 tool = 1
 
-[[colliders]]
-origin = [0.0, 0.3, 0.0]
+[[features]]
+id = 3
+name = "Box Collider"
+enabled = true
 
-[colliders.shape]
+[features.op]
+feature = "collider"
+roles = ["shots", "solid"]
+
+[features.op.shape]
 kind = "box"
 size = [0.6, 0.6, 0.6]
+
+[features.op.placement]
+origin = [0.0, 0.3, 0.0]
+rotation = [0.0, 0.0, 0.0]
 
 [breakable]
 health = 75

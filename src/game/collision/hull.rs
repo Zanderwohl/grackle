@@ -113,6 +113,10 @@ impl Hull {
         (self.min, self.max)
     }
 
+    pub(super) fn planes(&self) -> &[(Vec3, f32)] {
+        &self.planes
+    }
+
     /// The planes of this hull grown by a box of half extents `half`.
     fn grown(&self, half: Vec3) -> impl Iterator<Item = (Vec3, f32)> + '_ {
         self.planes.iter().map(move |&(n, reach)| (n, reach + half.dot(n.abs())))

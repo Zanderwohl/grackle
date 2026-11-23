@@ -57,8 +57,9 @@ the shape of the world.
 - **Every sweep is a ray against a shape grown by the body.** For a convex
   hull that is the hull's planes pushed out by the box's support, plus bevel
   planes on edges and corners (without bevels a box catches on the air past a
-  sharp corner). For a `RoundedBox` it is a rounded box with a bigger core,
-  which is analytic. One idea, so `fits`, `sweep`, `ray` and `depenetrate`
+  sharp corner). A prop's capsule or sphere is its segment grown by the box
+  and then by its radius, entered through a grown face, an edge cylinder or a
+  corner sphere ([`shape.rs`](../src/game/collision/shape.rs)). One idea, so `fits`, `sweep`, `ray` and `depenetrate`
   cannot disagree about where a wall is.
 - **Two shape kinds: convex hulls and triangles.** A wall, a floor piece, a
   prop collider and a brush are convex hulls with volume. A displacement is
@@ -116,7 +117,7 @@ the shape of the world.
 
 ```
 Hull { planes: Vec<(normal, reach)>, bounds }  // convex; Hull::triangle is flat
-RoundedBox                                     // props, kept in their own list
+PropShape = Hull | Capsule { a, b, radius }    // props, kept in their own lists
 
 Hit { t: f32 /* 0..1 of the move */, normal: Vec3, plane: f32 /* normal · center */ }
 
@@ -128,8 +129,9 @@ inside_map(point)           -> bool            // room volumes, not shapes
 ```
 
 A triangle is not its own shape: it is a hull whose two faces point opposite
-ways, so one grown-plane routine answers both. Props stay `RoundedBox`es in
-their own list, swept as a rounded box grown by the body.
+ways, so one grown-plane routine answers both. Props are `PropShape`s in two
+lists of their own: `props` for what bodies walk into and `shots` for what
+every ray test meets.
 
 **A contact on an axis-aligned plane is written as the plane's own number**
 (`onto_plane`), not as a step from where the box started. Stage 1 needed that
@@ -147,8 +149,8 @@ normal, or a body settled onto it each tick creeps down it.
 ### Stage 1 — shapes and queries, same world
 
 - [x] `src/game/collision/`: `Hull` (`hull.rs`) with grown planes and bevels;
-      `sweep`, `ray`, `overlaps`, `escapes`; `Hull::triangle`. Rounded-box
-      sweep in `rounded.rs`. Unit tested shape by shape.
+      `sweep`, `ray`, `overlaps`, `escapes`; `Hull::triangle`. Prop shapes
+      (turned boxes, capsules) in `shape.rs`. Unit tested shape by shape.
 - [x] Uniform-grid broadphase over static bounds (`common/grid.rs`), answering in
       index order so "first overlapped" is unchanged.
 - [x] `CollisionWorld` holds hulls; `rebuild` turns today's `WallSlab`s into

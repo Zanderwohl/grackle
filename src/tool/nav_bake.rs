@@ -27,7 +27,7 @@ use crate::game::nav_field::{FieldBake, Pickup, Sight, SightBake};
 use crate::game::nav_rating::MapStatistics;
 use crate::game::player::running_speed;
 use crate::get;
-use crate::prop::archetype::RoundedBox;
+use crate::game::collision::PropShape;
 use crate::tool::bake_job::{self, BackgroundBake, BakeJob, BakeKind, BakeProgress};
 use crate::tool::bakes::BakeSystems;
 use crate::tool::nav_cache;
@@ -72,7 +72,7 @@ pub struct NavBake {
     /// When the map last changed before `snapshot` was taken, which the bake's wait counts from.
     changed_at: Option<f32>,
     /// The props and pickups last seen, which are compared rather than change-detected.
-    seen_props: Vec<RoundedBox>,
+    seen_props: (Vec<PropShape>, Vec<PropShape>),
     seen_pickups: Vec<PickupKey>,
     bake: BackgroundBake<Job>,
     sight: BackgroundBake<SightJob>,
@@ -94,7 +94,7 @@ impl Default for NavBake {
             snapshot: None,
             dirty_since: None,
             changed_at: None,
-            seen_props: Vec::new(),
+            seen_props: (Vec::new(), Vec::new()),
             seen_pickups: Vec::new(),
             // Off: several seconds on Halls in a debug build, too much to redo on every still moment.
             bake: BackgroundBake::new(false),
@@ -224,7 +224,9 @@ impl Surface {
 struct Snapshot {
     volumes: Vec<Volume>,
     stairs: Vec<StairsShape>,
-    props: Vec<RoundedBox>,
+    props: Vec<PropShape>,
+    /// What stops shots, which sightlines are traced against.
+    shots: Vec<PropShape>,
     triggers: Vec<TriggerVolume>,
     spawns: Vec<Vec3>,
     pickups: Vec<Pickup>,
@@ -344,6 +346,7 @@ impl NavInputs<'_, '_> {
         stairs.sort_by_cached_key(|flight| format!("{flight:?}"));
         // Props are rebuilt every tick without change detection, so they are compared instead.
         let props = self.collision.props.clone();
+        let shots = self.collision.shots.clone();
         let triggers: Vec<TriggerVolume> = self.triggers.iter().copied().collect();
         let mut spawns: Vec<Vec3> = self.spawns.iter().map(|placed| placed.translation).collect();
         spawns.sort_by(|a, b| a.to_array().partial_cmp(&b.to_array()).unwrap_or(std::cmp::Ordering::Equal));
@@ -351,8 +354,8 @@ impl NavInputs<'_, '_> {
         let pickups = self.pickups();
         let launcher = self.launcher();
         // Debug writes an `f32` as its shortest exact decimal, so equal inputs hash equal.
-        let hash = nav_cache::stable_hash(&format!("{volumes:?}{stairs:?}{props:?}{triggers:?}{spawns:?}{pickups:?}{launcher:?}{rules:?}"));
-        Snapshot { volumes, stairs, props, triggers, spawns, pickups, launcher, rules, hash }
+        let hash = nav_cache::stable_hash(&format!("{volumes:?}{stairs:?}{props:?}{shots:?}{triggers:?}{spawns:?}{pickups:?}{launcher:?}{rules:?}"));
+        Snapshot { volumes, stairs, props, shots, triggers, spawns, pickups, launcher, rules, hash }
     }
 
     fn launcher(&self) -> Option<Launcher> {
@@ -444,6 +447,7 @@ impl BakeJob for Job {
             let (mut world, faces) = self.snapshot.surface().world();
             self.faces = faces;
             world.props = self.snapshot.props.clone();
+            world.shots = self.snapshot.shots.clone();
             self.world = Some(world);
             return;
         };
@@ -568,8 +572,8 @@ fn auto_bake_nav(
     }
     let now = time.elapsed_secs();
     let mut changed = inputs.changed_since_last_frame();
-    if state.seen_props != inputs.collision.props {
-        state.seen_props.clone_from(&inputs.collision.props);
+    if state.seen_props.0 != inputs.collision.props || state.seen_props.1 != inputs.collision.shots {
+        state.seen_props = (inputs.collision.props.clone(), inputs.collision.shots.clone());
         changed = true;
     }
     if !inputs.pickups_match(&state.seen_pickups) {
@@ -644,7 +648,7 @@ mod tests {
     use crate::tool::bakes::{BakePlugin, RoomBake};
 
     fn snapshot_of(volumes: Vec<Volume>) -> Snapshot {
-        Snapshot { volumes, stairs: Vec::new(), props: Vec::new(), triggers: Vec::new(), spawns: Vec::new(), pickups: Vec::new(), launcher: None, rules: MovementRules::default(), hash: 0 }
+        Snapshot { volumes, stairs: Vec::new(), props: Vec::new(), shots: Vec::new(), triggers: Vec::new(), spawns: Vec::new(), pickups: Vec::new(), launcher: None, rules: MovementRules::default(), hash: 0 }
     }
 
     /// Breaks if a bar drawn from this job could run backwards or stop short.
@@ -736,6 +740,7 @@ mod tests {
                 volumes: volumes.volumes(),
                 stairs: Vec::new(),
                 props: Vec::new(),
+                shots: Vec::new(),
                 triggers: triggers.iter().copied().collect(),
                 spawns: spawns.iter().map(|placed| placed.translation).collect(),
                 pickups: pickups.iter().map(|(placed, spec)| Pickup::weapon(format!("{:?}", spec.weapon), placed.translation)).collect(),

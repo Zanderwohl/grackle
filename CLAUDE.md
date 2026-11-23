@@ -1638,11 +1638,19 @@ The plan and what is left is
 section of the file is kept whatever the archetype, so flipping it and back
 loses nothing, and a held prop writes none of them.
 
-**A collider is a rounded box** — a core plus a radius — so a box, a sphere and
-an upright capsule are one shape to the collision world. A body is swept
-against it grown by the body's own box — another rounded box — which is what
-makes a pillar round to walk past rather than square. Colliders are axis-aligned in the prop; a turned
-placement collides as the bounding box of its turned core.
+**A collider is a feature** (`FeatureOp::Collider`, [`src/prop/collider.rs`](src/prop/collider.rs))
+that makes no body: a box, a sphere or a capsule, placed and turned any way, made from the
+toolbar's collider group, and playing any of five **roles** — `trigger` (a pickup is taken
+through it), `shots` (stops bullets, projectiles, blasts and sight; what a breakable is shot
+through), `solid` (bodies walk into it), `ignites` (sets a body alight, credited to the map) and
+`kills` (kills outright). A new one plays `trigger` on a pickup and `shots` and `solid`
+otherwise. In the world each is exact however it is turned
+([`src/game/collision/shape.rs`](src/game/collision/shape.rs), `PropShape`): a box is a `Hull`,
+a capsule a segment swept round by a radius (a sphere when its ends meet). Every machine places
+an instance's colliders by role in `PlacedColliders`; `CollisionWorld` keeps the solid ones in
+`props` and the shot-stopping ones in `shots`, which every ray test meets as it meets a wall,
+except a ray that starts inside or on one. A breakable is damaged through the box round its shot
+colliders (`Hitboxes`). A file's old `colliders` section is read as collider features.
 
 **Placed props follow the carousel rule.** The map `Prop` feature names a
 model; on the authority `sync_world_props`
@@ -1665,7 +1673,7 @@ only tops up its ammo. See "Weapon
 pickups" in [documentation/arena.md](documentation/arena.md).
 
 A placed prop's origin is where it stands on the floor. A pickup with no
-collider is taken through a small sphere, and is walked past by somebody it
+trigger collider is taken through a small sphere, and is walked past by somebody it
 would give nothing to. A pickup's **style** is drawing only: `Tf2`
 lifts and turns its parts (`float_pickups`; lifted but still while authoring), never the instance, so the same
 placement and trigger serve both and the switch can be flipped freely. Armor and the flag are kinds with no behavior yet.

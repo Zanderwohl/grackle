@@ -47,6 +47,7 @@ use crate::prop::document::{prop_path, PropDoc, PropEditor};
 pub mod archetype;
 pub mod baked;
 pub mod camera;
+pub mod collider;
 pub mod construct;
 pub mod curve;
 pub mod datum;

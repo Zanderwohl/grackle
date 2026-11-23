@@ -15,7 +15,8 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::common::skeleton::clip::{Clip, ClipSet};
-use crate::prop::archetype::{Archetype, BreakableSpec, Collider, HatSpec, PickupSpec};
+use crate::prop::archetype::{Archetype, BreakableSpec, HatSpec, PickupSpec};
+use crate::prop::collider::Collider;
 use crate::prop::hold::{HoldSpec, MuzzleSpec, ViewmodelSpec};
 use crate::common::air_lit::{lit, LitMaterial};
 use crate::prop::rig::PropRig;
@@ -314,7 +315,7 @@ fn bake_doc(
         muzzle: doc.muzzle.clone(),
         clips,
         archetype: doc.archetype,
-        colliders: doc.colliders.clone(),
+        colliders: built.colliders.iter().map(|(_, collider)| collider.clone()).collect(),
         breakable: doc.breakable,
         pickup: doc.pickup,
         hat: doc.hat.clone(),
