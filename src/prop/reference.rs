@@ -239,11 +239,12 @@ const DEGENERATE_EDGE: f32 = 1e-5;
 /// not offered: a dot floating beside a bore reads as a bug. An edge needs its
 /// middle on the surface too, or a long tool's sides poke out of its hole.
 pub fn pickables(body: PropFeatureId, solid: &Solid, wires: &[Wire]) -> Vec<Pickable> {
+    let surface = SurfaceIndex::of(solid);
     let mut found = Vec::new();
     for wire in wires {
         let named = |element| GeomRef { element, source: wire.source.clone() };
         for (i, &point) in wire.outline.points.iter().enumerate() {
-            if on_surface(solid, point) {
+            if surface.contains(point) {
                 found.push(Pickable { body, reference: named(Element::Point(i as u32)), at: Located::Point(point) });
             }
         }
@@ -252,7 +253,7 @@ pub fn pickables(body: PropFeatureId, solid: &Solid, wires: &[Wire]) -> Vec<Pick
             if a.distance(b) < DEGENERATE_EDGE {
                 continue;
             }
-            if [a, (a + b) / 2.0, b].into_iter().all(|p| on_surface(solid, p)) {
+            if [a, (a + b) / 2.0, b].into_iter().all(|p| surface.contains(p)) {
                 found.push(Pickable { body, reference: named(Element::Edge(i as u32)), at: Located::Edge(a, b) });
             }
         }
@@ -260,26 +261,56 @@ pub fn pickables(body: PropFeatureId, solid: &Solid, wires: &[Wire]) -> Vec<Pick
     found
 }
 
+/// A solid's polygons filed by their boxes, so asking whether a point is on
+/// the surface tests the polygons near it.
+struct SurfaceIndex<'a> {
+    solid: &'a Solid,
+    grid: crate::prop::box_grid::BoxGrid,
+}
+
+impl<'a> SurfaceIndex<'a> {
+    fn of(solid: &'a Solid) -> Self {
+        let reach = Vec3::splat(ON_SURFACE);
+        let boxes: Vec<(Vec3, Vec3)> = solid
+            .polygons()
+            .iter()
+            .map(|polygon| {
+                let (min, max) = polygon.vertices.iter().fold((Vec3::MAX, Vec3::MIN), |(min, max), p| (min.min(*p), max.max(*p)));
+                (min - reach, max + reach)
+            })
+            .collect();
+        SurfaceIndex { solid, grid: crate::prop::box_grid::BoxGrid::new(&boxes) }
+    }
+
+    fn contains(&self, point: Vec3) -> bool {
+        let polygons = self.solid.polygons();
+        self.grid.near_point(point).any(|i| on_polygon(&polygons[i], point))
+    }
+}
+
+#[cfg(test)]
 fn on_surface(solid: &Solid, point: Vec3) -> bool {
-    solid.polygons().iter().any(|polygon| {
-        let normal = polygon.plane.normal;
-        if (normal.dot(point) - polygon.plane.w).abs() > ON_SURFACE {
-            return false;
-        }
-        // Inside a convex polygon is the same side of every edge. Either
-        // side, so the test does not lean on the winding.
-        let v = &polygon.vertices;
-        let sides = (0..v.len()).map(|i| {
-            let (a, b) = (v[i], v[(i + 1) % v.len()]);
-            (b - a).cross(point - a).dot(normal) / (b - a).length().max(f32::EPSILON)
-        });
-        let (mut ahead, mut behind) = (true, true);
-        for side in sides {
-            ahead &= side >= -ON_SURFACE;
-            behind &= side <= ON_SURFACE;
-        }
-        ahead || behind
-    })
+    solid.polygons().iter().any(|polygon| on_polygon(polygon, point))
+}
+
+fn on_polygon(polygon: &crate::prop::solid::Polygon, point: Vec3) -> bool {
+    let normal = polygon.plane.normal;
+    if (normal.dot(point) - polygon.plane.w).abs() > ON_SURFACE {
+        return false;
+    }
+    // Inside a convex polygon is the same side of every edge. Either
+    // side, so the test does not lean on the winding.
+    let v = &polygon.vertices;
+    let sides = (0..v.len()).map(|i| {
+        let (a, b) = (v[i], v[(i + 1) % v.len()]);
+        (b - a).cross(point - a).dot(normal) / (b - a).length().max(f32::EPSILON)
+    });
+    let (mut ahead, mut behind) = (true, true);
+    for side in sides {
+        ahead &= side >= -ON_SURFACE;
+        behind &= side <= ON_SURFACE;
+    }
+    ahead || behind
 }
 
 /// Pixels. Generous, because a corner has no area to hit.

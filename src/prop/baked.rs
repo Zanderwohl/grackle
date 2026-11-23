@@ -22,7 +22,7 @@ use crate::common::air_lit::{lit, LitMaterial};
 use crate::prop::rig::PropRig;
 use crate::prop::surface::{Style, Surface};
 
-/// Materials cached per surface for the life of the process, since a drag
+/// Materials cached per surface while something draws with them, since a drag
 /// rebuilds the prop every frame.
 #[derive(Resource, Default)]
 pub struct SurfaceMaterials(Vec<(Surface, Handle<LitMaterial>)>);
@@ -36,6 +36,9 @@ impl SurfaceMaterials {
         match self.0.iter().find(|(known, _)| *known == surface) {
             Some((_, handle)) => handle.clone(),
             None => {
+                // Dragging a tint asks for a new surface every frame; a material
+                // only this cache holds would otherwise live as long as the app.
+                self.0.retain(|(_, handle)| in_use(handle));
                 let handle = materials.add(lit(surface.material()));
                 self.0.push((surface, handle.clone()));
                 handle
@@ -45,6 +48,14 @@ impl SurfaceMaterials {
 
     pub fn surface_of(&self, material: AssetId<LitMaterial>) -> Option<Surface> {
         self.0.iter().find(|(_, handle)| handle.id() == material).map(|(surface, _)| *surface)
+    }
+}
+
+/// Whether anything besides the one handle asked about keeps its asset alive.
+fn in_use<A: Asset>(handle: &Handle<A>) -> bool {
+    match handle {
+        Handle::Strong(strong) => std::sync::Arc::strong_count(strong) > 1,
+        Handle::Uuid(..) => true,
     }
 }
 
@@ -328,6 +339,20 @@ fn bake_doc(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_material_nothing_holds_is_let_go() {
+        let mut materials = Assets::<LitMaterial>::default();
+        let mut surfaces = SurfaceMaterials::default();
+        let gray = |shade| Surface::new(Style::Metal, crate::prop::surface::Tint([shade; 3]));
+        let kept = surfaces.get(gray(0.1), &mut materials);
+        for shade in 1..50 {
+            drop(surfaces.get(gray(0.1 + shade as f32 * 0.01), &mut materials));
+        }
+        assert_eq!(surfaces.0.len(), 2, "the one held and the latest");
+        assert_eq!(surfaces.get(gray(0.1), &mut materials), kept);
+        assert_eq!(surfaces.surface_of(kept.id()), Some(gray(0.1)));
+    }
 
 
     fn assert_spans_the_view(uvs: &[[f32; 2]]) {

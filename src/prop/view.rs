@@ -235,7 +235,10 @@ fn set_the_world_aside(
         (Entity, &mut Visibility, Option<&RenderLayers>),
         (Without<ChildOf>, Without<Node>, Without<PropScene>),
     >,
+    alive: Query<()>,
 ) {
+    // Shots and corpses come and go while modeling; forget the ones gone.
+    hidden.0.retain(|entity, _| alive.contains(*entity));
     let viewports = viewport_layers();
     for (entity, mut visibility, layers) in &mut entities {
         if layers.is_some_and(|layers| !layers.intersects(&viewports)) {
@@ -286,8 +289,8 @@ fn clear_the_stage(
     for entity in stage.iter().chain(lights.iter()) {
         commands.entity(entity).despawn();
     }
-    build.built = None;
-    build.input = None;
+    // The geometry too, rather than holding it until the next visit.
+    *build = PropBuild::default();
 }
 
 fn rebuild_the_prop(
@@ -308,8 +311,11 @@ fn rebuild_the_prop(
     // Down to the rollback bar; everything downstream reads this.
     let shown = editor.shown();
 
-    // The document moved and the geometry did not: the stage is already right.
-    if !stage.is_empty() && build.input.as_deref() == Some(shown) {
+    // The document moved and the geometry did not: the stage is already right,
+    // and only the colliders, which are drawn as gizmos, need taking again.
+    if !stage.is_empty() && build.input.as_deref().is_some_and(|input| crate::prop::feature::same_geometry(input, shown)) {
+        build.evaluated.colliders = crate::prop::feature::colliders_of(shown);
+        build.input = Some(shown.to_vec());
         build.built = Some(generation);
         build.waiting = None;
         return;

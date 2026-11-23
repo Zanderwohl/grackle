@@ -992,7 +992,12 @@ so the shipped props still name one. See
 The kernel ([`src/common/csg.rs`](src/common/csg.rs), shared with the map's
 surface and generic over what a face is made of) is the `csg.js` BSP
 algorithm written out, and **a solid is a bag of convex polygons that happens
-to be closed**. Nothing checks either property and both matter: a plane cuts a
+to be closed**. Two departures from `csg.js`, both for speed and neither
+changing what is inside: a boolean returns the operands' own polygons
+clipped, never the pieces building a tree cut them into, and a polygon the
+tree would cut but keep every piece of stays whole; and operands whose boxes
+do not meet, or a polygon outside the other operand's box, skip the tree. A
+pattern of sixteen copies was 18,000 triangles and two seconds before. Nothing checks either property and both matter: a plane cuts a
 convex polygon into exactly two pieces, which is the assumption the splitter
 is written on, and "inside" only means anything for a surface with no gaps.
 That is why the one sweep, [`skin.rs`](src/prop/skin.rs), emits triangles or

@@ -9,6 +9,7 @@ use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use crate::prop::box_grid::BoxGrid;
 use crate::prop::feature::PropFeatureId;
 use crate::prop::reference::{CopyOf, Element, GeomRef, Located, Pickable, Source};
 use crate::prop::solid::{Solid, NO_FACE};
@@ -166,10 +167,28 @@ pub fn find(body: PropFeatureId, solid: &Solid, faces: &FaceTable) -> (Vec<Seam>
             }
         }
     }
+    // Members of a bucket lie on one line, so only those whose spans along it
+    // overlap can share an edge: sorted by where each starts, a member is
+    // compared with those starting before it ends. A pattern along an axis
+    // puts every copy's edges on the same few lines.
     let mut pairs: HashSet<(usize, usize)> = HashSet::default();
-    for members in buckets.values() {
-        for (x, &i) in members.iter().enumerate() {
-            for &j in &members[x + 1..] {
+    let mut spans: Vec<(f32, f32, usize)> = Vec::new();
+    for members in buckets.values_mut() {
+        members.sort_unstable();
+        members.dedup();
+        let axis = segments[members[0]].along;
+        spans.clear();
+        spans.extend(members.iter().map(|&i| {
+            let segment = &segments[i];
+            let (u, w) = (segment.a.dot(axis), (segment.a + segment.along * segment.length).dot(axis));
+            (u.min(w), u.max(w), i)
+        }));
+        spans.sort_unstable_by(|a, b| a.0.total_cmp(&b.0));
+        for (x, &(_, high, i)) in spans.iter().enumerate() {
+            for &(low, _, j) in &spans[x + 1..] {
+                if low > high + ON_LINE {
+                    break;
+                }
                 if segments[i].tag != segments[j].tag {
                     pairs.insert((i.min(j), i.max(j)));
                 }
@@ -226,14 +245,33 @@ pub fn find(body: PropFeatureId, solid: &Solid, faces: &FaceTable) -> (Vec<Seam>
 
     let mut junctions = Vec::new();
     let mut taken = vec![false; ends.len()];
+    let cell_of = |point: Vec3| (point / JOIN).floor().as_ivec3();
+    let mut grid: HashMap<IVec3, Vec<usize>> = HashMap::default();
+    for (i, end) in ends.iter().enumerate() {
+        grid.entry(cell_of(end.0)).or_default().push(i);
+    }
+    let mut near = Vec::new();
     for i in 0..ends.len() {
         if taken[i] {
             continue;
         }
+        // In order, as a scan of every later end would take them.
+        near.clear();
+        let cell = cell_of(ends[i].0);
+        for x in -1..=1 {
+            for y in -1..=1 {
+                for z in -1..=1 {
+                    if let Some(members) = grid.get(&(cell + IVec3::new(x, y, z))) {
+                        near.extend(members.iter().copied().filter(|&j| j >= i));
+                    }
+                }
+            }
+        }
+        near.sort_unstable();
         let mut tags: Vec<u32> = Vec::new();
         let mut at = Vec3::ZERO;
         let mut count = 0.0;
-        for j in i..ends.len() {
+        for &j in &near {
             if !taken[j] && ends[j].0.distance(ends[i].0) < JOIN {
                 taken[j] = true;
                 tags.extend([ends[j].1, ends[j].2]);
@@ -259,16 +297,29 @@ pub fn find(body: PropFeatureId, solid: &Solid, faces: &FaceTable) -> (Vec<Seam>
 /// union — is offered as one curve in their place. A junction on an offered
 /// corner is that corner.
 pub fn offer(seams: &mut [Seam], junctions: &mut [Junction], pickables: &[Pickable]) -> Vec<GeomRef> {
+    let reach = Vec3::splat(JOIN);
+    let mut edges_of: HashMap<PropFeatureId, Vec<(&GeomRef, Vec3, Vec3)>> = HashMap::default();
+    let mut corners_of: HashMap<PropFeatureId, Vec<Vec3>> = HashMap::default();
+    for pickable in pickables {
+        match pickable.at {
+            Located::Edge(a, b) => edges_of.entry(pickable.body).or_default().push((&pickable.reference, a, b)),
+            Located::Point(corner) => corners_of.entry(pickable.body).or_default().push(corner),
+            _ => {}
+        }
+    }
+    let grids: HashMap<PropFeatureId, BoxGrid> = edges_of
+        .iter()
+        .map(|(body, edges)| (*body, BoxGrid::new(&edges.iter().map(|(_, a, b)| (a.min(*b) - reach, a.max(*b) + reach)).collect::<Vec<_>>())))
+        .collect();
     let mut replaced = Vec::new();
+    let mut edges: Vec<(&GeomRef, Vec3, Vec3)> = Vec::new();
     for seam in seams.iter_mut() {
-        let edges: Vec<(&GeomRef, Vec3, Vec3)> = pickables
-            .iter()
-            .filter(|p| p.body == seam.body)
-            .filter_map(|p| match p.at {
-                Located::Edge(a, b) => Some((&p.reference, a, b)),
-                _ => None,
-            })
-            .collect();
+        // Only an edge whose box meets the seam's can cover or lie along it.
+        edges.clear();
+        if let (Some(all), Some(grid)) = (edges_of.get(&seam.body), grids.get(&seam.body)) {
+            let (low, high) = seam.points.iter().fold((Vec3::MAX, Vec3::MIN), |(lo, hi), p| (lo.min(*p), hi.max(*p)));
+            edges.extend(grid.near_box(low - reach, high + reach).into_iter().map(|i| all[i]));
+        }
         let covered = |point: Vec3| edges.iter().any(|(_, a, b)| distance_to_segment(point, *a, *b) < JOIN);
         let on_edges = seam.segments().all(|(a, b)| covered(a.lerp(b, 0.5)) && covered(a) && covered(b));
         let near_seam = |point: Vec3| seam.segments().any(|(a, b)| distance_to_segment(point, a, b) < JOIN);
@@ -283,9 +334,9 @@ pub fn offer(seams: &mut [Seam], junctions: &mut [Junction], pickables: &[Pickab
         }
     }
     for junction in junctions.iter_mut() {
-        junction.offered = !pickables
-            .iter()
-            .any(|p| p.body == junction.body && matches!(p.at, Located::Point(corner) if corner.distance(junction.at) < JOIN));
+        junction.offered = !corners_of
+            .get(&junction.body)
+            .is_some_and(|corners| corners.iter().any(|corner| corner.distance(junction.at) < JOIN));
     }
     replaced
 }

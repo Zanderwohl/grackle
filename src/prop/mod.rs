@@ -51,6 +51,7 @@ pub mod collider;
 pub mod construct;
 pub mod curve;
 pub mod datum;
+pub mod box_grid;
 pub mod document;
 pub mod face_profile;
 pub mod feature;
