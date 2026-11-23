@@ -14,6 +14,8 @@ use std::path::{Path, PathBuf};
 
 use bevy::prelude::*;
 
+use crate::common::resource::session::{is_session_pack, SessionPack, SESSION_PACK};
+
 /// Both variants carry the path, so a pack author knows which file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AssetError {
@@ -69,26 +71,97 @@ impl AssetSource for NativeFiles {
     }
 }
 
-/// The source this process reads packs through. Boxed rather than a type
-/// parameter on every loader, since the platform picks it once at startup.
+/// Where this process reads packs from: the local packs through a source the platform picks once
+/// at startup, and, while connected, the server's files as one more pack above them
+/// ([`SessionPack`]). Content the game plays from is read over [`Assets::packs`]; the editors list
+/// and write [`default_packs`], which never includes the server's.
 #[derive(Resource)]
-pub struct Assets(pub Box<dyn AssetSource>);
+pub struct Assets {
+    source: Box<dyn AssetSource>,
+    session: Option<SessionPack>,
+}
 
 impl Default for Assets {
     fn default() -> Self {
-        Self(Box::new(NativeFiles))
+        Self::new(Box::new(NativeFiles))
+    }
+}
+
+impl AssetSource for Assets {
+    fn read(&self, pack: &Path, relative: &str) -> Result<Vec<u8>, AssetError> {
+        match (is_session_pack(pack), &self.session) {
+            (true, Some(session)) => session.read(relative),
+            (true, None) => Err(AssetError::NotFound(format!("{relative}: no server's files are mounted"))),
+            (false, _) => self.source.read(pack, relative),
+        }
+    }
+
+    fn list(&self, pack: &Path, folder: &str) -> Vec<String> {
+        match (is_session_pack(pack), &self.session) {
+            (true, Some(session)) => session.list(folder),
+            (true, None) => Vec::new(),
+            (false, _) => self.source.list(pack, folder),
+        }
     }
 }
 
 impl Assets {
+    pub fn new(source: Box<dyn AssetSource>) -> Self {
+        Self { source, session: None }
+    }
+
     pub fn read(&self, pack: &Path, relative: &str) -> Result<Vec<u8>, AssetError> {
-        self.0.read(pack, relative)
+        AssetSource::read(self, pack, relative)
+    }
+
+    pub fn list(&self, pack: &Path, folder: &str) -> Vec<String> {
+        AssetSource::list(self, pack, folder)
+    }
+
+    /// Lowest priority first: the local packs, then the server's while one is mounted.
+    pub fn packs(&self) -> Vec<PathBuf> {
+        let mut packs = default_packs();
+        if self.session.is_some() {
+            packs.push(PathBuf::from(SESSION_PACK));
+        }
+        packs
+    }
+
+    /// What the gameplay tables (weapons, loadouts, classes, taunts, modes, layers, body clips) are
+    /// built from: the server's files alone while one is mounted, so a file only this machine has
+    /// is not in the match; the local packs otherwise.
+    pub fn match_packs(&self) -> Vec<PathBuf> {
+        match self.session {
+            Some(_) => vec![PathBuf::from(SESSION_PACK)],
+            None => default_packs(),
+        }
+    }
+
+    /// The server's files take precedence over every local pack until [`Assets::unmount`].
+    pub fn mount(&mut self, session: SessionPack) {
+        self.session = Some(session);
+    }
+
+    pub fn unmount(&mut self) -> Option<SessionPack> {
+        self.session.take()
+    }
+
+    pub fn session(&self) -> Option<&SessionPack> {
+        self.session.as_ref()
+    }
+
+    /// `relative` in `pack` as the `AssetServer` names it: from [`ASSET_ROOT`] for a local pack,
+    /// from the object store for the server's. `None` for a pack outside both.
+    pub fn asset_path(&self, pack: &Path, relative: &str) -> Option<String> {
+        match is_session_pack(pack) {
+            true => self.session.as_ref()?.asset_path(relative),
+            false => asset_path(pack, relative),
+        }
     }
 
     pub fn stems(&self, pack: &Path, folder: &str, extension: &str) -> Vec<String> {
         let suffix = format!(".{extension}");
         let mut stems: Vec<String> = self
-            .0
             .list(pack, folder)
             .into_iter()
             .filter_map(|name| name.strip_suffix(&suffix).filter(|stem| !stem.is_empty()).map(str::to_owned))
@@ -100,7 +173,7 @@ impl Assets {
     /// The highest-priority pack's copy, so a pack overriding a file wins.
     pub fn read_from_packs(&self, relative: &str) -> Option<Vec<u8>> {
         let mut found = None;
-        for pack in crate::common::lang::default_packs() {
+        for pack in self.packs() {
             match self.read(&pack, relative) {
                 Ok(bytes) => found = Some(bytes),
                 Err(AssetError::NotFound(_)) => {}

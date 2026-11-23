@@ -141,9 +141,10 @@ impl MusicLibrary {
 }
 
 impl Track {
-    /// For the `AssetServer`, whose root is `assets/`; `None` for a pack outside it.
-    pub fn asset_path(&self) -> Option<String> {
-        crate::common::assets::asset_path(&self.pack, &self.path)
+    /// For the `AssetServer`: from `assets/`, or from the object store for the server's pack.
+    /// `None` for a pack outside both.
+    pub fn asset_path(&self, assets: &crate::common::assets::Assets) -> Option<String> {
+        assets.asset_path(&self.pack, &self.path)
     }
 }
 
@@ -218,8 +219,8 @@ impl Plugin for MusicPlugin {
 }
 
 fn find_music(assets: Res<Assets>, mut library: ResMut<MusicLibrary>) {
-    let listings = attribution::scan_packs(&crate::common::assets::default_packs(), MUSIC_DIR);
-    let (found, warnings) = discover(&listings, assets.0.as_ref());
+    let listings = attribution::scan_assets(&assets, MUSIC_DIR);
+    let (found, warnings) = discover(&listings, &*assets);
     for warning in warnings {
         warn!("{warning}");
     }
@@ -298,10 +299,10 @@ pub(crate) mod tests {
         assert_eq!(library.label("music/Dawn/two.ogg"), "Dawn Suite: two");
         assert_eq!(library.label("music/gone.ogg"), "music/gone.ogg");
         let pump = library.track("music/Pump/Pump.mp3").unwrap();
-        assert_eq!(pump.asset_path().as_deref(), Some("default/music/Pump/Pump.mp3"));
+        assert_eq!(pump.asset_path(&crate::common::assets::Assets::default()).as_deref(), Some("default/music/Pump/Pump.mp3"));
         assert!(library.track("music/gone.ogg").is_none());
         let elsewhere = Track { pack: PathBuf::from("/somewhere/pack"), path: "music/a.ogg".into() };
-        assert_eq!(elsewhere.asset_path(), None);
+        assert_eq!(elsewhere.asset_path(&crate::common::assets::Assets::default()), None);
     }
 
     #[test]

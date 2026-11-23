@@ -21,7 +21,7 @@ use super::pit::{Pit, PIT};
 use super::sky::{Sky, SkyMaterial};
 use crate::common::sky::SKYBOX;
 use super::{FILE_EXTENSION, MATERIALS_DIR};
-use crate::common::assets::{default_packs, Assets as PackAssets};
+use crate::common::assets::{Assets as PackAssets};
 use crate::tool::bakes::{RoomBake, RoomSlotMesh};
 use crate::common::palette::Palette;
 use crate::tool::room::RoomSlot;
@@ -144,7 +144,7 @@ impl MaterialLibrary {
 fn find(name: &str, packs: &PackAssets) -> Option<(Graph, PathBuf)> {
     let relative = format!("{MATERIALS_DIR}/{name}.{FILE_EXTENSION}");
     let mut found = None;
-    for pack in default_packs() {
+    for pack in packs.packs() {
         let Ok(bytes) = packs.read(&pack, &relative) else { continue };
         let parsed = String::from_utf8(bytes)
             .map_err(|e| e.to_string())

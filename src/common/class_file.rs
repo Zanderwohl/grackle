@@ -172,7 +172,7 @@ fn check_proportions(build: &Proportions) -> Result<(), String> {
 
 /// In every process: a client's is replaced by the server's on connect.
 pub fn load_builds_at_startup(assets: Res<Assets>, mut builds: ResMut<ClassBuilds>) {
-    let loaded = load_builds(&assets, &crate::common::assets::default_packs());
+    let loaded = load_builds(&assets, &assets.match_packs());
     info!("Loaded builds for {} classes and {} rigs", loaded.builds.len(), loaded.rigs.len());
     *builds = loaded;
 }

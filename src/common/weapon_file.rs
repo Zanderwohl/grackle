@@ -426,7 +426,7 @@ fn slot_choices(
 /// In every process and not authority-gated: a process starts `Solo` and may
 /// become a host, and a body can be handed out as soon as a round starts.
 pub fn load_catalog_at_startup(assets: Res<Assets>, mut catalog: ResMut<WeaponCatalog>) {
-    let loaded = load_catalog(&assets, &crate::common::assets::default_packs());
+    let loaded = load_catalog(&assets, &assets.match_packs());
     info!(
         "Loaded {} weapons and {} class loadouts",
         loaded.weapons.len(),
@@ -653,7 +653,7 @@ mod tests {
         use crate::common::music::tests::MemoryFiles;
         let shipped = std::fs::read_to_string("assets/default/weapons/pistol.toml").unwrap();
         let retuned = shipped.replace("deploy = 0.35", "deploy = 2.0");
-        let assets = Assets(Box::new(MemoryFiles(
+        let assets = Assets::new(Box::new(MemoryFiles(
             [
                 ("low/weapons/pistol.toml".to_owned(), shipped.into_bytes()),
                 ("high/weapons/pistol.toml".to_owned(), retuned.into_bytes()),

@@ -248,6 +248,7 @@ fn play_cues(
     mut commands: Commands,
     mut cues: MessageReader<MusicCue>,
     library: Res<MusicLibrary>,
+    packs: Res<crate::common::assets::Assets>,
     asset_server: Option<Res<AssetServer>>,
     settings: Option<Res<PlayerSettings>>,
     lan: Res<OnLan>,
@@ -267,7 +268,7 @@ fn play_cues(
             info!("No pack here holds {}, so no music plays", cue.track);
             continue;
         };
-        let Some(path) = track.asset_path() else {
+        let Some(path) = track.asset_path(&packs) else {
             warn!("{} is in {}, outside {}, where the AssetServer cannot reach it", cue.track, track.pack.display(), crate::common::assets::ASSET_ROOT);
             continue;
         };

@@ -81,7 +81,7 @@ fn load_fonts(
 ) {
     let ui = read_from_packs(&assets, UI_FONT);
     let display = read_from_packs(&assets, DISPLAY_FONT);
-    let (found, warnings) = pack_fonts::discover(&scan_packs(&default_packs(), FONTS_DIR), assets.0.as_ref());
+    let (found, warnings) = pack_fonts::discover(&scan_packs(&default_packs(), FONTS_DIR), &*assets);
     for warning in warnings {
         warn!("{warning}");
     }
@@ -194,7 +194,7 @@ mod tests {
     #[test]
     fn egui_draws_every_shipped_pack_font() {
         let assets = Assets::default();
-        let (found, warnings) = pack_fonts::discover(&scan_packs(&default_packs()[..1], FONTS_DIR), assets.0.as_ref());
+        let (found, warnings) = pack_fonts::discover(&scan_packs(&default_packs()[..1], FONTS_DIR), &assets);
         assert!(warnings.is_empty(), "{warnings:?}");
         let mut definitions = egui::FontDefinitions::default();
         for font in &found {

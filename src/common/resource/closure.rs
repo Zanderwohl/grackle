@@ -132,7 +132,7 @@ fn in_folder(assets: &Assets, packs: &[PathBuf], folder: &str, extension: &str, 
     let suffix = format!(".{extension}");
     let mut paths = BTreeSet::new();
     for pack in packs {
-        for name in assets.0.list(pack, folder) {
+        for name in assets.list(pack, folder) {
             if !name.ends_with(&suffix) {
                 continue;
             }
@@ -261,7 +261,7 @@ mod tests {
 
     #[test]
     fn a_higher_pack_wins_and_a_folder_lists_each_path_once() {
-        let assets = Assets(Box::new(Memory(vec![
+        let assets = Assets::new(Box::new(Memory(vec![
             ("low", "icons/a.svg", "<svg low/>"),
             ("high", "icons/a.svg", "<svg high/>"),
             ("low", "icons/b.svg", "<svg/>"),

@@ -6,12 +6,31 @@ pub mod closure;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod hash_index;
 mod named;
+pub mod session;
+pub mod store;
 
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
 pub use named::{describe, Described, Named, Reference};
+
+/// Registers [`store::OBJECT_SOURCE`], so the `AssetServer` can load a server's file (a track) out
+/// of the object store by [`store::object_asset_path`]. Before `AssetPlugin`, which builds the
+/// sources it is given and no later ones.
+pub struct ObjectSourcePlugin;
+
+impl bevy::app::Plugin for ObjectSourcePlugin {
+    fn build(&self, app: &mut bevy::app::App) {
+        use bevy::asset::io::{AssetSource, AssetSourceBuilder};
+        use bevy::asset::AssetApp;
+        // Absolute, as `AssetPlugin::file_path` is, since Bevy otherwise reads from the executable's folder.
+        let root = std::env::current_dir()
+            .map(|dir| dir.join(store::OBJECTS_DIR).to_string_lossy().into_owned())
+            .unwrap_or_else(|_| store::OBJECTS_DIR.to_owned());
+        app.register_asset_source(store::OBJECT_SOURCE, AssetSourceBuilder::new(AssetSource::get_default_reader(root)));
+    }
+}
 
 /// BLAKE3-256 of a file's bytes as stored.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -110,7 +129,7 @@ impl LogicalPath {
         ResourceKind::of(self).expect("a LogicalPath has a kind by construction")
     }
 
-    fn extension(&self) -> Option<&str> {
+    pub fn extension(&self) -> Option<&str> {
         let name = self.0.rsplit('/').next()?;
         name.rsplit_once('.').map(|(_, extension)| extension)
     }

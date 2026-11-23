@@ -57,6 +57,7 @@ pub fn run() {
     App::new()
         // Before `DefaultPlugins`: the log file's layer reads how many days of logs to keep.
         .insert_resource(settings)
+        .add_plugins(crate::common::resource::ObjectSourcePlugin)
         .add_plugins(DefaultPlugins
             .set(WindowPlugin {
                primary_window: Some(Window {

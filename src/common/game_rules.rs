@@ -199,7 +199,7 @@ fn check(key: &str, entry: ModeEntry) -> Result<ModeRules, String> {
 
 /// In every process: a client's is replaced by the server's on connect.
 pub fn load_modes_at_startup(assets: Res<Assets>, mut modes: ResMut<Modes>) {
-    *modes = load_modes(&assets, &crate::common::assets::default_packs());
+    *modes = load_modes(&assets, &assets.match_packs());
     info!("Loaded rules for {} game modes", modes.0.len());
 }
 

@@ -791,7 +791,7 @@ pub fn from_the_packs<T>(
 ) -> Option<(T, PathBuf)> {
     // Highest priority last, so an overriding pack wins.
     let mut found = None;
-    for pack in crate::common::assets::default_packs().iter() {
+    for pack in assets.packs().iter() {
         match read(assets, pack, name) {
             Ok(read) => found = Some((read, prop_path(pack, name))),
             Err(PropFileError::Asset(_)) => {}
@@ -817,7 +817,7 @@ pub fn taunt_named_by(assets: &Assets, name: &str) -> Option<String> {
 
 fn read_text(assets: &Assets, pack: &Path, name: &str) -> Result<String, PropFileError> {
     let relative = format!("{PROPS_DIR}/{name}.{PROP_EXTENSION}");
-    let bytes = assets.0.read(pack, &relative).map_err(PropFileError::Asset)?;
+    let bytes = assets.read(pack, &relative).map_err(PropFileError::Asset)?;
     String::from_utf8(bytes).map_err(|e| PropFileError::Malformed(format!("{relative}: {e}")))
 }
 

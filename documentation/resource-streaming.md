@@ -295,11 +295,28 @@ Left for later stages, noticed in this one:
 
 ### Stage 2 — the session pack
 
-- [ ] `ObjectStore` (native: `downloads/`; browser later) with put-by-hash that verifies.
-- [ ] A virtual pack above every local pack while connected, answering `AssetSource::read` and a
-      `session://` Bevy asset source.
-- [ ] `default_packs()` callers go through one resolver that knows about the session pack, rather
-      than each walking the list.
+- [x] `ObjectStore` with `DiskObjects` over `downloads/objects/` (native; the browser's comes
+      later). An object is named by its hash and the extension of the path it was sent under
+      (`ab/cdef….mp3`), checked when stored and again when read: a damaged file is deleted and
+      reads as missing. Written beside and renamed into place.
+- [x] `SessionPack` (a manifest over a store) mounted in the `Assets` resource with
+      `Assets::mount`/`unmount`, listed as the pack `<server>` above every local pack.
+      `Assets` is itself an `AssetSource`, so anything reading through it reads the server's
+      files too. The `object://` Bevy asset source (`ObjectSourcePlugin`, added before
+      `DefaultPlugins`) reads the store by `object_asset_path`, so a server's track plays;
+      `Assets::asset_path` answers for either kind of pack.
+- [x] One resolver, `Assets`, in place of `default_packs()` wherever the game reads content:
+      `Assets::packs()` (local, then the server's) for props, materials, decals and music;
+      `Assets::match_packs()` (the server's alone while mounted) for the gameplay tables and body
+      clips, which are closed. The editors, pickers, Library, lang, fonts and menu backgrounds keep
+      `default_packs()`, which never lists the server's pack.
+
+Noticed in this stage:
+
+- **Loaders run at startup.** Mounting a session changes what they would read, but nothing reads
+  again yet; stage 3 reloads the tables and clears the prop and material caches on mount and
+  unmount.
+- **The app was not launched** with `ObjectSourcePlugin`; it is covered by the tests only.
 
 ### Stage 3 — the wire
 

@@ -16,7 +16,7 @@ use lightyear::prelude::server::ClientOf;
 use lightyear::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::common::assets::{default_packs, Assets as PackAssets};
+use crate::common::assets::{Assets as PackAssets};
 use crate::common::net::NetRole;
 use crate::common::weapon::WeaponCatalog;
 use crate::prop::baked::{PropCache, SurfaceMaterials};
@@ -89,7 +89,7 @@ fn models_named_by(names: &[String], packs: &PackAssets) -> Vec<(String, String)
         .iter()
         .filter_map(|name| {
             let mut found = None;
-            for pack in default_packs().iter() {
+            for pack in packs.packs().iter() {
                 if let Ok(doc) = document::load(packs, pack, name) {
                     found = Some(doc);
                 }

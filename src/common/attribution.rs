@@ -57,6 +57,18 @@ fn walk(dir: &Path, relative: &str, depth: usize, files: &mut Vec<String>) {
     }
 }
 
+/// Every pack the game reads, the server's included while it is mounted, lowest priority first.
+pub fn scan_assets(assets: &crate::common::assets::Assets, folder: &str) -> Vec<PackListing> {
+    assets
+        .packs()
+        .into_iter()
+        .map(|pack| match (crate::common::resource::session::is_session_pack(&pack), assets.session()) {
+            (true, Some(session)) => PackListing { files: session.files_under(folder), pack },
+            _ => PackListing::scan(&pack, folder),
+        })
+        .collect()
+}
+
 /// Every pack in `packs`, lowest priority first, scanned for `folder`.
 pub fn scan_packs(packs: &[PathBuf], folder: &str) -> Vec<PackListing> {
     packs.iter().map(|pack| PackListing::scan(pack, folder)).collect()

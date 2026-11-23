@@ -271,6 +271,7 @@ shape is a new producer and not a rewrite of every consumer — see
 | `assets/default/` | The default pack: `lang/`, `blueprints/`, `servers/` (example `--server-config` files), `images/backgrounds/title/` (main-menu backgrounds). |
 | `assets/user/` | The user pack: gitignored, made at startup with `blueprints/`, `props/` and `images/backgrounds/title/`, last in `default_packs()` so it overrides the shipped one. A new map or prop is saved here unless the document already has a folder. Also holds `settings.toml`, the player settings, `shortcuts.toml`, `server.toml` (the Round tab) and `recent.toml` (the File menu's Recent lists). |
 | `cache/` | Gitignored, derived from the packs and maps: `thumbnails/{pack}/props/{name}.png`, `nav/{hash}.bin`, `lightmap/{hash}.bin`, `postcards/{pack}/{map}/*.png`, `rounds/{pack}/{map}/*.jsonl`, `trash/{kind}/` (deleted pack files, kept 30 days). What is about one pack file is filed under its pack and name ([`src/common/cache_path.rs`](src/common/cache_path.rs)); a file in no pack under `_no_pack/`, and a map with no file under `_no_pack/untitled` (its postcards in `_no_pack/untitled_{hash}`, so two unsaved maps keep a set each). Safe to delete, though the trash is the only copy of what is in it. |
+| `downloads/` | Gitignored: what servers sent, `objects/{ab}/{rest of hash}.{ext}`, never a pack (see "Naming pack files across machines"). Nothing writes to it yet. |
 | `logs/` | Gitignored: the log's file drain, one file per launch, and the Bakes panel's ECS dumps (`grackle_ecsdump_{stamp}.txt`, whose path the panel shows as a link that selects the file in the file manager), all deleted after the days set in Settings → Developer. |
 | `screenshots/` | Gitignored, made at startup: `F12` saves the window as drawn, HUD and egui included, as `{date}_{time}_{millisecond}.png` ([`src/common/screenshot.rs`](src/common/screenshot.rs)). |
 
@@ -3494,6 +3495,15 @@ into a `Manifest`, reading names through the loader that owns each format: a fea
 `FeatureTrait::resources_named`, so **a feature that names a pack file must list it there**, or
 it is not sent. A role brings every material it paints with. `HashIndex` (`cache/hashes.bin`)
 keeps each local file's hash by size and modified time.
+
+**The server's files are a pack in `Assets`** (stage 2): a `SessionPack` — a manifest over the
+`downloads/objects/` store, named by hash and extension — mounted with `Assets::mount` and listed
+as `<server>` above every local pack. Read game content over `assets.packs()`, and the gameplay
+tables (weapons, loadouts, classes, taunts, modes, layers, body clips) over
+`assets.match_packs()`, which is the server's pack alone while one is mounted, so a file only this
+machine has is never in the match. `default_packs()` is the local packs, for the editors and for
+what a client reads from its own disk (lang, fonts, menus); it never lists the server's. The
+`AssetServer` reads the store as `object://` (`Assets::asset_path`).
 
 ### Finding a server on the LAN
 
