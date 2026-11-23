@@ -4,16 +4,8 @@ use bevy::prelude::*;
 
 use crate::editor::editable::{FeatureTrait, PointRef};
 use crate::editor::spectator_camera::SpectatorCamera;
-use crate::tool::point_placement::{add_point_placement_tool, PlaceablePoint};
+use crate::tool::point_placement::PlaceablePoint;
 use crate::tool::Tools;
-
-pub struct SpectatorCameraPlugin;
-
-impl Plugin for SpectatorCameraPlugin {
-    fn build(&self, app: &mut App) {
-        add_point_placement_tool::<SpectatorCamera>(app);
-    }
-}
 
 impl PlaceablePoint for SpectatorCamera {
     const TOOL: Tools = Tools::SpectatorCamera;

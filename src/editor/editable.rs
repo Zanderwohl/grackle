@@ -141,6 +141,8 @@ pub trait FeatureTrait: Send + Sync {
     fn editor_ui(&mut self, ui: &mut egui::Ui, features: &HashMap<FeatureId, Feature>, prior_feature_order: &[FeatureId], retarget_request: &mut Option<String>) -> bool;
     fn type_name(&self) -> String;
     fn type_key(&self) -> &'static str;
+    /// How a click in the viewport reaches it.
+    fn picked_by(&self) -> PickedBy { PickedBy::Marker }
     /// The tool that makes this kind of feature, whose icon its row shows.
     fn tool(&self) -> Option<crate::tool::Tools> { None }
     fn debug_gizmos(&self, gizmos: &mut Gizmos);
@@ -234,6 +236,7 @@ pub trait FeatureTrait: Send + Sync {
     /// So a rebuilt copy of a Mirror can take over its predecessor's entities. A typetag trait
     /// object has no `Any` to downcast through.
     fn mirror_mut(&mut self) -> Option<&mut crate::editor::mirror::Mirror> { None }
+    fn as_mirror(&self) -> Option<&crate::editor::mirror::Mirror> { None }
 }
 
 enum RowAction {
@@ -1359,6 +1362,18 @@ pub struct OwnBase<'a> {
     pub label: &'a str,
     pub point: Vec3,
     pub active: &'a mut bool,
+}
+
+/// How a click in the viewport reaches a feature.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PickedBy {
+    /// Its walls, seen from the air inside its volumes, so it never hides what stands in it.
+    Walls,
+    /// Its pick boxes from outside only: a camera inside one would pick it with every click.
+    Outside,
+    /// Its pick boxes from either side, or near its point: a point-like feature.
+    Marker,
+    Nothing,
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq)]

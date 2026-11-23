@@ -1,17 +1,8 @@
-use bevy::app::App;
 use bevy::prelude::*;
 use crate::editor::editable::{FeatureTrait, PointRef};
 use crate::editor::grackle_point_light::GracklePointLight;
-use crate::tool::point_placement::{add_point_placement_tool, PlaceablePoint};
+use crate::tool::point_placement::PlaceablePoint;
 use crate::tool::Tools;
-
-pub struct PointLightPlugin;
-
-impl Plugin for PointLightPlugin {
-    fn build(&self, app: &mut App) {
-        add_point_placement_tool::<GracklePointLight>(app);
-    }
-}
 
 impl PlaceablePoint for GracklePointLight {
     const TOOL: Tools = Tools::PointLight;

@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use crate::common::reorder;
 use crate::common::skeleton::clip::ClipSet;
 use crate::common::assets::{AssetError, Assets};
-use crate::prop::feature::{evaluate, Axis, Evaluated, FeatureOp, PropFeature, PropFeatureId};
+use crate::prop::feature::{evaluate, Axis, BodyRef, Evaluated, FeatureOp, PropFeature, PropFeatureId};
 use crate::prop::refs::{AnyRef, CurveRef, DirectionRef, PointRef};
 use crate::prop::seam::{JunctionRef, SeamRef};
 use crate::prop::archetype::{Archetype, BreakableSpec, Collider, HatSpec, PickupSpec};
@@ -35,7 +35,7 @@ pub const PROPS_DIR: &str = "props";
 /// [`Pick::as_direction`], [`Pick::as_plane_source`] and [`Pick::body`].
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Pick {
-    Body(PropFeatureId),
+    Body(BodyRef),
     Geom(GeomRef),
     Plane(PlaneRef),
     /// A closed region of a sketch, which is what a sweep takes.
@@ -57,7 +57,7 @@ pub enum Pick {
 impl Pick {
     /// The standing body this pick stands for. A face stands for the body it
     /// is on; a corner or an edge does not, since one on a seam belongs to two.
-    pub fn body(&self, evaluated: &Evaluated) -> Option<PropFeatureId> {
+    pub fn body(&self, evaluated: &Evaluated) -> Option<BodyRef> {
         match self {
             Pick::Body(id) => evaluated.bodies.iter().any(|(body, _)| body == id).then_some(*id),
             Pick::Geom(reference @ GeomRef { element: Element::Face(_), .. }) => evaluated.body_of(reference),
@@ -169,12 +169,13 @@ impl Pick {
     /// See [`PropEditor::primary_feature`].
     pub fn feature(&self, evaluated: &Evaluated) -> Option<PropFeatureId> {
         match self {
-            Pick::Body(id) | Pick::Plane(PlaneRef::Feature(id)) | Pick::DatumAxis(id) | Pick::DatumPoint(id) => Some(*id),
+            Pick::Body(body) => Some(body.feature),
+            Pick::Plane(PlaneRef::Feature(id)) | Pick::DatumAxis(id) | Pick::DatumPoint(id) => Some(*id),
             Pick::Region { sketch, .. } | Pick::SketchPoint { sketch, .. } | Pick::SketchCurve { sketch, .. } => {
                 Some(*sketch)
             }
             Pick::Plane(PlaneRef::Origin(_)) | Pick::Axis(_) => None,
-            Pick::Geom(_) => self.body(evaluated),
+            Pick::Geom(_) => self.body(evaluated).map(|body| body.feature),
             Pick::Seam(name) => evaluated.seams().iter().find(|seam| seam.name == *name).map(|seam| seam.body),
             Pick::Junction(name) => evaluated.junctions().iter().find(|j| j.name == *name).map(|j| j.body),
         }
@@ -183,9 +184,8 @@ impl Pick {
     /// Every feature the pick names; if any goes, so does the pick.
     pub fn features(&self) -> Box<dyn Iterator<Item = PropFeatureId> + '_> {
         match self {
-            Pick::Body(id) | Pick::Plane(PlaneRef::Feature(id)) | Pick::DatumAxis(id) | Pick::DatumPoint(id) => {
-                Box::new(std::iter::once(*id))
-            }
+            Pick::Body(body) => Box::new(std::iter::once(body.feature)),
+            Pick::Plane(PlaneRef::Feature(id)) | Pick::DatumAxis(id) | Pick::DatumPoint(id) => Box::new(std::iter::once(*id)),
             Pick::Plane(PlaneRef::Origin(_)) | Pick::Axis(_) => Box::new(std::iter::empty()),
             Pick::Region { sketch, .. } | Pick::SketchPoint { sketch, .. } | Pick::SketchCurve { sketch, .. } => {
                 Box::new(std::iter::once(*sketch))
@@ -651,12 +651,12 @@ impl PropEditor {
     }
 
     /// The body the primary stands for; see [`Pick::body`].
-    pub fn primary_body(&self, evaluated: &Evaluated) -> Option<PropFeatureId> {
+    pub fn primary_body(&self, evaluated: &Evaluated) -> Option<BodyRef> {
         self.primary()?.body(evaluated)
     }
 
     /// The bodies the picks stand for, in pick order, repeats kept.
-    pub fn picked_bodies(&self, evaluated: &Evaluated) -> Vec<PropFeatureId> {
+    pub fn picked_bodies(&self, evaluated: &Evaluated) -> Vec<BodyRef> {
         self.picks.iter().filter_map(|pick| pick.body(evaluated)).collect()
     }
 
@@ -672,7 +672,8 @@ impl PropEditor {
             Some(FeatureOp::Plane { .. }) => Pick::Plane(PlaneRef::Feature(id)),
             Some(FeatureOp::Axis { .. }) => Pick::DatumAxis(id),
             Some(FeatureOp::Point { .. }) => Pick::DatumPoint(id),
-            _ => Pick::Body(id),
+            Some(op) => Pick::Body(BodyRef { feature: id, index: 0, of: op.bodies_made().max(1) }),
+            None => Pick::Body(BodyRef::whole(id)),
         }
     }
 
@@ -720,7 +721,7 @@ impl PropEditor {
 
     /// `(target, tool)` when exactly two picks stand for two different
     /// standing bodies; an eaten body would make a boolean broken on arrival.
-    pub fn pair_to_combine(&self, evaluated: &Evaluated) -> Option<(PropFeatureId, PropFeatureId)> {
+    pub fn pair_to_combine(&self, evaluated: &Evaluated) -> Option<(BodyRef, BodyRef)> {
         match self.picks[..] {
             [ref target, ref tool] => {
                 let (target, tool) = (target.body(evaluated)?, tool.body(evaluated)?);
@@ -731,7 +732,7 @@ impl PropEditor {
     }
 
     /// Single-operand verbs take the body the primary stands for.
-    pub fn body_to_act_on(&self, evaluated: &Evaluated) -> Option<PropFeatureId> {
+    pub fn body_to_act_on(&self, evaluated: &Evaluated) -> Option<BodyRef> {
         self.primary_body(evaluated)
     }
 
@@ -832,7 +833,49 @@ pub fn load(assets: &Assets, pack: &Path, name: &str) -> Result<PropDoc, PropFil
 }
 
 pub fn parse(text: &str) -> Result<PropDoc, toml::de::Error> {
-    toml::from_str(text)
+    let mut table: toml::Table = toml::from_str(text)?;
+    read_single_operands(&mut table);
+    toml::Value::Table(table).try_into()
+}
+
+/// Files from before features took lists of bodies name one: a `boolean`
+/// with a `target` and a `tool`, and a `target` on a mirror, a paint, a
+/// pattern or a sweep. Each is read as the list it now is.
+fn read_single_operands(table: &mut toml::Table) {
+    let Some(toml::Value::Array(features)) = table.get_mut("features") else { return };
+    for feature in features {
+        let Some(toml::Value::Table(op)) = feature.get_mut("op") else { continue };
+        let kind = op.get("feature").and_then(toml::Value::as_str).unwrap_or_default().to_string();
+        let mut one = |key: &str| op.remove(key).map(|value| toml::Value::Array(vec![value]));
+        match kind.as_str() {
+            "boolean" => {
+                let (target, tool) = (op.remove("target"), op.remove("tool"));
+                let operation = op.remove("op").and_then(|value| value.as_str().map(str::to_string)).unwrap_or_default();
+                let both = || toml::Value::Array(target.iter().chain(&tool).cloned().collect());
+                match operation.as_str() {
+                    "subtract" => {
+                        op.insert("feature".into(), "subtract".into());
+                        op.insert("targets".into(), toml::Value::Array(target.into_iter().collect()));
+                        op.insert("tools".into(), toml::Value::Array(tool.into_iter().collect()));
+                    }
+                    "intersect" => {
+                        op.insert("bodies".into(), both());
+                        op.insert("feature".into(), "intersect".into());
+                    }
+                    _ => {
+                        op.insert("bodies".into(), both());
+                        op.insert("feature".into(), "union".into());
+                    }
+                }
+            }
+            "mirror" | "paint" | "pattern" | "extrude" | "revolve" | "sweep" | "loft" => {
+                if let Some(targets) = one("target") {
+                    op.insert("targets".into(), targets);
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 pub fn to_text(doc: &PropDoc) -> Result<String, toml::ser::Error> {
@@ -853,7 +896,8 @@ pub fn save(path: &Path, doc: &PropDoc) -> Result<(), PropFileError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::prop::feature::{Axis, BooleanOp, PatternKind};
+    use crate::prop::feature::BodyRef;
+    use crate::prop::feature::{Axis, PatternKind};
     use crate::prop::profile::Placement;
     use crate::prop::solid::Shape;
     use crate::prop::surface::{Style, Surface, Tint};
@@ -879,13 +923,9 @@ mod tests {
             placement: Placement { origin: [0.0, 0.0, 0.0], rotation: [1.5708, 0.0, 0.0] },
             surface: Surface::default(),
         });
-        let drilled = doc.push(FeatureOp::Boolean {
-            op: BooleanOp::Subtract,
-            target: tube,
-            tool: bore,
-        });
+        let drilled = doc.push(FeatureOp::Subtract { targets: vec![BodyRef::whole(tube)], tools: vec![BodyRef::whole(bore)] });
         doc.push(FeatureOp::Mirror {
-            target: drilled,
+            targets: vec![BodyRef::whole(drilled)],
             about: crate::prop::plane::PlaneRef::Origin(crate::prop::plane::OriginPlane::Yz),
             offset: 0.0,
             keep_original: true,
@@ -908,13 +948,13 @@ mod tests {
         let mut doc = PropDoc::new("x");
         let a = doc.push(FeatureOp::default());
         let row = doc.push(FeatureOp::Pattern {
-            target: a,
+            targets: vec![BodyRef::whole(a)],
             count: 3,
             along: PatternKind::Linear { spacing: 0.05, direction: crate::prop::refs::DirectionRef::Along { curve: CurveRef::Axis { axis: Axis::Z } } },
         });
         let edge = GeomRef { element: Element::Edge(4), source: crate::prop::reference::Source { feature: a, copies: vec![] } };
         doc.push(FeatureOp::Pattern {
-            target: row,
+            targets: vec![BodyRef::whole(row)],
             count: 6,
             along: PatternKind::Radial { degrees: 360.0, axis: CurveRef::Edge { edge } },
         });
@@ -1007,9 +1047,9 @@ mod tests {
         let mut doc = PropDoc::new("x");
         let a = doc.push(FeatureOp::default());
         let b = doc.push(FeatureOp::default());
-        let cut = doc.push(FeatureOp::Boolean { op: BooleanOp::Subtract, target: a, tool: b });
+        let cut = doc.push(FeatureOp::Subtract { targets: vec![BodyRef::whole(a)], tools: vec![BodyRef::whole(b)] });
         let mirrored = doc.push(FeatureOp::Mirror {
-            target: cut,
+            targets: vec![BodyRef::whole(cut)],
             about: crate::prop::plane::PlaneRef::Origin(crate::prop::plane::OriginPlane::Yz),
             offset: 0.0,
             keep_original: true,
@@ -1031,7 +1071,7 @@ mod tests {
         let mut doc = PropDoc::new("x");
         let a = doc.push(FeatureOp::default());
         let b = doc.push(FeatureOp::default());
-        let cut = doc.push(FeatureOp::Boolean { op: BooleanOp::Subtract, target: a, tool: b });
+        let cut = doc.push(FeatureOp::Subtract { targets: vec![BodyRef::whole(a)], tools: vec![BodyRef::whole(b)] });
         let spare = doc.push(FeatureOp::default());
 
         // Indices count the list with the moved feature lifted out.
@@ -1045,7 +1085,7 @@ mod tests {
         let mut doc = PropDoc::new("x");
         let a = doc.push(FeatureOp::default());
         let b = doc.push(FeatureOp::default());
-        let cut = doc.push(FeatureOp::Boolean { op: BooleanOp::Subtract, target: a, tool: b });
+        let cut = doc.push(FeatureOp::Subtract { targets: vec![BodyRef::whole(a)], tools: vec![BodyRef::whole(b)] });
         doc.push(FeatureOp::default());
 
         doc.move_to(cut, 0);
@@ -1086,11 +1126,11 @@ mod tests {
         let mut doc = PropDoc::new("x");
         let a = doc.push(solid(0.0));
         let b = doc.push(solid(0.1));
-        let cut = doc.push(FeatureOp::Boolean { op: BooleanOp::Subtract, target: a, tool: b });
+        let cut = doc.push(FeatureOp::Subtract { targets: vec![BodyRef::whole(a)], tools: vec![BodyRef::whole(b)] });
         let c = doc.push(solid(0.05));
-        let joined = doc.push(FeatureOp::Boolean { op: BooleanOp::Union, target: cut, tool: c });
+        let joined = doc.push(FeatureOp::Union { bodies: vec![BodyRef::whole(cut), BodyRef::whole(c)] });
         doc.push(FeatureOp::Mirror {
-            target: joined,
+            targets: vec![BodyRef::whole(joined)],
             about: crate::prop::plane::PlaneRef::Origin(crate::prop::plane::OriginPlane::Yz),
             offset: 0.0,
             keep_original: true,
@@ -1366,12 +1406,12 @@ mod tests {
 
         editor.select(bore);
         editor.toggle_selected(barrel);
-        assert_eq!(editor.pair_to_combine(&evaluated), Some((bore, barrel)));
+        assert_eq!(editor.pair_to_combine(&evaluated), Some((BodyRef::whole(bore), BodyRef::whole(barrel))));
 
         editor.select(barrel);
         editor.toggle_selected(bore);
-        assert_eq!(editor.pair_to_combine(&evaluated), Some((barrel, bore)));
-        assert_eq!(editor.primary_body(&evaluated), Some(bore), "the last pick is the one the inspector shows");
+        assert_eq!(editor.pair_to_combine(&evaluated), Some((BodyRef::whole(barrel), BodyRef::whole(bore))));
+        assert_eq!(editor.primary_body(&evaluated), Some(BodyRef::whole(bore)), "the last pick is the one the inspector shows");
     }
 
     #[test]
@@ -1382,13 +1422,13 @@ mod tests {
         let c = editor.edit(|doc| doc.push(FeatureOp::default()));
         let standing = editor.doc().evaluate();
         let eats_b = editor.edit(|doc| doc.push(FeatureOp::Mirror {
-            target: b,
+            targets: vec![BodyRef::whole(b)],
             about: crate::prop::plane::PlaneRef::Origin(crate::prop::plane::OriginPlane::Yz),
             offset: 0.0,
             keep_original: false,
         }));
         let b_eaten = editor.doc().evaluate();
-        assert!(standing.bodies.iter().any(|(id, _)| *id == b) && eats_b != b);
+        assert!(standing.bodies.iter().any(|(id, _)| id.feature == b) && eats_b != b);
 
         editor.select(a);
         assert_eq!(editor.pair_to_combine(&standing), None);
@@ -1414,12 +1454,12 @@ mod tests {
 
         editor.toggle(face(barrel, 0));
         editor.toggle(face(bore, 2));
-        assert_eq!(editor.pair_to_combine(&evaluated), Some((barrel, bore)));
+        assert_eq!(editor.pair_to_combine(&evaluated), Some((BodyRef::whole(barrel), BodyRef::whole(bore))));
 
         editor.select_pick(face(barrel, 0));
         editor.toggle(face(barrel, 1));
         assert_eq!(editor.pair_to_combine(&evaluated), None);
-        assert_eq!(editor.body_to_act_on(&evaluated), Some(barrel));
+        assert_eq!(editor.body_to_act_on(&evaluated), Some(BodyRef::whole(barrel)));
     }
 
     #[test]
@@ -1431,7 +1471,7 @@ mod tests {
         editor.select(a);
         editor.toggle_selected(b);
         editor.toggle_selected(b);
-        assert_eq!(editor.picks(), &[Pick::Body(a)]);
+        assert_eq!(editor.picks(), &[Pick::Body(BodyRef::whole(a))]);
     }
 
     #[test]
@@ -1439,7 +1479,7 @@ mod tests {
         let mut doc = PropDoc::new("test");
         let a = doc.push(FeatureOp::default());
         let b = doc.push(FeatureOp::default());
-        let cut = doc.push(FeatureOp::Boolean { op: BooleanOp::Subtract, target: a, tool: b });
+        let cut = doc.push(FeatureOp::Subtract { targets: vec![BodyRef::whole(a)], tools: vec![BodyRef::whole(b)] });
         let problems_before = doc.evaluate().problems.len();
 
         let copy = doc.duplicate(a, "A copy".into()).expect("a primitive copies");
@@ -1532,7 +1572,7 @@ mod tests {
         editor.select(b);
         editor.toggle_selected(a);
         editor.undo();
-        assert_eq!(editor.picks(), &[Pick::Body(a)]);
+        assert_eq!(editor.picks(), &[Pick::Body(BodyRef::whole(a))]);
     }
 
     /// Fails if a reference outlives a feature it is named through.
@@ -1542,7 +1582,7 @@ mod tests {
         let mut editor = PropEditor::default();
         let a = editor.edit(|doc| doc.push(FeatureOp::default()));
         let mirror = editor.edit(|doc| {
-            doc.push(FeatureOp::Mirror { target: a, about: crate::prop::plane::PlaneRef::Origin(crate::prop::plane::OriginPlane::Yz), offset: 0.0, keep_original: true })
+            doc.push(FeatureOp::Mirror { targets: vec![BodyRef::whole(a)], about: crate::prop::plane::PlaneRef::Origin(crate::prop::plane::OriginPlane::Yz), offset: 0.0, keep_original: true })
         });
         let corner = |copies| Pick::Geom(GeomRef { element: Element::Point(0), source: Source { feature: a, copies } });
         editor.toggle(corner(vec![]));
@@ -1567,11 +1607,105 @@ mod tests {
         let mut editor = PropEditor::default();
         let a = editor.edit(|doc| doc.push(FeatureOp::default()));
         let edge = Pick::Geom(GeomRef { element: Element::Edge(3), source: Source { feature: a, copies: vec![] } });
-        editor.toggle(Pick::Body(a));
+        editor.toggle(Pick::Body(BodyRef::whole(a)));
         editor.toggle(edge.clone());
         assert_eq!(editor.primary(), Some(&edge));
         assert_eq!(editor.primary_body(&editor.doc().evaluate()), None, "an edge does not stand for its body");
         editor.toggle(edge);
-        assert_eq!(editor.primary(), Some(&Pick::Body(a)));
+        assert_eq!(editor.primary(), Some(&Pick::Body(BodyRef::whole(a))));
     }
+    #[test]
+    fn a_file_naming_single_operands_reads_as_lists() {
+        let text = r#"
+name = "old"
+next_id = 4
+
+[[features]]
+id = 0
+name = "A"
+enabled = true
+
+[features.op]
+feature = "primitive"
+
+[features.op.shape]
+kind = "box"
+size = [0.1, 0.1, 0.1]
+
+[features.op.placement]
+origin = [0.0, 0.0, 0.0]
+rotation = [0.0, 0.0, 0.0]
+
+[features.op.surface]
+style = "wood"
+tint = [0.5, 0.5, 0.5]
+
+[[features]]
+id = 1
+name = "Cut"
+enabled = true
+
+[features.op]
+feature = "boolean"
+op = "subtract"
+target = 0
+tool = 0
+
+[[features]]
+id = 2
+name = "Joined"
+enabled = true
+
+[features.op]
+feature = "boolean"
+op = "union"
+target = 1
+tool = 0
+
+[[features]]
+id = 3
+name = "Painted"
+enabled = true
+
+[features.op]
+feature = "paint"
+target = 2
+
+[features.op.surface]
+style = "wood"
+tint = [0.5, 0.5, 0.5]
+"#;
+        let doc = parse(text).expect("the old form reads");
+        let ops: Vec<&FeatureOp> = doc.features.iter().map(|f| &f.op).collect();
+        let a = BodyRef::whole(PropFeatureId(0));
+        assert_eq!(*ops[1], FeatureOp::Subtract { targets: vec![a], tools: vec![a] });
+        assert_eq!(*ops[2], FeatureOp::Union { bodies: vec![BodyRef::whole(PropFeatureId(1)), a] });
+        assert!(matches!(ops[3], FeatureOp::Paint { targets, .. } if *targets == vec![BodyRef::whole(PropFeatureId(2))]));
+    }
+
+    #[test]
+    fn numbered_targets_survive_a_save() {
+        let mut doc = PropDoc::new("numbered");
+        let a = doc.push(FeatureOp::Primitive { shape: Shape::default(), placement: Placement::default(), surface: Surface::default() });
+        doc.push(FeatureOp::Paint {
+            targets: vec![BodyRef::whole(a), BodyRef { feature: a, index: 1, of: 2 }],
+            surface: Surface::default(),
+        });
+        let text = to_text(&doc).unwrap();
+        assert_eq!(parse(&text).unwrap(), doc, "{text}");
+    }
+
+    #[test]
+    fn selecting_a_feature_that_makes_several_bodies_picks_the_first() {
+        let mut doc = PropDoc::new("several");
+        let a = doc.push(FeatureOp::Primitive { shape: Shape::default(), placement: Placement::default(), surface: Surface::default() });
+        let b = doc.push(FeatureOp::Primitive { shape: Shape::default(), placement: Placement::at(1.0, 0.0, 0.0), surface: Surface::default() });
+        let painted = doc.push(FeatureOp::Paint { targets: vec![BodyRef::whole(a), BodyRef::whole(b)], surface: Surface::default() });
+        let mut editor = PropEditor::default();
+        editor.open(doc, None);
+        editor.select(painted);
+        let evaluated = editor.doc().evaluate();
+        assert_eq!(editor.primary_body(&evaluated), Some(BodyRef { feature: painted, index: 0, of: 2 }));
+    }
+
 }

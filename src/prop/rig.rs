@@ -13,7 +13,7 @@ use crate::common::rotation::quat_from_euler;
 use crate::common::skeleton::clip::{Axis, Channel, Clip, Combine};
 use crate::common::skeleton::play::{angles_for, angles_onto, sample_key, shown_layers, track_time, ClipStack, Regions};
 use crate::get;
-use crate::prop::feature::{Evaluated, PropFeature, PropFeatureId};
+use crate::prop::feature::{BodyRef, Evaluated, PropFeature, PropFeatureId};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PropBone {
@@ -117,23 +117,25 @@ pub fn problems(bones: &[PropBone]) -> Vec<String> {
 }
 
 /// The bone each of `evaluated.bodies` rides on, in the same order. A body takes the first bone
-/// binding its own feature, else the bone of the first operand it ate that has one.
+/// binding its own feature, else the bone of the target it was made from (`FeatureOp::source_of`),
+/// else of the first operand it ate that has one.
 pub fn bone_of_each_body(features: &[PropFeature], bones: &[PropBone], evaluated: &Evaluated) -> Vec<Option<usize>> {
-    evaluated.bodies.iter().map(|(id, _)| bone_of(*id, features, bones, 0)).collect()
+    evaluated.bodies.iter().map(|(body, _)| bone_of(*body, features, bones, 0)).collect()
 }
 
 /// Deeper than any feature list has consumed, so a malformed one cannot loop.
 const MOST_ANCESTORS: usize = 256;
 
-fn bone_of(id: PropFeatureId, features: &[PropFeature], bones: &[PropBone], depth: usize) -> Option<usize> {
+fn bone_of(body: BodyRef, features: &[PropFeature], bones: &[PropBone], depth: usize) -> Option<usize> {
     if depth > MOST_ANCESTORS {
         return None;
     }
-    if let Some(bone) = bones.iter().position(|bone| bone.parts.contains(&id)) {
+    if let Some(bone) = bones.iter().position(|bone| bone.parts.contains(&body.feature)) {
         return Some(bone);
     }
-    let feature = features.iter().find(|feature| feature.id == id && feature.enabled)?;
-    feature.op.consumes().into_iter().find_map(|eaten| bone_of(eaten, features, bones, depth + 1))
+    let feature = features.iter().find(|feature| feature.id == body.feature && feature.enabled)?;
+    let own = feature.op.source_of(body.index).and_then(|source| bone_of(source, features, bones, depth + 1));
+    own.or_else(|| feature.op.eats().into_iter().find_map(|operand| bone_of(operand, features, bones, depth + 1)))
 }
 
 /// `id` and every feature whose body it ate, nearest first.
@@ -313,6 +315,7 @@ pub struct OnPropBone(pub usize);
 
 #[cfg(test)]
 mod tests {
+    use crate::prop::feature::BodyRef;
     use super::*;
     use crate::common::skeleton::clip::{Key, Track};
     use crate::common::skeleton::interpolation::Interpolation;
@@ -386,22 +389,37 @@ mod tests {
     }
 
     #[test]
+    fn each_body_a_subtraction_makes_rides_its_own_targets_bone() {
+        let mut doc = PropDoc::new("");
+        let barrel = primitive(&mut doc, 0.0);
+        let slide = primitive(&mut doc, 1.0);
+        let bore = primitive(&mut doc, 0.05);
+        doc.push(crate::prop::feature::FeatureOp::Subtract {
+            targets: vec![BodyRef::whole(barrel), BodyRef::whole(slide)],
+            tools: vec![BodyRef::whole(bore)],
+        });
+        let bones = [
+            PropBone { parts: vec![barrel], ..PropBone::new("barrel", Vec3::ZERO) },
+            PropBone { parts: vec![slide], ..PropBone::new("slide", Vec3::ZERO) },
+        ];
+        let evaluated = doc.evaluate();
+        assert_eq!(evaluated.bodies.len(), 2, "{:?}", evaluated.problems);
+        assert_eq!(bone_of_each_body(&doc.features, &bones, &evaluated), vec![Some(0), Some(1)]);
+    }
+
+    #[test]
     fn a_body_keeps_the_bone_of_what_it_ate() {
         let mut doc = PropDoc::new("");
         let barrel = primitive(&mut doc, 0.0);
         let bore = primitive(&mut doc, 0.05);
         let drilled = doc.push(
-            crate::prop::feature::FeatureOp::Boolean {
-                op: crate::prop::feature::BooleanOp::Subtract,
-                target: barrel,
-                tool: bore,
-            },
+            crate::prop::feature::FeatureOp::Subtract { targets: vec![BodyRef::whole(barrel)], tools: vec![BodyRef::whole(bore)] },
         );
         let stock = primitive(&mut doc, 5.0);
         doc.bones.push(PropBone { parts: vec![barrel], ..PropBone::new("spin", Vec3::ZERO) });
         let evaluated = doc.evaluate();
         let bones = bone_of_each_body(&doc.features, &doc.bones, &evaluated);
-        let on = |id| evaluated.bodies.iter().position(|(body, _)| *body == id).map(|index| bones[index]);
+        let on = |id| evaluated.bodies.iter().position(|(body, _)| body.feature == id).map(|index| bones[index]);
         assert_eq!(on(drilled), Some(Some(0)));
         assert_eq!(on(stock), Some(None));
     }
@@ -416,7 +434,7 @@ mod tests {
         let rig = PropRig::of(&doc.bones);
         let slide = rig.index_of("slide").unwrap();
         let named = |name: &str| doc.features.iter().find(|feature| feature.name == name).unwrap().id;
-        let on = |id| evaluated.bodies.iter().position(|(body, _)| *body == id).map(|index| bones[index]);
+        let on = |id| evaluated.bodies.iter().position(|(body, _)| body.feature == id).map(|index| bones[index]);
         assert_eq!(on(named("Slide")), Some(Some(slide)));
         assert!(bones.contains(&None), "every body moves with a bone");
 
@@ -490,7 +508,7 @@ mod tests {
         let evaluated = doc.evaluate();
         let bones = bone_of_each_body(&doc.features, &doc.bones, &evaluated);
         let rocket = doc.features.iter().find(|feature| feature.name == "Round").unwrap().id;
-        let on = evaluated.bodies.iter().position(|(body, _)| *body == rocket).map(|index| bones[index]);
+        let on = evaluated.bodies.iter().position(|(body, _)| body.feature == rocket).map(|index| bones[index]);
         assert_eq!(on, Some(Some(round)));
         assert!(bones.contains(&None), "the tube rides the round too");
         for name in ["reload", "body_reload"] {

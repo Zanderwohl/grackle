@@ -135,7 +135,8 @@ impl Plugin for PropGizmoPlugin {
                 |mut grab: ResMut<GizmoGrab>, mut hovered: ResMut<HoveredPick>, mut tool: ResMut<ActiveTool>| {
                     grab.held = None;
                     hovered.0 = None;
-                    tool.0 = None;
+                    tool.task = None;
+                    tool.moved_on.clear();
                 },
             );
     }
@@ -391,9 +392,9 @@ fn pick_in_the_viewport(
                 project: |p: Vec3| camera.world_to_viewport(at, p).ok(),
             };
             let mut candidates = candidates_under(evaluated, &pointer, hit);
-            Some(match tool.0 {
+            Some(match tool.task {
                 None => candidates.next(),
-                Some(task) => candidates.find(|pick| accepts(task, editor.picks(), pick, editor.doc(), evaluated)),
+                Some(task) => candidates.find(|pick| accepts(task, editor.picks(), &tool.moved_on, pick, editor.doc(), evaluated)),
             })
         })
         .flatten();
@@ -409,7 +410,7 @@ fn pick_in_the_viewport(
     match under {
         Some(pick) => editor.toggle(pick),
         // A miss is not a cancel: a tool keeps what it has.
-        None if tool.0.is_some() => {}
+        None if tool.task.is_some() => {}
         None => editor.clear_selection(),
     }
 }
@@ -419,7 +420,7 @@ fn pick_in_the_viewport(
 fn candidates_under<'a, P: Fn(Vec3) -> Option<Vec2>>(
     evaluated: &'a Evaluated,
     pointer: &'a Pointer<P>,
-    hit: Option<(crate::prop::feature::PropFeatureId, &'a crate::prop::solid::Polygon, f32)>,
+    hit: Option<(crate::prop::feature::BodyRef, &'a crate::prop::solid::Polygon, f32)>,
 ) -> impl Iterator<Item = Pick> + 'a {
     let geom = |pickable: &crate::prop::reference::Pickable| Pick::Geom(pickable.reference.clone());
     let finders: Vec<Box<dyn Fn() -> Option<Pick> + 'a>> = vec![

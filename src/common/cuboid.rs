@@ -176,6 +176,8 @@ impl FeatureTrait for GrackleCuboid {
 
     fn type_key(&self) -> &'static str { "cuboid" }
 
+    fn picked_by(&self) -> crate::editor::editable::PickedBy { crate::editor::editable::PickedBy::Nothing }
+
     fn debug_gizmos(&self, gizmos: &mut Gizmos) {
         let min = self.min;
         let max = self.max;

@@ -17,7 +17,7 @@ use crate::prop::curve::Curve2;
 use crate::prop::datum::{DatumAxis, DatumPoint};
 use crate::prop::seam::{self, FaceTable, Junction, JunctionRef, Seam, SeamRef};
 use crate::prop::solid::Solid;
-use crate::prop::feature::{Axis, PropFeatureId};
+use crate::prop::feature::{Axis, BodyRef, PropFeatureId};
 use crate::prop::plane::{Datum, Plane, PlaneRef};
 use crate::prop::reference::{Element, GeomRef, Located, Wire};
 use crate::prop::sketch::{PlacedSketch, SketchId};
@@ -76,7 +76,7 @@ pub enum AnyRef {
     Plane(PlaneRef),
     Direction(DirectionRef),
     Face { face: GeomRef },
-    Body { body: PropFeatureId },
+    Body { body: BodyRef },
     /// Entries in a sketch's region list.
     Regions { sketch: PropFeatureId, entries: Vec<SketchId> },
 }
@@ -147,7 +147,7 @@ impl AnyRef {
             AnyRef::Plane(plane) => plane.feature().into_iter().collect(),
             AnyRef::Direction(direction) => direction.features(),
             AnyRef::Face { face } => face.source.features().collect(),
-            AnyRef::Body { body } => vec![*body],
+            AnyRef::Body { body } => vec![body.feature],
             AnyRef::Regions { sketch, .. } => vec![*sketch],
         }
     }
@@ -485,6 +485,7 @@ impl AnyRef {
 
 #[cfg(test)]
 mod tests {
+    use crate::prop::feature::BodyRef;
     use super::*;
     use crate::prop::plane::OriginPlane;
     use crate::prop::reference::{Outline, Source};
@@ -555,7 +556,7 @@ mod tests {
                 AnyRef::Direction(DirectionRef::Normal { plane: PlaneRef::Feature(PropFeatureId(2)) }),
                 AnyRef::Direction(DirectionRef::Along { curve: edge(2) }),
                 AnyRef::Face { face: corner },
-                AnyRef::Body { body: PropFeatureId(9) },
+                AnyRef::Body { body: BodyRef::whole(PropFeatureId(9)) },
                 AnyRef::Regions { sketch: PropFeatureId(1), entries: vec![SketchId(2), SketchId(4)] },
             ],
         };

@@ -6,7 +6,7 @@ use bevy::prelude::*;
 
 use crate::editor::editable::{FeatureTrait, PointRef};
 use crate::editor::prop::{Prop, PropMarker, PropModel, PROP_SIZE};
-use crate::tool::point_placement::{add_point_placement_tool, PlaceablePoint};
+use crate::tool::point_placement::PlaceablePoint;
 use crate::tool::Tools;
 
 /// Shared handles for the stand-in cube.
@@ -20,7 +20,6 @@ pub struct PropPlugin;
 
 impl Plugin for PropPlugin {
     fn build(&self, app: &mut App) {
-        add_point_placement_tool::<Prop>(app);
         app
             .init_resource::<PropAssets>()
             // Ungated: a model chosen mid-match still has to take the cube away.

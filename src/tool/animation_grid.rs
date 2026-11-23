@@ -20,14 +20,13 @@ use crate::editor::animation_grid::{
     cell_table, cells, showing, AnimationGrid, AnimationGridMarker, GridCell, RosterTeam,
 };
 use crate::editor::editable::{FeatureTrait, PointRef};
-use crate::tool::point_placement::{add_point_placement_tool, PlaceablePoint};
+use crate::tool::point_placement::PlaceablePoint;
 use crate::tool::Tools;
 
 pub struct AnimationGridPlugin;
 
 impl Plugin for AnimationGridPlugin {
     fn build(&self, app: &mut App) {
-        add_point_placement_tool::<AnimationGrid>(app);
         app
             // Not authority-gated: a client receives these bodies and has to
             // drop them when the grid goes.

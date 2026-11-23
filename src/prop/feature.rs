@@ -48,6 +48,66 @@ impl std::fmt::Display for PropFeatureId {
     }
 }
 
+/// One of the bodies a feature made. `of` is how many it made when this was
+/// named: a different count means they were renumbered, so the reference names
+/// nothing rather than the wrong body. Written as the bare feature id for
+/// `index: 0, of: 1`, so older files read unchanged.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct BodyRef {
+    pub feature: PropFeatureId,
+    pub index: u32,
+    pub of: u32,
+}
+
+impl BodyRef {
+    /// The one body of a feature that makes one.
+    pub fn whole(feature: PropFeatureId) -> Self {
+        BodyRef { feature, index: 0, of: 1 }
+    }
+}
+
+/// For logs; the editor names a body through `prop.inspector.body_of`.
+impl std::fmt::Display for BodyRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.of {
+            1 => write!(f, "{}", self.feature),
+            of => write!(f, "{} ({}/{})", self.feature, self.index + 1, of),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(untagged)]
+enum BodyRefForm {
+    Whole(PropFeatureId),
+    Numbered { feature: PropFeatureId, index: u32, of: u32 },
+}
+
+impl Serialize for BodyRef {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match *self {
+            BodyRef { feature, index: 0, of: 1 } => BodyRefForm::Whole(feature),
+            BodyRef { feature, index, of } => BodyRefForm::Numbered { feature, index, of },
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for BodyRef {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let form = BodyRefForm::deserialize(deserializer).map_err(|_| {
+            serde::de::Error::custom("a body is a feature id, or { feature, index, of }")
+        })?;
+        Ok(match form {
+            BodyRefForm::Whole(feature) => BodyRef::whole(feature),
+            BodyRefForm::Numbered { feature, index, of } if index < of => BodyRef { feature, index, of },
+            BodyRefForm::Numbered { feature, index, of } => {
+                return Err(serde::de::Error::custom(format!("body {index} of {of} of feature {feature} is past the last")));
+            }
+        })
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BooleanOp {
@@ -111,9 +171,9 @@ pub enum FeatureOp {
         taper: f32,
         #[serde(default)]
         op: SweepOp,
-        /// The body `op` joins, cuts or intersects.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        target: Option<PropFeatureId>,
+        /// The bodies `op` joins, cuts or intersects.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        targets: Vec<BodyRef>,
         /// Along the direction.
         end: End,
         /// Back against the direction; none is one side only.
@@ -137,8 +197,8 @@ pub enum FeatureOp {
         #[serde(default)]
         op: SweepOp,
         /// As for [`FeatureOp::Extrude`].
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        target: Option<PropFeatureId>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        targets: Vec<BodyRef>,
         axis: CurveRef,
         profile: ProfileSource,
         surface: Surface,
@@ -157,8 +217,8 @@ pub enum FeatureOp {
         #[serde(default)]
         op: SweepOp,
         /// As for [`FeatureOp::Extrude`].
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        target: Option<PropFeatureId>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        targets: Vec<BodyRef>,
         path: PathRef,
         profile: ProfileSource,
         surface: Surface,
@@ -172,30 +232,37 @@ pub enum FeatureOp {
         #[serde(default)]
         op: SweepOp,
         /// As for [`FeatureOp::Extrude`].
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        target: Option<PropFeatureId>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        targets: Vec<BodyRef>,
         profiles: Vec<Profile>,
         surface: Surface,
     },
-    Boolean { op: BooleanOp, target: PropFeatureId, tool: PropFeatureId },
-    /// About a plane, as it stood when this runs.
+    /// Every body joined into one.
+    Union { bodies: Vec<BodyRef> },
+    /// Every tool taken out of each target: one body per target.
+    Subtract { targets: Vec<BodyRef>, tools: Vec<BodyRef> },
+    /// What every body shares.
+    Intersect { bodies: Vec<BodyRef> },
+    /// Each target about a plane, as it stood when this runs: one body per
+    /// target.
     Mirror {
-        target: PropFeatureId,
         /// Meters along the plane's normal.
         #[serde(default, with = "crate::prop::nice_f32::scalar")]
         offset: f32,
         /// Union with the original rather than replacing it.
         #[serde(default)]
         keep_original: bool,
+        targets: Vec<BodyRef>,
         about: PlaneRef,
     },
     /// Its own feature because what gets repainted is usually a boolean's
     /// result, which no earlier feature has a surface for.
-    Paint { target: PropFeatureId, surface: Surface },
-    /// Copies of a body joined into one. The original is the first copy.
+    Paint { targets: Vec<BodyRef>, surface: Surface },
+    /// Copies of each target joined into one body per target. The original
+    /// is the first copy.
     Pattern {
-        target: PropFeatureId,
         count: u32,
+        targets: Vec<BodyRef>,
         along: PatternKind,
     },
     /// Not geometry: something to sketch on and measure from, made from what
@@ -260,16 +327,6 @@ impl SweepOp {
             SweepOp::Join => get!("prop.sweep_op.join"),
             SweepOp::Cut => get!("prop.sweep_op.cut"),
             SweepOp::Intersect => get!("prop.sweep_op.intersect"),
-        }
-    }
-
-    /// With the target as the first operand and the new body the second.
-    fn boolean(self) -> Option<BooleanOp> {
-        match self {
-            SweepOp::NewBody => None,
-            SweepOp::Join => Some(BooleanOp::Union),
-            SweepOp::Cut => Some(BooleanOp::Subtract),
-            SweepOp::Intersect => Some(BooleanOp::Intersect),
         }
     }
 }
@@ -368,7 +425,9 @@ impl FeatureOp {
             FeatureOp::Sweep { .. } => get!("prop.features.sweep"),
             FeatureOp::Loft { .. } => get!("prop.features.loft"),
             FeatureOp::Revolve { .. } => get!("prop.features.revolve"),
-            FeatureOp::Boolean { op, .. } => op.name(),
+            FeatureOp::Union { .. } => BooleanOp::Union.name(),
+            FeatureOp::Subtract { .. } => BooleanOp::Subtract.name(),
+            FeatureOp::Intersect { .. } => BooleanOp::Intersect.name(),
             FeatureOp::Mirror { .. } => get!("prop.features.mirror"),
             FeatureOp::Paint { .. } => get!("prop.features.paint"),
             FeatureOp::Pattern { .. } => get!("prop.features.pattern"),
@@ -385,12 +444,12 @@ impl FeatureOp {
     /// nothing knows the feature depends on.
     pub fn fields(&self) -> Vec<Field> {
         let field = |label, slot, refs: Vec<AnyRef>| Field { label, slot, consumed: false, picked: true, refs };
-        let body = |label, slot, id: &PropFeatureId| Field {
+        let bodies = |label, slot, list: &[BodyRef]| Field {
             label,
             slot,
             consumed: true,
-            picked: false,
-            refs: vec![AnyRef::Body { body: *id }],
+            picked: true,
+            refs: list.iter().map(|body| AnyRef::Body { body: *body }).collect(),
         };
         // Regions have rows of their own; a face is a Pick row.
         let profiled = |profile: &ProfileSource| match profile {
@@ -412,56 +471,54 @@ impl FeatureOp {
         // Drawn in the feature's own sections rather than as rows, each
         // empty while unset, so every field keeps its index.
         let unpicked = |label, slot, refs: Vec<AnyRef>| Field { label, slot, consumed: false, picked: false, refs };
-        // The body a sweep joins, cuts or intersects, eaten only while it does.
-        let operand = |op: &SweepOp, target: &Option<PropFeatureId>| Field {
-            label: "prop.inspector.target",
-            slot: slot::BODY,
-            consumed: true,
-            picked: false,
-            refs: match op {
-                SweepOp::NewBody => vec![],
-                _ => target.iter().map(|body| AnyRef::Body { body: *body }).collect(),
-            },
+        // The bodies a sweep joins, cuts or intersects, eaten and shown only
+        // while it does.
+        let operand = |op: &SweepOp, targets: &[BodyRef]| match op {
+            SweepOp::NewBody => Field { picked: false, ..bodies("prop.inspector.targets", slot::TARGETS, &[]) },
+            _ => bodies("prop.inspector.targets", slot::TARGETS, targets),
         };
         let bound = |end: Option<&End>| end.and_then(End::bound).into_iter().cloned().collect();
         match self {
             FeatureOp::Primitive { .. } => vec![],
-            FeatureOp::Extrude { profile, direction, end, other, op, target, .. } => vec![
+            FeatureOp::Extrude { profile, direction, end, other, op, targets, .. } => vec![
                 profiled(profile),
                 unpicked("prop.inspector.direction", slot::DIRECTION, direction.iter().cloned().map(AnyRef::Direction).collect()),
                 unpicked("prop.extrude.up_to", slot::BOUND, bound(Some(end))),
                 unpicked("prop.extrude.up_to", slot::BOUND, bound(other.as_ref())),
-                operand(op, target),
+                operand(op, targets),
             ],
-            FeatureOp::Sweep { profile, path, op, target, .. } => vec![
+            FeatureOp::Sweep { profile, path, op, targets, .. } => vec![
                 profiled(profile),
                 field("prop.inspector.path", slot::PATH, vec![AnyRef::Path(path.clone())]),
-                operand(op, target),
+                operand(op, targets),
             ],
-            FeatureOp::Revolve { profile, axis, op, target, .. } => vec![
+            FeatureOp::Revolve { profile, axis, op, targets, .. } => vec![
                 profiled(profile),
                 field("prop.inspector.axis", slot::AXIS, vec![AnyRef::Curve(axis.clone())]),
-                operand(op, target),
+                operand(op, targets),
             ],
-            FeatureOp::Loft { profiles, op, target, .. } => std::iter::once(field(
+            FeatureOp::Loft { profiles, op, targets, .. } => std::iter::once(field(
                 "prop.inspector.profiles",
                 slot::PROFILES,
                 profiles.iter().map(|p| AnyRef::Regions { sketch: p.sketch, entries: vec![p.region] }).collect(),
             ))
             .chain(profiles.iter().map(|p| unpicked("prop.loft.start", slot::POINT, p.start.iter().cloned().map(AnyRef::Point).collect())))
-            .chain(std::iter::once(operand(op, target)))
+            .chain(std::iter::once(operand(op, targets)))
             .collect(),
-            FeatureOp::Boolean { target, tool, .. } => vec![
-                body("prop.inspector.target", slot::BODY, target),
-                body("prop.inspector.tool", slot::SECOND_BODY, tool),
+            FeatureOp::Union { bodies: list } | FeatureOp::Intersect { bodies: list } => {
+                vec![bodies("prop.inspector.bodies", slot::BODIES_2, list)]
+            }
+            FeatureOp::Subtract { targets, tools } => vec![
+                bodies("prop.inspector.targets", slot::TARGETS, targets),
+                bodies("prop.inspector.tools", slot::TOOLS, tools),
             ],
-            FeatureOp::Mirror { target, about, .. } => vec![
-                body("prop.inspector.target", slot::BODY, target),
+            FeatureOp::Mirror { targets, about, .. } => vec![
+                bodies("prop.inspector.targets", slot::BODIES, targets),
                 field("prop.inspector.plane", slot::PLANE, vec![AnyRef::Plane(*about)]),
             ],
-            FeatureOp::Paint { target, .. } => vec![body("prop.inspector.target", slot::BODY, target)],
-            FeatureOp::Pattern { target, along, .. } => vec![
-                body("prop.inspector.target", slot::BODY, target),
+            FeatureOp::Paint { targets, .. } => vec![bodies("prop.inspector.targets", slot::BODIES, targets)],
+            FeatureOp::Pattern { targets, along, .. } => vec![
+                bodies("prop.inspector.targets", slot::BODIES, targets),
                 match along {
                     PatternKind::Linear { direction, .. } => {
                         field("prop.inspector.direction", slot::DIRECTION, vec![AnyRef::Direction(direction.clone())])
@@ -497,9 +554,9 @@ impl FeatureOp {
             (FeatureOp::Extrude { direction, .. }, 1, Resolved::Direction(to)) => *direction = Some(to),
             (FeatureOp::Extrude { end, .. }, 2, Resolved::Bound(to)) => *end = End::UpTo { to },
             (FeatureOp::Extrude { other, .. }, 3, Resolved::Bound(to)) => *other = Some(End::UpTo { to }),
-            (FeatureOp::Extrude { target, .. }, 4, Resolved::Body(id))
-            | (FeatureOp::Revolve { target, .. } | FeatureOp::Sweep { target, .. }, 2, Resolved::Body(id)) => *target = Some(id),
-            (FeatureOp::Loft { profiles, target, .. }, at, Resolved::Body(id)) if at == profiles.len() + 1 => *target = Some(id),
+            (FeatureOp::Extrude { targets, .. }, 4, Resolved::Bodies(to))
+            | (FeatureOp::Revolve { targets, .. } | FeatureOp::Sweep { targets, .. }, 2, Resolved::Bodies(to)) => *targets = to,
+            (FeatureOp::Loft { profiles, targets, .. }, at, Resolved::Bodies(to)) if at == profiles.len() + 1 => *targets = to,
             (FeatureOp::Loft { profiles, .. }, 0, Resolved::Profiles(to)) => {
                 // A profile on a sketch it already had keeps its start.
                 let kept = |sketch| profiles.iter().find(|p| p.sketch == sketch).and_then(|p| p.start.clone());
@@ -510,14 +567,16 @@ impl FeatureOp {
             }
             (FeatureOp::Revolve { axis, .. }, 1, Resolved::Curve(curve)) => *axis = curve,
             (
-                FeatureOp::Boolean { target, .. }
-                | FeatureOp::Mirror { target, .. }
-                | FeatureOp::Paint { target, .. }
-                | FeatureOp::Pattern { target, .. },
+                FeatureOp::Union { bodies: list }
+                | FeatureOp::Intersect { bodies: list }
+                | FeatureOp::Subtract { targets: list, .. }
+                | FeatureOp::Mirror { targets: list, .. }
+                | FeatureOp::Paint { targets: list, .. }
+                | FeatureOp::Pattern { targets: list, .. },
                 0,
-                Resolved::Body(id),
-            ) => *target = id,
-            (FeatureOp::Boolean { tool, .. }, 1, Resolved::Body(id)) => *tool = id,
+                Resolved::Bodies(to),
+            ) => *list = to,
+            (FeatureOp::Subtract { tools, .. }, 1, Resolved::Bodies(to)) => *tools = to,
             (FeatureOp::Mirror { about, .. }, 1, Resolved::Plane(on)) => *about = on,
             (FeatureOp::Pattern { along: PatternKind::Linear { direction, .. }, .. }, 1, Resolved::Direction(to)) => *direction = to,
             (FeatureOp::Pattern { along: PatternKind::Radial { axis, .. }, .. }, 1, Resolved::Curve(curve)) => *axis = curve,
@@ -537,9 +596,21 @@ impl FeatureOp {
         true
     }
 
-    /// The bodies it eats; see [`Self::fields`].
+    /// The features whose bodies it eats; see [`Self::fields`].
     pub fn consumes(&self) -> Vec<PropFeatureId> {
         self.fields().iter().filter(|field| field.consumed).flat_map(|field| field.refs.iter().flat_map(AnyRef::features)).collect()
+    }
+
+    /// The bodies it eats, in operand order.
+    pub fn eats(&self) -> Vec<BodyRef> {
+        self.fields()
+            .iter()
+            .filter(|field| field.consumed)
+            .flat_map(|field| field.refs.iter().filter_map(|reference| match reference {
+                AnyRef::Body { body } => Some(*body),
+                _ => None,
+            }))
+            .collect()
     }
 
     /// Features this one names without consuming: what a datum was made
@@ -572,7 +643,9 @@ impl FeatureOp {
             | FeatureOp::Revolve { .. }
             | FeatureOp::Sweep { .. }
             | FeatureOp::Loft { .. }
-            | FeatureOp::Boolean { .. }
+            | FeatureOp::Union { .. }
+            | FeatureOp::Subtract { .. }
+            | FeatureOp::Intersect { .. }
             | FeatureOp::Mirror { .. }
             | FeatureOp::Paint { .. }
             | FeatureOp::Pattern { .. }
@@ -580,6 +653,68 @@ impl FeatureOp {
             | FeatureOp::Axis { .. }
             | FeatureOp::Point { .. }
             | FeatureOp::Sketch { .. } => None,
+        }
+    }
+
+    /// How many bodies it makes when it runs, which every [`BodyRef`] to them
+    /// carries as its `of`.
+    pub fn bodies_made(&self) -> u32 {
+        let count = |list: &[BodyRef]| list.len() as u32;
+        match self {
+            FeatureOp::Plane { .. } | FeatureOp::Axis { .. } | FeatureOp::Point { .. } | FeatureOp::Sketch { .. } => 0,
+            FeatureOp::Subtract { targets, .. }
+            | FeatureOp::Mirror { targets, .. }
+            | FeatureOp::Paint { targets, .. }
+            | FeatureOp::Pattern { targets, .. } => count(targets),
+            FeatureOp::Extrude { op, targets, .. }
+            | FeatureOp::Revolve { op, targets, .. }
+            | FeatureOp::Sweep { op, targets, .. }
+            | FeatureOp::Loft { op, targets, .. } => match op {
+                SweepOp::Cut | SweepOp::Intersect => count(targets),
+                SweepOp::NewBody | SweepOp::Join => 1,
+            },
+            FeatureOp::Primitive { .. } | FeatureOp::Union { .. } | FeatureOp::Intersect { .. } => 1,
+        }
+    }
+
+    /// The target body `index` came from; `None` where its one body joins
+    /// them all.
+    pub fn source_of(&self, index: u32) -> Option<BodyRef> {
+        let targets = match self {
+            FeatureOp::Subtract { targets, .. }
+            | FeatureOp::Mirror { targets, .. }
+            | FeatureOp::Paint { targets, .. }
+            | FeatureOp::Pattern { targets, .. } => targets,
+            FeatureOp::Extrude { op, targets, .. }
+            | FeatureOp::Revolve { op, targets, .. }
+            | FeatureOp::Sweep { op, targets, .. }
+            | FeatureOp::Loft { op, targets, .. }
+                if matches!(op, SweepOp::Cut | SweepOp::Intersect) =>
+            {
+                targets
+            }
+            _ => return None,
+        };
+        targets.get(index as usize).copied()
+    }
+
+    /// A sweep that joins, cuts or intersects with no target named.
+    pub fn sweep_with_no_targets(&self) -> bool {
+        match self {
+            FeatureOp::Extrude { op, targets, .. }
+            | FeatureOp::Revolve { op, targets, .. }
+            | FeatureOp::Sweep { op, targets, .. }
+            | FeatureOp::Loft { op, targets, .. } => *op != SweepOp::NewBody && targets.is_empty(),
+            _ => false,
+        }
+    }
+
+    pub fn sweep_op_mut(&mut self) -> Option<&mut SweepOp> {
+        match self {
+            FeatureOp::Extrude { op, .. } | FeatureOp::Revolve { op, .. } | FeatureOp::Sweep { op, .. } | FeatureOp::Loft { op, .. } => {
+                Some(op)
+            }
+            _ => None,
         }
     }
 
@@ -645,18 +780,19 @@ impl Problem {
     fn missing_body(feature: PropFeatureId) -> Self {
         Self { feature, message: get!("prop.problems.missing_body") }
     }
+
+    fn renumbered_body(feature: PropFeatureId) -> Self {
+        Self { feature, message: get!("prop.problems.renumbered_body") }
+    }
 }
 
 #[derive(Clone, Debug, Default)]
 pub struct Evaluated {
     /// The bodies left standing, in the order they were made.
-    pub bodies: Vec<(PropFeatureId, Solid)>,
+    pub bodies: Vec<(BodyRef, Solid)>,
     pub problems: Vec<Problem>,
-    /// Which bodies were live just before each feature ran. Recorded so the
-    /// panel does not reimplement the consuming rule.
-    pub live_before: Vec<Vec<PropFeatureId>>,
     /// Beside `bodies`, in the same order: the outlines each was made from.
-    pub wires: Vec<(PropFeatureId, Vec<Wire>)>,
+    pub wires: Vec<(BodyRef, Vec<Wire>)>,
     /// The named corners and edges that can be seen; see [`pickables`].
     pub pickables: Vec<Pickable>,
     /// The origin planes, then plane features in list order.
@@ -694,11 +830,11 @@ impl Evaluated {
     }
 
     /// A feature already eaten has no body, so contributes nothing.
-    pub fn bounds_of_bodies(&self, ids: &[PropFeatureId]) -> Option<(Vec3, Vec3)> {
+    pub fn bounds_of_bodies(&self, ids: &[BodyRef]) -> Option<(Vec3, Vec3)> {
         self.bounds_of(|id| ids.contains(&id))
     }
 
-    fn bounds_of(&self, wanted: impl Fn(PropFeatureId) -> bool) -> Option<(Vec3, Vec3)> {
+    fn bounds_of(&self, wanted: impl Fn(BodyRef) -> bool) -> Option<(Vec3, Vec3)> {
         self.bodies
             .iter()
             .filter(|(id, _)| wanted(*id))
@@ -708,7 +844,7 @@ impl Evaluated {
 
     /// Tested against faces, not boxes, so a click down a bore reaches what is
     /// behind. Faces are convex, so a fan triangulates them exactly.
-    pub fn body_under(&self, origin: Vec3, direction: Vec3) -> Option<PropFeatureId> {
+    pub fn body_under(&self, origin: Vec3, direction: Vec3) -> Option<BodyRef> {
         self.face_under(origin, direction).map(|(id, _, _)| id)
     }
 
@@ -719,7 +855,7 @@ impl Evaluated {
     /// The nearest face hit and how far down the ray: what [`Evaluated::face_distance`],
     /// [`Evaluated::surface_under`] and [`Evaluated::region_under`] each cast for, so one cast
     /// can serve all three.
-    pub fn face_under(&self, origin: Vec3, direction: Vec3) -> Option<(PropFeatureId, &Polygon, f32)> {
+    pub fn face_under(&self, origin: Vec3, direction: Vec3) -> Option<(BodyRef, &Polygon, f32)> {
         self.bodies
             .iter()
             .flat_map(|(id, solid)| solid.polygons().iter().map(move |polygon| (*id, polygon)))
@@ -735,12 +871,12 @@ impl Evaluated {
 
     /// What a click on a body's surface lands on: the body, and the named
     /// face its polygon carries the tag of.
-    pub fn surface_under(&self, ray: Ray3d) -> Option<(PropFeatureId, Option<GeomRef>)> {
+    pub fn surface_under(&self, ray: Ray3d) -> Option<(BodyRef, Option<GeomRef>)> {
         Some(self.surface_of_hit(self.face_under(ray.origin, *ray.direction)?))
     }
 
     /// [`Evaluated::surface_under`] for a hit already cast.
-    pub fn surface_of_hit(&self, (body, polygon, _): (PropFeatureId, &Polygon, f32)) -> (PropFeatureId, Option<GeomRef>) {
+    pub fn surface_of_hit(&self, (body, polygon, _): (BodyRef, &Polygon, f32)) -> (BodyRef, Option<GeomRef>) {
         (body, self.faces.name(polygon.surface.tag).cloned())
     }
 
@@ -806,7 +942,7 @@ impl Evaluated {
         self.found.get_or_init(|| {
             let (mut seams, mut junctions) = (vec![], vec![]);
             for (body, solid) in &self.bodies {
-                let (found, meeting) = seam::find(*body, solid, &self.faces);
+                let (found, meeting) = seam::find(body.feature, solid, &self.faces);
                 seams.extend(found);
                 junctions.extend(meeting);
             }
@@ -829,7 +965,7 @@ impl Evaluated {
         }
     }
 
-    pub fn body_of(&self, reference: &GeomRef) -> Option<PropFeatureId> {
+    pub fn body_of(&self, reference: &GeomRef) -> Option<BodyRef> {
         self.wires
             .iter()
             .find(|(_, wires)| wires.iter().any(|wire| wire.source == reference.source))
@@ -904,28 +1040,113 @@ impl AxisFrame {
 /// Stands a sweep's body up on its own, or joins, cuts or intersects its
 /// target with it under the sweep's id. A target that cannot be combined is
 /// put back where it stood.
-fn combine(body: Live, op: SweepOp, target: Option<PropFeatureId>, live: &mut Vec<Live>, problems: &mut Vec<Problem>) {
-    let Some(boolean) = op.boolean() else {
+fn combine(
+    body: Live,
+    op: SweepOp,
+    targets: &[BodyRef],
+    live: &mut Vec<Live>,
+    problems: &mut Vec<Problem>,
+    faces: &mut FaceTable,
+) {
+    let feature = body.body.feature;
+    if op == SweepOp::NewBody {
         live.push(body);
         return;
-    };
-    let Some(at) = target.and_then(|target| live.iter().position(|standing| standing.id == target)) else {
-        problems.push(Problem::missing_body(body.id));
-        return;
-    };
-    let target = live.remove(at);
-    let solid = match boolean {
-        BooleanOp::Union => target.solid.union(&body.solid),
-        BooleanOp::Subtract => target.solid.subtract(&body.solid),
-        BooleanOp::Intersect => target.solid.intersect(&body.solid),
-    };
-    if solid.is_empty() {
-        problems.push(Problem { feature: body.id, message: get!("prop.problems.nothing_left") });
-        live.insert(at, target);
+    }
+    if targets.is_empty() {
+        problems.push(Problem::missing_body(feature));
         return;
     }
-    let wires = target.wires.into_iter().chain(body.wires).collect();
-    live.push(Live { id: body.id, solid, wires });
+    let taken = match take(targets, live, feature) {
+        Ok(taken) => taken,
+        Err(problem) => {
+            problems.push(problem);
+            return;
+        }
+    };
+    let solids: Vec<Solid> = match op {
+        SweepOp::Join => {
+            let joined = taken[1..].iter().fold(taken[0].1.solid.clone(), |joined, (_, target)| joined.union(&target.solid));
+            vec![joined.union(&body.solid)]
+        }
+        SweepOp::Cut => taken.iter().map(|(_, target)| target.solid.subtract(&body.solid)).collect(),
+        SweepOp::Intersect | SweepOp::NewBody => taken.iter().map(|(_, target)| target.solid.intersect(&body.solid)).collect(),
+    };
+    if solids.iter().any(Solid::is_empty) {
+        problems.push(Problem { feature, message: get!("prop.problems.nothing_left") });
+        put_back(taken, live);
+        return;
+    }
+    let of = solids.len() as u32;
+    if op == SweepOp::Join {
+        let wires = taken.into_iter().flat_map(|(_, target)| target.wires).chain(body.wires).collect();
+        let solid = solids.into_iter().next().expect("one joined body");
+        live.push(Live { body: body.body, solid, wires });
+        return;
+    }
+    for (index, ((_, target), solid)) in taken.into_iter().zip(solids).enumerate() {
+        let (solid, copied) = own_copy(solid, &[&body], feature, index as u32, faces);
+        let wires = target.wires.into_iter().chain(copied).collect();
+        live.push(Live { body: BodyRef { feature, index: index as u32, of }, solid, wires });
+    }
+}
+
+/// The faces and outlines `shared` brought into body `index` of one per
+/// target, named apart from the other bodies' copies so a click on that wall
+/// names this body. The first keeps the plain names.
+fn own_copy(solid: Solid, shared: &[&Live], feature: PropFeatureId, index: u32, faces: &mut FaceTable) -> (Solid, Vec<Wire>) {
+    let wires = shared.iter().flat_map(|body| &body.wires);
+    if index == 0 {
+        return (solid, wires.cloned().collect());
+    }
+    let copied = wires.map(|wire| wire.copied(feature, index, wire.outline.clone())).collect();
+    let tags: std::collections::HashSet<u32> =
+        shared.iter().flat_map(|body| body.solid.polygons().iter().map(|polygon| polygon.surface.tag)).collect();
+    (solid.retagged(|tag| if tags.contains(&tag) { faces.copied(tag, feature, index) } else { tag }), copied)
+}
+
+/// Takes `bodies` out of `live`, in the order named, each with where it stood
+/// so [`put_back`] can return it. All are found before any is taken, so a
+/// missing one takes nothing.
+fn take(bodies: &[BodyRef], live: &mut Vec<Live>, feature: PropFeatureId) -> Result<Vec<(usize, Live)>, Problem> {
+    if bodies.is_empty() {
+        return Err(Problem::missing_body(feature));
+    }
+    let mut at = Vec::with_capacity(bodies.len());
+    for body in bodies {
+        let found = locate(*body, live, feature)?;
+        if at.contains(&found) {
+            return Err(Problem { feature, message: get!("prop.problems.self_boolean") });
+        }
+        at.push(found);
+    }
+    // Highest first, so removing one does not shift the rest.
+    let mut order: Vec<usize> = (0..at.len()).collect();
+    order.sort_by_key(|&i| std::cmp::Reverse(at[i]));
+    let mut taken: Vec<Option<(usize, Live)>> = (0..at.len()).map(|_| None).collect();
+    for i in order {
+        taken[i] = Some((at[i], live.remove(at[i])));
+    }
+    Ok(taken.into_iter().flatten().collect())
+}
+
+fn put_back(mut taken: Vec<(usize, Live)>, live: &mut Vec<Live>) {
+    taken.sort_by_key(|(at, _)| *at);
+    for (at, body) in taken {
+        live.insert(at.min(live.len()), body);
+    }
+}
+
+/// Where `body` stands among the live bodies, or why `feature` cannot use it.
+fn locate(body: BodyRef, live: &[Live], feature: PropFeatureId) -> Result<usize, Problem> {
+    let at = live
+        .iter()
+        .position(|standing| standing.body.feature == body.feature && standing.body.index == body.index)
+        .ok_or_else(|| Problem::missing_body(feature))?;
+    match live[at].body.of == body.of {
+        true => Ok(at),
+        false => Err(Problem::renumbered_body(feature)),
+    }
 }
 
 /// Meters an extrude through everything runs past the last body.
@@ -1008,7 +1229,7 @@ impl<'a> Reach<'a> {
 
 /// A body mid-evaluation, with the outlines of everything that went into it.
 struct Live {
-    id: PropFeatureId,
+    body: BodyRef,
     solid: Solid,
     wires: Vec<Wire>,
 }
@@ -1161,10 +1382,8 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
     let mut axes = Vec::new();
     let mut points = Vec::new();
     let mut faces = FaceTable::default();
-    let mut live_before = Vec::with_capacity(features.len());
 
     for feature in features {
-        live_before.push(live.iter().map(|body| body.id).collect());
 
         if !feature.enabled {
             continue;
@@ -1172,10 +1391,9 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
 
         // Find before taking: a boolean that took one operand and failed to
         // find the other would delete a body it never used.
-        let find = |id: PropFeatureId, live: &[Live]| live.iter().position(|body| body.id == id);
         // A generator's polygons carry its own face numbers until here.
         let made = |solid: Solid, outline: Outline, faces: &mut FaceTable| Live {
-            id: feature.id,
+            body: BodyRef::whole(feature.id),
             solid: solid.retagged(|face| faces.of_generator(feature.id, face)),
             wires: vec![Wire::new(feature.id, outline)],
         };
@@ -1188,7 +1406,7 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
             &points,
             origin_half_of(&live),
         )
-        .with_bodies(live.iter().map(|body| (body.id, &body.solid)), &faces);
+        .with_bodies(live.iter().map(|body| (body.body.feature, &body.solid)), &faces);
         let resolved_axis = |axis: &CurveRef| axis.resolve(&scope).and_then(|curve| curve.line());
 
         match &feature.op {
@@ -1196,7 +1414,7 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
                 let solid = shape.solid(*surface).transformed(placement.transform());
                 live.push(made(solid, shape.outline().transformed(placement.transform()), &mut faces));
             }
-            FeatureOp::Extrude { profile, taper, op, target, end, other, direction, surface } => {
+            FeatureOp::Extrude { profile, taper, op, targets, end, other, direction, surface } => {
                 let Some((plane, found, by_across)) = profile_of(feature.id, profile, &scope, &mut problems) else { continue };
                 let reach = Reach::new(&plane, direction.as_ref(), &scope, &live).and_then(|reach| {
                     let near = match other {
@@ -1221,11 +1439,11 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
                 let local = reach.local(&plane);
                 let run = |loops| pushed(loops, from, to, local, *taper);
                 match sweep(&found, run, |points| points.to_vec(), &[plane.transform()], *surface, by_across) {
-                    Ok((solid, outline)) => combine(made(solid, outline, &mut faces), *op, *target, &mut live, &mut problems),
+                    Ok((solid, outline)) => combine(made(solid, outline, &mut faces), *op, targets, &mut live, &mut problems, &mut faces),
                     Err(message) => problems.push(Problem { feature: feature.id, message }),
                 }
             }
-            FeatureOp::Sweep { profile, orient, twist, scale, op, target, path, surface } => {
+            FeatureOp::Sweep { profile, orient, twist, scale, op, targets, path, surface } => {
                 let Some((plane, found, by_across)) = profile_of(feature.id, profile, &scope, &mut problems) else { continue };
                 let Some(curves) = path.resolve(&scope) else {
                     problems.push(Problem { feature: feature.id, message: get!("prop.problems.missing_path") });
@@ -1262,11 +1480,11 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
                     closed: points.closed,
                 };
                 match sweep(&found, run, |points| points.to_vec(), &[], *surface, by_across) {
-                    Ok((solid, outline)) => combine(made(solid, outline, &mut faces), *op, *target, &mut live, &mut problems),
+                    Ok((solid, outline)) => combine(made(solid, outline, &mut faces), *op, targets, &mut live, &mut problems, &mut faces),
                     Err(message) => problems.push(Problem { feature: feature.id, message }),
                 }
             }
-            FeatureOp::Loft { closed, op, target, profiles, surface } => {
+            FeatureOp::Loft { closed, op, targets, profiles, surface } => {
                 let mut placed_profiles = Vec::with_capacity(profiles.len());
                 for profile in profiles {
                     let Some(placed) = sketches.iter().find(|placed: &&PlacedSketch| placed.id == profile.sketch) else {
@@ -1297,13 +1515,13 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
                     .and_then(|run| skin(&run, *surface).map_err(SkinProblem::message));
                 match swept {
                     Ok(swept) if !swept.solid.is_empty() => {
-                        combine(made(swept.solid, swept.outline, &mut faces), *op, *target, &mut live, &mut problems)
+                        combine(made(swept.solid, swept.outline, &mut faces), *op, targets, &mut live, &mut problems, &mut faces)
                     }
                     Ok(_) => problems.push(Problem { feature: feature.id, message: get!("prop.problems.empty_sweep") }),
                     Err(message) => problems.push(Problem { feature: feature.id, message }),
                 }
             }
-            FeatureOp::Revolve { profile, axis, degrees, steps, symmetric, op, target, surface } => {
+            FeatureOp::Revolve { profile, axis, degrees, steps, symmetric, op, targets, surface } => {
                 let Some((plane, found, by_across)) = profile_of(feature.id, profile, &scope, &mut problems) else { continue };
                 let Some((a, b)) = resolved_axis(axis) else {
                     problems.push(Problem { feature: feature.id, message: get!("prop.problems.missing_axis") });
@@ -1325,79 +1543,105 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
                 };
                 let run = |loops| revolution(loops, *degrees, steps);
                 match sweep(&found, run, |points| frame.local(points), &[spin, frame.transform], *surface, by_across) {
-                    Ok((solid, outline)) => combine(made(solid, outline, &mut faces), *op, *target, &mut live, &mut problems),
+                    Ok((solid, outline)) => combine(made(solid, outline, &mut faces), *op, targets, &mut live, &mut problems, &mut faces),
                     Err(message) => problems.push(Problem { feature: feature.id, message }),
                 }
             }
-            FeatureOp::Boolean { op, target, tool } => {
-                // Otherwise reported as a missing body.
-                if target == tool {
-                    problems.push(Problem {
-                        feature: feature.id,
-                        message: get!("prop.problems.self_boolean"),
-                    });
+            FeatureOp::Union { bodies } | FeatureOp::Intersect { bodies } => {
+                let taken = match take(bodies, &mut live, feature.id) {
+                    Ok(taken) => taken,
+                    Err(problem) => {
+                        problems.push(problem);
+                        continue;
+                    }
+                };
+                let union = matches!(feature.op, FeatureOp::Union { .. });
+                let solid = taken[1..].iter().fold(taken[0].1.solid.clone(), |joined, (_, body)| match union {
+                    true => joined.union(&body.solid),
+                    false => joined.intersect(&body.solid),
+                });
+                if solid.is_empty() {
+                    problems.push(Problem { feature: feature.id, message: get!("prop.problems.nothing_left") });
+                    put_back(taken, &mut live);
                     continue;
                 }
-                let (Some(at_target), Some(at_tool)) = (find(*target, &live), find(*tool, &live))
-                else {
+                let wires = taken.into_iter().flat_map(|(_, body)| body.wires).collect();
+                live.push(Live { body: BodyRef::whole(feature.id), solid, wires });
+            }
+            FeatureOp::Subtract { targets, tools } => {
+                if targets.is_empty() || tools.is_empty() {
                     problems.push(Problem::missing_body(feature.id));
                     continue;
+                }
+                // Taken together, so a body named as both is a problem.
+                let operands: Vec<BodyRef> = targets.iter().chain(tools).copied().collect();
+                let mut taken = match take(&operands, &mut live, feature.id) {
+                    Ok(taken) => taken,
+                    Err(problem) => {
+                        problems.push(problem);
+                        continue;
+                    }
                 };
-                // Higher index first, or removing one shifts the other.
-                let (first, second) = (at_target.max(at_tool), at_target.min(at_tool));
-                let (a, b) = if at_target < at_tool {
-                    let b = live.remove(first);
-                    let a = live.remove(second);
-                    (a, b)
-                } else {
-                    let a = live.remove(first);
-                    let b = live.remove(second);
-                    (a, b)
-                };
-                let result = match op {
-                    BooleanOp::Union => a.solid.union(&b.solid),
-                    BooleanOp::Subtract => a.solid.subtract(&b.solid),
-                    BooleanOp::Intersect => a.solid.intersect(&b.solid),
-                };
-                if result.is_empty() {
-                    problems.push(Problem {
-                        feature: feature.id,
-                        message: get!("prop.problems.nothing_left"),
-                    });
+                let tools = taken.split_off(targets.len());
+                let solids: Vec<Solid> = taken
+                    .iter()
+                    .map(|(_, target)| tools.iter().fold(target.solid.clone(), |left, (_, tool)| left.subtract(&tool.solid)))
+                    .collect();
+                if solids.iter().any(Solid::is_empty) {
+                    problems.push(Problem { feature: feature.id, message: get!("prop.problems.nothing_left") });
+                    put_back(taken.into_iter().chain(tools).collect(), &mut live);
                     continue;
                 }
-                let wires = a.wires.into_iter().chain(b.wires).collect();
-                live.push(Live { id: feature.id, solid: result, wires });
+                let of = solids.len() as u32;
+                let shared: Vec<&Live> = tools.iter().map(|(_, tool)| tool).collect();
+                for (index, ((_, target), solid)) in taken.into_iter().zip(solids).enumerate() {
+                    let (solid, copied) = own_copy(solid, &shared, feature.id, index as u32, &mut faces);
+                    let wires = target.wires.into_iter().chain(copied).collect();
+                    live.push(Live { body: BodyRef { feature: feature.id, index: index as u32, of }, solid, wires });
+                }
             }
-            FeatureOp::Mirror { target, about, offset, keep_original } => {
+            FeatureOp::Mirror { targets, about, offset, keep_original } => {
                 let Some(plane) = scope.plane(*about) else {
                     problems.push(Problem { feature: feature.id, message: get!("prop.problems.no_mirror_plane") });
                     continue;
                 };
-                let Some(body) = find(*target, &live).map(|at| live.remove(at)) else {
-                    problems.push(Problem::missing_body(feature.id));
-                    continue;
+                let taken = match take(targets, &mut live, feature.id) {
+                    Ok(taken) => taken,
+                    Err(problem) => {
+                        problems.push(problem);
+                        continue;
+                    }
                 };
                 let normal = *plane.normal;
                 let origin = plane.origin + normal * *offset;
-                let reflected = body.solid.clone().mirrored(origin, normal).retagged(|tag| faces.copied(tag, feature.id, 1));
-                let reflections = body
-                    .wires
-                    .iter()
-                    .map(|wire| wire.copied(feature.id, 1, wire.outline.clone().mirrored(origin, normal)));
-                let (solid, wires) = if *keep_original {
-                    (body.solid.union(&reflected), body.wires.iter().cloned().chain(reflections).collect())
-                } else {
-                    (reflected, reflections.collect())
-                };
-                live.push(Live { id: feature.id, solid, wires });
+                let of = taken.len() as u32;
+                for (index, (_, body)) in taken.into_iter().enumerate() {
+                    let reflected = body.solid.clone().mirrored(origin, normal).retagged(|tag| faces.copied(tag, feature.id, 1));
+                    let reflections = body
+                        .wires
+                        .iter()
+                        .map(|wire| wire.copied(feature.id, 1, wire.outline.clone().mirrored(origin, normal)));
+                    let (solid, wires) = if *keep_original {
+                        (body.solid.union(&reflected), body.wires.iter().cloned().chain(reflections).collect())
+                    } else {
+                        (reflected, reflections.collect())
+                    };
+                    live.push(Live { body: BodyRef { feature: feature.id, index: index as u32, of }, solid, wires });
+                }
             }
-            FeatureOp::Paint { target, surface } => {
-                let Some(body) = find(*target, &live).map(|at| live.remove(at)) else {
-                    problems.push(Problem::missing_body(feature.id));
-                    continue;
+            FeatureOp::Paint { targets, surface } => {
+                let taken = match take(targets, &mut live, feature.id) {
+                    Ok(taken) => taken,
+                    Err(problem) => {
+                        problems.push(problem);
+                        continue;
+                    }
                 };
-                live.push(Live { id: feature.id, solid: body.solid.painted(*surface), wires: body.wires });
+                let of = taken.len() as u32;
+                for (index, (_, body)) in taken.into_iter().enumerate() {
+                    let made = BodyRef { feature: feature.id, index: index as u32, of };
+                    live.push(Live { body: made, solid: body.solid.painted(*surface), wires: body.wires });
+                }
             }
             FeatureOp::Plane { def } => match def.resolve(feature.id, &scope) {
                 Some(datum) => planes.push(datum),
@@ -1425,46 +1669,51 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
                     }),
                 }
             }
-            FeatureOp::Pattern { target, count, along } => {
+            FeatureOp::Pattern { targets, count, along } => {
                 let Some(line) = along.resolve(&scope) else {
                     problems.push(Problem { feature: feature.id, message: get!("prop.problems.missing_line") });
                     continue;
                 };
-                let Some(body) = find(*target, &live).map(|at| live.remove(at)) else {
-                    problems.push(Problem::missing_body(feature.id));
-                    continue;
+                let taken = match take(targets, &mut live, feature.id) {
+                    Ok(taken) => taken,
+                    Err(problem) => {
+                        problems.push(problem);
+                        continue;
+                    }
                 };
                 let count = (*count).max(1);
-                // Unioned, not concatenated: overlapping copies must become one
-                // closed surface or a later boolean keeps the wrong half.
-                let solid = (1..count).fold(body.solid.clone(), |joined, index| {
-                    let copy = body.solid.clone().transformed(along.copy(line, index, count));
-                    joined.union(&copy.retagged(|tag| faces.copied(tag, feature.id, index)))
-                });
-                let mut wires = body.wires.clone();
-                for index in 1..count {
-                    let moved = along.copy(line, index, count);
-                    wires.extend(
-                        body.wires
-                            .iter()
-                            .map(|wire| wire.copied(feature.id, index, wire.outline.clone().transformed(moved))),
-                    );
+                let of = taken.len() as u32;
+                for (made, (_, body)) in taken.into_iter().enumerate() {
+                    // Unioned, not concatenated: overlapping copies must become one
+                    // closed surface or a later boolean keeps the wrong half.
+                    let solid = (1..count).fold(body.solid.clone(), |joined, index| {
+                        let copy = body.solid.clone().transformed(along.copy(line, index, count));
+                        joined.union(&copy.retagged(|tag| faces.copied(tag, feature.id, index)))
+                    });
+                    let mut wires = body.wires.clone();
+                    for index in 1..count {
+                        let moved = along.copy(line, index, count);
+                        wires.extend(
+                            body.wires
+                                .iter()
+                                .map(|wire| wire.copied(feature.id, index, wire.outline.clone().transformed(moved))),
+                        );
+                    }
+                    live.push(Live { body: BodyRef { feature: feature.id, index: made as u32, of }, solid, wires });
                 }
-                live.push(Live { id: feature.id, solid, wires });
             }
         }
     }
 
-    let pickables: Vec<Pickable> = live.iter().flat_map(|body| pickables(body.id, &body.solid, &body.wires)).collect();
+    let pickables: Vec<Pickable> = live.iter().flat_map(|body| pickables(body.body.feature, &body.solid, &body.wires)).collect();
     let origin_half = origin_half_of(&live);
     planes.splice(0..0, OriginPlane::ALL.map(|which| Datum::origin(which, origin_half)));
-    let (bodies, wires) = live.into_iter().map(|body| ((body.id, body.solid), (body.id, body.wires))).unzip();
+    let (bodies, wires) = live.into_iter().map(|body| ((body.body, body.solid), (body.body, body.wires))).unzip();
     Evaluated {
         bodies,
         wires,
         pickables,
         problems,
-        live_before,
         planes,
         sketches,
         axes,
@@ -1500,13 +1749,13 @@ mod tests {
                 profile: ProfileSource::Regions { sketch: id(100), regions: vec![SketchId(1)] },
                 taper: 5.0,
                 op: SweepOp::Cut,
-                target: Some(id(137)),
+                targets: vec![BodyRef::whole(id(137))],
                 end: End::UpTo { to: AnyRef::Face { face: geom(Element::Face(2), 138) } },
                 other: Some(End::UpTo { to: AnyRef::Plane(PlaneRef::Feature(id(139))) }),
                 direction: Some(DirectionRef::Normal { plane: PlaneRef::Feature(id(140)) }),
                 surface,
             },
-            FeatureOp::Sweep { op: SweepOp::NewBody, target: None,
+            FeatureOp::Sweep { op: SweepOp::NewBody, targets: vec![],
                 profile: ProfileSource::Regions { sketch: id(131), regions: vec![SketchId(1)] },
                 orient: Orient::Frenet,
                 twist: 15.0,
@@ -1519,7 +1768,7 @@ mod tests {
                 },
                 surface,
             },
-            FeatureOp::Revolve { op: SweepOp::NewBody, target: None,
+            FeatureOp::Revolve { op: SweepOp::NewBody, targets: vec![],
                 profile: ProfileSource::Regions { sketch: id(101), regions: vec![SketchId(1)] },
                 degrees: 90.0,
                 steps: 12,
@@ -1527,7 +1776,7 @@ mod tests {
                 axis: CurveRef::Datum { feature: id(102) },
                 surface,
             },
-            FeatureOp::Revolve { op: SweepOp::Join, target: Some(id(143)),
+            FeatureOp::Revolve { op: SweepOp::Join, targets: vec![BodyRef::whole(id(143))],
                 profile: ProfileSource::Face { face: geom(Element::Face(4), 141) },
                 degrees: 45.0,
                 steps: 6,
@@ -1535,7 +1784,7 @@ mod tests {
                 axis: CurveRef::Datum { feature: id(142) },
                 surface,
             },
-            FeatureOp::Loft { op: SweepOp::NewBody, target: None,
+            FeatureOp::Loft { op: SweepOp::NewBody, targets: vec![],
                 closed: false,
                 profiles: vec![
                     Profile { sketch: id(134), region: SketchId(1), start: None },
@@ -1543,15 +1792,15 @@ mod tests {
                 ],
                 surface,
             },
-            FeatureOp::Boolean { op: BooleanOp::Subtract, target: id(103), tool: id(104) },
-            FeatureOp::Mirror { target: id(105), offset: 0.0, keep_original: true, about: PlaneRef::Feature(id(106)) },
-            FeatureOp::Paint { target: id(107), surface },
+            FeatureOp::Subtract { targets: vec![BodyRef::whole(id(103))], tools: vec![BodyRef::whole(id(104))] },
+            FeatureOp::Mirror { targets: vec![BodyRef::whole(id(105))], offset: 0.0, keep_original: true, about: PlaneRef::Feature(id(106)) },
+            FeatureOp::Paint { targets: vec![BodyRef::whole(id(107))], surface },
             FeatureOp::Pattern {
-                target: id(108),
+                targets: vec![BodyRef::whole(id(108))],
                 count: 3,
                 along: PatternKind::Linear { spacing: 0.05, direction: DirectionRef::Normal { plane: PlaneRef::Feature(id(109)) } },
             },
-            FeatureOp::Pattern { target: id(110), count: 3, along: PatternKind::Radial { degrees: 90.0, axis: CurveRef::Edge { edge: copied } } },
+            FeatureOp::Pattern { targets: vec![BodyRef::whole(id(110))], count: 3, along: PatternKind::Radial { degrees: 90.0, axis: CurveRef::Edge { edge: copied } } },
             FeatureOp::Plane {
                 def: PlaneDef::Through {
                     through: vec![
@@ -1622,7 +1871,14 @@ mod tests {
                             })
                             .collect(),
                     ),
-                    (_, [AnyRef::Body { body }]) => Resolved::Body(*body),
+                    (Kind::Bodies(_), refs) => Resolved::Bodies(
+                        refs.iter()
+                            .map(|r| match r {
+                                AnyRef::Body { body } => *body,
+                                other => panic!("an operand is a body, not {other:?}"),
+                            })
+                            .collect(),
+                    ),
                     (_, [AnyRef::Regions { sketch, entries }]) => Resolved::Regions { sketch: *sketch, entries: entries.clone() },
                     (Kind::Regions, [AnyRef::Face { face }]) => Resolved::ProfileFace(face.clone()),
                     (_, [AnyRef::Curve(curve)]) => Resolved::Curve(curve.clone()),
@@ -1663,7 +1919,7 @@ mod tests {
         let turned = PropFeature::new(
             PropFeatureId(3),
             FeatureOp::Pattern {
-                target: PropFeatureId(0),
+                targets: vec![BodyRef::whole(PropFeatureId(0))],
                 count: 4,
                 along: PatternKind::Radial { degrees: 360.0, axis: CurveRef::Datum { feature: PropFeatureId(1) } },
             },
@@ -1688,7 +1944,7 @@ mod tests {
         let pattern = |count: u32, along: PatternKind| {
             let evaluated = evaluate(&[
                 cube.clone(),
-                PropFeature::new(PropFeatureId(1), FeatureOp::Pattern { target: PropFeatureId(0), count, along }),
+                PropFeature::new(PropFeatureId(1), FeatureOp::Pattern { targets: vec![BodyRef::whole(PropFeatureId(0))], count, along }),
             ]);
             assert!(evaluated.problems.is_empty(), "{:?}", evaluated.problems);
             assert_eq!(evaluated.bodies.len(), 1, "the copies are one body");
@@ -1712,26 +1968,127 @@ mod tests {
         let far = cube(1, -0.5);
         let evaluated = evaluate(&[near.clone(), far.clone()]);
         let from_front = evaluated.body_under(Vec3::new(0.0, 0.0, 1.0), Vec3::NEG_Z);
-        assert_eq!(from_front, Some(PropFeatureId(0)));
+        assert_eq!(from_front, Some(BodyRef::whole(PropFeatureId(0))));
         let beside = evaluated.body_under(Vec3::new(1.0, 0.0, 1.0), Vec3::NEG_Z);
         assert_eq!(beside, None);
 
         let bore = primitive(2, Shape::Box { size: [0.04, 0.04, 0.3] }, Vec3::ZERO);
         let drilled = PropFeature::new(
             PropFeatureId(3),
-            FeatureOp::Boolean { op: BooleanOp::Subtract, target: PropFeatureId(0), tool: PropFeatureId(2) },
+            FeatureOp::Subtract { targets: vec![BodyRef::whole(PropFeatureId(0))], tools: vec![BodyRef::whole(PropFeatureId(2))] },
         );
         let evaluated = evaluate(&[near, far, bore, drilled]);
         assert_eq!(
             evaluated.body_under(Vec3::new(0.0, 0.0, 1.0), Vec3::NEG_Z),
-            Some(PropFeatureId(1)),
+            Some(BodyRef::whole(PropFeatureId(1))),
             "the ray goes down the hole",
         );
         assert_eq!(
             evaluated.body_under(Vec3::new(0.04, 0.0, 1.0), Vec3::NEG_Z),
-            Some(PropFeatureId(3)),
+            Some(BodyRef::whole(PropFeatureId(3))),
             "beside the hole is the drilled body, under its own id",
         );
+    }
+
+    fn small_cube(id: u32, x: f32) -> PropFeature {
+        primitive(id, Shape::Box { size: [0.1; 3] }, Vec3::new(x, 0.0, 0.0))
+    }
+
+    #[test]
+    fn one_tool_cuts_through_three_targets_as_three_bodies() {
+        let rod = primitive(3, Shape::Box { size: [3.0, 0.02, 0.02] }, Vec3::X);
+        let cut = PropFeature::new(
+            PropFeatureId(4),
+            FeatureOp::Subtract {
+                targets: (0..3).map(|id| BodyRef::whole(PropFeatureId(id))).collect(),
+                tools: vec![BodyRef::whole(PropFeatureId(3))],
+            },
+        );
+        let evaluated = evaluate(&[small_cube(0, 0.0), small_cube(1, 1.0), small_cube(2, 2.0), rod, cut]);
+        assert!(evaluated.problems.is_empty(), "{:?}", evaluated.problems);
+        assert_eq!(evaluated.bodies.len(), 3);
+        for (index, (body, solid)) in evaluated.bodies.iter().enumerate() {
+            assert_eq!(*body, BodyRef { feature: PropFeatureId(4), index: index as u32, of: 3 });
+            assert!((solid.volume() - (0.001 - 0.1 * 0.02 * 0.02)).abs() < 1e-7, "{}", solid.volume());
+        }
+    }
+
+    #[test]
+    fn a_union_of_four_overlapping_cubes_is_one_body() {
+        let cubes: Vec<PropFeature> = (0..4).map(|id| small_cube(id, id as f32 * 0.05)).collect();
+        let union = PropFeature::new(
+            PropFeatureId(4),
+            FeatureOp::Union { bodies: (0..4).map(|id| BodyRef::whole(PropFeatureId(id))).collect() },
+        );
+        let evaluated = evaluate(&[cubes, vec![union]].concat());
+        assert_eq!(evaluated.bodies.len(), 1);
+        assert_eq!(evaluated.bodies[0].0, BodyRef::whole(PropFeatureId(4)));
+        assert!((evaluated.bodies[0].1.volume() - 0.25 * 0.1 * 0.1).abs() < 1e-7);
+    }
+
+    #[test]
+    fn a_mirror_of_two_bodies_makes_two() {
+        let mirror = PropFeature::new(
+            PropFeatureId(2),
+            FeatureOp::Mirror {
+                offset: 0.0,
+                keep_original: false,
+                targets: vec![BodyRef::whole(PropFeatureId(0)), BodyRef::whole(PropFeatureId(1))],
+                about: PlaneRef::Origin(OriginPlane::Yz),
+            },
+        );
+        let evaluated = evaluate(&[small_cube(0, 0.2), small_cube(1, 0.5), mirror]);
+        assert_eq!(evaluated.bodies.len(), 2);
+        for (index, (body, solid)) in evaluated.bodies.iter().enumerate() {
+            assert_eq!(*body, BodyRef { feature: PropFeatureId(2), index: index as u32, of: 2 });
+            assert!((solid.volume() - 0.001).abs() < 1e-7);
+            assert!(solid.bounds().unwrap().1.x < 0.0, "copied across the plane");
+        }
+    }
+
+    #[test]
+    fn a_body_of_a_feature_that_makes_one_is_written_as_its_bare_id() {
+        #[derive(Serialize, Deserialize, PartialEq, Debug)]
+        struct Holder {
+            target: BodyRef,
+        }
+        let whole = Holder { target: BodyRef::whole(PropFeatureId(3)) };
+        let text = toml::to_string(&whole).unwrap();
+        assert_eq!(text.trim(), "target = 3");
+        assert_eq!(toml::from_str::<Holder>(&text).unwrap(), whole);
+        let second = Holder { target: BodyRef { feature: PropFeatureId(3), index: 1, of: 2 } };
+        let text = toml::to_string(&second).unwrap();
+        assert!(text.contains("index = 1") && text.contains("of = 2"), "{text}");
+        assert_eq!(toml::from_str::<Holder>(&text).unwrap(), second);
+    }
+
+    #[test]
+    fn a_body_past_the_count_its_feature_made_does_not_load() {
+        #[derive(Deserialize, Debug)]
+        #[allow(dead_code)]
+        struct Holder {
+            target: BodyRef,
+        }
+        for text in ["target = { feature = 3, index = 2, of = 2 }", "target = { feature = 3, index = 0, of = 0 }"] {
+            let error = toml::from_str::<Holder>(text).unwrap_err().to_string();
+            assert!(error.contains("past the last"), "{text}: {error}");
+        }
+        let error = toml::from_str::<Holder>("target = { feature = 3, idx = 1, of = 2 }").unwrap_err().to_string();
+        assert!(error.contains("{ feature, index, of }"), "{error}");
+    }
+
+    #[test]
+    fn a_body_named_under_another_count_is_a_problem_and_is_left_standing() {
+        let cube = primitive(0, Shape::Box { size: [0.1, 0.1, 0.1] }, Vec3::ZERO);
+        let paint = PropFeature::new(
+            PropFeatureId(1),
+            FeatureOp::Paint { targets: vec![BodyRef { feature: PropFeatureId(0), index: 0, of: 2 }], surface: Surface::default() },
+        );
+        let evaluated = evaluate(&[cube, paint]);
+        assert_eq!(evaluated.problems.len(), 1);
+        assert_eq!(evaluated.problems[0].feature, PropFeatureId(1));
+        assert_eq!(evaluated.problems[0].message, get!("prop.problems.renumbered_body"));
+        assert_eq!(evaluated.bodies[0].0, BodyRef::whole(PropFeatureId(0)), "the cube was not eaten");
     }
 
     fn primitive(id: u32, shape: Shape, at: Vec3) -> PropFeature {
@@ -1757,17 +2114,13 @@ mod tests {
             unit_box(1, Vec3::new(0.5, 0.0, 0.0)),
             PropFeature::new(
                 PropFeatureId(2),
-                FeatureOp::Boolean {
-                    op: BooleanOp::Subtract,
-                    target: PropFeatureId(0),
-                    tool: PropFeatureId(1),
-                },
+                FeatureOp::Subtract { targets: vec![BodyRef::whole(PropFeatureId(0))], tools: vec![BodyRef::whole(PropFeatureId(1))] },
             ),
         ];
         let result = evaluate(&features);
         assert!(result.problems.is_empty(), "{:?}", result.problems);
         assert_eq!(result.bodies.len(), 1, "the operands were left lying around");
-        assert_eq!(result.bodies[0].0, PropFeatureId(2), "the result took the wrong id");
+        assert_eq!(result.bodies[0].0.feature, PropFeatureId(2), "the result took the wrong id");
         assert!((result.bodies[0].1.volume() - 0.5).abs() < 1e-3);
     }
 
@@ -1778,18 +2131,14 @@ mod tests {
             unit_box(0, Vec3::ZERO),
             PropFeature::new(
                 PropFeatureId(2),
-                FeatureOp::Boolean {
-                    op: BooleanOp::Subtract,
-                    target: PropFeatureId(0),
-                    tool: PropFeatureId(9),
-                },
+                FeatureOp::Subtract { targets: vec![BodyRef::whole(PropFeatureId(0))], tools: vec![BodyRef::whole(PropFeatureId(9))] },
             ),
         ];
         let result = evaluate(&features);
         assert_eq!(result.problems.len(), 1);
         assert_eq!(result.problems[0].feature, PropFeatureId(2));
         assert_eq!(result.bodies.len(), 1, "the surviving body went missing too");
-        assert_eq!(result.bodies[0].0, PropFeatureId(0), "the target was eaten by a failed boolean");
+        assert_eq!(result.bodies[0].0.feature, PropFeatureId(0), "the target was eaten by a failed boolean");
     }
 
     /// A feature that fails must put back whatever it took.
@@ -1799,17 +2148,13 @@ mod tests {
             unit_box(0, Vec3::ZERO),
             PropFeature::new(
                 PropFeatureId(1),
-                FeatureOp::Boolean {
-                    op: BooleanOp::Union,
-                    target: PropFeatureId(0),
-                    tool: PropFeatureId(0),
-                },
+                FeatureOp::Union { bodies: vec![BodyRef::whole(PropFeatureId(0)), BodyRef::whole(PropFeatureId(0))] },
             ),
         ];
         let result = evaluate(&features);
         assert_eq!(result.problems.len(), 1);
         assert_eq!(result.bodies.len(), 1);
-        assert_eq!(result.bodies[0].0, PropFeatureId(0));
+        assert_eq!(result.bodies[0].0.feature, PropFeatureId(0));
     }
 
     #[test]
@@ -1818,7 +2163,7 @@ mod tests {
         features[0].enabled = false;
         let result = evaluate(&features);
         assert_eq!(result.bodies.len(), 1);
-        assert_eq!(result.bodies[0].0, PropFeatureId(1));
+        assert_eq!(result.bodies[0].0.feature, PropFeatureId(1));
     }
 
     #[test]
@@ -1828,7 +2173,7 @@ mod tests {
             PropFeature::new(
                 PropFeatureId(1),
                 FeatureOp::Mirror {
-                    target: PropFeatureId(0),
+                    targets: vec![BodyRef::whole(PropFeatureId(0))],
                     about: crate::prop::plane::PlaneRef::Origin(crate::prop::plane::OriginPlane::Yz),
                     offset: 0.0,
                     keep_original: true,
@@ -1839,29 +2184,6 @@ mod tests {
         assert!(result.problems.is_empty(), "{:?}", result.problems);
         assert_eq!(result.bodies.len(), 1);
         assert!((result.bodies[0].1.volume() - 2.0).abs() < 1e-3);
-    }
-
-    /// Fails as the panel offering bodies that are already eaten.
-    #[test]
-    fn the_live_set_is_recorded_as_each_feature_sees_it() {
-        let features = vec![
-            unit_box(0, Vec3::ZERO),
-            unit_box(1, Vec3::new(0.5, 0.0, 0.0)),
-            PropFeature::new(
-                PropFeatureId(2),
-                FeatureOp::Boolean {
-                    op: BooleanOp::Subtract,
-                    target: PropFeatureId(0),
-                    tool: PropFeatureId(1),
-                },
-            ),
-            unit_box(3, Vec3::new(9.0, 0.0, 0.0)),
-        ];
-        let result = evaluate(&features);
-        assert_eq!(result.live_before[0], vec![]);
-        assert_eq!(result.live_before[1], vec![PropFeatureId(0)]);
-        assert_eq!(result.live_before[2], vec![PropFeatureId(0), PropFeatureId(1)]);
-        assert_eq!(result.live_before[3], vec![PropFeatureId(2)]);
     }
 
     mod extrude {
@@ -1898,7 +2220,7 @@ mod tests {
                     FeatureOp::Extrude {
                         taper: 0.0,
                         op: SweepOp::NewBody,
-                        target: None,
+                        targets: vec![],
                         // Half each way, as both sides at half the distance.
                         end: End::Distance { distance: if symmetric { distance / 2.0 } else { distance } },
                         other: symmetric.then_some(End::Distance { distance: distance / 2.0 }),
@@ -2016,7 +2338,7 @@ mod tests {
                 profile: ProfileSource::Regions { sketch: on, regions: ids },
                 taper: 0.0,
                 op: SweepOp::NewBody,
-                target: None,
+                targets: vec![],
                 end: End::Distance { distance: 0.1 },
                 other: None,
                 direction: None,
@@ -2196,7 +2518,7 @@ mod tests {
                 PropFeature::new(PropFeatureId(1), FeatureOp::Sketch { on: PlaneRef::Origin(OriginPlane::Xz), sketch: path }),
                 PropFeature::new(
                     PropFeatureId(2),
-                    FeatureOp::Sweep { op: SweepOp::NewBody, target: None,
+                    FeatureOp::Sweep { op: SweepOp::NewBody, targets: vec![],
                         profile: ProfileSource::Regions { sketch: PropFeatureId(0), regions },
                         orient,
                         twist: 0.0,
@@ -2293,7 +2615,7 @@ mod tests {
                 PropFeature::new(PropFeatureId(0), FeatureOp::Sketch { on: PlaneRef::Origin(on), sketch }),
                 PropFeature::new(
                     PropFeatureId(1),
-                    FeatureOp::Revolve { op: SweepOp::NewBody, target: None,
+                    FeatureOp::Revolve { op: SweepOp::NewBody, targets: vec![],
                         axis: CurveRef::Sketch { sketch: PropFeatureId(0), entity: axis },
                         degrees,
                         steps,
@@ -2382,7 +2704,7 @@ mod tests {
                     PropFeature::new(PropFeatureId(0), FeatureOp::Sketch { on: PlaneRef::Origin(OriginPlane::Xy), sketch: sketch.clone() }),
                     PropFeature::new(
                         PropFeatureId(1),
-                        FeatureOp::Revolve { op: SweepOp::NewBody, target: None,
+                        FeatureOp::Revolve { op: SweepOp::NewBody, targets: vec![],
                             profile: ProfileSource::Regions { sketch: PropFeatureId(0), regions: regions.clone() },
                             degrees: 360.0,
                             steps: 12,
@@ -2419,7 +2741,7 @@ mod tests {
                 PropFeature::new(PropFeatureId(0), FeatureOp::Sketch { on: PlaneRef::Origin(OriginPlane::Xy), sketch }),
                 PropFeature::new(
                     PropFeatureId(1),
-                    FeatureOp::Revolve { op: SweepOp::NewBody, target: None,
+                    FeatureOp::Revolve { op: SweepOp::NewBody, targets: vec![],
                         axis: CurveRef::Sketch { sketch: PropFeatureId(0), entity: axis },
                         degrees: 120.0,
                         steps: 4,
@@ -2445,7 +2767,7 @@ mod tests {
             let regions = adopt(&mut sketch, names);
             let mut doc = PropDoc::new("test");
             let on = doc.push(FeatureOp::Sketch { on: PlaneRef::Origin(OriginPlane::Xz), sketch });
-            doc.push(FeatureOp::Revolve { op: SweepOp::NewBody, target: None,
+            doc.push(FeatureOp::Revolve { op: SweepOp::NewBody, targets: vec![],
                 axis: CurveRef::Sketch { sketch: on, entity: axis },
                 degrees: 270.0,
                 steps: 9,
@@ -2503,7 +2825,7 @@ mod tests {
                 PropFeature::new(PropFeatureId(2), FeatureOp::Sketch { on: PlaneRef::Feature(PropFeatureId(1)), sketch: far }),
                 PropFeature::new(
                     PropFeatureId(3),
-                    FeatureOp::Loft { op: SweepOp::NewBody, target: None,
+                    FeatureOp::Loft { op: SweepOp::NewBody, targets: vec![],
                         closed: false,
                         profiles: vec![
                             Profile { sketch: PropFeatureId(0), region: entries[0], start: None },
@@ -2599,7 +2921,7 @@ mod tests {
                 features.push(PropFeature::new(sketch, FeatureOp::Sketch { on: PlaneRef::Feature(plane), sketch: drawn }));
                 profiles.push(Profile { sketch, region, start: None });
             }
-            features.push(PropFeature::new(PropFeatureId(6), FeatureOp::Loft { op: SweepOp::NewBody, target: None, closed: true, profiles, surface: Surface::default() }));
+            features.push(PropFeature::new(PropFeatureId(6), FeatureOp::Loft { op: SweepOp::NewBody, targets: vec![], closed: true, profiles, surface: Surface::default() }));
             let evaluated = evaluate(&features);
             assert!(evaluated.problems.is_empty(), "{:?}", evaluated.problems);
             assert!(evaluated.bodies[0].1.volume() > 0.0);
@@ -2615,7 +2937,7 @@ mod tests {
                 PropFeature::new(PropFeatureId(0), FeatureOp::Sketch { on: PlaneRef::Origin(OriginPlane::Xy), sketch }),
                 PropFeature::new(
                     PropFeatureId(1),
-                    FeatureOp::Loft { op: SweepOp::NewBody, target: None,
+                    FeatureOp::Loft { op: SweepOp::NewBody, targets: vec![],
                         closed: false,
                         profiles: vec![Profile { sketch: PropFeatureId(0), region, start: None }],
                         surface: Surface::default(),
@@ -2631,7 +2953,7 @@ mod tests {
             let mut doc = PropDoc::new("test");
             let near = doc.push(FeatureOp::Sketch { on: PlaneRef::Origin(OriginPlane::Xy), sketch: squares(&[0.06]) });
             let far = doc.push(FeatureOp::Sketch { on: PlaneRef::Origin(OriginPlane::Xy), sketch: squares(&[0.02]) });
-            doc.push(FeatureOp::Loft { op: SweepOp::NewBody, target: None,
+            doc.push(FeatureOp::Loft { op: SweepOp::NewBody, targets: vec![],
                 closed: true,
                 profiles: vec![
                     Profile { sketch: near, region: SketchId(5), start: None },
@@ -2672,7 +2994,7 @@ mod tests {
                 profile: ProfileSource::Regions { sketch: PropFeatureId(sketch), regions: vec![region] },
                 taper: 0.0,
                 op: SweepOp::NewBody,
-                target: None,
+                targets: vec![],
                 end,
                 other: None,
                 direction: None,
@@ -2705,25 +3027,72 @@ mod tests {
             assert!((volume - expected).abs() < expected * 1e-3, "{volume} against {expected}");
         }
 
+        /// A cube at the origin, a second at `far_size` 0.3 m up, the square
+        /// sketched, and a cut through all both ways naming both cubes.
+        fn cut_through_two(far_size: f32) -> Evaluated {
+            let (sketch, region) = square();
+            let far = FeatureOp::Primitive {
+                shape: Shape::Box { size: [far_size; 3] },
+                placement: Placement::at(0.0, 0.0, 0.3),
+                surface: Surface::default(),
+            };
+            let mut cut = extrude(2, region, End::ThroughAll);
+            if let FeatureOp::Extrude { op, targets, other, .. } = &mut cut {
+                *op = SweepOp::Cut;
+                *targets = vec![BodyRef::whole(PropFeatureId(0)), BodyRef::whole(PropFeatureId(1))];
+                *other = Some(End::ThroughAll);
+            }
+            evaluate(&[
+                PropFeature::new(PropFeatureId(0), cube()),
+                PropFeature::new(PropFeatureId(1), far),
+                PropFeature::new(PropFeatureId(2), FeatureOp::Sketch { on: PlaneRef::Origin(OriginPlane::Xy), sketch }),
+                PropFeature::new(PropFeatureId(3), cut),
+            ])
+        }
+
+        #[test]
+        fn a_cut_through_two_targets_bores_each_as_its_own_body() {
+            let evaluated = cut_through_two(0.1);
+            assert!(evaluated.problems.is_empty(), "{:?}", evaluated.problems);
+            assert_eq!(evaluated.bodies.len(), 2);
+            for (index, (body, solid)) in evaluated.bodies.iter().enumerate() {
+                assert_eq!(*body, BodyRef { feature: PropFeatureId(3), index: index as u32, of: 2 });
+                near(solid.volume(), 0.1f32.powi(3) - SIDE * SIDE * 0.1);
+                // The bore's wall in this body names this body.
+                let (_, wires) = &evaluated.wires[index];
+                let wall = wires.iter().find(|wire| wire.source.feature == PropFeatureId(3)).expect("the cut's outline");
+                let face = GeomRef { element: crate::prop::reference::Element::Face(0), source: wall.source.clone() };
+                assert_eq!(evaluated.body_of(&face), Some(*body));
+            }
+        }
+
+        #[test]
+        fn a_cut_that_empties_one_target_leaves_both_standing() {
+            let evaluated = cut_through_two(0.01);
+            assert_eq!(evaluated.problems.len(), 1);
+            let standing: Vec<BodyRef> = evaluated.bodies.iter().map(|(body, _)| *body).collect();
+            assert_eq!(standing, vec![BodyRef::whole(PropFeatureId(0)), BodyRef::whole(PropFeatureId(1))], "in their order");
+        }
+
         #[test]
         fn a_join_adds_to_its_target_under_its_own_id() {
             let evaluated = on_the_cube(|region| {
                 let mut op = extrude(1, region, End::Distance { distance: 0.1 });
-                if let FeatureOp::Extrude { op: how, target, .. } = &mut op {
-                    (*how, *target) = (SweepOp::Join, Some(PropFeatureId(0)));
+                if let FeatureOp::Extrude { op: how, targets, .. } = &mut op {
+                    (*how, *targets) = (SweepOp::Join, vec![BodyRef::whole(PropFeatureId(0))]);
                 }
                 op
             });
             near(only_volume(&evaluated), 0.1f32.powi(3) + SIDE * SIDE * 0.05);
-            assert_eq!(evaluated.bodies[0].0, PropFeatureId(2));
+            assert_eq!(evaluated.bodies[0].0.feature, PropFeatureId(2));
         }
 
         #[test]
         fn a_cut_through_all_both_ways_bores_the_cube() {
             let evaluated = on_the_cube(|region| {
                 let mut op = extrude(1, region, End::ThroughAll);
-                if let FeatureOp::Extrude { op: how, target, other, .. } = &mut op {
-                    (*how, *target, *other) = (SweepOp::Cut, Some(PropFeatureId(0)), Some(End::ThroughAll));
+                if let FeatureOp::Extrude { op: how, targets, other, .. } = &mut op {
+                    (*how, *targets, *other) = (SweepOp::Cut, vec![BodyRef::whole(PropFeatureId(0))], Some(End::ThroughAll));
                 }
                 op
             });
@@ -2741,7 +3110,7 @@ mod tests {
             });
             assert_eq!(evaluated.problems.len(), 1);
             assert_eq!(evaluated.bodies.len(), 1, "the cube stands as it was");
-            assert_eq!(evaluated.bodies[0].0, PropFeatureId(0));
+            assert_eq!(evaluated.bodies[0].0.feature, PropFeatureId(0));
         }
 
         #[test]
@@ -2836,7 +3205,7 @@ mod tests {
                 profile: ProfileSource::Regions { sketch: on, regions: vec![region] },
                 taper: 2.5,
                 op: SweepOp::Cut,
-                target: Some(body),
+                targets: vec![BodyRef::whole(body)],
                 end: End::UpTo { to: AnyRef::Face { face } },
                 other: Some(End::ThroughAll),
                 direction: Some(DirectionRef::Normal { plane: PlaneRef::Origin(OriginPlane::Xz) }),
@@ -2848,7 +3217,7 @@ mod tests {
                 steps: 6,
                 symmetric: false,
                 op: SweepOp::Intersect,
-                target: Some(body),
+                targets: vec![BodyRef::whole(body)],
                 axis: CurveRef::Axis { axis: Axis::Y },
                 surface: Surface::default(),
             });
@@ -2881,7 +3250,7 @@ mod tests {
                         steps: 24,
                         symmetric: false,
                         op: SweepOp::Cut,
-                        target: Some(PropFeatureId(0)),
+                        targets: vec![BodyRef::whole(PropFeatureId(0))],
                         axis: CurveRef::Axis { axis: Axis::Y },
                         surface: Surface::default(),
                     },

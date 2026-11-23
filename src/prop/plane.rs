@@ -445,6 +445,7 @@ pub fn draw_square(gizmos: &mut Gizmos, corners: &[Vec3; 4], color: Color) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::prop::feature::BodyRef;
     use crate::prop::refs::{AnyRef, CurveRef};
     use crate::prop::feature::{evaluate, FeatureOp, PropFeature, PropFeatureId};
     use crate::prop::profile::Placement;
@@ -566,7 +567,7 @@ mod tests {
         let mirror = PropFeature::new(
             PropFeatureId(2),
             FeatureOp::Mirror {
-                target: PropFeatureId(0),
+                targets: vec![BodyRef::whole(PropFeatureId(0))],
                 about: crate::prop::plane::PlaneRef::Origin(crate::prop::plane::OriginPlane::Xy),
                 offset: 1.0,
                 keep_original: false,
@@ -736,7 +737,7 @@ mod tests {
         assert!((plane.distance(Vec3::ZERO).abs() - 0.1).abs() < 1e-6);
 
         let mut spoiled = face.to_vec();
-        spoiled[2] = Pick::Body(PropFeatureId(0));
+        spoiled[2] = Pick::Body(BodyRef::whole(PropFeatureId(0)));
         assert_eq!(plane_through(&spoiled, &evaluated), None);
 
         let mut dangling = face.to_vec();

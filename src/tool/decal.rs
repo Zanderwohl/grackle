@@ -4,16 +4,8 @@ use bevy::prelude::*;
 
 use crate::editor::decal::EditorDecal;
 use crate::editor::editable::{FeatureTrait, PointRef};
-use crate::tool::point_placement::{add_point_placement_tool, PlaceablePoint};
+use crate::tool::point_placement::PlaceablePoint;
 use crate::tool::Tools;
-
-pub struct DecalToolPlugin;
-
-impl Plugin for DecalToolPlugin {
-    fn build(&self, app: &mut App) {
-        add_point_placement_tool::<EditorDecal>(app);
-    }
-}
 
 impl PlaceablePoint for EditorDecal {
     const TOOL: Tools = Tools::Decal;

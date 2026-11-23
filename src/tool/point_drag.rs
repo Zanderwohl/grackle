@@ -58,18 +58,6 @@ fn axis_rotation(axis: u8) -> Quat {
     }
 }
 
-fn is_point_like(type_key: &str) -> bool {
-    type_key == "global_point"
-        || type_key == "grackle_point_light"
-        || type_key == "spawn_point"
-        || type_key == "prop"
-        || type_key == "weapon_pickup"
-        || type_key == "spectator_camera"
-        || type_key == "decal"
-        || type_key == "animation_display"
-        || type_key == "animation_grid"
-        || type_key == "mirror"
-}
 
 impl PointDragState {
     pub fn is_dragging(&self) -> bool {
@@ -134,7 +122,7 @@ impl PointDragState {
 
         let should_track = current.filter(|id| {
             features.get_feature(id)
-                .map(|a| is_point_like(a.object().type_key()))
+                .map(|a| a.object().picked_by() == crate::editor::editable::PickedBy::Marker)
                 .unwrap_or(false)
         });
 
