@@ -18,7 +18,7 @@ use crate::common::assets::{AssetError, Assets};
 use crate::prop::feature::{evaluate, Axis, BodyRef, Evaluated, FeatureOp, PropFeature, PropFeatureId};
 use crate::prop::refs::{AnyRef, CurveRef, DirectionRef, PointRef};
 use crate::prop::seam::{JunctionRef, SeamRef};
-use crate::prop::archetype::{Archetype, BreakableSpec, Collider, HatSpec, PickupSpec};
+use crate::prop::archetype::{Archetype, BreakableSpec, HatSpec, PickupSpec};
 use crate::prop::hold::{HoldSpec, MuzzleSpec, ViewmodelSpec};
 use crate::prop::reference::{Element, GeomRef};
 use crate::prop::plane::PlaneRef;
@@ -225,10 +225,6 @@ pub struct PropDoc {
     pub muzzle: Option<MuzzleSpec>,
     #[serde(default, skip_serializing_if = "is_default")]
     pub archetype: Archetype,
-    /// What a placed prop collides as, or is picked up by. Authored apart from
-    /// the geometry: a crate with a handle cut in it is still a box to walk into.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub colliders: Vec<Collider>,
     #[serde(default, skip_serializing_if = "is_default")]
     pub breakable: BreakableSpec,
     #[serde(default, skip_serializing_if = "is_default")]
@@ -267,7 +263,6 @@ impl PropDoc {
             viewmodel: ViewmodelSpec::default(),
             muzzle: None,
             archetype: Archetype::default(),
-            colliders: vec![],
             breakable: BreakableSpec::default(),
             pickup: PickupSpec::default(),
             hat: HatSpec::default(),
@@ -835,7 +830,54 @@ pub fn load(assets: &Assets, pack: &Path, name: &str) -> Result<PropDoc, PropFil
 pub fn parse(text: &str) -> Result<PropDoc, toml::de::Error> {
     let mut table: toml::Table = toml::from_str(text)?;
     read_single_operands(&mut table);
+    read_collider_section(&mut table);
     toml::Value::Table(table).try_into()
+}
+
+/// Files from before colliders were features list them in a `colliders` section, unturned,
+/// each an origin and a shape. Each is read as a `collider` feature at the end of the list,
+/// playing what its archetype made of it: a pickup's was taken through, an obstacle's or a
+/// breakable's walked into and shot, and anything else's did nothing.
+fn read_collider_section(table: &mut toml::Table) {
+    let Some(toml::Value::Array(old)) = table.remove("colliders") else { return };
+    let roles: Vec<toml::Value> = match table.get("archetype").and_then(toml::Value::as_str) {
+        Some("pickup") => vec!["trigger".into()],
+        Some("obstacle" | "breakable") => vec!["shots".into(), "solid".into()],
+        _ => vec![],
+    };
+    let features = table.entry("features").or_insert_with(|| toml::Value::Array(vec![]));
+    let toml::Value::Array(features) = features else { return };
+    let mut next_id = features
+        .iter()
+        .filter_map(|feature| feature.get("id").and_then(toml::Value::as_integer))
+        .map(|id| id + 1)
+        .max()
+        .unwrap_or(0);
+    for collider in old {
+        let toml::Value::Table(mut collider) = collider else { continue };
+        let Some(shape) = collider.remove("shape") else { continue };
+        let origin = collider.remove("origin").unwrap_or_else(|| toml::Value::Array(vec![0.0.into(); 3]));
+        let name = match shape.get("kind").and_then(toml::Value::as_str) {
+            Some("sphere") => crate::get!("prop.collider.sphere"),
+            Some("capsule") => crate::get!("prop.collider.capsule"),
+            _ => crate::get!("prop.collider.box"),
+        };
+        let mut placement = toml::Table::new();
+        placement.insert("origin".into(), origin);
+        let mut op = toml::Table::new();
+        op.insert("feature".into(), "collider".into());
+        op.insert("roles".into(), toml::Value::Array(roles.clone()));
+        op.insert("shape".into(), shape);
+        op.insert("placement".into(), toml::Value::Table(placement));
+        let mut feature = toml::Table::new();
+        feature.insert("id".into(), next_id.into());
+        feature.insert("name".into(), name.into());
+        feature.insert("op".into(), toml::Value::Table(op));
+        features.push(toml::Value::Table(feature));
+        next_id += 1;
+    }
+    let stored = table.get("next_id").and_then(toml::Value::as_integer).unwrap_or(0);
+    table.insert("next_id".into(), stored.max(next_id).into());
 }
 
 /// Files from before features took lists of bodies name one: a `boolean`
@@ -1198,7 +1240,7 @@ mod tests {
 
         let crate_ = read("crate").unwrap();
         assert_eq!(crate_.archetype, Archetype::Breakable);
-        assert_eq!(crate_.colliders.len(), 1);
+        assert_eq!(crate_.evaluate().colliders.len(), 1);
         assert_eq!(crate_.breakable.health, 75);
 
         for (name, kind) in [
@@ -1209,11 +1251,58 @@ mod tests {
             let pack = read(name).unwrap();
             assert_eq!(pack.archetype, Archetype::Pickup, "{name}");
             assert_eq!(pack.pickup.kind, kind, "{name}");
-            assert!(!pack.colliders.is_empty(), "{name} has nothing to walk into");
+            let colliders = pack.evaluate().colliders;
+            assert!(
+                colliders.iter().any(|(_, collider)| collider.has(crate::prop::collider::ColliderRole::Trigger)),
+                "{name} has nothing to take it through"
+            );
         }
 
         let rifle = read("sniper_rifle").unwrap();
         assert_eq!(rifle.archetype, Archetype::Held, "a weapon written before archetypes is not held");
+    }
+
+    /// Fails if an old collider is lost, gets the wrong roles, or takes an id in use.
+    #[test]
+    fn an_old_collider_section_is_read_as_features() {
+        let text = r#"
+name_key = "prop.untitled"
+archetype = "pickup"
+next_id = 1
+
+[[features]]
+id = 0
+name = "Box"
+
+[features.op]
+feature = "primitive"
+
+[features.op.shape]
+kind = "box"
+size = [0.2, 0.2, 0.2]
+
+[features.op.placement]
+
+[features.op.surface]
+style = "wood"
+tint = [0.55, 0.38, 0.2]
+
+[[colliders]]
+origin = [0.0, 0.2, 0.0]
+
+[colliders.shape]
+kind = "sphere"
+radius = 0.3
+"#;
+        let doc = parse(text).unwrap();
+        let colliders = doc.evaluate().colliders;
+        assert_eq!(colliders.len(), 1);
+        let (id, collider) = &colliders[0];
+        assert_eq!(*id, PropFeatureId(1));
+        assert_eq!(collider.roles, [crate::prop::collider::ColliderRole::Trigger].into());
+        assert_eq!(collider.placement.origin, [0.0, 0.2, 0.0]);
+        let mut doc = doc;
+        assert_eq!(doc.push(FeatureOp::default()), PropFeatureId(2), "a new feature took a collider's id");
     }
 
     /// The new sections round-trip, and a held prop's file gains none of them.
@@ -1222,7 +1311,7 @@ mod tests {
         use crate::prop::archetype::*;
         let held = PropDoc::new("prop.untitled");
         let text = to_text(&held).unwrap();
-        for section in ["archetype", "colliders", "breakable", "pickup", "hat"] {
+        for section in ["archetype", "collider", "breakable", "pickup", "hat"] {
             assert!(!text.contains(section), "a held prop wrote {section}:\n{text}");
         }
 
@@ -1233,10 +1322,17 @@ mod tests {
             surface: Default::default(),
         });
         doc.archetype = Archetype::Pickup;
-        doc.colliders = vec![
-            Collider { origin: [0.0, 0.1, 0.0], shape: ColliderShape::Capsule { radius: 0.2, height: 1.0 } },
-            Collider { origin: [0.0; 3], shape: ColliderShape::Sphere { radius: 0.05 } },
-        ];
+        use crate::prop::collider::{ColliderRole, ColliderShape};
+        doc.push(FeatureOp::Collider {
+            roles: [ColliderRole::Trigger, ColliderRole::Kills].into(),
+            shape: ColliderShape::Capsule { radius: 0.2, height: 1.0 },
+            placement: crate::prop::profile::Placement { origin: [0.0, 0.1, 0.0], rotation: [0.3, 0.0, 0.0] },
+        });
+        doc.push(FeatureOp::Collider {
+            roles: Default::default(),
+            shape: ColliderShape::Sphere { radius: 0.05 },
+            placement: Default::default(),
+        });
         doc.breakable.health = 30;
         doc.pickup = PickupSpec { kind: PickupKind::Ammo, style: PickupStyle::Tf2, amount: 0.25, respawn: 15.0 };
         doc.hat.offset = [0.0, -0.05, 0.01];
@@ -1709,3 +1805,4 @@ tint = [0.5, 0.5, 0.5]
     }
 
 }
+

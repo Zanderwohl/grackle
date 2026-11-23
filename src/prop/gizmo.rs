@@ -16,7 +16,7 @@ use crate::common::rotation::quat_from_euler;
 use crate::common::skeleton::{Pose, Skeleton};
 use crate::editor::input::CurrentMouseInput;
 use crate::editor::multicam::Multicam;
-use crate::prop::archetype::ColliderShape;
+use crate::prop::collider::ColliderShape;
 use crate::prop::document::{Pick, PropEditor};
 use crate::prop::feature::FeatureOp;
 use crate::prop::figure::{FigureReach, ScaleFigure, ScaleFigureMarker};
@@ -129,7 +129,12 @@ impl Plugin for PropGizmoPlugin {
                     .run_if(in_state(AppMode::Prop))
                     .run_if(crate::prop::sketch_edit::not_sketching),
             )
-            .add_systems(Update, draw_colliders.run_if(in_state(AppMode::Prop)))
+            .add_systems(
+                Update,
+                draw_colliders
+                    .run_if(in_state(AppMode::Prop))
+                    .run_if(resource_exists::<crate::prop::view::PropBuild>),
+            )
             .add_systems(
                 OnExit(AppMode::Prop),
                 |mut grab: ResMut<GizmoGrab>, mut hovered: ResMut<HoveredPick>, mut tool: ResMut<ActiveTool>| {
@@ -142,37 +147,76 @@ impl Plugin for PropGizmoPlugin {
     }
 }
 
-/// A placed prop's colliders, which nothing else in the viewport shows: they are
-/// authored apart from the geometry.
-fn draw_colliders(editor: Res<PropEditor>, mut gizmos: Gizmos) {
-    let doc = editor.doc();
-    if !doc.archetype.is_placed() {
-        return;
+/// Drawn whatever the archetype.
+fn draw_colliders(editor: Res<PropEditor>, build: Res<crate::prop::view::PropBuild>, mut gizmos: Gizmos) {
+    let selected = editor.primary_feature(&build.evaluated);
+    for (id, collider) in &build.evaluated.colliders {
+        let color = if selected == Some(*id) { HIGHLIGHT } else { collider.color() };
+        collider.draw(&mut gizmos, &Transform::IDENTITY, color);
     }
-    let color = match doc.archetype.blocks() {
-        true => Color::srgb(1.0, 0.55, 0.1),
-        // A trigger, not a wall.
-        false => Color::srgb(0.3, 0.9, 0.5),
-    };
-    for collider in &doc.colliders {
-        let at = Vec3::from_array(collider.origin);
-        match collider.shape {
-            ColliderShape::Box { size } => {
-                gizmos.cube(Transform::from_translation(at).with_scale(Vec3::from_array(size)), color);
-            }
-            ColliderShape::Sphere { radius } => {
-                gizmos.sphere(Isometry3d::from_translation(at), radius, color);
-            }
-            ColliderShape::Capsule { radius, height } => {
-                let length = (height - 2.0 * radius).max(0.0);
-                gizmos.primitive_3d(&Capsule3d::new(radius, length), Isometry3d::from_translation(at), color);
-            }
+}
+
+/// What a face handle resizes: a primitive's shape or a collider's.
+pub trait Resizable: Clone + PartialEq {
+    fn half_extents(&self) -> Vec3;
+    fn axis_is_radial(&self, axis: usize) -> bool;
+    fn set_half_extent(&mut self, axis: usize, half: f32);
+}
+
+impl Resizable for Shape {
+    fn half_extents(&self) -> Vec3 {
+        Shape::half_extents(self)
+    }
+    fn axis_is_radial(&self, axis: usize) -> bool {
+        Shape::axis_is_radial(self, axis)
+    }
+    fn set_half_extent(&mut self, axis: usize, half: f32) {
+        Shape::set_half_extent(self, axis, half)
+    }
+}
+
+impl Resizable for ColliderShape {
+    fn half_extents(&self) -> Vec3 {
+        ColliderShape::half_extents(self)
+    }
+    fn axis_is_radial(&self, axis: usize) -> bool {
+        ColliderShape::axis_is_radial(self, axis)
+    }
+    fn set_half_extent(&mut self, axis: usize, half: f32) {
+        ColliderShape::set_half_extent(self, axis, half)
+    }
+}
+
+/// The selected feature's shape, whichever kind it is.
+#[derive(Clone, PartialEq)]
+enum SelectedShape {
+    Solid(Shape),
+    Collider(ColliderShape),
+}
+
+impl Resizable for SelectedShape {
+    fn half_extents(&self) -> Vec3 {
+        match self {
+            SelectedShape::Solid(shape) => shape.half_extents(),
+            SelectedShape::Collider(shape) => shape.half_extents(),
+        }
+    }
+    fn axis_is_radial(&self, axis: usize) -> bool {
+        match self {
+            SelectedShape::Solid(shape) => shape.axis_is_radial(axis),
+            SelectedShape::Collider(shape) => shape.axis_is_radial(axis),
+        }
+    }
+    fn set_half_extent(&mut self, axis: usize, half: f32) {
+        match self {
+            SelectedShape::Solid(shape) => shape.set_half_extent(axis, half),
+            SelectedShape::Collider(shape) => Resizable::set_half_extent(shape, axis, half),
         }
     }
 }
 
 /// Every handle, in the feature's own space. Drawing and picking both use it.
-fn handles(shape: Option<&Shape>, scale: f32) -> Vec<(Handle, Vec3)> {
+fn handles(shape: Option<&impl Resizable>, scale: f32) -> Vec<(Handle, Vec3)> {
     let mut found = Vec::with_capacity(9);
     for axis in 0..3 {
         found.push((Handle::Move(axis), Vec3::AXES[axis] * scale * ARROW_REACH));
@@ -198,13 +242,13 @@ fn gizmo_scale(extents: Option<Vec3>) -> f32 {
 
 /// Move one face to `local_t` along its own axis. Returns a new placement too,
 /// because a shape is centered on its origin and the far face must stay put.
-pub fn drag_face(
-    shape: &Shape,
+pub fn drag_face<S: Resizable>(
+    shape: &S,
     placement: &Placement,
     axis: usize,
     max: bool,
     local_t: f32,
-) -> (Shape, Placement) {
+) -> (S, Placement) {
     let mut shape = shape.clone();
     let mut placement = *placement;
     let half = shape.half_extents()[axis];
@@ -221,6 +265,13 @@ pub fn drag_face(
     };
 
     shape.set_half_extent(axis, (high - low) / 2.0);
+    // The shape may clamp the extent (a capsule is never shorter than its caps), so the far face
+    // stays put by the extent it took.
+    let took = shape.half_extents()[axis] * 2.0;
+    let (low, high) = match max {
+        true => (low, low + took),
+        false => (high - took, high),
+    };
 
     let mut along = Vec3::ZERO;
     along[axis] = (high + low) / 2.0;
@@ -257,14 +308,15 @@ fn drag_the_selected(
     };
 
     let (shape, placement) = match &feature.op {
-        FeatureOp::Primitive { shape, placement, .. } => (Some(shape.clone()), *placement),
+        FeatureOp::Primitive { shape, placement, .. } => (Some(SelectedShape::Solid(shape.clone())), *placement),
+        FeatureOp::Collider { shape, placement, .. } => (Some(SelectedShape::Collider(*shape)), *placement),
         _ => {
             grab.held = None;
             return;
         }
     };
 
-    let scale = gizmo_scale(shape.as_ref().map(Shape::half_extents));
+    let scale = gizmo_scale(shape.as_ref().map(Resizable::half_extents));
     let points = handles(shape.as_ref(), scale);
     let rotation = placement.rotation();
     let origin = placement.origin();
@@ -343,10 +395,18 @@ fn drag_the_selected(
                         let (resized, moved) = drag_face(shape, &placement, axis, max, local_t);
                         if (&resized, &moved) != (shape, &placement)
                             && let Some(feature) = editor.doc_mut().feature_mut(selected)
-                            && let FeatureOp::Primitive { shape, placement, .. } = &mut feature.op
                         {
-                            *shape = resized;
-                            *placement = moved;
+                            match (&mut feature.op, resized) {
+                                (FeatureOp::Primitive { shape, placement, .. }, SelectedShape::Solid(resized)) => {
+                                    *shape = resized;
+                                    *placement = moved;
+                                }
+                                (FeatureOp::Collider { shape, placement, .. }, SelectedShape::Collider(resized)) => {
+                                    *shape = resized;
+                                    *placement = moved;
+                                }
+                                _ => {}
+                            }
                         }
                     }
                 }
@@ -721,6 +781,15 @@ mod tests {
 
     /// A cylinder resized by its side must not move off its own axis.
     #[test]
+    fn a_capsule_dragged_shorter_than_its_caps_keeps_its_far_end() {
+        let shape = ColliderShape::Capsule { radius: 0.2, height: 1.0 };
+        let (resized, moved) = drag_face(&shape, &Placement::default(), 1, true, -0.3);
+        assert_eq!(resized, ColliderShape::Capsule { radius: 0.2, height: 0.4 });
+        // The bottom stays at -0.5, so the middle is at -0.3.
+        assert!((moved.origin()[1] + 0.3).abs() < 1e-6, "the capsule slid: {:?}", moved.origin);
+    }
+
+    #[test]
     fn resizing_a_radius_leaves_the_axis_alone() {
         let shape = Shape::Prism { sides: 12, radius: 0.05, height: 0.5 };
         let placement = Placement::at(0.2, 0.0, 0.0);
@@ -775,7 +844,7 @@ mod tests {
                 );
             }
         }
-        assert_eq!(handles(None, 0.05).len(), 3);
+        assert_eq!(handles(None::<&Shape>, 0.05).len(), 3);
     }
 
     /// Fails if arrow pick points tie, which makes every grip arrow pick as X.

@@ -23,7 +23,9 @@ use crate::editor::weapon_pickup::WeaponPickupSpec;
 use crate::game::collision::CollisionWorld;
 use crate::game::player::{PhysicsBody, Player};
 use crate::game::weapon::{draw, Trigger};
-use crate::prop::archetype::{Archetype, Collider, ColliderShape, PickupKind, PickupSpec, PickupStyle, RoundedBox};
+use crate::game::collision::PropShape;
+use crate::prop::archetype::{Archetype, PickupKind, PickupSpec, PickupStyle};
+use crate::prop::collider::ColliderRole;
 use crate::prop::baked::{BakedProp, PropCache, SurfaceMaterials};
 use crate::prop::rig::{place_part, OnPropBone, PropPose};
 
@@ -134,7 +136,29 @@ struct PartsPlacedAt(Option<Transform>);
 #[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
 struct RestsOn(f32);
 
-/// The trigger a pickup with no colliders is taken through, in meters.
+/// An instance's colliders in the world, by role in [`ColliderRole::ALL`]'s order. Kept on every
+/// machine. A taken pickup has none.
+#[derive(Component, Clone, Debug, Default, PartialEq)]
+pub struct PlacedColliders([Vec<PropShape>; 5]);
+
+impl PlacedColliders {
+    pub fn of(baked: &BakedProp, at: &Transform) -> Self {
+        let mut placed = PlacedColliders::default();
+        for collider in &baked.colliders {
+            let shape = collider.placed(at);
+            for role in &collider.roles {
+                placed.0[role.index()].push(shape.clone());
+            }
+        }
+        placed
+    }
+
+    pub fn playing(&self, role: ColliderRole) -> &[PropShape] {
+        &self.0[role.index()]
+    }
+}
+
+/// The trigger a pickup with no trigger colliders is taken through, in meters.
 pub const DEFAULT_PICKUP_RADIUS: f32 = 0.4;
 
 /// The trigger a weapon is taken through, in meters, centered on where it
@@ -174,21 +198,34 @@ impl Plugin for WorldPropPlugin {
             // client predicting its movement walks into its own copy.
             .add_systems(
                 FixedUpdate,
+                // Outside Play too, so the nav bake reads what stands now rather than what stood
+                // at the end of the last round. Not in the weapon editor, whose range has a
+                // collision world of its own swapped in.
                 collide_with_props
                     .after(crate::game::rebuild_collision_when_rooms_change)
                     .before(crate::game::player::step_player)
-                    .run_if(in_state(AppMode::Play)),
+                    .run_if(not(in_state(AppMode::Weapon))),
             )
             // Ungated: a client draws what it is sent.
             .add_message::<DamageDealt>()
+            // Also `DamagePlugin`'s; here too for an app with no damage layer.
+            .add_message::<crate::common::damage::Kill>()
             .add_systems(
                 Update,
-                (place_world_props, dress_world_props, start_hit_clips, place_world_prop_parts, box_breakables).chain(),
+                (place_world_props, place_prop_colliders, dress_world_props, start_hit_clips, place_world_prop_parts, box_breakables)
+                    .chain(),
+            )
+            .add_systems(
+                FixedUpdate,
+                act_on_bodies_touching_props
+                    .in_set(crate::game::damage::DamageSystems::Deal)
+                    .run_if(in_state(AppMode::Play))
+                    .run_if(crate::common::net::has_authority),
             )
             // With the bones on F6: both are what a body is measured against.
             .add_systems(
                 PostUpdate,
-                draw_pickup_triggers
+                draw_prop_colliders
                     .run_if(resource_exists::<GizmoConfigStore>)
                     .run_if(resource_exists::<crate::game::skeleton::ShowBones>)
                     .run_if(crate::common::app_mode::showing_the_world),
@@ -560,74 +597,92 @@ fn pose_placed(
     }
 }
 
-/// Everything a placed prop is solid as, in the world.
-pub fn placed_colliders<'a>(
-    baked: &'a BakedProp,
-    at: &Transform,
-) -> impl Iterator<Item = RoundedBox> + 'a {
-    let at = *at;
-    baked.colliders.iter().map(move |collider| collider.rounded().placed(&at))
-}
-
-/// What a pickup is taken through: its colliders, or a small sphere when it
-/// has none, so a pack modeled without one can still be walked into.
-fn triggers<'a>(baked: &'a BakedProp, at: &Transform) -> impl Iterator<Item = RoundedBox> + 'a {
-    let fallback = baked.colliders.is_empty().then(|| {
-        Collider { origin: [0.0; 3], shape: ColliderShape::Sphere { radius: DEFAULT_PICKUP_RADIUS } }
-            .rounded()
-            .placed(at)
-    });
-    placed_colliders(baked, at).chain(fallback)
-}
-
-/// A weapon pickup's trigger, or a prop pickup's.
-fn pickup_triggers<'a>(
-    gives: Option<&GivesWeapon>,
-    baked: Option<&'a BakedProp>,
-    at: &Transform,
-) -> impl Iterator<Item = RoundedBox> + 'a {
-    let weapon = gives.map(|_| weapon_trigger(at));
-    let prop = match gives {
-        Some(_) => None,
-        None => baked.map(|baked| triggers(baked, at)),
-    };
-    weapon.into_iter().chain(prop.into_iter().flatten())
-}
-
-/// A breakable is shot as the box around its colliders, and has no head.
-/// Every machine works this out, since a client draws hitboxes too. A prop
-/// that stops being breakable loses them, or shots would go on stopping at it.
-fn box_breakables(
+#[allow(clippy::type_complexity)]
+fn place_prop_colliders(
     mut commands: Commands,
     cache: Res<PropCache>,
-    mut boxed_for: Local<Option<u64>>,
-    instances: Query<(Entity, Ref<WorldProp>, Option<&Hitboxes>, Option<Ref<Damageable>>)>,
+    mut placed_for: Local<Option<u64>>,
+    mut instances: Query<
+        (Entity, Ref<WorldProp>, Option<Ref<Pickup>>, Option<&mut PlacedColliders>),
+        Without<GivesWeapon>,
+    >,
 ) {
-    let rebaked = *boxed_for != Some(cache.bakes());
-    *boxed_for = Some(cache.bakes());
-    for (entity, prop, boxes, breakable) in &instances {
-        let Some(breakable) = breakable else {
-            if boxes.is_some() {
-                commands.entity(entity).remove::<Hitboxes>();
-            }
-            continue;
-        };
-        // Nothing the box is worked out from has changed.
-        if !rebaked && !prop.is_changed() && !breakable.is_added() && boxes.is_some() {
+    let rebaked = *placed_for != Some(cache.bakes());
+    *placed_for = Some(cache.bakes());
+    for (entity, prop, pickup, placed) in &mut instances {
+        let pickup_changed = pickup.as_ref().is_some_and(Ref::is_changed);
+        if !rebaked && !prop.is_changed() && !pickup_changed && placed.is_some() {
             continue;
         }
-        let Some(baked) = cache.get(&prop.model) else { continue };
-        let Some(body) = bounding(placed_colliders(baked, &prop.transform())) else { continue };
-        let wanted = Hitboxes { body, head: None };
-        if boxes != Some(&wanted) {
-            commands.entity(entity).insert(wanted);
+        let taken = pickup.is_some_and(|pickup| pickup.taken);
+        let wanted = match (taken, cache.get(&prop.model)) {
+            (false, Some(baked)) => PlacedColliders::of(baked, &prop.transform()),
+            _ => PlacedColliders::default(),
+        };
+        match placed {
+            Some(mut placed) => {
+                if *placed != wanted {
+                    *placed = wanted;
+                }
+            }
+            None => {
+                commands.entity(entity).insert(wanted);
+            }
         }
     }
 }
 
-fn bounding(shapes: impl Iterator<Item = RoundedBox>) -> Option<Box3> {
+/// Its trigger colliders, else a small sphere; a weapon's is a fixed sphere. Placed from the model,
+/// since [`PlacedColliders`] is empty while the pickup is taken and refilled a frame after.
+fn pickup_triggers(gives: Option<&GivesWeapon>, baked: Option<&BakedProp>, at: &Transform) -> Vec<PropShape> {
+    if gives.is_some() {
+        return vec![weapon_trigger(at)];
+    }
+    let triggers: Vec<PropShape> = baked
+        .into_iter()
+        .flat_map(|baked| &baked.colliders)
+        .filter(|collider| collider.has(ColliderRole::Trigger))
+        .map(|collider| collider.placed(at))
+        .collect();
+    match triggers.is_empty() {
+        true => vec![PropShape::sphere(at.translation, DEFAULT_PICKUP_RADIUS)],
+        false => triggers,
+    }
+}
+
+/// A breakable is shot as the box around its shot colliders, and has no head, so a shot through a
+/// corner of the box that misses a turned or round collider still counts. Every machine works
+/// this out, since a client draws hitboxes too. A prop that stops being breakable loses them, or shots would go on
+/// stopping at it.
+fn box_breakables(
+    mut commands: Commands,
+    instances: Query<(Entity, Ref<PlacedColliders>, Option<&Hitboxes>, Option<Ref<Damageable>>)>,
+) {
+    for (entity, placed, boxes, breakable) in &instances {
+        let wanted = breakable
+            .filter(|_| !placed.playing(ColliderRole::Shots).is_empty())
+            .and_then(|breakable| {
+                if !placed.is_changed() && !breakable.is_added() && boxes.is_some() {
+                    return boxes.copied();
+                }
+                Some(Hitboxes { body: bounding(placed.playing(ColliderRole::Shots).iter())?, head: None })
+            });
+        match wanted {
+            Some(wanted) if boxes != Some(&wanted) => {
+                commands.entity(entity).insert(wanted);
+            }
+            Some(_) => {}
+            None if boxes.is_some() => {
+                commands.entity(entity).remove::<Hitboxes>();
+            }
+            None => {}
+        }
+    }
+}
+
+fn bounding<'a>(shapes: impl Iterator<Item = &'a PropShape>) -> Option<Box3> {
     let (min, max) = shapes.fold(None, |bounds: Option<(Vec3, Vec3)>, shape| {
-        let (lo, hi) = (shape.center - shape.half_extents(), shape.center + shape.half_extents());
+        let (lo, hi) = shape.bounds();
         Some(match bounds {
             Some((min, max)) => (min.min(lo), max.max(hi)),
             None => (lo, hi),
@@ -636,30 +691,61 @@ fn bounding(shapes: impl Iterator<Item = RoundedBox>) -> Option<Box3> {
     Some(Box3 { center: (min + max) * 0.5, half_extents: (max - min) * 0.5 })
 }
 
-/// Build the solid props into the collision world. On every machine, so a
-/// client predicting its movement walks into the same crate the server does.
-/// Run each tick before the step, rebuilding only when an instance came, went
-/// or moved, a model was baked, or something else wrote the collision world.
+/// Build the solid and shot-stopping props into the collision world. On every machine, so a
+/// client predicting its movement walks into the same crate the server does. Run each tick
+/// before the step, rebuilding only when an instance came, went or changed its colliders, or
+/// something else wrote the collision world.
 pub fn collide_with_props(
     mut collision: ResMut<CollisionWorld>,
-    cache: Res<PropCache>,
-    instances: Query<&WorldProp>,
-    changed: Query<(), Changed<WorldProp>>,
-    mut built: Local<Option<(u64, usize)>>,
+    instances: Query<&PlacedColliders>,
+    changed: Query<(), Changed<PlacedColliders>>,
+    mut built: Local<Option<usize>>,
 ) {
-    let seen = (cache.bakes(), instances.iter().len());
+    let seen = instances.iter().len();
     if *built == Some(seen) && changed.is_empty() && !collision.is_changed() {
         return;
     }
     *built = Some(seen);
     let collision = collision.bypass_change_detection();
     collision.props.clear();
-    for prop in &instances {
-        let Some(baked) = cache.get(&prop.model) else { continue };
-        if !baked.archetype.blocks() {
+    collision.shots.clear();
+    for placed in &instances {
+        collision.props.extend_from_slice(placed.playing(ColliderRole::Solid));
+        collision.shots.extend_from_slice(placed.playing(ColliderRole::Shots));
+    }
+}
+
+/// Credited to the map. A body already burning starts its afterburn over.
+#[allow(clippy::type_complexity)]
+fn act_on_bodies_touching_props(
+    mut commands: Commands,
+    instances: Query<&PlacedColliders>,
+    mut bodies: Query<
+        (Entity, &PhysicsBody, &Stance, Option<&mut crate::common::flame::Burning>),
+        (With<Player>, Without<crate::game::death::Dying>),
+    >,
+    mut kills: MessageWriter<crate::common::damage::Kill>,
+) {
+    use crate::common::damage::{DamageSource, How, Kill};
+    use crate::common::flame::{Burning, FlameSpec};
+    let touching = |role: ColliderRole, center: Vec3, half: Vec3| {
+        instances.iter().any(|placed| placed.playing(role).iter().any(|shape| shape.overlaps(center, half)))
+    };
+    for (body, placed, stance, burning) in &mut bodies {
+        let (center, half) = (placed.current, stance.half_extents());
+        if touching(ColliderRole::Kills, center, half) {
+            kills.write(Kill { target: body, source: DamageSource::World, point: center, how: How::Kill });
             continue;
         }
-        collision.props.extend(placed_colliders(baked, &prop.transform()));
+        if !touching(ColliderRole::Ignites, center, half) {
+            continue;
+        }
+        match burning {
+            Some(mut burning) => burning.relight(&FlameSpec::FLAMETHROWER, DamageSource::World),
+            None => {
+                commands.entity(body).try_insert(Burning::lit(&FlameSpec::FLAMETHROWER, DamageSource::World));
+            }
+        }
     }
 }
 
@@ -713,14 +799,15 @@ fn take_pickups(
             (None, Some(baked)) => baked.pickup.respawn,
             (None, None) => continue,
         };
-        let Some(reach) = bounding(pickup_triggers(gives, baked, &at)) else { continue };
+        let triggers = pickup_triggers(gives, baked, &at);
+        let Some(reach) = bounding(triggers.iter()) else { continue };
         for (body_entity, body, stance, health, armor, ammo, equipped, trigger, id, condition) in &mut bodies {
             let half = stance.half_extents();
             // Overlapping a trigger needs overlapping the box around all of them.
             if ((body.current - reach.center).abs() - half - reach.half_extents).max_element() > 1.0e-4 {
                 continue;
             }
-            if !pickup_triggers(gives, baked, &at).any(|trigger| trigger.overlaps(body.current, half)) {
+            if !triggers.iter().any(|trigger| trigger.overlaps(body.current, half)) {
                 continue;
             }
             let gained = match gives {
@@ -811,42 +898,41 @@ fn give(
     }
 }
 
-/// Bright while it can be taken, dim while it restocks. A trigger with a core
-/// is drawn as the box around it, which is a little generous at the corners.
-fn draw_pickup_triggers(
+/// Every placed prop's colliders in the colors of their roles, and each pickup's trigger: bright
+/// while it can be taken, dim while it restocks.
+fn draw_prop_colliders(
     show: Res<crate::game::skeleton::ShowBones>,
     cache: Res<PropCache>,
-    pickups: Query<(&WorldProp, &Pickup, Option<&GivesWeapon>)>,
+    instances: Query<(&WorldProp, Option<&Pickup>, Option<&GivesWeapon>)>,
     mut gizmos: Gizmos,
 ) {
     if !show.0 {
         return;
     }
-    for (prop, pickup, gives) in &pickups {
+    for (prop, pickup, gives) in &instances {
+        let at = prop.transform();
+        let taken = pickup.is_some_and(|pickup| pickup.taken);
+        let dim = |color: Color| if taken { color.with_alpha(0.25) } else { color };
         let baked = cache.get(&prop.model);
-        if gives.is_none() && baked.is_none() {
+        let fallback = pickup.is_some()
+            && baked.is_none_or(|baked| !baked.colliders.iter().any(|collider| collider.has(ColliderRole::Trigger)));
+        if gives.is_some() || fallback {
+            let reach = if gives.is_some() { WEAPON_PICKUP_RADIUS } else { DEFAULT_PICKUP_RADIUS };
+            let center = if gives.is_some() { at.transform_point(Vec3::Y * WEAPON_HOVER) } else { at.translation };
+            gizmos.sphere(Isometry3d::from_translation(center), reach, dim(Color::srgb(0.4, 0.9, 0.5)));
+        }
+        if gives.is_some() {
             continue;
         }
-        let triggers = pickup_triggers(gives, baked, &prop.transform());
-        let color = if pickup.taken { Color::srgba(0.4, 0.9, 0.5, 0.25) } else { Color::srgb(0.4, 0.9, 0.5) };
-        for trigger in triggers {
-            if trigger.core == Vec3::ZERO {
-                gizmos.sphere(Isometry3d::from_translation(trigger.center), trigger.radius, color);
-            } else {
-                let size = (trigger.core + Vec3::splat(trigger.radius)) * 2.0;
-                gizmos.cube(Transform::from_translation(trigger.center).with_scale(size), color);
-            }
+        let Some(baked) = baked else { continue };
+        for collider in &baked.colliders {
+            collider.draw(&mut gizmos, &at, dim(collider.color()));
         }
     }
 }
 
-fn weapon_trigger(at: &Transform) -> RoundedBox {
-    Collider {
-        origin: [0.0, WEAPON_HOVER, 0.0],
-        shape: ColliderShape::Sphere { radius: WEAPON_PICKUP_RADIUS },
-    }
-    .rounded()
-    .placed(at)
+fn weapon_trigger(at: &Transform) -> PropShape {
+    PropShape::sphere(at.transform_point(Vec3::Y * WEAPON_HOVER), WEAPON_PICKUP_RADIUS)
 }
 
 /// A weapon not carried is added with full ammo, and drawn if `draws`; one
@@ -1198,6 +1284,61 @@ mod tests {
         assert!(world.query_filtered::<(), (With<WorldProp>, With<Pickup>)>().single(world).is_ok());
         world.run_system_once(collide_with_props).unwrap();
         assert!(world.resource::<CollisionWorld>().props.is_empty(), "a health pack is a wall");
+    }
+
+    #[test]
+    fn colliders_reach_the_collision_world_by_their_roles() {
+        use crate::prop::collider::ColliderShape;
+        use crate::prop::feature::FeatureOp;
+        let mut app = app_with_assets();
+        let mut doc = crate::prop::document::PropDoc::new("rack");
+        doc.archetype = Archetype::Obstacle;
+        for roles in [vec![ColliderRole::Solid, ColliderRole::Shots], vec![ColliderRole::Solid], vec![ColliderRole::Trigger]] {
+            doc.push(FeatureOp::Collider {
+                roles: roles.into_iter().collect(),
+                shape: ColliderShape::Box { size: [0.5; 3] },
+                placement: crate::prop::profile::Placement { origin: [0.0, 0.25, 0.0], rotation: [0.0, 0.5, 0.0] },
+            });
+        }
+        adopt(&mut app, "rack", &doc);
+        app.world_mut().spawn((PropMarker, PropModel("rack".into()), Transform::from_xyz(3.0, 0.0, 0.0)));
+        app.update();
+        app.update();
+
+        let world = app.world_mut();
+        world.run_system_once(collide_with_props).unwrap();
+        let collision = world.resource::<CollisionWorld>();
+        assert_eq!((collision.props.len(), collision.shots.len()), (2, 1));
+        assert!(collision.props[0].overlaps(Vec3::new(3.0, 0.25, 0.0), Vec3::splat(0.1)), "not where the prop stands");
+    }
+
+    fn touching(world: &mut World, role: ColliderRole) -> Entity {
+        let mut placed = PlacedColliders::default();
+        placed.0[role.index()].push(PropShape::sphere(Vec3::new(0.0, 1.0, 0.0), 0.5));
+        world.spawn(placed);
+        world.init_resource::<Messages<crate::common::damage::Kill>>();
+        let inside = world.spawn((Player::default(), PhysicsBody::at(Vec3::new(0.0, 1.0, 0.7)), Stance::Standing)).id();
+        world.spawn((Player::default(), PhysicsBody::at(Vec3::new(5.0, 1.0, 0.0)), Stance::Standing));
+        world.run_system_once(act_on_bodies_touching_props).unwrap();
+        inside
+    }
+
+    #[test]
+    fn a_killing_collider_kills_only_whoever_touches_it() {
+        let mut world = World::new();
+        let inside = touching(&mut world, ColliderRole::Kills);
+        let kills: Vec<_> = world.resource_mut::<Messages<crate::common::damage::Kill>>().drain().collect();
+        assert_eq!(kills.len(), 1, "{kills:?}");
+        assert_eq!(kills[0].target, inside);
+    }
+
+    #[test]
+    fn an_igniting_collider_sets_alight_only_whoever_touches_it() {
+        let mut world = World::new();
+        let inside = touching(&mut world, ColliderRole::Ignites);
+        let mut alight = world.query_filtered::<Entity, With<crate::common::flame::Burning>>();
+        assert_eq!(alight.iter(&world).collect::<Vec<_>>(), vec![inside]);
+        assert!(world.resource::<Messages<crate::common::damage::Kill>>().is_empty());
     }
 
     fn rifle() -> (WeaponCatalog, Equipped) {

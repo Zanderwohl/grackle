@@ -30,7 +30,8 @@ use crate::common::net::NetRole;
 use crate::editor::multicam::{Insets, MulticamState};
 use crate::get;
 use crate::common::taunt::Taunts;
-use crate::prop::archetype::{Archetype, Collider, ColliderShape, PickupKind, PickupStyle};
+use crate::prop::archetype::{Archetype, PickupKind, PickupStyle};
+use crate::prop::collider::{ColliderRole, ColliderShape};
 use crate::prop::document::{self, Pick, PropDoc, PropEditor, PROP_EXTENSION};
 use crate::prop::plane::{OriginPlane, PickedPlane, Plane, PlaneRef};
 use crate::prop::reference::{Element, GeomRef, Located};
@@ -950,6 +951,18 @@ fn toolbar(
 
     ui.separator();
 
+    let colliders = ColliderShape::defaults();
+    let collider_name = |index: usize| (colliders[index].icon(), colliders[index].name());
+    if let Some(index) = toolbar::split_button(ui, "prop_collider", colliders.len(), collider_name, None, Joins::NONE) {
+        added = Some(FeatureOp::Collider {
+            roles: ColliderRole::defaults(editor.doc().archetype),
+            shape: colliders[index],
+            placement: Placement::at(0.0, colliders[index].half_extents().y, 0.0),
+        });
+    }
+
+    ui.separator();
+
     tool_family(ui, "prop_combine", &BooleanOp::ALL.map(Tool::Combine), active, requests);
     tool_button(ui, Tool::Mirror, active, requests, Joins::NONE);
     tool_family(ui, "prop_pattern", &[Tool::LinearPattern, Tool::RadialPattern], active, requests);
@@ -1690,6 +1703,26 @@ fn feature_inspector(
 
         let main = feature.op.main_axis();
         match &mut feature.op {
+            FeatureOp::Collider { roles, shape, placement } => {
+                section(ui, "shape", get!("prop.inspector.sections.shape"), |ui| {
+                    changed |= collider_shape_ui(ui, shape);
+                });
+                section(ui, "placement", get!("prop.inspector.sections.placement"), |ui| {
+                    changed |= placement_ui(ui, placement, main);
+                });
+                section(ui, "roles", get!("prop.inspector.sections.roles"), |ui| {
+                    for role in ColliderRole::ALL {
+                        let mut playing = roles.contains(&role);
+                        if ui.checkbox(&mut playing, role.name()).changed() {
+                            changed = true;
+                            match playing {
+                                true => roles.insert(role),
+                                false => roles.remove(&role),
+                            };
+                        }
+                    }
+                });
+            }
             FeatureOp::Primitive { shape, placement, surface } => {
                 section(ui, "shape", get!("prop.inspector.sections.shape"), |ui| {
                     changed |= shape_ui(ui, shape);
@@ -2108,11 +2141,6 @@ fn archetype_sections(ui: &mut Ui, editor: &mut PropEditor) {
     if archetype == Archetype::Pickup {
         section(ui, "pickup", get!("prop.inspector.sections.pickup"), |ui| pickup_ui(ui, editor));
     }
-    if archetype.is_placed() {
-        section(ui, "colliders", get!("prop.inspector.sections.colliders"), |ui| {
-            colliders_ui(ui, editor)
-        });
-    }
 }
 
 fn pickup_ui(ui: &mut Ui, editor: &mut PropEditor) {
@@ -2324,68 +2352,6 @@ fn bones_ui(ui: &mut Ui, editor: &mut PropEditor, build: &PropBuild) {
             }
         }
         doc.bones = bones;
-    }
-}
-
-fn colliders_ui(ui: &mut Ui, editor: &mut PropEditor) {
-    let mut colliders = editor.doc().colliders.clone();
-    let mut changed = false;
-    let mut remove = None;
-
-    for (index, collider) in colliders.iter_mut().enumerate() {
-        ui.push_id(("prop_collider", index), |ui| {
-            ui.horizontal(|ui| {
-                egui::ComboBox::from_id_salt("shape")
-                    .selected_text(collider.shape.name())
-                    .show_ui(ui, |ui| {
-                        for candidate in ColliderShape::defaults() {
-                            let same = std::mem::discriminant(&candidate)
-                                == std::mem::discriminant(&collider.shape);
-                            if ui.selectable_label(same, candidate.name()).clicked() && !same {
-                                collider.shape = candidate;
-                                changed = true;
-                            }
-                        }
-                    });
-                if ui.button(get!("prop.inspector.remove_point")).on_hover_text(get!("prop.collider.remove")).clicked() {
-                    remove = Some(index);
-                }
-            });
-            changed |= vec3_ui(ui, get!("prop.inspector.origin"), &mut collider.origin, 0.005, "m");
-            match &mut collider.shape {
-                ColliderShape::Box { size } => {
-                    changed |= vec3_ui(ui, get!("prop.inspector.size"), size, 0.005, "m");
-                }
-                ColliderShape::Sphere { radius } => {
-                    changed |= drag(ui, get!("prop.inspector.radius"), radius, 0.005, "m");
-                }
-                ColliderShape::Capsule { radius, height } => {
-                    changed |= drag(ui, get!("prop.inspector.radius"), radius, 0.005, "m");
-                    changed |= drag(ui, get!("prop.inspector.height"), height, 0.005, "m");
-                }
-            }
-            ui.separator();
-        });
-    }
-
-    if let Some(index) = remove {
-        editor.edit(|doc| {
-            doc.colliders.remove(index);
-        });
-        return;
-    }
-    if ui.button(get!("prop.collider.add")).clicked() {
-        editor.edit(|doc| {
-            doc.colliders.push(Collider {
-                origin: [0.0, 0.25, 0.0],
-                shape: ColliderShape::Box { size: [0.5; 3] },
-            })
-        });
-        return;
-    }
-    if changed {
-        editor.begin_gesture();
-        editor.doc_mut().colliders = colliders;
     }
 }
 
@@ -2966,6 +2932,29 @@ fn surface_ui(ui: &mut Ui, surface: &mut Surface) -> bool {
         ui.label(get!("prop.inspector.tint"));
         changed |= ui.color_edit_button_rgb(&mut surface.tint.0).changed();
     });
+    changed
+}
+
+fn collider_shape_ui(ui: &mut Ui, shape: &mut ColliderShape) -> bool {
+    let mut changed = false;
+    match shape {
+        ColliderShape::Box { size } => {
+            changed |= vec3_ui(ui, get!("prop.inspector.size"), size, 0.005, "m");
+            for side in size.iter_mut() {
+                *side = side.max(crate::prop::solid::MIN_EXTENT * 2.0);
+            }
+        }
+        ColliderShape::Sphere { radius } => {
+            changed |= drag(ui, get!("prop.inspector.radius"), radius, 0.005, "m");
+            *radius = radius.max(crate::prop::solid::MIN_EXTENT);
+        }
+        ColliderShape::Capsule { radius, height } => {
+            changed |= drag(ui, get!("prop.inspector.radius"), radius, 0.005, "m");
+            changed |= drag(ui, get!("prop.inspector.height"), height, 0.005, "m");
+            *radius = radius.max(crate::prop::solid::MIN_EXTENT);
+            *height = height.max(*radius * 2.0);
+        }
+    }
     changed
 }
 

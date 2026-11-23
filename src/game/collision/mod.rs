@@ -3,7 +3,7 @@
 
 mod contact;
 pub mod hull;
-mod rounded;
+mod shape;
 
 use std::ops::ControlFlow;
 
@@ -11,11 +11,11 @@ use bevy::prelude::*;
 
 use crate::common::stairs::StairsShape;
 use crate::common::world_surface::{self, Face, Fill, Volume};
-use crate::prop::archetype::RoundedBox;
 use crate::tool::room::Room;
 use crate::common::grid::Grid;
 pub use contact::{Touched, MOST_TOUCHED};
 pub use hull::{onto_plane, Hit, Hull};
+pub use shape::{Capsule, PropShape};
 
 /// How far each wall stands out behind its face, in meters. Only the face
 /// matters to a sweep; the depth gives depenetration somewhere to measure from.
@@ -42,15 +42,17 @@ pub struct CollisionWorld {
     /// Placed props that block movement. Kept apart from `hulls` because they
     /// are rebuilt on a different trigger: rooms change with the map, props
     /// with what the authority has standing.
-    pub props: Vec<RoundedBox>,
+    pub props: Vec<PropShape>,
+    /// Placed props that stop shots, blasts and sight: every ray test meets them as it meets a wall.
+    pub shots: Vec<PropShape>,
 }
 
 /// Whether a prop's bounds touch `min..=max`. A sweep's hit lies inside the prop grown by the box,
 /// so a prop whose bounds miss the swept box by more than rounding cannot be hit.
-fn boxes_touch(prop: &RoundedBox, min: Vec3, max: Vec3) -> bool {
+fn boxes_touch(prop: &PropShape, min: Vec3, max: Vec3) -> bool {
     const SLACK: f32 = 1.0e-3;
-    let reach = prop.half_extents() + SLACK;
-    (prop.center - reach).cmple(max).all() && (prop.center + reach).cmpge(min).all()
+    let (low, high) = prop.bounds();
+    (low - SLACK).cmple(max).all() && (high + SLACK).cmpge(min).all()
 }
 
 fn face_bounds(face: &Face) -> (Vec3, Vec3) {
@@ -195,7 +197,7 @@ impl CollisionWorld {
         });
         let mut best = best.map(|(hit, _)| hit);
         for prop in self.props.iter().filter(|prop| boxes_touch(prop, min, max)) {
-            let Some(hit) = rounded::sweep(prop, center, half, delta) else { continue };
+            let Some(hit) = prop.sweep(center, half, delta) else { continue };
             if best.is_none_or(|best| hit.t < best.t) {
                 best = Some(hit);
             }
@@ -323,6 +325,7 @@ impl CollisionWorld {
         let Ok((direction, length)) = Dir3::new_and_length(to - from) else { return true };
         let ray = Ray3d::new(from, direction);
         !self.grid.any_along(from, to, |index| self.hulls[index as usize].ray(&ray, length).is_some())
+            && !self.shots.iter().any(|shot| shot.ray(&ray, length).is_some())
     }
 
     /// Whether no wall is within `range` along the ray, as [`CollisionWorld::ray_distance`] would
@@ -330,10 +333,11 @@ impl CollisionWorld {
     pub fn ray_clear(&self, ray: &Ray3d, range: f32) -> bool {
         let end = ray.origin + *ray.direction * (range + FILING_SLACK);
         !self.grid.any_along(ray.origin, end, |index| self.hulls[index as usize].ray(ray, range).is_some())
+            && !self.shots.iter().any(|shot| shot.ray(ray, range).is_some())
     }
 
-    /// The first wall along the ray, as a distance and the normal of the face
-    /// crossed. The crossed face, not the nearest: a bounce off the wrong
+    /// The first wall or shot-stopping prop along the ray, as a distance and the normal of the
+    /// face crossed. The crossed face, not the nearest: a bounce off the wrong
     /// normal goes through the floor.
     pub fn ray_hit(&self, ray: &Ray3d, range: f32) -> Option<(f32, Vec3)> {
         // Walked a little past the range and the best hit, for the same rounding as `FILING_SLACK`.
@@ -352,7 +356,13 @@ impl CollisionWorld {
             }
             false
         });
-        best.map(|(distance, normal, _)| (distance, normal))
+        let mut best = best.map(|(distance, normal, _)| (distance, normal));
+        for (distance, normal) in self.shots.iter().filter_map(|shot| shot.ray(ray, range)) {
+            if best.is_none_or(|(best, _)| distance < best) {
+                best = Some((distance, normal));
+            }
+        }
+        best
     }
 
     /// Shove a body that is already inside a wall or a solid prop back out of
@@ -399,9 +409,7 @@ impl CollisionWorld {
         center
     }
 
-    /// The ways out of the first wall or solid prop the box is inside. A
-    /// rounded prop is escaped along the axes, by its extent on each as the
-    /// body would meet it moving along that axis from where it is.
+    /// The ways out of the first wall or solid prop the box is inside.
     fn escapes(&self, center: Vec3, half: Vec3) -> Option<Vec<Vec3>> {
         let mut first: Option<u32> = None;
         self.grid.for_each_near(center - half, center + half, |index| {
@@ -413,16 +421,7 @@ impl CollisionWorld {
             return Some(self.hulls[index as usize].escapes(center, half, SKIN).collect());
         }
         let prop = self.props.iter().find(|prop| prop.overlaps(center, half))?;
-        let mut escapes = Vec::with_capacity(6);
-        for axis in 0..3 {
-            let (min, max) = prop.slab_along(axis, center, half)?;
-            for value in [max + half[axis] + SKIN, min - half[axis] - SKIN] {
-                let mut moved = center;
-                moved[axis] = value;
-                escapes.push(moved);
-            }
-        }
-        Some(escapes)
+        Some(prop.escapes(center, half, SKIN))
     }
 }
 
@@ -519,14 +518,15 @@ mod tests {
     #[test]
     fn a_box_meets_what_testing_every_wall_meets() {
         let mut world = a_sprawl();
-        world.props.push(RoundedBox { center: Vec3::new(-8.0, 1.0, 2.0), core: Vec3::splat(0.5), radius: 0.2 });
+        world.props.push(PropShape::turned_box(Vec3::new(-8.0, 1.0, 2.0), Vec3::splat(0.7), Quat::from_rotation_y(0.4)));
+        world.props.push(PropShape::Capsule(Capsule { a: Vec3::new(4.0, 0.5, -3.0), b: Vec3::new(6.0, 2.0, -1.0), radius: 0.4 }));
         let mut seed = 0x1357_9bdf;
         for i in 0..3000 {
             let mut random = || scatter(&mut seed);
             let center = Vec3::new(random() * 96.0 - 44.0, random() * 18.0 - 5.0, random() * 88.0 - 44.0);
             let delta = Vec3::new(random() - 0.5, random() - 0.5, random() - 0.5) * if i % 2 == 0 { 3.0 } else { 40.0 };
             let walls = world.hulls.iter().filter_map(|hull| hull.sweep(center, HALF, delta));
-            let props = world.props.iter().filter_map(|prop| rounded::sweep(prop, center, HALF, delta));
+            let props = world.props.iter().filter_map(|prop| prop.sweep(center, HALF, delta));
             let expected = walls.chain(props).fold(None, |best: Option<Hit>, hit| match best {
                 Some(best) if best.t <= hit.t => Some(best),
                 _ => Some(hit),
@@ -566,7 +566,7 @@ mod tests {
     #[test]
     fn a_crate_stops_a_body_walking_into_it() {
         let mut world = one_room();
-        world.props.push(RoundedBox { center: Vec3::new(2.0, 0.5, 0.0), core: Vec3::splat(0.5), radius: 0.0 });
+        world.props.push(PropShape::turned_box(Vec3::new(2.0, 0.5, 0.0), Vec3::splat(0.5), Quat::IDENTITY));
 
         let start = Vec3::new(0.0, HALF.y + 0.01, 0.0);
         let (end, touched) = world.slide(start, HALF, Vec3::new(3.0, 0.0, 0.0));
@@ -580,11 +580,29 @@ mod tests {
     #[test]
     fn a_body_inside_a_crate_is_pushed_out_of_it() {
         let mut world = one_room();
-        world.props.push(RoundedBox { center: Vec3::new(0.2, 0.5, 0.0), core: Vec3::splat(0.5), radius: 0.0 });
+        world.props.push(PropShape::turned_box(Vec3::new(0.2, 0.5, 0.0), Vec3::splat(0.5), Quat::IDENTITY));
 
         let inside = Vec3::new(0.0, HALF.y + 0.01, 0.0);
         let out = world.depenetrate(inside, HALF);
         assert!(world.fits(out, HALF), "still inside the crate at {out}");
+    }
+
+    #[test]
+    fn a_prop_stops_shots_or_bodies_as_it_is_filed() {
+        let mut world = one_room();
+        world.shots.push(PropShape::turned_box(Vec3::new(2.0, 1.5, 0.0), Vec3::splat(0.5), Quat::from_rotation_y(0.3)));
+        world.props.push(PropShape::sphere(Vec3::new(0.0, 1.5, 2.0), 0.5));
+
+        let at_the_shield = Ray3d::new(Vec3::new(0.0, 1.5, 0.0), Dir3::X);
+        let distance = world.ray_distance(&at_the_shield, 100.0).unwrap();
+        assert!(distance < 1.6, "the shot went through the shield to {distance}");
+        assert!(!world.segment_clear(at_the_shield.origin, Vec3::new(4.0, 1.5, 0.0)));
+
+        let at_the_ball = Ray3d::new(Vec3::new(0.0, 1.5, 0.0), Dir3::Z);
+        assert!((world.ray_distance(&at_the_ball, 100.0).unwrap() - 5.0).abs() < 1e-3, "the ball stopped a shot");
+
+        let walked = world.slide(Vec3::new(0.0, HALF.y + 0.01, 0.0), HALF, Vec3::X * 3.0).0;
+        assert!((walked.x - 3.0).abs() < 1e-3, "the shield stopped a body at {walked}");
     }
 
     /// Head on, a pillar stops a body; off-center, its round side turns the
@@ -592,7 +610,7 @@ mod tests {
     #[test]
     fn a_round_pillar_is_round() {
         let mut world = one_room();
-        world.props.push(RoundedBox { center: Vec3::new(2.0, 2.0, 0.0), core: Vec3::new(0.0, 2.0, 0.0), radius: 0.5 });
+        world.props.push(PropShape::Capsule(Capsule { a: Vec3::new(2.0, 0.0, 0.0), b: Vec3::new(2.0, 4.0, 0.0), radius: 0.5 }));
 
         let head_on = world.slide(Vec3::new(0.0, HALF.y + 0.01, 0.0), HALF, Vec3::X * 3.0).0;
         assert!((head_on.x - (1.5 - HALF.x)).abs() < 0.01, "head on stopped at {}", head_on.x);

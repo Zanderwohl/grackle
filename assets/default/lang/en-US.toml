@@ -1385,11 +1385,16 @@ parent = "{ bone } names { parent } as its parent, which is not a bone above it"
 bound_twice = "{ bone } binds { feature }, which a bone above it already binds"
 
 [prop.collider]
-box = "Box"
-sphere = "Sphere"
-capsule = "Capsule"
-add = "Add collider"
-remove = "Remove collider"
+box = "Box Collider"
+sphere = "Sphere Collider"
+capsule = "Capsule Collider"
+
+[prop.collider.roles]
+trigger = "Triggers the prop's effect"
+shots = "Stops shots and blasts"
+solid = "Solid to bodies"
+ignites = "Sets bodies alight"
+kills = "Kills bodies"
 
 [prop.breakable]
 health = "Health"
@@ -1565,7 +1570,7 @@ prop = "Prop"
 archetype = "Archetype"
 breakable = "Breakable"
 pickup = "Pickup"
-colliders = "Colliders"
+roles = "Roles"
 size = "Size"
 feature = "Feature"
 shape = "Shape"

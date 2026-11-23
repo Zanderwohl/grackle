@@ -10,11 +10,14 @@
 //!
 //! [`FeatureTimeline`]: crate::editor::editable::FeatureTimeline
 
+use std::collections::BTreeSet;
+
 use bevy::math::Affine3A;
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::get;
+use crate::prop::collider::{Collider, ColliderRole, ColliderShape};
 use crate::prop::profile::Placement;
 use crate::prop::solid::Polygon;
 use crate::prop::datum::{AxisDef, DatumAxis, DatumPoint, PointDef};
@@ -274,6 +277,14 @@ pub enum FeatureOp {
     Point { def: PointDef },
     /// A drawing on a plane, which makes no body; see [`crate::prop::sketch`].
     Sketch { on: PlaneRef, sketch: Sketch },
+    /// Not geometry: what a placed prop collides as, and what touching it does. Makes no body.
+    /// Roles first: TOML needs every plain value before any sub-table.
+    Collider {
+        #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+        roles: BTreeSet<ColliderRole>,
+        shape: ColliderShape,
+        placement: Placement,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -435,6 +446,7 @@ impl FeatureOp {
             FeatureOp::Axis { .. } => get!("prop.features.axis"),
             FeatureOp::Point { .. } => get!("prop.features.point"),
             FeatureOp::Sketch { .. } => get!("prop.features.sketch"),
+            FeatureOp::Collider { shape, .. } => shape.name(),
         }
     }
 
@@ -479,7 +491,7 @@ impl FeatureOp {
         };
         let bound = |end: Option<&End>| end.and_then(End::bound).into_iter().cloned().collect();
         match self {
-            FeatureOp::Primitive { .. } => vec![],
+            FeatureOp::Primitive { .. } | FeatureOp::Collider { .. } => vec![],
             FeatureOp::Extrude { profile, direction, end, other, op, targets, .. } => vec![
                 profiled(profile),
                 unpicked("prop.inspector.direction", slot::DIRECTION, direction.iter().cloned().map(AnyRef::Direction).collect()),
@@ -638,7 +650,7 @@ impl FeatureOp {
 
     pub fn placement_mut(&mut self) -> Option<&mut Placement> {
         match self {
-            FeatureOp::Primitive { placement, .. } => Some(placement),
+            FeatureOp::Primitive { placement, .. } | FeatureOp::Collider { placement, .. } => Some(placement),
             FeatureOp::Extrude { .. }
             | FeatureOp::Revolve { .. }
             | FeatureOp::Sweep { .. }
@@ -661,7 +673,11 @@ impl FeatureOp {
     pub fn bodies_made(&self) -> u32 {
         let count = |list: &[BodyRef]| list.len() as u32;
         match self {
-            FeatureOp::Plane { .. } | FeatureOp::Axis { .. } | FeatureOp::Point { .. } | FeatureOp::Sketch { .. } => 0,
+            FeatureOp::Plane { .. }
+            | FeatureOp::Axis { .. }
+            | FeatureOp::Point { .. }
+            | FeatureOp::Sketch { .. }
+            | FeatureOp::Collider { .. } => 0,
             FeatureOp::Subtract { targets, .. }
             | FeatureOp::Mirror { targets, .. }
             | FeatureOp::Paint { targets, .. }
@@ -719,7 +735,10 @@ impl FeatureOp {
     }
 
     pub fn makes_body(&self) -> bool {
-        !matches!(self, FeatureOp::Plane { .. } | FeatureOp::Axis { .. } | FeatureOp::Point { .. } | FeatureOp::Sketch { .. })
+        !matches!(
+            self,
+            FeatureOp::Plane { .. } | FeatureOp::Axis { .. } | FeatureOp::Point { .. } | FeatureOp::Sketch { .. } | FeatureOp::Collider { .. }
+        )
     }
 
     /// Each sketch the feature sweeps regions of, and the entries it names.
@@ -739,6 +758,7 @@ impl FeatureOp {
     pub fn main_axis(&self) -> Vec3 {
         match self {
             FeatureOp::Primitive { shape: Shape::Prism { .. } | Shape::Cone { .. }, .. } => Vec3::Y,
+            FeatureOp::Collider { shape: ColliderShape::Capsule { .. }, .. } => Vec3::Y,
             _ => Vec3::Z,
         }
     }
@@ -806,6 +826,8 @@ pub struct Evaluated {
     pub origin_half: f32,
     /// What every polygon's face tag names.
     pub faces: FaceTable,
+    /// In list order.
+    pub colliders: Vec<(PropFeatureId, Collider)>,
     /// Every body's seams and junctions, each marked whether it is offered,
     /// found the first time something asks: the game bakes props through
     /// [`evaluate`] and never does.
@@ -1382,6 +1404,7 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
     let mut axes = Vec::new();
     let mut points = Vec::new();
     let mut faces = FaceTable::default();
+    let mut colliders = Vec::new();
 
     for feature in features {
 
@@ -1655,6 +1678,9 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
                 Some(point) => points.push(point),
                 None => problems.push(Problem { feature: feature.id, message: get!("prop.problems.no_point") }),
             },
+            FeatureOp::Collider { roles, shape, placement } => {
+                colliders.push((feature.id, Collider { shape: *shape, placement: *placement, roles: roles.clone() }));
+            }
             FeatureOp::Sketch { on, sketch } => {
                 match scope.plane(*on) {
                     Some(plane) => sketches.push(PlacedSketch {
@@ -1720,6 +1746,7 @@ pub fn evaluate(features: &[PropFeature]) -> Evaluated {
         points,
         origin_half,
         faces,
+        colliders,
         found: Default::default(),
     }
 }
