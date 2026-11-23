@@ -23,4 +23,5 @@ pub mod trigger;
 pub mod block;
 pub mod stairs;
 pub mod footprint_block;
+pub mod transmogrify;
 pub mod volume_order;

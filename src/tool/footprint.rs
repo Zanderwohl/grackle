@@ -7,7 +7,6 @@ use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 
 use crate::editor::editable::{Feature, FeatureId, FeatureTimeline, FeatureTrait, PointRef};
-use crate::editor::footprint_block::FootprintBlock;
 use crate::editor::footprint_room::{ChainCorner, FootprintRoom, DEFAULT_HEIGHT, LINE_COLOR};
 use crate::editor::input::CurrentMouseInput;
 use crate::prop::sketch_edit::hatch;
@@ -25,10 +24,7 @@ const CLOSE_RADIUS: f32 = 0.3;
 const HATCH_SPACING: f32 = 0.5;
 
 fn made_by(tool: &Tools, room: FootprintRoom) -> Box<dyn FeatureTrait> {
-    match tool {
-        Tools::FootprintBlock => Box::new(FootprintBlock::from_footprint(room)),
-        _ => Box::new(room),
-    }
+    crate::editor::transmogrify::footprint_as(tool, room)
 }
 
 /// The loop being drawn. Plain data, so what a click does is testable without

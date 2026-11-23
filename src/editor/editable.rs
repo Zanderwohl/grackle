@@ -145,6 +145,8 @@ pub trait FeatureTrait: Send + Sync {
     fn picked_by(&self) -> PickedBy { PickedBy::Marker }
     /// The tool that makes this kind of feature, whose icon its row shows.
     fn tool(&self) -> Option<crate::tool::Tools> { None }
+    /// `None` for a kind outside this feature's family (`transmogrify::targets`).
+    fn transmogrify(&self, _into: &crate::tool::Tools) -> Option<Box<dyn FeatureTrait>> { None }
     fn debug_gizmos(&self, gizmos: &mut Gizmos);
     /// Drawn on top of `debug_gizmos` while this feature is selected.
     fn selected_gizmos(&self, _gizmos: &mut Gizmos) {}
@@ -654,6 +656,19 @@ impl FeatureTimeline {
         new_id
     }
     
+    /// Keeps the id, so whatever names the feature's points still resolves.
+    pub fn transmogrify(&mut self, id: FeatureId, into: &crate::tool::Tools) -> bool {
+        let Some(object) = self.features.get(&id).and_then(|feature| feature.object.transmogrify(into)) else {
+            return false;
+        };
+        // Still naming the old kind's entity, which the refresh despawns.
+        if let Some(feature) = self.features.get_mut(&id) {
+            feature.object = object;
+        }
+        self.queue_refresh_for_feature_and_descendants(id);
+        true
+    }
+
     pub fn get_feature(&self, id: &FeatureId) -> Option<&Feature> {
         self.features.get(id)
     }
@@ -933,6 +948,7 @@ impl FeatureTimeline {
 
                 // Resizable, opening at half the tab; bounds are relative to the tab so neither half can vanish.
                 let available = ui.available_height();
+                let mut transmogrify_into = None;
                 egui::Panel::bottom("editor_feature_panel")
                     .resizable(true)
                     .default_size(feature_editor_default_height(available))
@@ -942,14 +958,16 @@ impl FeatureTimeline {
                         if let Some(mut feature) = features.features.remove(&selected_id) {
                             let mut retarget_request: Option<String> = None;
                             // Padded here rather than in each `editor_ui`, so every feature type's panel looks the same.
-                            let edited = feature_editor_frame(ui, |ui| {
+                            let (edited, into) = feature_editor_frame(ui, |ui| {
                                 ui.heading(feature.label());
                                 ui.add_space(FEATURE_EDITOR_PADDING * 0.5);
-                                feature.object_mut().editor_ui(ui, &features.features, prior_order, &mut retarget_request)
+                                let edited = feature.object_mut().editor_ui(ui, &features.features, prior_order, &mut retarget_request);
+                                (edited, crate::editor::transmogrify::section(ui, feature.object()))
                             });
                             if let Some(label) = retarget_request {
                                 *retarget_out = Some((selected_id, label));
                             }
+                            transmogrify_into = into;
                             if edited {
                                 entity_for_event = feature.object().entity();
                                 was_edited = true;
@@ -958,6 +976,12 @@ impl FeatureTimeline {
                             features.features.insert(selected_id, feature);
                         }
                     });
+                // No `EditEvent`: the refresh despawns the entity it would name.
+                if transmogrify_into.is_some_and(|into| features.transmogrify(selected_id, &into)) {
+                    entity_for_event = None;
+                    was_edited = true;
+                    edited_id = Some(selected_id);
+                }
             }
         }
 
@@ -1797,6 +1821,43 @@ mod tests {
         let feature = timeline.features_mut().get_mut(&id).unwrap();
         feature.object_mut().get_point_ref_mut("location").unwrap().x = AxisRef::Absolute(x);
         feature.object_mut().resolve_references(&HashMap::new());
+    }
+
+    /// Breaks if a Mirror's copy keeps the old kind's entity, or if the change is not one undo step.
+    #[test]
+    fn a_transmogrified_source_rebuilds_its_mirror_and_undoes_in_one_step() {
+        use crate::editor::editor_room::EditorRoom;
+        use crate::editor::mirror::Mirror;
+        use crate::tool::Tools;
+
+        let mut timeline = FeatureTimeline::default();
+        let room = timeline.apply_feature(Box::new(EditorRoom::from_point_refs(
+            PointRef::absolute(2.0, 0.0, -1.0),
+            PointRef::absolute(6.0, 3.0, 1.0),
+        )));
+        let mirror = timeline.apply_feature(Box::new(Mirror::new(PointRef::absolute(0.0, 0.0, 0.0)).with_sources(vec![room])));
+        let mut world = World::new();
+        for id in [room, mirror] {
+            let entity = world.spawn_empty().id();
+            timeline.features_mut().get_mut(&id).unwrap().object_mut().set_entity(Some(entity));
+        }
+        let old_entities: Vec<Entity> = [room, mirror].iter().filter_map(|id| timeline.get_feature(id).unwrap().object().entity()).collect();
+        timeline.resolve_all();
+        timeline.checkpoint(&MapMetadata::default());
+
+        assert!(timeline.transmogrify(room, &Tools::Trigger));
+        timeline.resolve_all();
+        for id in [room, mirror] {
+            assert_eq!(timeline.get_feature(&id).unwrap().object().entity(), None, "{id:?} is stood up again");
+        }
+        assert!(old_entities.iter().all(|entity| timeline.pending_despawns.contains(entity)));
+        let copies = timeline.get_feature(&mirror).unwrap().object().standing_copies();
+        assert!(!copies.is_empty() && copies.iter().all(|copy| copy.object.type_key() == "trigger"));
+
+        timeline.undo(&mut MapMetadata::default());
+        assert_eq!(timeline.get_feature(&room).unwrap().object().type_key(), "editor_room");
+        let copies = timeline.get_feature(&mirror).unwrap().object().standing_copies();
+        assert!(copies.iter().all(|copy| copy.object.type_key() == "editor_room"));
     }
 
     /// An un-checkpointed edit must be taken back by undo first rather than skipped.

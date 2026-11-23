@@ -45,6 +45,9 @@ impl FeatureTrait for FootprintBlock {
 
     fn tool(&self) -> Option<crate::tool::Tools> { Some(crate::tool::Tools::FootprintBlock) }
     fn type_key(&self) -> &'static str { "footprint_block" }
+    fn transmogrify(&self, into: &crate::tool::Tools) -> Option<Box<dyn FeatureTrait>> {
+        Some(crate::editor::transmogrify::footprint_as(into, self.plan.clone()))
+    }
     fn picked_by(&self) -> crate::editor::editable::PickedBy { crate::editor::editable::PickedBy::Walls }
 
     fn debug_gizmos(&self, gizmos: &mut Gizmos) {

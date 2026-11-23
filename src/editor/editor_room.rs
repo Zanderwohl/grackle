@@ -28,7 +28,7 @@ impl MaxBase {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct EditorRoom {
     min: PointRef,
     max: PointRef,
@@ -209,6 +209,9 @@ impl FeatureTrait for EditorRoom {
 
     fn tool(&self) -> Option<crate::tool::Tools> { Some(crate::tool::Tools::Room) }
     fn type_key(&self) -> &'static str { "editor_room" }
+    fn transmogrify(&self, into: &crate::tool::Tools) -> Option<Box<dyn FeatureTrait>> {
+        Some(crate::editor::transmogrify::box_as(into, self.clone()))
+    }
     fn picked_by(&self) -> crate::editor::editable::PickedBy { crate::editor::editable::PickedBy::Walls }
 
     fn debug_gizmos(&self, gizmos: &mut Gizmos) {
