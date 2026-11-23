@@ -1,7 +1,6 @@
-//! Kept maps: copying a server's round map and everything it needs into a pack of its own, and,
-//! when a map in such a pack is opened, mounting its lock so its files are found by hash rather
-//! than by name. See "Keeping foreign content is an explicit copy into a pack" and "A blueprint
-//! locks what it was saved against" in documentation/resource-streaming.md.
+//! Kept maps: a server's round map and what it needs copied into a pack of its own, and, while
+//! one is open, its lock mounted so its files are found by hash. See stage 5 of
+//! documentation/resource-streaming.md.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -47,7 +46,6 @@ impl ObjectStore for KeptObjects {
     }
 }
 
-/// The kept map whose lock is mounted.
 #[derive(Resource, Default)]
 pub struct LockedMap(pub Option<PathBuf>);
 
@@ -66,25 +64,42 @@ pub fn manifest_of(requires: &[Required]) -> Result<Manifest, String> {
     Manifest::checked(entries)
 }
 
-/// Mounts a kept map's lock as it is opened, and unmounts it when another map is. A client's
-/// mounted pack is the server's, so a client mounts no lock.
+/// Only in the map editor and Play: a mounted lock hides the local files it names, which the
+/// other editors edit. A client mounts none, since its mounted pack is the server's. Ordered after
+/// the client's own unmount, which a role change also makes.
+#[allow(clippy::too_many_arguments)]
 pub fn lock_kept_maps(
     role: Res<NetRole>,
+    mode: Res<State<crate::common::app_mode::AppMode>>,
     file: Option<Res<crate::editor::panels::CurrentFilePath>>,
     root: Res<DownloadsRoot>,
     mut assets: ResMut<PackAssets>,
     mut locked: ResMut<LockedMap>,
     cache: Option<ResMut<crate::prop::baked::PropCache>>,
     mut changed: MessageWriter<PacksChanged>,
-    // The panels hold the file path mutably every frame, so its change flag is always set.
-    mut seen: Local<Option<PathBuf>>,
+    // The panels hold the file path mutably every frame, so its change flag is always set; whether
+    // the path is in a kept pack is read once per path.
+    mut seen: Local<Option<(PathBuf, bool)>>,
 ) {
+    // A role change unmounted whatever was mounted, so the lock is looked at again.
+    if role.is_changed() {
+        locked.0 = None;
+    }
     let Some(file) = file else { return };
-    if !role.is_authority() || *seen == file.path {
+    if !role.is_authority() {
         return;
     }
-    seen.clone_from(&file.path);
-    let opened = file.path.clone().filter(|path| crate::common::pack_info::in_a_kept_pack(path));
+    let kept = match (&file.path, seen.as_ref()) {
+        (Some(path), Some((known, kept))) if known == path => *kept,
+        (Some(path), _) => {
+            let kept = crate::common::pack_info::in_a_kept_pack(path);
+            *seen = Some((path.clone(), kept));
+            kept
+        }
+        (None, _) => false,
+    };
+    let shown = matches!(mode.get(), crate::common::app_mode::AppMode::Editor | crate::common::app_mode::AppMode::Play);
+    let opened = file.path.clone().filter(|_| kept && shown);
     if opened == locked.0 {
         return;
     }
@@ -115,7 +130,6 @@ pub fn lock_kept_maps(
     }
 }
 
-/// Asked for from the Multiplayer menu.
 #[derive(Message, Clone, Copy, Debug, Default)]
 pub struct KeepACopy;
 
@@ -139,8 +153,6 @@ fn free_pack(root: &Path, base: &str) -> PathBuf {
     pack
 }
 
-/// Copies the round's map, written with its lock, and every file the server's manifest lists into
-/// a new kept pack.
 pub fn keep_a_copy(mut asked: MessageReader<KeepACopy>, role: Res<NetRole>, assets: Res<PackAssets>, fetch: Res<Fetch>) {
     if asked.read().count() == 0 {
         return;
@@ -222,8 +234,7 @@ mod tests {
         assert_eq!(manifest.get(&crate::common::resource::LogicalPath::new("weapons/pistol.toml").unwrap()).unwrap().key.hash, ContentHash::of(&weapons));
     }
 
-    /// A kept map's files come from its pack by the hash its lock names, whatever a local pack of
-    /// higher priority holds at the same path.
+    /// Fails if a local pack's file at the same path is read instead of the kept one.
     #[test]
     fn a_kept_lock_reads_the_kept_file_not_the_local_one() {
         let pack = std::env::temp_dir().join(format!("grackle-kept-{}", std::process::id()));

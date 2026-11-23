@@ -24,8 +24,7 @@ use crate::common::resource::{ContentHash, LogicalPath, Manifest, ManifestEntry,
 use crate::editor::editable::FeatureTimeline;
 use crate::editor::map_metadata::MapMetadata;
 
-/// Ordered and reliable both ways: a manifest replaces the one before it, and a chunk follows the
-/// one before it.
+/// Ordered and reliable, so a file's chunks arrive in order.
 pub struct ResourceChannel;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -47,7 +46,7 @@ fn server_name(listing: Option<&crate::common::round_settings::ServerListing>, p
     }
 }
 
-/// The hashes a client lacks. Answered only for hashes in the server's current manifest.
+/// Answered only for hashes in the server's current manifest.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct Want {
     pub hashes: Vec<ContentHash>,
@@ -115,7 +114,7 @@ impl Plugin for ResourceSyncPlugin {
             .init_resource::<Fetch>()
             .init_resource::<crate::common::resource::lock::LockedMap>()
             .add_message::<crate::common::resource::lock::KeepACopy>()
-            .add_systems(Update, (crate::common::resource::lock::lock_kept_maps, crate::common::resource::lock::keep_a_copy))
+            .add_systems(Update, (crate::common::resource::lock::lock_kept_maps.after(forget_the_server_when_not_a_client), crate::common::resource::lock::keep_a_copy))
             .add_systems(Startup, crate::common::resource::prune::prune_old_downloads.run_if(resource_exists::<crate::common::resource::prune::PruneDownloads>))
             .add_systems(
                 OnEnter(crate::common::app_mode::AppMode::Play),
@@ -131,12 +130,10 @@ impl Plugin for ResourceSyncPlugin {
     }
 }
 
-/// Where the server reads a file it serves.
 enum Source {
     /// Its highest local pack's copy, checked against the hash again when sent.
     Pack(LogicalPath),
     Bytes(Vec<u8>),
-    /// A bake kept on disk.
     File(PathBuf),
 }
 
@@ -149,7 +146,7 @@ struct Served {
     named: Vec<Named>,
     saves: u64,
     lightmap: Option<u64>,
-    /// The map as the last round started, kept in the manifest so every client stores it.
+    /// The map as the last round started.
     round: Option<(ManifestEntry, Vec<u8>)>,
     since: f32,
     /// The map or its settings changed, so what it names is looked at again.
@@ -199,7 +196,6 @@ fn remember_the_rounds_map(
     served.since = REBUILD_INTERVAL;
 }
 
-/// The sun bake standing now, as a manifest entry and where its bytes are.
 #[cfg(not(target_arch = "wasm32"))]
 fn lightmap_entry(hash: u64) -> Option<(ManifestEntry, Source)> {
     let file = crate::tool::bake_cache::file(crate::tool::sun_bake::CACHE_FOLDER, hash);
@@ -230,8 +226,6 @@ fn lightmap_on_disk(_: u64) -> bool {
     false
 }
 
-/// Rebuilt when what the map names changes, a prop is saved, the catalog changes, a round starts,
-/// the sun is baked, or the server starts; at most every [`REBUILD_INTERVAL`].
 #[allow(clippy::too_many_arguments)]
 fn rebuild_the_manifest(
     time: Res<Time>,
@@ -244,16 +238,20 @@ fn rebuild_the_manifest(
     sun: Option<Res<crate::tool::sun_bake::SunBake>>,
     named: (Option<Res<crate::common::round_settings::ServerListing>>, Option<Res<crate::common::player_settings::PlayerSettings>>),
     server: Option<Single<&Endpoint, With<Server>>>,
+    mut packs_changed: MessageReader<PacksChanged>,
     mut served: ResMut<Served>,
     mut sender: ServerMultiMessageSender,
 ) -> Result {
+    // Read every frame, so a change while not hosting is not taken for one after.
+    let packs_changed = packs_changed.read().count() > 0;
     let was_hosting = std::mem::replace(&mut served.hosting, server.is_some());
     let Some(server) = server else { return Ok(()) };
 
     let saves = editor.map_or(0, |editor| editor.saves());
     let lightmap = sun.and_then(|sun| sun.baked_hash());
     served.pending |= timeline.as_ref().is_some_and(|timeline| timeline.is_changed()) || metadata.as_ref().is_some_and(|metadata| metadata.is_changed());
-    served.force |= !was_hosting || catalog.as_ref().is_some_and(|catalog| catalog.is_changed()) || saves != served.saves || lightmap != served.lightmap;
+    // A kept map's lock mounted or unmounted changes the files served under the same names.
+    served.force |= !was_hosting || packs_changed || catalog.as_ref().is_some_and(|catalog| catalog.is_changed()) || saves != served.saves || lightmap != served.lightmap;
     if let Some(hash) = served.lightmap_pending
         && lightmap_on_disk(hash)
     {
@@ -292,8 +290,7 @@ fn rebuild_the_manifest(
         true => match_roots(map.clone()).into_iter().skip(1).collect(),
         false => match_roots(map.clone()),
     };
-    // Over `packs()`, which includes a kept map's lock while one is mounted, since that is what
-    // `read_from_packs` serves from.
+    // `packs()`, not `default_packs()`: it includes a mounted lock, which `read_from_packs` serves.
     let found = closure(&assets, &assets.packs(), &given, roots);
     for problem in found.problems.iter().filter(|problem| !served.problems.contains(problem)) {
         warn!("Left out of what clients are sent: {problem}");
@@ -364,7 +361,6 @@ fn send_the_manifest_to_new_clients(
     Ok(())
 }
 
-/// What one client is still to be sent.
 #[derive(Component, Default)]
 struct Outbox {
     queue: VecDeque<ContentHash>,
@@ -453,7 +449,7 @@ pub enum FetchPhase {
     /// No manifest yet.
     #[default]
     Idle,
-    /// Checking the manifest against the store and the local packs, a few files a frame.
+    /// A few files a frame.
     Comparing,
     Downloading,
     /// Every file is stored and the server's pack is mounted.
@@ -468,17 +464,14 @@ const COMPARE_BYTES_PER_FRAME: u64 = 8 * 1024 * 1024;
 #[derive(Resource, Default)]
 pub struct Fetch {
     pub phase: FetchPhase,
-    /// The server's name as its manifest gave it.
     pub server: String,
     pub entries: usize,
     pub entries_checked: usize,
     pub bytes_wanted: u64,
     pub bytes_received: u64,
     pub files_wanted: usize,
-    /// The file being received now.
     pub current: Option<LogicalPath>,
     manifest: Option<Manifest>,
-    /// Entries still to compare.
     comparing: VecDeque<ManifestEntry>,
     generation: u64,
     /// By hash: its size, and a path it is listed at, for messages and its extension.
@@ -495,7 +488,6 @@ pub struct Fetch {
 }
 
 impl Fetch {
-    /// The manifest generation mounted now.
     pub fn mounted_generation(&self) -> Option<u64> {
         self.mounted
     }
@@ -504,7 +496,6 @@ impl Fetch {
         self.files_wanted.saturating_sub(self.wanted.len())
     }
 
-    /// The server's files, once a manifest is in.
     pub fn manifest(&self) -> Option<&Manifest> {
         self.manifest.as_ref()
     }
@@ -519,6 +510,8 @@ pub(crate) struct SessionRecord {
     /// Every object the session used, by its name in the store; what keeps one from being pruned.
     #[serde(default)]
     pub(crate) objects: BTreeSet<String>,
+    #[serde(skip)]
+    written: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -535,7 +528,6 @@ fn label(role: &NetRole) -> String {
     }
 }
 
-/// Unmounts the server's pack when this machine stops being its client.
 fn forget_the_server_when_not_a_client(
     role: Res<NetRole>,
     mut assets: ResMut<PackAssets>,
@@ -556,7 +548,7 @@ fn forget_the_server_when_not_a_client(
     }
 }
 
-/// The local packs' copy of `entry`, if it is the same bytes.
+/// Only a byte-identical copy.
 fn local_copy(assets: &PackAssets, entry: &ManifestEntry) -> Option<Vec<u8>> {
     for pack in default_packs().iter().rev() {
         if assets.size_local(pack, entry.key.path.as_str()).is_some_and(|size| size != entry.size) {
@@ -590,7 +582,6 @@ fn read_manifests(
     fetch.phase = FetchPhase::Comparing;
 }
 
-/// Compares a frame's worth of entries; once all are compared, asks for what is lacking.
 fn compare_some(
     role: Res<NetRole>,
     assets: Res<PackAssets>,
@@ -713,7 +704,7 @@ fn read_chunks(
     }
 }
 
-/// Puts each lightmap the manifest lists where the sun bake looks for its cache.
+/// Into the sun bake's cache folder, where it looks.
 #[cfg(not(target_arch = "wasm32"))]
 fn place_lightmaps(manifest: &Manifest, store: &dyn ObjectStore) -> bool {
     let mut placed = false;
@@ -760,9 +751,8 @@ fn mount_when_everything_is_stored(
     }
     record_rounds(&root, &role, &mut fetch, &manifest);
 
-    // A remount reports only the paths whose files changed, and none for a round's map or a
-    // lightmap, which no loader reads: otherwise every round start would reload every table and
-    // drop every bake on every client.
+    // Only changed paths, and never a round's map or a lightmap, which no loader reads; else each
+    // round start would reload every table and drop every bake on every client.
     let only = assets.session().map(|before| {
         let differs = |entry: &ManifestEntry, other: &Manifest| other.get(&entry.key.path).is_none_or(|known| known.key.hash != entry.key.hash);
         let mut paths: Vec<String> = manifest
@@ -806,6 +796,7 @@ fn record_rounds(root: &DownloadsRoot, role: &NetRole, fetch: &mut Fetch, manife
         started: now.format("%Y-%m-%d_%H-%M-%S").to_string(),
         rounds: Vec::new(),
         objects: BTreeSet::new(),
+        written: false,
     });
     let mut added = false;
     for entry in &manifest.entries {
@@ -818,9 +809,10 @@ fn record_rounds(root: &DownloadsRoot, role: &NetRole, fetch: &mut Fetch, manife
             added = true;
         }
     }
-    if !added && !record.rounds.is_empty() {
+    if !added && record.written {
         return;
     }
+    record.written = true;
     let folder: String = record.server.chars().map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '-' { c } else { '_' }).collect();
     let file = root.0.join("sessions").join(folder).join(format!("{}.toml", record.started));
     let written = toml::to_string(record).map_err(|e| e.to_string()).and_then(|text| {

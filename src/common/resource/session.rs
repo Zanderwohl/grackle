@@ -1,6 +1,5 @@
 //! The server's files as a pack: its manifest, read out of the object store, mounted above every
-//! local pack while connected. See "The server publishes a manifest" in
-//! documentation/resource-streaming.md.
+//! local pack while connected.
 
 use std::path::Path;
 
@@ -17,7 +16,7 @@ pub fn is_session_pack(pack: &Path) -> bool {
 }
 
 pub struct SessionPack {
-    /// The server's name, for messages.
+    /// For messages.
     pub label: String,
     pub manifest: Manifest,
     store: Box<dyn ObjectStore>,
@@ -42,12 +41,10 @@ impl SessionPack {
         LogicalPath::new(relative).is_ok_and(|path| self.manifest.get(&path).is_some())
     }
 
-    /// The size the manifest states.
     pub fn size(&self, relative: &str) -> Option<u64> {
         Some(self.manifest.get(&LogicalPath::new(relative).ok()?)?.size)
     }
 
-    /// The names of the files directly in `folder`.
     pub fn list(&self, folder: &str) -> Vec<String> {
         let prefix = format!("{folder}/");
         self.manifest
@@ -71,14 +68,12 @@ impl SessionPack {
             .collect()
     }
 
-    /// The `AssetServer` path of a file in the manifest.
     pub fn asset_path(&self, relative: &str) -> Option<String> {
         let path = LogicalPath::new(relative).ok()?;
         let entry = self.manifest.get(&path)?;
         Some(object_asset_path(entry.key.hash, path.extension()?))
     }
 
-    /// The manifest entries whose objects are not stored yet.
     pub fn lacking(&self) -> Vec<&LogicalPath> {
         self.manifest
             .entries

@@ -57,8 +57,7 @@ impl HashIndex {
         Self { file, entries, changed: false }
     }
 
-    /// The hash and size of the file at `path`, read and hashed only when its size or modified
-    /// time differs from what was indexed.
+    /// Hashed again only when its size or modified time differs from what was indexed.
     pub fn hash_of(&mut self, path: &Path) -> std::io::Result<(ContentHash, u64)> {
         let metadata = std::fs::metadata(path)?;
         let size = metadata.len();

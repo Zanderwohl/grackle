@@ -1,6 +1,4 @@
-//! What [`AppMode::Joining`] draws: a small window over a background picture, naming the server,
-//! with a progress bar, the phase it is in and a Disconnect button. The state behind it is
-//! [`crate::common::joining`].
+//! What [`AppMode::Joining`] draws. The state behind it is [`crate::common::joining`].
 
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts, EguiPrimaryContextPass};

@@ -1,11 +1,9 @@
 //! A pack's `pack.toml`: who made it, and for a pack kept from a server, where it came from and
-//! what each file was. See "Authors are per resource" and "Keeping foreign content" in
-//! documentation/resource-streaming.md.
+//! what each file was.
 //!
-//! **A kept pack is not in [`default_packs`](crate::common::assets::default_packs)**: its files
-//! would otherwise join every local game's catalog and shadow local files by name. It is reached
-//! only by opening one of its maps, whose lock mounts the files it names
-//! ([`crate::common::resource::lock`]).
+//! A kept pack is not in [`default_packs`](crate::common::assets::default_packs), or its files
+//! would join every local game's catalog and shadow local files by name. It is reached only
+//! through one of its maps' locks ([`crate::common::resource::lock`]).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -28,7 +26,6 @@ pub struct PackInfo {
     pub files: BTreeMap<String, FileOrigin>,
 }
 
-/// Where a kept pack came from.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Origin {
     /// Always "kept" so far.
@@ -91,7 +88,6 @@ pub fn is_kept_pack(_: &Path) -> bool {
     false
 }
 
-/// Every kept pack under `assets/`, by name.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn kept_packs() -> Vec<PathBuf> {
     let mut kept: Vec<PathBuf> = std::fs::read_dir(ASSET_ROOT)
@@ -110,13 +106,13 @@ pub fn kept_packs() -> Vec<PathBuf> {
     Vec::new()
 }
 
-/// The pack a file is in, as `assets/{pack}`.
+/// As `assets/{pack}`.
 pub fn pack_of(file: &Path) -> Option<PathBuf> {
     let (pack, _) = crate::common::cache_path::in_pack(file)?;
     Some(Path::new(ASSET_ROOT).join(pack))
 }
 
-/// Whether `file` is in a kept pack, which the editors open read-only.
+/// The editors open a kept pack's files read-only.
 pub fn in_a_kept_pack(file: &Path) -> bool {
     pack_of(file).is_some_and(|pack| is_kept_pack(&pack))
 }

@@ -6,7 +6,6 @@ use crate::common::resource::{LogicalPath, ResourceKind};
 /// A name as a file writes it, before it is a path.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Named {
-    /// A file stem under `props/`.
     Prop(String),
     /// A weapon key: a file stem under `weapons/`.
     Weapon(String),
@@ -14,17 +13,14 @@ pub enum Named {
     Material(String),
     /// A file name under `decals/`, extension included.
     Decal(String),
-    /// A file stem under `icons/`.
     Icon(String),
     /// A rig file's stem, which also names its own clip folder.
     Rig(String),
     /// A clip's path under `animations/` without its extension: `taunt_wave`, `raptor/taunt_wag`.
     Clip(String),
-    /// A track's path inside a pack.
     Music(String),
 }
 
-/// A place a closure goes looking.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Reference {
     /// Missing is reported unless `optional`.

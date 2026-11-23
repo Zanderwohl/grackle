@@ -1,8 +1,7 @@
 //! [`AppMode::Joining`]: from connecting to a server until its first screen. The client fetches the
-//! server's files ([`crate::common::resource::sync`]) and then builds them — every prop and material
-//! the manifest lists, the map's rooms and its light — so the first frame of the server's mode bakes
-//! nothing. See "Joining is a loading state" in documentation/resource-streaming.md; the screen is
-//! [`crate::joining_screen`].
+//! server's files, then bakes every prop and material they list and waits for the map's rooms and
+//! light, so the first frame of the server's mode bakes nothing. See stage 4 of
+//! documentation/resource-streaming.md.
 
 use std::collections::VecDeque;
 
@@ -39,13 +38,11 @@ impl Plugin for JoiningPlugin {
     }
 }
 
-/// What the build band has left: the files to bake, a frame each, then waiting on the room and
-/// sun bakes.
+/// The files left to bake, a frame each, before waiting on the room and sun bakes.
 #[derive(Resource, Default)]
 pub struct JoinBuild {
     /// The mounted manifest generation the build was planned for; a remount plans it again.
     planned: Option<u64>,
-    /// Prop file stems.
     pub props: VecDeque<String>,
     /// Material names, baked by the material editor's plugin.
     pub materials: VecDeque<String>,
@@ -174,7 +171,6 @@ fn finish_joining(
     }
 }
 
-/// How far joining has got, as the screen draws it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct JoinProgress {
     /// 0 to 1: comparing up to 0.05, downloading up to 0.8, building up to 1.

@@ -38,7 +38,7 @@ pub fn match_roots(map: LogicalPath) -> Vec<Reference> {
     roots
 }
 
-/// A file found in a pack, or one handed in by its bytes (a round's map, serialized as it stands).
+/// From a pack, or handed in by its bytes (a round's map).
 struct Found {
     bytes: Vec<u8>,
     pack: String,

@@ -18,9 +18,8 @@ use serde::{Deserialize, Serialize};
 
 pub use named::{describe, Described, Named, Reference};
 
-/// Registers [`store::OBJECT_SOURCE`], so the `AssetServer` can load a server's file (a track) out
-/// of the object store by [`store::object_asset_path`]. Before `AssetPlugin`, which builds the
-/// sources it is given and no later ones.
+/// [`store::OBJECT_SOURCE`], for a server's track. Added before `AssetPlugin`, which builds only the
+/// sources registered by then.
 pub struct ObjectSourcePlugin;
 
 impl bevy::app::Plugin for ObjectSourcePlugin {
@@ -184,9 +183,8 @@ pub enum ResourceKind {
     Music,
     /// A music folder's `attribution.txt`.
     Attribution,
-    /// A sun bake the server made, `lightmap/{input hash:016x}.bin`, offered so a client need not
-    /// bake it. Derived, so not checkable without baking it; trusted, since nothing gameplay-related
-    /// reads a lightmap.
+    /// `lightmap/{input hash:016x}.bin`. Cannot be checked without baking it, so it is trusted:
+    /// nothing gameplay-related reads a lightmap.
     Lightmap,
 }
 
@@ -243,7 +241,6 @@ impl ResourceKind {
         }
     }
 
-    /// The largest file of the kind a client will take.
     pub fn max_bytes(self) -> u64 {
         match self {
             ResourceKind::Blueprint => 16 * MIB,
@@ -256,9 +253,7 @@ impl ResourceKind {
         }
     }
 
-    /// What a path is, by its folder, depth and extension. Only a weapon, rig or table sits
-    /// directly in its folder; clips are one folder further down for a rig's own, and a track
-    /// may be in a folder of its own.
+    /// Only a clip (a rig's own) and a track (in its own folder) may sit one folder deeper.
     pub fn of(path: &LogicalPath) -> Option<ResourceKind> {
         let extension = path.extension()?;
         let depth = path.depth();
@@ -280,7 +275,6 @@ impl ResourceKind {
     }
 }
 
-/// A file named across machines.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ResourceKey {
     pub path: LogicalPath,
@@ -293,14 +287,12 @@ impl ResourceKey {
     }
 }
 
-/// One file a match needs.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ManifestEntry {
     pub key: ResourceKey,
     /// Bytes. Not part of the hash: it weights a progress bar and caps a transfer.
     pub size: u64,
-    /// The folder name of the pack it came from, for the UI only. It never names a folder on the
-    /// machine that reads it.
+    /// For the UI only: it never names a folder on the machine that reads it.
     pub pack: String,
     pub authors: Vec<String>,
 }

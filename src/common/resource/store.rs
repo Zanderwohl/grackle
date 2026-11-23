@@ -50,7 +50,6 @@ pub fn object_name(hash: ContentHash, extension: &str) -> String {
     format!("{}/{}.{extension}", &hex[..2], &hex[2..])
 }
 
-/// The `AssetServer` path of a stored object.
 pub fn object_asset_path(hash: ContentHash, extension: &str) -> String {
     format!("{OBJECT_SOURCE}://{}", object_name(hash, extension))
 }

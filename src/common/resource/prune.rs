@@ -1,7 +1,6 @@
-//! Deleting what servers sent once no recent session used it. Runs at startup, as the logs' and the
-//! trash's cleanup do. A session record lists every object it used
-//! ([`crate::common::resource::sync`]); an object no kept record lists goes, and while what is
-//! kept is over [`SIZE_CAP`] the oldest records go first.
+//! Deleting what servers sent once no recent session used it, at startup. A session record lists
+//! every object it used; an object no kept record lists goes, and while what is kept is over
+//! [`SIZE_CAP`] the oldest records go first.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -56,13 +55,18 @@ fn records(root: &Path, problems: &mut Vec<String>) -> Vec<Record> {
     found
 }
 
-/// Every object in the store, by its name there (`ab/cdef….ext`), with its size.
-fn objects(root: &Path) -> Vec<(String, PathBuf, u64)> {
+/// Every object in the store written before `before`, by its name there (`ab/cdef….ext`), with its
+/// size. A later one belongs to a session still fetching, whose record is written once it mounts.
+fn objects(root: &Path, before: SystemTime) -> Vec<(String, PathBuf, u64)> {
     let mut found = Vec::new();
     for folder in std::fs::read_dir(root.join("objects")).into_iter().flatten().filter_map(Result::ok) {
         let prefix = folder.file_name().to_string_lossy().into_owned();
         for file in std::fs::read_dir(folder.path()).into_iter().flatten().filter_map(Result::ok) {
-            let size = file.metadata().map_or(0, |metadata| metadata.len());
+            let Ok(metadata) = file.metadata() else { continue };
+            if metadata.modified().is_ok_and(|modified| modified > before) {
+                continue;
+            }
+            let size = metadata.len();
             found.push((format!("{prefix}/{}", file.file_name().to_string_lossy()), file.path(), size));
         }
     }
@@ -86,7 +90,7 @@ pub fn prune(root: &Path, keep: Duration, cap: u64, now: SystemTime) -> Vec<Stri
         fresh
     });
 
-    let stored = objects(root);
+    let stored = objects(root, now);
     let size_of = |kept: &[Record]| -> u64 {
         let wanted: BTreeSet<&String> = kept.iter().flat_map(|record| &record.objects).collect();
         stored.iter().filter(|(name, _, _)| wanted.contains(name)).map(|(_, _, size)| size).sum()
@@ -105,7 +109,6 @@ pub fn prune(root: &Path, keep: Duration, cap: u64, now: SystemTime) -> Vec<Stri
     problems
 }
 
-/// Settings → Developer's button.
 pub fn delete_all_downloads(root: &Path) {
     for folder in ["objects", "sessions"] {
         let path = root.join(folder);
@@ -165,5 +168,16 @@ mod tests {
         assert!(prune(&root, Duration::from_secs(60), 15, SystemTime::now()).is_empty());
         assert!(!root.join("objects/aa/first.gpp").exists(), "the older session's object was kept over the cap");
         assert!(root.join("objects/bb/second.gpp").exists());
+    }
+
+    /// An object stored after the prune began belongs to a session still fetching.
+    #[test]
+    fn an_object_newer_than_the_prune_is_kept() {
+        let root = std::env::temp_dir().join(format!("grackle-prune-new-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let started = SystemTime::now() - Duration::from_secs(60);
+        write(&root.join("objects/aa/fetching.gpp"), b"fetching");
+        assert!(prune(&root, Duration::from_secs(60), SIZE_CAP, started).is_empty());
+        assert!(root.join("objects/aa/fetching.gpp").exists(), "an object being fetched was pruned");
     }
 }

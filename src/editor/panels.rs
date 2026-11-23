@@ -58,7 +58,9 @@ fn ask_where_to_save(current_file: &CurrentFilePath) {
     std::thread::spawn(move || {
         let mut dialog = rfd::AsyncFileDialog::new()
             .add_filter("Grackle Map Blueprint", &[MAP_BLUEPRINT_EXTENSION]);
-        if let Some(directory) = dialog_directory(existing.as_deref(), BLUEPRINTS_DIR) {
+        // Never into a kept pack: its files are the server's, described by its `pack.toml`.
+        let from = existing.as_deref().filter(|path| !crate::common::pack_info::in_a_kept_pack(path));
+        if let Some(directory) = dialog_directory(from, BLUEPRINTS_DIR) {
             dialog = dialog.set_directory(directory);
         }
         dialog = match existing.as_ref().and_then(|existing| existing.file_name()) {
