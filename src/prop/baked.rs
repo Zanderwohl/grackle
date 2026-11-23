@@ -206,6 +206,13 @@ impl PropCache {
         self.baked.get(name).and_then(Option::as_ref)
     }
 
+    /// Drops one bake, so the prop is read from the packs again.
+    pub fn forget(&mut self, name: &str) {
+        if self.baked.remove(name).is_some() {
+            self.generation += 1;
+        }
+    }
+
     /// Drops every bake, so each prop is read from the packs again: their contents changed (a
     /// server's files were mounted or unmounted).
     pub fn forget_all(&mut self) {

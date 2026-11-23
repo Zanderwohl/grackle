@@ -152,6 +152,11 @@ struct Served {
     pending: bool,
     /// Something changed that calls for a rebuild whatever the map names.
     force: bool,
+    /// A sun bake whose cache file was not on disk yet at the last rebuild; its file is written on
+    /// the IO pool after the bake lands.
+    lightmap_pending: Option<u64>,
+    /// The closure's problems at the last rebuild, so each is warned of once.
+    problems: Vec<String>,
     hosting: bool,
 }
 
@@ -210,6 +215,17 @@ fn lightmap_entry(_: u64) -> Option<(ManifestEntry, Source)> {
     None
 }
 
+/// A stat a frame, rather than the closure, while a lightmap's file is awaited.
+#[cfg(not(target_arch = "wasm32"))]
+fn lightmap_on_disk(hash: u64) -> bool {
+    crate::tool::bake_cache::file(crate::tool::sun_bake::CACHE_FOLDER, hash).is_file()
+}
+
+#[cfg(target_arch = "wasm32")]
+fn lightmap_on_disk(_: u64) -> bool {
+    false
+}
+
 /// Rebuilt when what the map names changes, a prop is saved, the catalog changes, a round starts,
 /// the sun is baked, or the server starts; at most every [`REBUILD_INTERVAL`].
 #[allow(clippy::too_many_arguments)]
@@ -234,6 +250,12 @@ fn rebuild_the_manifest(
     let lightmap = sun.and_then(|sun| sun.baked_hash());
     served.pending |= timeline.as_ref().is_some_and(|timeline| timeline.is_changed()) || metadata.as_ref().is_some_and(|metadata| metadata.is_changed());
     served.force |= !was_hosting || catalog.as_ref().is_some_and(|catalog| catalog.is_changed()) || saves != served.saves || lightmap != served.lightmap;
+    if let Some(hash) = served.lightmap_pending
+        && lightmap_on_disk(hash)
+    {
+        served.lightmap_pending = None;
+        served.force = true;
+    }
     served.since += time.delta_secs();
     if !(served.pending || served.force) || served.since < REBUILD_INTERVAL {
         return Ok(());
@@ -267,9 +289,10 @@ fn rebuild_the_manifest(
         false => match_roots(map.clone()),
     };
     let found = closure(&assets, &default_packs(), &given, roots);
-    for problem in &found.problems {
+    for problem in found.problems.iter().filter(|problem| !served.problems.contains(problem)) {
         warn!("Left out of what clients are sent: {problem}");
     }
+    served.problems = found.problems.clone();
     for missing in &found.missing {
         debug!("{} is named but no pack has it", missing.path);
     }
@@ -287,9 +310,14 @@ fn rebuild_the_manifest(
         sources.insert(entry.key.hash, Source::Bytes(bytes.clone()));
         entries.push(entry.clone());
     }
-    if let Some((entry, source)) = lightmap.and_then(lightmap_entry) {
-        sources.insert(entry.key.hash, source);
-        entries.push(entry);
+    served.lightmap_pending = None;
+    match lightmap.map(|hash| (hash, lightmap_entry(hash))) {
+        Some((_, Some((entry, source)))) => {
+            sources.insert(entry.key.hash, source);
+            entries.push(entry);
+        }
+        Some((hash, None)) => served.lightmap_pending = Some(hash),
+        None => {}
     }
     let manifest = match Manifest::checked(entries) {
         Ok(manifest) => manifest,
@@ -445,6 +473,9 @@ pub struct Fetch {
     generation: u64,
     /// By hash: its size, and a path it is listed at, for messages and its extension.
     wanted: BTreeMap<ContentHash, (u64, LogicalPath)>,
+    /// What a comparison under way has found lacking, swapped in for `wanted` when it ends, so
+    /// files still downloading keep being taken meanwhile.
+    next_wanted: BTreeMap<ContentHash, (u64, LogicalPath)>,
     asked: BTreeSet<ContentHash>,
     /// How many times each file has been asked for again after arriving damaged.
     retries: HashMap<ContentHash, u32>,
@@ -454,6 +485,11 @@ pub struct Fetch {
 }
 
 impl Fetch {
+    /// The manifest generation mounted now.
+    pub fn mounted_generation(&self) -> Option<u64> {
+        self.mounted
+    }
+
     pub fn files_received(&self) -> usize {
         self.files_wanted.saturating_sub(self.wanted.len())
     }
@@ -503,7 +539,7 @@ fn forget_the_server_when_not_a_client(
         if let Some(mut cache) = cache {
             cache.forget_all();
         }
-        changed.write(PacksChanged);
+        changed.write(PacksChanged::ALL);
     }
 }
 
@@ -534,6 +570,7 @@ fn read_manifests(
     fetch.server = message.server.chars().take(MAX_SERVER_NAME).collect();
     fetch.entries = message.manifest.entries.len();
     fetch.entries_checked = 0;
+    fetch.next_wanted.clear();
     fetch.comparing = message.manifest.entries.iter().cloned().collect();
     fetch.manifest = Some(message.manifest);
     fetch.generation = message.generation;
@@ -552,10 +589,7 @@ fn compare_some(
         return;
     }
     let Some(store) = root.store() else { return };
-    let Fetch { comparing, wanted, entries_checked, .. } = &mut *fetch;
-    if *entries_checked == 0 {
-        wanted.clear();
-    }
+    let Fetch { comparing, next_wanted: wanted, entries_checked, .. } = &mut *fetch;
     let mut read = 0;
     while read < COMPARE_BYTES_PER_FRAME {
         let Some(entry) = comparing.pop_front() else { break };
@@ -576,7 +610,9 @@ fn compare_some(
         return;
     }
 
-    let wanted = std::mem::take(&mut fetch.wanted);
+    // A file that finished downloading while it was compared is stored by now.
+    let mut wanted = std::mem::take(&mut fetch.next_wanted);
+    wanted.retain(|hash, (_, path)| !store.has(*hash, path.extension().unwrap_or_default()));
     fetch.partial.retain(|hash, _| wanted.contains_key(hash));
     fetch.asked.retain(|hash| wanted.contains_key(hash));
     let ask: Vec<ContentHash> = wanted.keys().filter(|hash| !fetch.asked.contains(*hash)).copied().collect();
@@ -711,12 +747,39 @@ fn mount_when_everything_is_stored(
     }
     record_rounds(&root, &role, &mut fetch, &manifest);
 
+    // A remount reports only the paths whose files changed, and none for a round's map or a
+    // lightmap, which no loader reads: otherwise every round start would reload every table and
+    // drop every bake on every client.
+    let only = assets.session().map(|before| {
+        let differs = |entry: &ManifestEntry, other: &Manifest| other.get(&entry.key.path).is_none_or(|known| known.key.hash != entry.key.hash);
+        let mut paths: Vec<String> = manifest
+            .entries
+            .iter()
+            .filter(|entry| differs(entry, &before.manifest))
+            .chain(before.manifest.entries.iter().filter(|entry| differs(entry, &manifest)))
+            .filter(|entry| !matches!(entry.key.kind(), ResourceKind::Blueprint | ResourceKind::Lightmap))
+            .map(|entry| entry.key.path.to_string())
+            .collect();
+        paths.sort();
+        paths.dedup();
+        paths
+    });
     info!("The server's {} files are mounted", manifest.entries.len());
     assets.mount(SessionPack::new(label(&role), manifest, store));
-    if let Some(mut cache) = cache {
-        cache.forget_all();
+    match (&only, cache) {
+        (Some(paths), Some(mut cache)) => {
+            for path in paths {
+                if let Some(stem) = path.strip_prefix("props/").and_then(|rest| rest.strip_suffix(".gpp")) {
+                    cache.forget(stem);
+                }
+            }
+        }
+        (None, Some(mut cache)) => cache.forget_all(),
+        (_, None) => {}
     }
-    changed.write(PacksChanged);
+    if only.as_ref().is_none_or(|paths| !paths.is_empty()) {
+        changed.write(PacksChanged { only });
+    }
     fetch.mounted = Some(fetch.generation);
     fetch.phase = FetchPhase::Mounted;
     fetch.current = None;

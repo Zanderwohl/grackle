@@ -239,8 +239,16 @@ fn forget_materials_for_new_packs(
     mut baked: ResMut<gpu::BakedTextures>,
     mut standard: ResMut<Assets<StandardMaterial>>,
 ) {
-    if changed.read().count() > 0 {
-        library.forget_all(&mut baked, &mut standard);
+    for changed in changed.read() {
+        match &changed.only {
+            None => library.forget_all(&mut baked, &mut standard),
+            Some(paths) => {
+                for path in paths {
+                    let Some(name) = path.strip_prefix(&format!("{MATERIALS_DIR}/")).and_then(|rest| rest.strip_suffix(&format!(".{FILE_EXTENSION}"))) else { continue };
+                    library.forget(name, &mut baked, &mut standard);
+                }
+            }
+        }
     }
 }
 

@@ -43,7 +43,8 @@ impl Plugin for JoiningPlugin {
 /// sun bakes.
 #[derive(Resource, Default)]
 pub struct JoinBuild {
-    planned: bool,
+    /// The mounted manifest generation the build was planned for; a remount plans it again.
+    planned: Option<u64>,
     /// Prop file stems.
     pub props: VecDeque<String>,
     /// Material names, baked by the material editor's plugin.
@@ -81,8 +82,9 @@ fn stem(path: &str) -> String {
     name.rsplit_once('.').map_or(name, |(stem, _)| stem).to_owned()
 }
 
+/// Planned again on each remount; a prop or material already baked costs nothing to ask for.
 fn plan_the_build(fetch: Res<Fetch>, mut build: ResMut<JoinBuild>) {
-    if build.planned || fetch.phase != FetchPhase::Mounted {
+    if fetch.phase != FetchPhase::Mounted || build.planned == fetch.mounted_generation() {
         return;
     }
     let Some(manifest) = fetch.manifest() else { return };
@@ -93,7 +95,7 @@ fn plan_the_build(fetch: Res<Fetch>, mut build: ResMut<JoinBuild>) {
     build.materials = of_kind(ResourceKind::Material);
     build.props_total = build.props.len();
     build.materials_total = build.materials.len();
-    build.planned = true;
+    build.planned = fetch.mounted_generation();
 }
 
 #[derive(bevy::ecs::system::SystemParam)]
@@ -160,7 +162,8 @@ fn finish_joining(
     let Some(mode) = server_mode.0 else { return };
     let bakes = bakes.as_deref();
     let done = fetch.phase == FetchPhase::Mounted
-        && build.planned
+        && build.planned.is_some()
+        && build.planned == fetch.mounted_generation()
         && !build.files_left()
         && build.map_in(timeline.as_deref())
         && settled(bakes.and_then(|bakes| bakes.get(BakeKind::Rooms)))
@@ -247,7 +250,7 @@ mod tests {
 
         fetch.phase = FetchPhase::Mounted;
         assert!((progress(&fetch, &build, None, None).fraction - 1.0).abs() < 1e-6, "with nothing to build or bake, joining is done");
-        let building = JoinBuild { props: ["crate".to_owned()].into(), props_total: 1, planned: true, ..default() };
+        let building = JoinBuild { props: ["crate".to_owned()].into(), props_total: 1, planned: Some(1), ..default() };
         let fraction = progress(&fetch, &building, None, None).fraction;
         assert!(fraction > 0.8 && fraction < 1.0, "{fraction}");
     }

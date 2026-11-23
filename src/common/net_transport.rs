@@ -826,6 +826,39 @@ mod tests {
         assert!(record.iter().any(|text| text.contains(&hash.to_string())), "no session record names the round: {record:?}");
     }
 
+    /// Fails if a client that leaves a server and joins it again, with its map unchanged, is held
+    /// on the joining screen waiting for a map it already has.
+    #[test]
+    fn a_client_that_rejoins_an_unchanged_map_finishes_joining() {
+        use crate::common::app_mode::AppMode;
+        use crate::common::resource::sync::DownloadsRoot;
+        let port = free_port();
+        let mut host = networked_app(AppMode::Editor);
+        let loaded = crate::editor::save::parse(&std::fs::read_to_string("assets/default/blueprints/new.gmb").unwrap()).unwrap();
+        host.world_mut().insert_resource(loaded.timeline);
+        host.world_mut().insert_resource(loaded.metadata);
+        host.world_mut().write_message(NetRequest::Host { port });
+        let mut client = networked_app(AppMode::Editor);
+        client.world_mut().insert_resource(crate::editor::editable::FeatureTimeline::default());
+        client.world_mut().insert_resource(crate::editor::map_metadata::MapMetadata::default());
+        client.add_message::<crate::tool::room::CalculateRoomGeometry>();
+        let root = std::env::temp_dir().join(format!("grackle-downloads-{}-rejoin", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        client.world_mut().insert_resource(DownloadsRoot(root));
+        assert!(run_until(&mut [&mut host], 2.0, |apps| matches!(*apps[0].world().resource::<NetStatus>(), NetStatus::Hosting { .. })));
+
+        let in_mode = |want: AppMode| move |apps: &[&mut App]| *apps[1].world().resource::<State<AppMode>>().get() == want;
+        for attempt in ["first", "second"] {
+            client.world_mut().write_message(NetRequest::Join { host: "127.0.0.1".into(), port });
+            assert!(run_until(&mut [&mut host, &mut client], 5.0, in_mode(AppMode::Joining)), "{attempt} join: never joining");
+            assert!(run_until(&mut [&mut host, &mut client], 15.0, in_mode(AppMode::Editor)), "{attempt} join: held on the joining screen");
+            client.world_mut().write_message(NetRequest::GoSolo);
+            let solo = |apps: &[&mut App]| *apps[1].world().resource::<NetRole>() == NetRole::Solo;
+            assert!(run_until(&mut [&mut host, &mut client], 5.0, solo), "{attempt} join: never left");
+            assert!(run_until(&mut [&mut host, &mut client], 5.0, |apps| matches!(*apps[0].world().resource::<NetStatus>(), NetStatus::Hosting { clients: 0 })));
+        }
+    }
+
     /// Losing the port would connect to the right machine on the wrong port.
     #[test]
     fn resolving_keeps_the_port() {

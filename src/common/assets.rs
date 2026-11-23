@@ -16,10 +16,23 @@ use bevy::prelude::*;
 
 use crate::common::resource::session::{is_session_pack, SessionPack, SESSION_PACK};
 
-/// What the packs hold has changed: a server's files were mounted or unmounted. Each loader that
-/// read them at startup reads them again; a plugin reading it calls [`ensure_packs_changed`].
-#[derive(Message, Clone, Copy, Debug, Default)]
-pub struct PacksChanged;
+/// What the packs hold has changed: a server's files were mounted or unmounted, or a mounted
+/// manifest changed. Each loader that read them at startup reads them again; a plugin reading it
+/// calls [`ensure_packs_changed`].
+#[derive(Message, Clone, Debug, Default)]
+pub struct PacksChanged {
+    /// The paths whose files changed; `None` for every file, as on mounting or unmounting.
+    pub only: Option<Vec<String>>,
+}
+
+impl PacksChanged {
+    pub const ALL: PacksChanged = PacksChanged { only: None };
+
+    /// Whether `path` may have changed.
+    pub fn touches(&self, path: &str) -> bool {
+        self.only.as_ref().is_none_or(|only| only.iter().any(|changed| changed == path))
+    }
+}
 
 pub fn ensure_packs_changed(app: &mut App) {
     if !app.world().contains_resource::<Messages<PacksChanged>>() {
