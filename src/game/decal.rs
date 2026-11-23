@@ -799,7 +799,7 @@ fn clear_transients(mut commands: Commands, decals: Query<Entity, With<Transient
     *rings = TransientDecals::default();
 }
 
-/// Added in `main.rs` beside `WorldPropPlugin`: it builds meshes and materials, which the game's
+/// Added in `launch.rs` beside `WorldPropPlugin`: it builds meshes and materials, which the game's
 /// tests have no assets for.
 pub struct DecalPlugin;
 

@@ -683,7 +683,7 @@ fn start_the_warm_up(mut spawners: Query<&mut EffectSpawner, (With<WarmUp>, Adde
     }
 }
 
-/// Added in `main.rs` beside `DecalPlugin`: Hanabi needs a renderer, which the
+/// Added in `launch.rs` beside `DecalPlugin`: Hanabi needs a renderer, which the
 /// game's tests do not have.
 pub struct GibBloodPlugin;
 

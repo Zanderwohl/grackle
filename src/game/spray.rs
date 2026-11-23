@@ -421,7 +421,7 @@ impl Plugin for SpraySyncPlugin {
     }
 }
 
-/// Added in `main.rs` beside [`crate::game::decal::DecalPlugin`].
+/// Added in `launch.rs` beside [`crate::game::decal::DecalPlugin`].
 pub struct SprayPlugin;
 
 impl Plugin for SprayPlugin {

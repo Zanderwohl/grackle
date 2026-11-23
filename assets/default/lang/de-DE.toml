@@ -1,9 +1,6 @@
 [language]
 name = "Deutsch"
 
-[editor]
-title = "Grackle Level Editor"
-
 [viewport]
 free = "Freie Kamera"
 front = "Vorne"

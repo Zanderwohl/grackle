@@ -205,11 +205,8 @@ one.
 Six binaries — editor/game client, accounts, items, matchmaking, play server,
 plus the existing `ensure_lang` — argues for a Cargo workspace with the shared
 model in library crates, rather than the current single crate with `[[bin]]`
-entries. Two specific pressures:
+entries. One specific pressure:
 
-- `src/main.rs` re-declares `mod common; mod editor; mod tool;` instead of using
-  the `grackle` library, so the editor binary compiles a second copy of the tree.
-  With one extra binary that is a build-time annoyance; with five it is not.
 - The item model and crate series have to be shared between the item server and
   the client that displays a backpack, but the *roll* must exist only on the
   server. That is a crate boundary, and it is easier to enforce as one than as a

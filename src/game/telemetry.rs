@@ -313,7 +313,7 @@ impl Round {
     }
 }
 
-/// Inserted by the `editor` binary: rounds are written to `cache/rounds/` only where somebody
+/// Inserted by [`crate::launch::run`]: rounds are written to `cache/rounds/` only where somebody
 /// asked, so the game's tests, which play rounds, leave no files behind.
 #[derive(Resource, Default)]
 pub struct RecordRounds;

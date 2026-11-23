@@ -359,7 +359,7 @@ pub fn written_into(text: &str, settings: &RoundSettings, listing: &ServerListin
 }
 
 /// Writes the Round tab's settings to a file once they have been left alone for a moment. Added
-/// by the editor binary only, so tests write nothing.
+/// by [`crate::launch::run`] only, so tests write nothing.
 pub struct RoundSettingsFilePlugin {
     pub path: PathBuf,
     /// Edited instead while `path` does not exist yet: [`ServerFiles::shipped`].

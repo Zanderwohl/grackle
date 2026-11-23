@@ -1,12 +1,12 @@
 //! The first screen for somebody with no name saved: a name and a field of view, then on to the
-//! binary's home mode (the map editor or the main menu) with the demo scene asked for. Started as the
-//! initial [`AppMode`] rather than switched to, so the home mode's `OnEnter` never runs before it.
+//! main menu with the demo scene asked for. Started as the initial [`AppMode`] rather than switched
+//! to, so the main menu's `OnEnter` never runs before it.
 
 use bevy::prelude::*;
 use bevy_egui::egui::{self, Id, LayerId, Ui, UiBuilder};
 use bevy_egui::{EguiContexts, EguiPrimaryContextPass};
 
-use crate::common::app_mode::{AppMode, Home};
+use crate::common::app_mode::AppMode;
 use crate::common::file_menu::{FileAction, DEMO_SCENE};
 use crate::common::player_settings::{self, PlayerSettings, NAME_LIMIT};
 use crate::editor::panels::CurrentFilePath;
@@ -19,8 +19,6 @@ pub struct OnboardingPlugin {
     /// The command line chose where to start, so the process starts in the map editor, where the
     /// start flags take it from.
     pub skip: bool,
-    /// Where a bare launch starts, and where Continue goes; inserted as [`Home`] for everybody else.
-    pub home: AppMode,
 }
 
 impl Plugin for OnboardingPlugin {
@@ -29,12 +27,10 @@ impl Plugin for OnboardingPlugin {
         if !self.skip {
             match unnamed {
                 true => app.insert_state(AppMode::Onboarding),
-                false if self.home != AppMode::default() => app.insert_state(self.home),
-                false => app,
+                false => app.insert_state(AppMode::MainMenu),
             };
         }
-        app.insert_resource(Home(self.home))
-            .init_resource::<Draft>()
+        app.init_resource::<Draft>()
             .add_systems(Update, follow_the_settings.run_if(in_state(AppMode::Onboarding)))
             .add_systems(EguiPrimaryContextPass, screen.run_if(in_state(AppMode::Onboarding)));
     }
@@ -69,19 +65,18 @@ fn follow_the_settings(mut draft: ResMut<Draft>, settings: Option<Res<PlayerSett
     }
 }
 
-fn finish(draft: &Draft, home: AppMode, settings: Option<&mut PlayerSettings>, current_file: &mut CurrentFilePath, next: &mut NextState<AppMode>) {
+fn finish(draft: &Draft, settings: Option<&mut PlayerSettings>, current_file: &mut CurrentFilePath, next: &mut NextState<AppMode>) {
     if let Some(settings) = settings {
         let chosen = PlayerSettings { name: draft.name.clone(), field_of_view: draft.field_of_view, ..settings.clone() };
         *settings = chosen.cleaned();
     }
     current_file.request(FileAction::Demo(DEMO_SCENE));
-    next.set(home);
+    next.set(AppMode::MainMenu);
 }
 
 fn screen(
     mut contexts: EguiContexts,
     mut draft: ResMut<Draft>,
-    home: Res<Home>,
     settings: Option<ResMut<PlayerSettings>>,
     mut current_file: ResMut<CurrentFilePath>,
     mut next: ResMut<NextState<AppMode>>,
@@ -126,7 +121,7 @@ fn screen(
     });
 
     if go {
-        finish(&draft, home.0, settings.map(ResMut::into_inner), &mut current_file, &mut next);
+        finish(&draft, settings.map(ResMut::into_inner), &mut current_file, &mut next);
     }
 }
 
@@ -142,29 +137,25 @@ mod tests {
     }
 
     fn app(settings: PlayerSettings, skip: bool) -> App {
-        app_with_home(settings, skip, AppMode::Editor)
-    }
-
-    fn app_with_home(settings: PlayerSettings, skip: bool, home: AppMode) -> App {
         let mut app = App::new();
         app.add_plugins(bevy::state::app::StatesPlugin).insert_resource(settings);
-        app.add_plugins(OnboardingPlugin { skip, home });
+        app.add_plugins(OnboardingPlugin { skip });
         app.init_state::<AppMode>();
         app.update();
         app
     }
 
     #[test]
-    fn continue_keeps_every_other_setting_and_opens_the_demo() {
+    fn continue_keeps_every_other_setting_opens_the_demo_and_goes_to_the_main_menu() {
         let mut settings = PlayerSettings { auto_reload: false, ..default() };
         let draft = Draft { name: "  Ada ".into(), field_of_view: 200 };
         let (mut current_file, mut next) = (CurrentFilePath::default(), NextState::<AppMode>::default());
-        finish(&draft, AppMode::Editor, Some(&mut settings), &mut current_file, &mut next);
+        finish(&draft, Some(&mut settings), &mut current_file, &mut next);
         assert_eq!(settings.name, "Ada");
         assert_eq!(settings.field_of_view, *player_settings::FIELD_OF_VIEW_RANGE.end());
         assert!(!settings.auto_reload, "a setting the screen does not ask for was overwritten");
         assert_eq!(current_file.requested(), Some(FileAction::Demo(DEMO_SCENE)));
-        assert!(matches!(next, NextState::Pending(AppMode::Editor)));
+        assert!(matches!(next, NextState::Pending(AppMode::MainMenu)));
     }
 
     #[test]
@@ -175,27 +166,15 @@ mod tests {
         assert_eq!(app.world().resource::<Draft>().name, "Ada");
     }
 
+    /// A bare launch goes to the main menu, after onboarding for somebody unnamed; a start flag
+    /// skips both and lands in the map editor, where the flags take it from.
     #[test]
-    fn only_somebody_unnamed_starts_in_onboarding() {
-        let mode = |app: &App| *app.world().resource::<State<AppMode>>().get();
-        assert_eq!(mode(&app(PlayerSettings::default(), false)), AppMode::Onboarding);
-        assert_eq!(mode(&app(PlayerSettings { name: "Ada".into(), ..default() }, false)), AppMode::Editor);
-        assert_eq!(mode(&app(PlayerSettings::default(), true)), AppMode::Editor);
-    }
-
-    /// Fails if the game binary starts anywhere but its main menu on a bare launch, or keeps a
-    /// new player from naming themself first.
-    #[test]
-    fn a_bare_launch_of_the_game_starts_in_the_main_menu() {
+    fn a_bare_launch_starts_in_the_main_menu_and_a_start_flag_skips_onboarding() {
         let mode = |app: &App| *app.world().resource::<State<AppMode>>().get();
         let named = PlayerSettings { name: "Ada".into(), ..default() };
-        assert_eq!(mode(&app_with_home(named.clone(), false, AppMode::MainMenu)), AppMode::MainMenu);
-        assert_eq!(mode(&app_with_home(PlayerSettings::default(), false, AppMode::MainMenu)), AppMode::Onboarding);
-        assert_eq!(mode(&app_with_home(named, true, AppMode::MainMenu)), AppMode::Editor);
-
-        let mut next = NextState::<AppMode>::default();
-        let draft = Draft { name: "Ada".into(), field_of_view: 90 };
-        finish(&draft, AppMode::MainMenu, None, &mut CurrentFilePath::default(), &mut next);
-        assert!(matches!(next, NextState::Pending(AppMode::MainMenu)));
+        assert_eq!(mode(&app(PlayerSettings::default(), false)), AppMode::Onboarding);
+        assert_eq!(mode(&app(named.clone(), false)), AppMode::MainMenu);
+        assert_eq!(mode(&app(PlayerSettings::default(), true)), AppMode::Editor);
+        assert_eq!(mode(&app(named, true)), AppMode::Editor);
     }
 }

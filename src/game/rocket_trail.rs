@@ -337,7 +337,7 @@ fn warm_up_the_trail(mut commands: Commands, trail_look: Res<TrailLook>, cloud_l
     ));
 }
 
-/// Added in `main.rs` beside `BlastCloudPlugin`, whose cloud sheet it draws with: Hanabi needs a
+/// Added in `launch.rs` beside `BlastCloudPlugin`, whose cloud sheet it draws with: Hanabi needs a
 /// renderer, which the game's tests do not have.
 pub struct RocketTrailPlugin;
 

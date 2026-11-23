@@ -597,7 +597,7 @@ fn fit_the_panel(
 }
 
 /// Draws a body through the warm-up's portrait camera at startup, so the first picker does not
-/// compile its pipelines on the frame. Added in `main.rs`, as the game's tests have no renderer.
+/// compile its pipelines on the frame. Added in `launch.rs`, as the game's tests have no renderer.
 pub struct PortraitWarmUpPlugin;
 
 impl Plugin for PortraitWarmUpPlugin {

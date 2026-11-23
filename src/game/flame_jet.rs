@@ -740,7 +740,7 @@ fn warm_up_the_flames(mut commands: Commands, look: Res<FlameLook>) {
     }
 }
 
-/// Added in `main.rs` beside `GibBloodPlugin`: Hanabi needs a renderer, which
+/// Added in `launch.rs` beside `GibBloodPlugin`: Hanabi needs a renderer, which
 /// the game's tests do not have.
 pub struct FlameJetPlugin;
 

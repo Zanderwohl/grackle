@@ -1045,7 +1045,7 @@ impl PostcardPanel<'_> {
     }
 }
 
-/// Added in `main.rs` beside the thumbnails rather than with the other bakes, because it renders.
+/// Added in `launch.rs` beside the thumbnails rather than with the other bakes, because it renders.
 pub struct PostcardBakePlugin;
 
 impl Plugin for PostcardBakePlugin {

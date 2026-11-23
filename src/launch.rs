@@ -1,5 +1,4 @@
-//! What both binaries wire together. `editor` and `grackle` are one app, starting in different
-//! modes under different window titles; each `main` is a call to [`run`].
+//! The app's wiring: `grackle`'s `main` is a call to [`run`].
 
 use bevy::prelude::*;
 use bevy::window::{ExitCondition, PresentMode};
@@ -37,32 +36,9 @@ use crate::lang_editor::{LangEditorPlugin, StartInLangEditor};
 use crate::prop::thumbnail::ThumbnailPlugin;
 use crate::prop::{PropEditorPlugin, StartInPropEditor};
 use crate::tool::ToolPlugin;
-use crate::common::app_mode::{AppMode, StartInPlay};
+use crate::common::app_mode::StartInPlay;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Binary {
-    Game,
-    Editor,
-}
-
-impl Binary {
-    fn title(self) -> String {
-        match self {
-            Binary::Game => get!("main_menu.window_title"),
-            Binary::Editor => get!("editor.title"),
-        }
-    }
-
-    /// Where a launch that names nothing to open or play starts, after onboarding.
-    pub fn home(self) -> AppMode {
-        match self {
-            Binary::Game => AppMode::MainMenu,
-            Binary::Editor => AppMode::Editor,
-        }
-    }
-}
-
-pub fn run(binary: Binary) {
+pub fn run() {
     let editor_params = startup::EditorParams::new()
         .unwrap_or_else(|message| {
             eprintln!("Startup error:\n{}", message);
@@ -84,7 +60,7 @@ pub fn run(binary: Binary) {
         .add_plugins(DefaultPlugins
             .set(WindowPlugin {
                primary_window: Some(Window {
-                   title: binary.title(),
+                   title: get!("main_menu.window_title"),
                    name: Some("grackle.app".to_owned()),
                    present_mode: PresentMode::AutoVsync,
                    prevent_default_event_handling: true,
@@ -154,7 +130,7 @@ pub fn run(binary: Binary) {
             ))
         .add_plugins(RoundSettingsFilePlugin { path: server_files.saved.clone(), seed: server_files.shipped.clone() })
         .add_plugins((crate::main_menu::MainMenuPlugin, crate::common::lan_discovery::LanDiscoveryPlugin, crate::server_browser::ServerBrowserPlugin))
-        .add_plugins(crate::onboarding::OnboardingPlugin { skip: editor_params.chooses_where_to_start(), home: binary.home() })
+        .add_plugins(crate::onboarding::OnboardingPlugin { skip: editor_params.chooses_where_to_start() })
         .add_systems(Startup, move || {
             // Read before the log existed, so said now.
             if let Some(problem) = &settings_problem {

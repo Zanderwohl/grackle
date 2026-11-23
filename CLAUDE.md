@@ -256,7 +256,7 @@ shape is a new producer and not a rewrite of every consumer — see
 
 | Path | What lives there |
 | --- | --- |
-| `src/launch.rs` | Plugin wiring for both app binaries: `grackle` (`src/bin/grackle.rs`, the default, opening onto the main menu) and `editor` (`src/main.rs`, opening onto the map editor). |
+| `src/launch.rs` | Plugin wiring for the app binary, `grackle` (`src/bin/grackle.rs`), which opens onto the main menu, or the map editor with `--editor`. |
 | `src/main_menu.rs` | `AppMode::MainMenu`: the game's first screen. See "The main menu". |
 | `src/editor/` | The document model: features, timeline, save/load, panels, cameras. |
 | `src/tool/` | One module per editor tool, each its own `Plugin` with its own `Tools` state. |
@@ -468,11 +468,12 @@ in a team mode is still a gamemode question.
 the Mode menu's order, with a separator above Play and above the main menu. **`Onboarding`** ([`src/onboarding.rs`](src/onboarding.rs)) is never in the
 menu: it is the *initial* state, inserted by `OnboardingPlugin` when the saved player name is
 blank and the command line names nothing to open or play (`EditorParams::chooses_where_to_start`:
-any mode flag, `--map`, `--serve`, `--connect`, `--server-config`, `--server-profile`, `--spectate`, `--rounds` or
+any mode flag (`--editor` among them), `--map`, `--serve`, `--connect`, `--server-config`, `--server-profile`, `--spectate`, `--rounds` or
 `--class`; not `--lang`, `--game` or `--profile`). It asks for a name and a field of
 view (45°–110°, default 80°), and Continue writes those two fields to `PlayerSettings`, leaving the rest as the Settings window left them, requests File → Demo
-Maps → Demo Scene and enters the binary's home mode (`launch::Binary::home`): the main menu for
-`grackle`, the map editor for `editor`. A bare launch by a named player starts there too.
+Maps → Demo Scene and enters the main menu. A bare launch by a named player starts there too.
+Any start flag skips onboarding and the main menu, unnamed player or not, and starts in the map
+editor, where the flags take it on from. `--editor` opens the map editor and nothing else.
 
 **The main menu** ([`src/main_menu.rs`](src/main_menu.rs)) is Bevy UI plates
 (`game::menu`) on the egui context camera, the one camera live outside the
@@ -1054,7 +1055,7 @@ the viewmodel camera tonemaps the lens with everything else, and it does not
 draw `render_layers::GIZMOS` — gizmos live there, drawn by the editor
 viewports and the play camera — or a debug overlay from the eye would sit in
 the lens. `ForwardCameraPlugin` is added in
-`main.rs`, as `WorldPropPlugin` is, since the game's tests have no renderer.
+`launch.rs`, as `WorldPropPlugin` is, since the game's tests have no renderer.
 
 **The lens is drawn once at startup, out of sight.** Bevy compiles a pipeline
 the first time something draws with it, and on macOS and wasm it does so
@@ -1663,7 +1664,7 @@ model; on the authority `sync_world_props`
 `WorldProp` up per feature that names one, and every machine draws and collides
 with those. A broken breakable is remembered as a feature whose `StandsFor`
 points at nothing, so the absence rule does not stand it straight back up;
-entering or leaving Play forgets. `WorldPropPlugin` is added in `main.rs`
+entering or leaving Play forgets. `WorldPropPlugin` is added in `launch.rs`
 beside `GamePlugin` rather than inside it, because it bakes models and the
 game's tests run with no asset plugins.
 
@@ -2075,7 +2076,7 @@ map arriving mid-round, the set covers one arriving as the round starts.
 `StateTransition`, the bakes are asked for, and a modal shows each one's
 progress until they land and the round starts — or Cancel or `Escape` drops
 it. Entering Play then finds nothing to do, so the frame never freezes. Only
-on the authority, and only in the editor binary: a client follows the
+on the authority: a client follows the
 server's mode, and without the plugin entering Play still bakes, blocked.
 
 The actual work is the free function `bake_rooms`, called by both paths, so
@@ -2164,7 +2165,7 @@ by feature id and Mirror image), saved in the blueprint without the pictures. Ea
 one tile wide (`PickerKind::captioned`) offering every postcard the map would have, with its
 picture or a gray "Not generated" placeholder (`Choice::placeholder`). Its
 own checkbox in the Bakes panel, on by default; a round never waits for it. `PostcardBakePlugin` is
-added in `main.rs`, since it renders.
+added in `launch.rs`, since it renders.
 
 **The chosen postcards are on the HUD** while nobody is fighting — the pre-game, between rounds,
 and while the team picker is up ([`src/game/postcards.rs`](src/game/postcards.rs)); when none of those holds they fly out off the bottom (easeInQuart, a quarter second apart). Up to
@@ -2181,7 +2182,7 @@ that moves to its place in a new layout (easeInOutQuart), again a quarter second
 size once the window has held it for 0.3 s — always, so cards a small window had no room for, which
 wait below the screen, come back — and, with the window still, when a card stops fitting or what is
 kept clear changes while a card waits for room (`lays_out_again`). `PostcardHudPlugin` is added in
-`main.rs` beside the bake.
+`launch.rs` beside the bake.
 
 **A card is printed, not drawn** ([`src/common/postcard_print.rs`](src/common/postcard_print.rs)):
 `Postcard::blank` is 768×512 grained off-white paper, and `print` presses any picture into an
@@ -3229,7 +3230,7 @@ its own dot** instead, traced as it draws from the drawn eye along the latch's
 aim (`our_own_dot`), since the replicated one trails the mouse by a round trip;
 it decides nothing, so it is not predicted and never corrected. A rechamber
 hides the viewed body's dot while it has the rifle down, on drawing only.
-`LaserDotPlugin` is added in `main.rs` and joins the shared warm-up; the trace
+`LaserDotPlugin` is added in `launch.rs` and joins the shared warm-up; the trace
 is `WeaponPlugin`'s.
 
 As the sights rise, black closes in from the screen's edges until only the
@@ -3784,7 +3785,7 @@ Two things about tracers specifically:
   stays at least a pixel or so wide. `mark_tracers` writes each path as a
   `ShotPath` message, the viewed body's starting at its barrel, and spawns
   the `Tracer` that draws the line and ball only while the hitboxes are shown
-  (`F4`). `StreakPlugin` is added in `main.rs`, since it builds a mesh and a
+  (`F4`). `StreakPlugin` is added in `launch.rs`, since it builds a mesh and a
   material, and joins the shared warm-up as the decals do.
 - **A hitscan action names its `trail`** in `weapons/{key}.toml`, required on every
   one: `"streak"` above, or `"beam"` ([`src/game/beam.rs`](src/game/beam.rs),
@@ -4241,8 +4242,8 @@ failure; nothing on wasm.
   every mode opens (Settings), which no one mode's dock can hold.
 - Asset paths are relative to the working directory (`assets/default/...`), so
   binaries must run from the repo root.
-- **Every binary links `lib.rs`; none re-declares the module tree.** `main.rs`
-  and `bin/grackle.rs` are a call to `launch::run`, where the wiring is. This used to be
+- **Every binary links `lib.rs`; none re-declares the module tree.** `bin/grackle.rs`
+  is a call to `launch::run`, where the wiring is. This used to be
   `mod common; mod editor; mod tool;`, which compiled a second copy of the
   whole tree with its own `LANG` table and its own caches. That is not a build
   time problem to get round to — a client and a server that must reach the same
