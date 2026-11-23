@@ -82,6 +82,10 @@ impl FeatureTrait for WeaponPickup {
         Some(&self.weapon)
     }
 
+    fn resources_named(&self) -> Vec<crate::common::resource::Named> {
+        vec![crate::common::resource::Named::Weapon(self.weapon.clone())]
+    }
+
     fn get_point(&self, _key: &str) -> Result<Vec3, PointResolutionError> {
         Ok(self.resolved_location)
     }

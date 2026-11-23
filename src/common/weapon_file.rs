@@ -228,6 +228,22 @@ pub fn read_loadouts(assets: &Assets, packs: &[PathBuf]) -> LoadoutFiles {
     LoadoutFiles(files)
 }
 
+/// The hats and weapons a `loadouts.toml` names, for [`crate::common::resource`].
+pub fn resources_named_in_loadouts(text: &str) -> Result<Vec<crate::common::resource::Named>, String> {
+    use crate::common::resource::Named;
+    let file: LoadoutFile = toml::from_str(text).map_err(|e| e.to_string())?;
+    let mut named = Vec::new();
+    for entry in file.loadouts.into_values() {
+        named.extend(entry.hat.map(Named::Prop));
+        for slot in entry.slots.into_values() {
+            named.extend(slot.permitted.into_iter().chain(slot.default).map(Named::Weapon));
+        }
+    }
+    named.sort();
+    named.dedup();
+    Ok(named)
+}
+
 /// The catalog these weapons make, with every pack's loadouts read against
 /// them. A weapon with a [`WeaponProblem`] is left out, with a line saying why.
 pub fn catalog_of(assets: &Assets, packs: &[PathBuf], weapons: &[PackWeapon]) -> WeaponCatalog {

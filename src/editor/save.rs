@@ -166,6 +166,35 @@ pub fn parse(text: &str) -> Result<LoadedBlueprint, String> {
     Ok(LoadedBlueprint { timeline, metadata: blueprint.metadata.into_metadata() })
 }
 
+/// What a blueprint needs besides itself: what its features name, every material a role they name
+/// paints with, the default material of each slot, and its music. For
+/// [`crate::common::resource`].
+pub fn resources_named_in(text: &str) -> Result<crate::common::resource::Described, String> {
+    use crate::common::resource::Named;
+    use crate::tool::room::RoomSlot;
+
+    let loaded = parse(text)?;
+    let palette = &loaded.metadata.palette;
+    let mut named = Vec::new();
+    for id in loaded.timeline.feature_order() {
+        let Some(feature) = loaded.timeline.get_feature(id) else { continue };
+        for name in feature.object().resources_named() {
+            match name {
+                Named::Material(name) => match palette.materials_of_role(&name) {
+                    Some(materials) => named.extend(materials.into_iter().map(|material| Named::Material(material.to_owned()))),
+                    None => named.push(Named::Material(name)),
+                },
+                other => named.push(other),
+            }
+        }
+    }
+    named.extend(RoomSlot::ALL.map(|slot| Named::Material(crate::material::library::default_material(slot).to_owned())));
+    named.extend(loaded.metadata.music.iter().cloned().map(Named::Music));
+    named.sort();
+    named.dedup();
+    Ok(crate::common::resource::Described { named, authors: loaded.metadata.authors })
+}
+
 /// Every error names `path`.
 pub fn save(path: &Path, features: &FeatureTimeline, metadata: &MapMetadata) -> Result<(), String> {
     let text = to_text(features, metadata).map_err(|e| format!("{}: {e}", path.display()))?;

@@ -105,6 +105,12 @@ impl Palette {
         }
     }
 
+    /// Every material a role paints with on any side; `None` when `name` is not a role.
+    pub fn materials_of_role(&self, name: &str) -> Option<Vec<&str>> {
+        let role = self.roles.get(name).or_else(|| BUILT_IN.get(name))?;
+        Some(role.sides.values().chain(role.unsided.as_ref()).map(String::as_str).collect())
+    }
+
     /// The material a slot naming `name` is painted with on `side`: the name itself unless it is a
     /// role. `None` for a role with nothing for this side, which draws the slot's default.
     pub fn resolve<'a>(&'a self, name: &'a str, side: Option<Side>) -> Option<&'a str> {

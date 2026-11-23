@@ -212,6 +212,10 @@ pub trait FeatureTrait: Send + Sync {
     /// The weapon this feature names by key, so renaming or deleting one can say what it breaks.
     fn weapon_named(&self) -> Option<&str> { None }
 
+    /// The pack files this feature names, for what a map needs sent with it
+    /// ([`crate::common::resource`]). A material here may be a palette role.
+    fn resources_named(&self) -> Vec<crate::common::resource::Named> { Vec::new() }
+
     /// The volumes of air this feature stands up, as its entities carry them.
     /// Asked by picking, which works from features rather than entities.
     fn rooms(&self) -> Vec<crate::tool::room::Room> { Vec::new() }

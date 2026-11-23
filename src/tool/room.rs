@@ -408,6 +408,15 @@ impl RoomSurfaces {
         *self == Self::default()
     }
 
+    /// Each slot's name, which may be a role.
+    pub fn named(&self) -> Vec<crate::common::resource::Named> {
+        [&self.floor, &self.walls, &self.ceiling]
+            .into_iter()
+            .flatten()
+            .map(|name| crate::common::resource::Named::Material(name.clone()))
+            .collect()
+    }
+
     pub fn of(&self, slot: RoomSlot) -> Option<&str> {
         self.slot(slot).as_deref()
     }

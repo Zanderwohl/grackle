@@ -3482,6 +3482,19 @@ Two rules, and both are easy to undo:
   role equal to the one already set, because the transport will hang off
   `Changed<NetRole>` and re-picking "Host" must not drop everybody connected.
 
+### Naming pack files across machines
+
+[`src/common/resource/`](src/common/resource/mod.rs) is stage 1 of
+[documentation/resource-streaming.md](documentation/resource-streaming.md); nothing sends with it
+yet. A file is a `LogicalPath` inside a pack (`props/crate.gpp`, checked on construction and when
+deserialized, so a path off the wire never leaves a pack) and the BLAKE3 hash of its bytes; two
+files with one path and different hashes are different resources. `closure` walks what each file
+names from `match_roots(map)` — the map, the tables, every weapon file and the top-level clips —
+into a `Manifest`, reading names through the loader that owns each format: a feature answers
+`FeatureTrait::resources_named`, so **a feature that names a pack file must list it there**, or
+it is not sent. A role brings every material it paints with. `HashIndex` (`cache/hashes.bin`)
+keeps each local file's hash by size and modified time.
+
 ### Finding a server on the LAN
 
 [`src/common/lan_discovery.rs`](src/common/lan_discovery.rs), native only, since a browser cannot

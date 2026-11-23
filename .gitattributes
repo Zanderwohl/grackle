@@ -1,0 +1,5 @@
+# Pack files are named across machines by the hash of their bytes, so a checkout that turned
+# line endings into CRLF would hash differently from the host and download for nothing.
+assets/** text=auto eol=lf
+# Fonts are never sent, and their licenses are kept as they were published.
+assets/*/fonts/** -text
