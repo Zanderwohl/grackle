@@ -6,6 +6,10 @@ free = "Freie Kamera"
 front = "Vorne"
 top = "Oben"
 right = "Rechts"
+back = "Hinten"
+bottom = "Unten"
+left = "Links"
+toggle_side = "Seite wechseln"
 ui = "UI-Kamera"
 
 [debug.viewport]
