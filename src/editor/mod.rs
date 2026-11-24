@@ -1,4 +1,5 @@
 pub mod multicam;
+pub mod viewport_gizmos;
 pub mod input;
 pub mod editable;
 pub mod map_metadata;

@@ -296,7 +296,7 @@ pub fn ray_point_distance(ray: &Ray3d, point: Vec3) -> f32 {
     cross.length() / dir.length()
 }
 
-pub fn dashed_line(gizmos: &mut Gizmos, start: Vec3, end: Vec3, color: Color, dash: f32, gap: f32) {
+pub fn dashed_line<C: GizmoConfigGroup>(gizmos: &mut Gizmos<C>, start: Vec3, end: Vec3, color: Color, dash: f32, gap: f32) {
     let dir = end - start;
     let len = dir.length();
     if len < 0.001 { return; }

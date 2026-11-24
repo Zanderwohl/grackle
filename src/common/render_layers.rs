@@ -43,6 +43,10 @@ pub const PORTRAIT: usize = 7;
 /// [`crate::game::hud_portrait`].
 pub const HUD_PORTRAIT: usize = 8;
 
+/// The first of four layers each drawn by one editor viewport alone, for
+/// gizmos faded by that view's zoom. See [`crate::editor::viewport_gizmos`].
+pub const VIEWPORT_FIRST: usize = 9;
+
 /// The editor's 2D shape painter and the egui camera.
 pub const PAINTER: usize = 31;
 
@@ -76,7 +80,11 @@ mod tests {
 
     #[test]
     fn no_two_features_share_a_layer() {
-        let all = [WORLD, VIEWMODEL, EDITOR_ONLY, THUMBNAIL, GIZMOS, WARM_UP, INSIDE_HEAD, PORTRAIT, HUD_PORTRAIT, PAINTER];
+        let viewports = VIEWPORT_FIRST..VIEWPORT_FIRST + 4;
+        let all: Vec<usize> = [WORLD, VIEWMODEL, EDITOR_ONLY, THUMBNAIL, GIZMOS, WARM_UP, INSIDE_HEAD, PORTRAIT, HUD_PORTRAIT, PAINTER]
+            .into_iter()
+            .chain(viewports)
+            .collect();
         for (i, a) in all.iter().enumerate() {
             for b in &all[i + 1..] {
                 assert_ne!(a, b, "two features claim layer {a}");
