@@ -1,0 +1,506 @@
+name_key = "prop.untitled"
+archetype = "obstacle"
+next_id = 6
+
+[[features]]
+id = 0
+name = "Sketch"
+enabled = true
+
+[features.op]
+feature = "sketch"
+
+[features.op.on]
+origin = "xy"
+
+[features.op.sketch]
+next_id = 36
+
+[[features.op.sketch.points]]
+id = 0
+at = [
+    -0.0,
+    -0.0,
+]
+
+[[features.op.sketch.points]]
+id = 1
+at = [
+    0.55,
+    -0.0,
+]
+
+[[features.op.sketch.points]]
+id = 3
+at = [
+    0.005,
+    0.97999996,
+]
+
+[[features.op.sketch.points]]
+id = 5
+at = [
+    0.555,
+    0.97999996,
+]
+
+[[features.op.sketch.points]]
+id = 7
+at = [
+    -0.0,
+    0.48999998,
+]
+
+[[features.op.sketch.points]]
+id = 9
+at = [
+    0.635,
+    0.49499997,
+]
+
+[[features.op.sketch.points]]
+id = 14
+at = [
+    0.35,
+    0.97999996,
+]
+
+[[features.op.sketch.points]]
+id = 15
+at = [
+    0.48999998,
+    0.49499997,
+]
+
+[[features.op.sketch.points]]
+id = 16
+at = [
+    0.35,
+    0.0,
+]
+
+[[features.op.sketch.points]]
+id = 20
+at = [
+    0.38,
+    0.84999996,
+]
+
+[[features.op.sketch.points]]
+id = 21
+at = [
+    0.415,
+    0.84999996,
+]
+
+[[features.op.sketch.points]]
+id = 23
+at = [
+    0.42499998,
+    0.79999995,
+]
+
+[[features.op.sketch.points]]
+id = 25
+at = [
+    0.39,
+    0.79999995,
+]
+
+[[features.op.sketch.points]]
+id = 27
+at = [
+    0.375,
+    0.099999994,
+]
+
+[[features.op.sketch.points]]
+id = 28
+at = [
+    0.41,
+    0.099999994,
+]
+
+[[features.op.sketch.points]]
+id = 30
+at = [
+    0.42499998,
+    0.14999999,
+]
+
+[[features.op.sketch.points]]
+id = 32
+at = [
+    0.385,
+    0.155,
+]
+
+[[features.op.sketch.entities]]
+kind = "line"
+id = 2
+a = 0
+b = 1
+construction = false
+
+[[features.op.sketch.entities]]
+kind = "line"
+id = 4
+a = 0
+b = 3
+construction = false
+
+[[features.op.sketch.entities]]
+kind = "line"
+id = 6
+a = 3
+b = 5
+construction = false
+
+[[features.op.sketch.entities]]
+kind = "line"
+id = 8
+a = 0
+b = 7
+construction = false
+
+[[features.op.sketch.entities]]
+kind = "line"
+id = 10
+a = 7
+b = 9
+construction = false
+
+[[features.op.sketch.entities]]
+kind = "bezier"
+id = 11
+points = [
+    5,
+    9,
+    1,
+]
+construction = false
+
+[[features.op.sketch.entities]]
+kind = "bezier"
+id = 17
+points = [
+    14,
+    15,
+    16,
+]
+construction = false
+
+[[features.op.sketch.entities]]
+kind = "line"
+id = 22
+a = 20
+b = 21
+construction = false
+
+[[features.op.sketch.entities]]
+kind = "line"
+id = 24
+a = 21
+b = 23
+construction = false
+
+[[features.op.sketch.entities]]
+kind = "line"
+id = 26
+a = 23
+b = 25
+construction = false
+
+[[features.op.sketch.entities]]
+kind = "line"
+id = 29
+a = 27
+b = 28
+construction = false
+
+[[features.op.sketch.entities]]
+kind = "line"
+id = 31
+a = 28
+b = 30
+construction = false
+
+[[features.op.sketch.entities]]
+kind = "line"
+id = 33
+a = 30
+b = 32
+construction = false
+
+[[features.op.sketch.regions]]
+id = 18
+hint = [
+    0.21119334,
+    0.50579405,
+]
+
+[[features.op.sketch.regions.bounds]]
+entity = 4
+side = "right"
+
+[[features.op.sketch.regions.bounds]]
+entity = 6
+side = "right"
+
+[[features.op.sketch.regions.bounds]]
+entity = 10
+side = "left"
+
+[[features.op.sketch.regions.bounds]]
+entity = 17
+side = "right"
+
+[[features.op.sketch.regions]]
+id = 19
+hint = [
+    0.21112336,
+    0.4783616,
+]
+
+[[features.op.sketch.regions.bounds]]
+entity = 2
+side = "left"
+
+[[features.op.sketch.regions.bounds]]
+entity = 4
+side = "right"
+
+[[features.op.sketch.regions.bounds]]
+entity = 10
+side = "right"
+
+[[features.op.sketch.regions.bounds]]
+entity = 17
+side = "right"
+
+[[features.op.sketch.regions]]
+id = 34
+hint = [
+    0.40599275,
+    0.8132964,
+]
+
+[[features.op.sketch.regions.bounds]]
+entity = 17
+side = "left"
+
+[[features.op.sketch.regions.bounds]]
+entity = 22
+side = "right"
+
+[[features.op.sketch.regions.bounds]]
+entity = 24
+side = "right"
+
+[[features.op.sketch.regions.bounds]]
+entity = 26
+side = "right"
+
+[[features.op.sketch.regions]]
+id = 35
+hint = [
+    0.39964086,
+    0.12704986,
+]
+
+[[features.op.sketch.regions.bounds]]
+entity = 17
+side = "left"
+
+[[features.op.sketch.regions.bounds]]
+entity = 29
+side = "left"
+
+[[features.op.sketch.regions.bounds]]
+entity = 31
+side = "left"
+
+[[features.op.sketch.regions.bounds]]
+entity = 33
+side = "left"
+
+[[features]]
+id = 2
+name = "Revolve"
+enabled = true
+
+[features.op]
+feature = "revolve"
+degrees = 360.0
+steps = 12
+symmetric = false
+op = "new_body"
+
+[features.op.axis]
+kind = "sketch"
+sketch = 0
+entity = 8
+
+[features.op.profile]
+from = "regions"
+sketch = 0
+regions = [
+    18,
+    19,
+]
+
+[features.op.surface]
+style = "wood"
+tint = [
+    0.31046686,
+    0.17654268,
+    0.0,
+]
+
+[[features]]
+id = 3
+name = "Revolve"
+enabled = true
+
+[features.op]
+feature = "revolve"
+degrees = 360.0
+steps = 12
+symmetric = false
+op = "new_body"
+
+[features.op.axis]
+kind = "axis"
+axis = "y"
+
+[features.op.profile]
+from = "regions"
+sketch = 0
+regions = [
+    34,
+    35,
+]
+
+[features.op.surface]
+style = "metal"
+tint = [
+    0.42,
+    0.44,
+    0.47,
+]
+
+[[features]]
+id = 4
+name = "Capsule Collider"
+enabled = true
+
+[features.op]
+feature = "collider"
+roles = [
+    "shots",
+    "solid",
+]
+
+[features.op.shape]
+kind = "capsule"
+radius = 0.42
+height = 1.0191653
+
+[features.op.placement]
+origin = [
+    0.0,
+    0.49521172,
+    0.0,
+]
+rotation = [
+    0.0,
+    0.0,
+    0.0,
+]
+
+[[features]]
+id = 5
+name = "Box Collider"
+enabled = true
+
+[features.op]
+feature = "collider"
+roles = [
+    "shots",
+    "solid",
+]
+
+[features.op.shape]
+kind = "box"
+size = [
+    0.65,
+    0.1,
+    0.65,
+]
+
+[features.op.placement]
+origin = [
+    0.0,
+    0.928,
+    0.0,
+]
+rotation = [
+    0.0,
+    0.0,
+    0.0,
+]
+
+[hold]
+grip = [
+    0.0,
+    0.0,
+    0.0,
+]
+grip_rotation = [
+    -0.8054,
+    0.9568,
+    -1.279,
+]
+support = [
+    0.0,
+    0.0,
+    -0.07,
+]
+support_rotation = [
+    -1.374,
+    0.3441,
+    -1.2572,
+]
+two_handed = true
+carry = [
+    0.05,
+    -0.14,
+    -0.22,
+]
+carry_rotation = [
+    0.0,
+    0.0,
+    0.0,
+]
+
+[viewmodel]
+across = [
+    0.35,
+    -0.71,
+]
+depth = 0.3
+rotation = [
+    0.0,
+    0.0,
+    0.0,
+]
+
+[stand_in]
+shown = true
+class = "mercenary"
+at = [
+    1.0971433,
+    0.0035028458,
+    0.0,
+]
+yaw = 0.0

@@ -1,6 +1,35 @@
 name_key = "prop.names.health_pack"
 archetype = "pickup"
-next_id = 6
+next_id = 23
+
+[[features]]
+id = 5
+name = "Box Collider"
+enabled = true
+
+[features.op]
+feature = "collider"
+roles = ["trigger"]
+
+[features.op.shape]
+kind = "box"
+size = [
+    1.0,
+    0.66,
+    1.0,
+]
+
+[features.op.placement]
+origin = [
+    0.0,
+    0.33,
+    0.0,
+]
+rotation = [
+    0.0,
+    0.0,
+    0.0,
+]
 
 [[features]]
 id = 0
@@ -15,7 +44,7 @@ kind = "box"
 size = [
     0.4,
     0.22,
-    0.3,
+    0.22,
 ]
 
 [features.op.placement]
@@ -33,121 +62,563 @@ rotation = [
 [features.op.surface]
 style = "plastic"
 tint = [
-    0.92,
-    0.92,
-    0.9,
+    0.86917025,
+    0.92370003,
+    0.9160225,
 ]
 
 [[features]]
+id = 6
+name = "Sketch"
+enabled = true
+
+[features.op]
+feature = "sketch"
+
+[features.op.on]
+origin = "yz"
+
+[features.op.sketch]
+next_id = 10
+
+[[features.op.sketch.points]]
+id = 0
+at = [
+    -0.11,
+    0.22,
+]
+
+[[features.op.sketch.points]]
 id = 1
-name = "Cross long"
-enabled = true
-
-[features.op]
-feature = "primitive"
-
-[features.op.shape]
-kind = "box"
-size = [
-    0.2,
-    0.02,
-    0.06,
+at = [
+    0.11,
+    0.22,
 ]
 
-[features.op.placement]
-origin = [
-    0.0,
-    0.23,
-    0.0,
-]
-rotation = [
-    0.0,
-    0.0,
-    0.0,
-]
-
-[features.op.surface]
-style = "plastic"
-tint = [
-    0.62,
-    0.08,
-    0.08,
-]
-
-[[features]]
-id = 2
-name = "Cross short"
-enabled = true
-
-[features.op]
-feature = "primitive"
-
-[features.op.shape]
-kind = "box"
-size = [
-    0.06,
-    0.02,
-    0.2,
-]
-
-[features.op.placement]
-origin = [
-    0.0,
-    0.23,
-    0.0,
-]
-rotation = [
-    0.0,
-    0.0,
-    0.0,
-]
-
-[features.op.surface]
-style = "plastic"
-tint = [
-    0.62,
-    0.08,
-    0.08,
-]
-
-[[features]]
+[[features.op.sketch.points]]
 id = 3
-name = "Cross"
-enabled = true
+at = [
+    -0.0,
+    0.22,
+]
 
-[features.op]
-feature = "boolean"
-op = "union"
-target = 1
-tool = 2
-
-[[features]]
+[[features.op.sketch.points]]
 id = 4
-name = "Pack"
-enabled = true
+at = [
+    0.0,
+    0.275,
+]
 
-[features.op]
-feature = "boolean"
-op = "union"
-target = 0
-tool = 3
+[[features.op.sketch.points]]
+id = 6
+at = [
+    0.07,
+    0.26,
+]
+
+[[features.op.sketch.entities]]
+kind = "line"
+id = 2
+a = 0
+b = 1
+construction = false
+
+[[features.op.sketch.entities]]
+kind = "line"
+id = 5
+a = 3
+b = 4
+construction = false
+
+[[features.op.sketch.entities]]
+kind = "line"
+id = 7
+a = 4
+b = 6
+construction = false
+
+[[features.op.sketch.entities]]
+kind = "line"
+id = 8
+a = 6
+b = 1
+construction = false
+
+[[features.op.sketch.regions]]
+id = 9
+hint = [
+    0.045,
+    0.24,
+]
+
+[[features.op.sketch.regions.bounds]]
+entity = 2
+side = "left"
+
+[[features.op.sketch.regions.bounds]]
+entity = 5
+side = "right"
+
+[[features.op.sketch.regions.bounds]]
+entity = 7
+side = "right"
+
+[[features.op.sketch.regions.bounds]]
+entity = 8
+side = "right"
 
 [[features]]
-id = 5
-name = "Box Collider"
+id = 7
+name = "Extrude"
 enabled = true
 
 [features.op]
-feature = "collider"
-roles = ["trigger"]
+feature = "extrude"
+taper = 0.0
+op = "new_body"
 
-[features.op.shape]
-kind = "box"
-size = [0.5, 0.4, 0.4]
+[features.op.end]
+kind = "distance"
+distance = 0.2
 
-[features.op.placement]
-origin = [0.0, 0.2, 0.0]
-rotation = [0.0, 0.0, 0.0]
+[features.op.profile]
+from = "regions"
+sketch = 6
+regions = [9]
+
+[features.op.surface]
+style = "plastic"
+tint = [
+    0.64747304,
+    0.23857173,
+    0.23857173,
+]
+
+[[features]]
+id = 8
+name = "Plane"
+enabled = true
+
+[features.op]
+feature = "plane"
+
+[features.op.def]
+kind = "through"
+
+[[features.op.def.through]]
+ref = "face"
+
+[features.op.def.through.face.element]
+face = 0
+
+[features.op.def.through.face.source]
+feature = 7
+
+[[features]]
+id = 9
+name = "Mirror"
+enabled = true
+
+[features.op]
+feature = "mirror"
+offset = 0.0
+keep_original = true
+targets = [7]
+
+[features.op.about]
+feature = 8
+
+[[features]]
+id = 10
+name = "Plane"
+enabled = true
+
+[features.op]
+feature = "plane"
+
+[features.op.def]
+kind = "through"
+
+[[features.op.def.through]]
+ref = "face"
+
+[features.op.def.through.face.element]
+face = 5
+
+[features.op.def.through.face.source]
+feature = 7
+
+[[features.op.def.through.face.source.copies]]
+by = 9
+index = 1
+
+[[features]]
+id = 11
+name = "Mirror"
+enabled = true
+
+[features.op]
+feature = "mirror"
+offset = 0.0
+keep_original = true
+targets = [9]
+
+[features.op.about]
+feature = 10
+
+[[features]]
+id = 12
+name = "Plane"
+enabled = true
+
+[features.op]
+feature = "plane"
+
+[features.op.def]
+kind = "through"
+
+[[features.op.def.through]]
+ref = "face"
+
+[features.op.def.through.face.element]
+face = 0
+
+[features.op.def.through.face.source]
+feature = 0
+
+[[features]]
+id = 13
+name = "Sketch"
+enabled = true
+
+[features.op]
+feature = "sketch"
+
+[features.op.on]
+feature = 12
+
+[features.op.sketch]
+next_id = 4
+
+[[features.op.sketch.points]]
+id = 0
+at = [
+    0.19999999,
+    -0.114999995,
+]
+
+[[features.op.sketch.entities]]
+kind = "circle"
+id = 1
+center = 0
+radius = 0.09962428
+construction = false
+
+[[features.op.sketch.entities]]
+kind = "circle"
+id = 2
+center = 0
+radius = 0.09124143
+construction = false
+
+[[features.op.sketch.regions]]
+id = 3
+hint = [
+    0.19999999,
+    -0.023358863,
+]
+
+[[features.op.sketch.regions.bounds]]
+entity = 1
+side = "left"
+
+[[features]]
+id = 14
+name = "Extrude"
+enabled = true
+
+[features.op]
+feature = "extrude"
+taper = 0.0
+op = "new_body"
+
+[features.op.end]
+kind = "distance"
+distance = 0.01
+
+[features.op.profile]
+from = "regions"
+sketch = 13
+regions = [3]
+
+[features.op.surface]
+style = "plastic"
+tint = [
+    0.07270296,
+    0.32173938,
+    0.013984695,
+]
+
+[[features]]
+id = 15
+name = "Plane"
+enabled = true
+
+[features.op]
+feature = "plane"
+
+[features.op.def]
+kind = "through"
+
+[[features.op.def.through]]
+ref = "face"
+
+[features.op.def.through.face.element]
+face = 0
+
+[features.op.def.through.face.source]
+feature = 0
+
+[[features]]
+id = 16
+name = "Sketch"
+enabled = true
+
+[features.op]
+feature = "sketch"
+
+[features.op.on]
+feature = 15
+
+[features.op.sketch]
+next_id = 13
+
+[[features.op.sketch.points]]
+id = 0
+at = [
+    0.19999999,
+    -0.114999995,
+]
+
+[[features.op.sketch.points]]
+id = 1
+at = [
+    0.13,
+    -0.114999995,
+]
+
+[[features.op.sketch.points]]
+id = 3
+at = [
+    0.19999999,
+    -0.185,
+]
+
+[[features.op.sketch.points]]
+id = 5
+at = [
+    0.17999999,
+    -0.185,
+]
+
+[[features.op.sketch.points]]
+id = 7
+at = [
+    0.13,
+    -0.13499999,
+]
+
+[[features.op.sketch.points]]
+id = 9
+at = [
+    0.17999999,
+    -0.13499999,
+]
+
+[[features.op.sketch.entities]]
+kind = "line"
+id = 2
+a = 0
+b = 1
+construction = false
+
+[[features.op.sketch.entities]]
+kind = "line"
+id = 4
+a = 0
+b = 3
+construction = false
+
+[[features.op.sketch.entities]]
+kind = "line"
+id = 6
+a = 3
+b = 5
+construction = false
+
+[[features.op.sketch.entities]]
+kind = "line"
+id = 8
+a = 1
+b = 7
+construction = false
+
+[[features.op.sketch.entities]]
+kind = "line"
+id = 10
+a = 7
+b = 9
+construction = false
+
+[[features.op.sketch.entities]]
+kind = "line"
+id = 11
+a = 9
+b = 5
+construction = false
+
+[[features.op.sketch.regions]]
+id = 12
+hint = [
+    0.16499999,
+    -0.12499999,
+]
+
+[[features.op.sketch.regions.bounds]]
+entity = 2
+side = "left"
+
+[[features.op.sketch.regions.bounds]]
+entity = 4
+side = "right"
+
+[[features.op.sketch.regions.bounds]]
+entity = 6
+side = "right"
+
+[[features.op.sketch.regions.bounds]]
+entity = 8
+side = "left"
+
+[[features.op.sketch.regions.bounds]]
+entity = 10
+side = "left"
+
+[[features.op.sketch.regions.bounds]]
+entity = 11
+side = "left"
+
+[[features]]
+id = 17
+name = "Extrude"
+enabled = true
+
+[features.op]
+feature = "extrude"
+taper = 0.0
+op = "new_body"
+
+[features.op.end]
+kind = "distance"
+distance = 0.02
+
+[features.op.profile]
+from = "regions"
+sketch = 16
+regions = [12]
+
+[features.op.surface]
+style = "metal"
+tint = [
+    0.04972969,
+    0.5189881,
+    0.005691163,
+]
+
+[[features]]
+id = 18
+name = "Plane"
+enabled = true
+
+[features.op]
+feature = "plane"
+
+[features.op.def]
+kind = "through"
+
+[[features.op.def.through]]
+ref = "face"
+
+[features.op.def.through.face.element]
+face = 7
+
+[features.op.def.through.face.source]
+feature = 17
+
+[[features]]
+id = 19
+name = "Mirror"
+enabled = true
+
+[features.op]
+feature = "mirror"
+offset = 0.0
+keep_original = true
+targets = [17]
+
+[features.op.about]
+feature = 18
+
+[[features]]
+id = 20
+name = "Plane"
+enabled = true
+
+[features.op]
+feature = "plane"
+
+[features.op.def]
+kind = "through"
+
+[[features.op.def.through]]
+ref = "face"
+
+[features.op.def.through.face.element]
+face = 2
+
+[features.op.def.through.face.source]
+feature = 17
+
+[[features]]
+id = 21
+name = "Mirror"
+enabled = true
+
+[features.op]
+feature = "mirror"
+offset = 0.0
+keep_original = true
+targets = [19]
+
+[features.op.about]
+feature = 20
+
+[[features]]
+id = 22
+name = "Mirror"
+enabled = true
+
+[features.op]
+feature = "mirror"
+offset = 0.0
+keep_original = true
+targets = [
+    21,
+    14,
+]
+
+[features.op.about]
+origin = "xy"
 
 [hold]
 grip = [
