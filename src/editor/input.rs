@@ -206,6 +206,10 @@ impl EditorInputPlugin {
         let mut locations = Vec::new();
         for (_, pointer) in pointers {
             for (camera_entity, camera, render_target, camera_transform, _cam_multicam) in &cameras {
+                // A camera off in the single view keeps its old viewport.
+                if !camera.is_active {
+                    continue;
+                }
                 if let Some(pointer_loc) = pointer.location() {
                     if pointer_loc.is_in_viewport(camera, render_target, &primary_window_entity) {
                         if pressed.is_some() {

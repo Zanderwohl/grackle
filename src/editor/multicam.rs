@@ -95,6 +95,8 @@ pub struct MulticamState {
     pub debug_mouse_circle: bool,
     pub draw_ortho_cameras: bool,
     pub draw_perspective_cameras: bool,
+    /// Only the free camera, across the whole viewport area.
+    pub single: bool,
 }
 
 #[derive(Component)]
@@ -151,7 +153,7 @@ pub fn side_rotation(axis: CameraAxis, flipped: bool, frame: SideFrame) -> Optio
     Some(Transform::IDENTITY.looking_to(looking, up).rotation)
 }
 
-/// The label of each side of an ortho view, unflipped first.
+/// Unflipped first.
 fn side_names(axis: CameraAxis) -> Option<[String; 2]> {
     match axis {
         CameraAxis::None => None,
@@ -161,14 +163,13 @@ fn side_names(axis: CameraAxis) -> Option<[String; 2]> {
     }
 }
 
-/// The two names of an ortho view, stacked in one grid cell so the node is as
-/// wide as the longer; the side not shown is hidden but still laid out.
+/// A viewport's clickable label. An ortho view's two names share one grid
+/// cell, so the node is as wide as the longer; the hidden one is still laid out.
 #[derive(Component)]
-pub struct SideLabel {
+pub struct ViewLabel {
     pub camera: Entity,
 }
 
-/// One of a [`SideLabel`]'s two names; `flipped` says which side it names.
 #[derive(Component)]
 struct SideName {
     camera: Entity,
@@ -284,6 +285,7 @@ impl Default for MulticamState {
             debug_window: false,
             draw_ortho_cameras: false,
             draw_perspective_cameras: true,
+            single: false,
         }
     }
 }
@@ -315,7 +317,7 @@ impl Plugin for MulticamPlugin {
             // After transform propagation, so gizmos use this frame's global transforms.
             .add_systems(PostUpdate, Self::draw_camera_gizmos.after(TransformSystems::Propagate).run_if(in_state(AppMode::Editor)))
             .add_systems(EguiPrimaryContextPass, Self::debug_window.run_if(in_state(AppMode::Editor)))
-            .add_systems(EguiPrimaryContextPass, offer_side_toggles.run_if(crate::common::app_mode::showing_the_viewports))
+            .add_systems(EguiPrimaryContextPass, offer_view_toggles.run_if(crate::common::app_mode::showing_the_viewports))
             .add_systems(OnEnter(AppMode::Editor), face_the_near_sides)
             .add_systems(Update, frame_the_starting_room.run_if(in_state(AppMode::Editor)))
             // Before the prop modes frame their views, which read the side.
@@ -326,8 +328,7 @@ impl Plugin for MulticamPlugin {
 }
 
 /// Where an ortho view was left on each side, written only when its side
-/// changes. The map editor and the prop modes keep their own pair, since a
-/// prop is framed again on every entry and a map's views are not.
+/// changes. The prop modes keep a separate pair, since they reframe on entry.
 #[derive(Component)]
 pub struct SideViews {
     /// The frame the camera's transform is in now.
@@ -335,18 +336,15 @@ pub struct SideViews {
     /// Near side, then far side; `None` until the view has been left there.
     map: [Option<Transform>; 2],
     prop: [Option<Transform>; 2],
-    /// The map `map[1]` was left on, as `FeatureTimeline::adoptions`.
-    map_adoption: u64,
-    /// The map the near side was last framed on its starting room for, and one
-    /// seen but not yet framed: framing waits a frame, so the last map's rooms
-    /// are gone.
+    /// `FeatureTimeline::adoptions` last framed, and one seen but not yet:
+    /// framing waits a frame so the last map's rooms are gone.
     near_framed: Option<u64>,
     near_pending: Option<u64>,
 }
 
 impl Default for SideViews {
     fn default() -> Self {
-        Self { frame: SideFrame::Map, map: [None; 2], prop: [None; 2], map_adoption: 0, near_framed: None, near_pending: None }
+        Self { frame: SideFrame::Map, map: [None; 2], prop: [None; 2], near_framed: None, near_pending: None }
     }
 }
 
@@ -362,22 +360,18 @@ impl SideViews {
 /// How far outside the starting room a map's views first stand, in meters.
 const STARTING_STANDOFF: f32 = 1.0;
 
-/// The bounds of a map's starting room, the first in map order.
+/// The bounds of a map's starting room, the first in map order. `None` until
+/// every room has its place, since until then which is first is unknown.
 fn starting_room(rooms: &Query<(&Room, Option<&VolumeOrder>)>) -> Option<(Vec3, Vec3)> {
-    rooms
-        .iter()
-        .min_by(|(_, a), (_, b)| match (a, b) {
-            (Some(a), Some(b)) => a.cmp(b),
-            (Some(_), None) => std::cmp::Ordering::Less,
-            (None, Some(_)) => std::cmp::Ordering::Greater,
-            (None, None) => std::cmp::Ordering::Equal,
-        })
-        .map(|(room, _)| room.bounds())
+    let mut placed = Vec::new();
+    for (room, order) in rooms {
+        placed.push((order?, room));
+    }
+    placed.into_iter().min_by(|(a, _), (b, _)| a.cmp(b)).map(|(_, room)| room.bounds())
 }
 
-/// Where a map's view first stands on a side: outside the starting room,
-/// centered on it, so every inward face of the room is toward the camera and
-/// in front of its near clip.
+/// Outside the room, so every inward face is toward the camera and in front
+/// of its near clip.
 fn first_position(axis: CameraAxis, flipped: bool, room: (Vec3, Vec3)) -> Option<Vec3> {
     let (min, max) = room;
     let mut at = (min + max) / 2.0;
@@ -393,9 +387,7 @@ fn first_position(axis: CameraAxis, flipped: bool, room: (Vec3, Vec3)) -> Option
     Some(at)
 }
 
-/// Puts each ortho view's near side outside a newly opened map's starting
-/// room, once per map. A view on its far side has the place kept for its
-/// near side instead.
+/// Once per opened map.
 fn frame_the_starting_room(
     timeline: Option<Res<crate::editor::editable::FeatureTimeline>>,
     rooms: Query<(&Room, Option<&VolumeOrder>)>,
@@ -413,28 +405,28 @@ fn frame_the_starting_room(
             continue;
         }
         let Some(room) = room else { continue };
-        let (Some(at), Some(rotation)) =
-            (first_position(multicam.axis, false, room), side_rotation(multicam.axis, false, SideFrame::Map))
-        else {
-            continue;
-        };
-        if views.frame == SideFrame::Map && !multicam.flipped {
-            transform.translation = at;
-        } else {
-            views.map[0] = Some(Transform { translation: at, rotation, ..*transform });
+        for flipped in [false, true] {
+            let (Some(at), Some(rotation)) =
+                (first_position(multicam.axis, flipped, room), side_rotation(multicam.axis, flipped, SideFrame::Map))
+            else {
+                continue;
+            };
+            if views.frame == SideFrame::Map && multicam.flipped == flipped {
+                transform.translation = at;
+            } else {
+                views.map[flipped as usize] = Some(Transform { translation: at, rotation, ..*transform });
+            }
         }
         views.near_framed = Some(adoption);
     }
 }
 
-/// Keeps what an ortho view shows as the side it is on.
 fn leave_side(multicam: &Multicam, transform: &Transform, views: &mut SideViews) {
     let frame = views.frame;
     views.slots(frame)[multicam.flipped as usize] = Some(*transform);
 }
 
-/// Moves an ortho view to `flipped` in `frame`, where that side was left, else
-/// to `fallback`. The rotation is always the side's fixed one.
+/// To where that side was left, else `fallback`.
 fn show_side(
     multicam: &mut Multicam,
     transform: &mut Transform,
@@ -459,8 +451,7 @@ fn show_name(camera: Entity, flipped: bool, names: &mut Query<(&SideName, &mut V
     }
 }
 
-/// Entering a mode with the viewports starts at Front, Top and Right. A prop
-/// mode frames its views afresh, so its pair is forgotten.
+/// A prop mode reframes its views on entry, so its pair is forgotten.
 fn face_the_near_sides(
     mode: Res<State<AppMode>>,
     mut cameras: Query<(Entity, &mut Multicam, &mut Transform, &mut SideViews)>,
@@ -477,8 +468,6 @@ fn face_the_near_sides(
     }
 }
 
-/// With no tool in hand: the map editor's Select, or the prop editor with no
-/// tool waiting and no sketch open.
 fn hands_free(
     mode: AppMode,
     tool: Option<&State<crate::tool::Tools>>,
@@ -487,42 +476,43 @@ fn hands_free(
 ) -> bool {
     match mode {
         AppMode::Editor => tool.is_some_and(|tool| *tool.get() == crate::tool::Tools::Select),
-        AppMode::Prop | AppMode::Animation => {
+        AppMode::Prop => {
             prop_tool.is_none_or(|tool| tool.task.is_none())
                 && sketch.is_none_or(|session| session.editing().is_none())
         }
+        // The prop editor's tool may still be waiting, but nothing here uses it.
+        AppMode::Animation => true,
         _ => false,
     }
 }
 
-/// An invisible egui button over each ortho view's label, so a click on it is
-/// egui's and reaches no tool. Clicked, the view looks the other way.
-fn offer_side_toggles(
+/// An egui button, so a click on the label reaches no tool. The free camera's
+/// toggles the single view; an ortho view's, its side.
+fn offer_view_toggles(
     mut contexts: EguiContexts,
     mode: Res<State<AppMode>>,
     tool: Option<Res<State<crate::tool::Tools>>>,
     prop_tool: Option<Res<crate::prop::tool::ActiveTool>>,
     sketch: Option<Res<crate::prop::sketch_edit::SketchSession>>,
     window: Single<&Window, With<PrimaryWindow>>,
-    labels: Query<(&SideLabel, &ComputedNode)>,
-    viewports: Query<&Camera, With<Multicam>>,
-    mut cameras: Query<(&mut Multicam, &mut Transform, &mut SideViews)>,
+    labels: Query<(&ViewLabel, &ComputedNode)>,
+    mut state: ResMut<MulticamState>,
+    mut cameras: Query<(&Camera, &mut Multicam, &mut Transform, Option<&mut SideViews>)>,
     mut names: Query<(&SideName, &mut Visibility)>,
     rooms: Query<(&Room, Option<&VolumeOrder>)>,
-    timeline: Option<Res<crate::editor::editable::FeatureTimeline>>,
 ) {
     if !hands_free(*mode.get(), tool.as_deref(), prop_tool.as_deref(), sketch.as_deref()) {
         return;
     }
     let Ok(ctx) = contexts.ctx_mut() else {
-        warn!("multicam::offer_side_toggles: no egui context");
+        warn!("multicam::offer_view_toggles: no egui context");
         return;
     };
     // Window logical pixels to egui points, which differ under egui zoom.
     let to_points = window.scale_factor() / ctx.pixels_per_point();
     let mut toggled = Vec::new();
     for (label, computed) in &labels {
-        let Ok(camera) = viewports.get(label.camera) else { continue };
+        let Ok((camera, multicam, ..)) = cameras.get(label.camera) else { continue };
         if !camera.is_active {
             continue;
         }
@@ -533,7 +523,20 @@ fn offer_side_toggles(
         }
         let min = viewport.min + Vec2::splat(LABEL_INSET - SIDE_TOGGLE_PADDING);
         let size = size + Vec2::splat(2.0 * SIDE_TOGGLE_PADDING);
-        let clicked = egui::Area::new(egui::Id::new(("viewport_side_toggle", label.camera)))
+        let id = egui::Id::new(("viewport_toggle", label.camera));
+        let tooltip = match multicam.axis {
+            CameraAxis::None => get!("viewport.toggle_grid"),
+            _ => get!("viewport.toggle_side"),
+        };
+        // The area shares the windows' layer and rises over them once clicked.
+        let center = (min + size / 2.0) * to_points;
+        if ctx
+            .layer_id_at(egui::pos2(center.x, center.y))
+            .is_some_and(|layer| layer.id != id && matches!(layer.order, egui::Order::Middle | egui::Order::Foreground))
+        {
+            continue;
+        }
+        let clicked = egui::Area::new(id)
             .fixed_pos(egui::pos2(min.x * to_points, min.y * to_points))
             .constrain(false)
             .show(ctx, |ui| {
@@ -543,23 +546,19 @@ fn offer_side_toggles(
                 );
                 response
                     .on_hover_cursor(egui::CursorIcon::PointingHand)
-                    .on_hover_text(get!("viewport.toggle_side"))
+                    .on_hover_text(tooltip)
                     .clicked()
             })
             .inner;
-        if clicked {
+        if clicked && multicam.axis == CameraAxis::None {
+            state.single = !state.single;
+        } else if clicked {
             toggled.push(label.camera);
         }
     }
     let frame = SideFrame::of(*mode.get());
-    let adoption = timeline.map_or(0, |timeline| timeline.adoptions());
     for camera in toggled {
-        let Ok((mut multicam, mut transform, mut views)) = cameras.get_mut(camera) else { continue };
-        // Another map's far view would look at where that map's room was.
-        if views.map_adoption != adoption {
-            views.map[1] = None;
-            views.map_adoption = adoption;
-        }
+        let Ok((_, mut multicam, mut transform, Some(mut views))) = cameras.get_mut(camera) else { continue };
         let flipped = !multicam.flipped;
         let axis = multicam.axis;
         leave_side(&multicam, &transform, &mut views);
@@ -685,11 +684,11 @@ impl MulticamPlugin {
                         };
                         match side_names(axis) {
                             None => {
-                                parent.spawn((label, Text::new(camera_name)));
+                                parent.spawn((ViewLabel { camera }, label, Text::new(camera_name)));
                             }
                             Some([near, far]) => {
                                 parent
-                                    .spawn((SideLabel { camera }, Node { display: Display::Grid, ..label }))
+                                    .spawn((ViewLabel { camera }, Node { display: Display::Grid, ..label }))
                                     .with_children(|names| {
                                         for (flipped, name) in [(false, near), (true, far)] {
                                             names.spawn((
@@ -891,25 +890,41 @@ impl MulticamPlugin {
             return;
         };
 
-        let camera_size = UVec2::new(
-            (viewport_size.x / 2).max(1),
-            (viewport_size.y / 2).max(1),
-        );
+        let camera_size = match state.single {
+            true => viewport_size.max(UVec2::ONE),
+            false => UVec2::new((viewport_size.x / 2).max(1), (viewport_size.y / 2).max(1)),
+        };
 
         // See `renderable`.
         let showing = renderable(camera_size);
+        let shown = |multicam: &Multicam| showing && (!state.single || multicam.axis == CameraAxis::None);
+        // The cameras share one main texture and a clear wipes all of it, so only the lowest shown one
+        // clears; with none clearing, the last frame stays wherever nothing is drawn.
+        let clearing = cameras
+            .iter()
+            .filter(|(_, multicam)| shown(multicam))
+            .min_by_key(|(camera, _)| camera.order)
+            .map(|(_, multicam)| multicam.id);
 
         for (mut camera, multicam) in cameras {
-            if camera.is_active != showing {
-                camera.is_active = showing;
+            let clears = clearing == Some(multicam.id);
+            if matches!(camera.clear_color, ClearColorConfig::None) == clears {
+                camera.clear_color = if clears { ClearColorConfig::Default } else { ClearColorConfig::None };
             }
-            if !showing {
+            let shown = shown(multicam);
+            if camera.is_active != shown {
+                camera.is_active = shown;
+            }
+            if !shown {
                 continue;
             }
-            let camera_pos = viewport_start + UVec2::new(
-                multicam.screen_pos.x * camera_size.x,
-                multicam.screen_pos.y * camera_size.y,
-            );
+            let camera_pos = match state.single {
+                true => viewport_start,
+                false => viewport_start + UVec2::new(
+                    multicam.screen_pos.x * camera_size.x,
+                    multicam.screen_pos.y * camera_size.y,
+                ),
+            };
 
             let wanted = Viewport {
                 physical_position: camera_pos,
@@ -1117,8 +1132,6 @@ fn draw_rect(
 mod tests {
     use super::*;
 
-    /// Breaks if the play camera, which has the default layers, can see an
-    /// editor handle.
     #[test]
     fn each_ortho_view_flips_to_face_straight_back_with_the_same_up() {
         for frame in [SideFrame::Map, SideFrame::Prop] {
@@ -1166,6 +1179,20 @@ mod tests {
         assert_eq!(first_position(CameraAxis::None, false, room), None);
     }
 
+    /// Bevy refuses a system whose queries conflict only when it first runs, which no other test does.
+    #[test]
+    fn the_viewport_systems_have_no_conflicting_queries() {
+        fn initialize<M>(world: &mut World, system: impl IntoSystem<(), (), M>) {
+            IntoSystem::into_system(system).initialize(world);
+        }
+        let mut world = World::new();
+        initialize(&mut world, offer_view_toggles);
+        initialize(&mut world, face_the_near_sides);
+        initialize(&mut world, frame_the_starting_room);
+    }
+
+    /// Breaks if the play camera, which has the default layers, can see an
+    /// editor handle.
     #[test]
     fn handles_are_seen_by_the_editor_viewports_and_nothing_else() {
         assert!(!RenderLayers::default().intersects(&editor_only()), "the play camera sees handles");

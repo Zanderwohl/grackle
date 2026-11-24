@@ -9,6 +9,7 @@ right = "Rechts"
 back = "Hinten"
 bottom = "Unten"
 left = "Links"
+toggle_grid = "Einzelansicht umschalten"
 toggle_side = "Seite wechseln"
 ui = "UI-Kamera"
 
