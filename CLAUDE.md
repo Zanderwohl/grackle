@@ -468,12 +468,15 @@ in a team mode is still a gamemode question.
 `Prop`, `Animation`, `Material`, `Weapon`, `Lang`, `Play`, `MainMenu`, `Onboarding`, `Joining` or `Starting`, iterable in that order, which is
 the Mode menu's order, with a separator above Play and above the main menu (`AppMode::in_the_menu`
 leaves out the last three). **`Starting`** ([`src/startup_screen.rs`](src/startup_screen.rs)) is the
-*initial* state of a bare launch: a title picture with "pikaia.space" centered over it in Nabla at
-100 pt (133⅓ logical px; drawn from the font's plain outlines in one color, since Bevy's text does
-not paint COLRv1), and a progress window in the bottom right with no button, up while the warm-up cameras and the lens compile their pipelines, the picture loads and
-the startup map's rooms and light settle, and then until ten frames in a row take under 0.1 s, or
-20 s at most. The window opens hidden and is shown once the picture has been drawn (3 s at most; at once for a
-launch that does not start here), and the warm-up cameras stay off behind a shut `WarmUpGate` until
+*initial* state of a bare launch: a title picture, the "pikaia.space" wordmark centered over it, and
+a progress window in the bottom right with no button. The wordmark's letters are PNGs in
+`assets/default/images/wordmark/`, pre-rendered from Nabla in Chrome (Bevy's text does not paint
+COLRv1 color fonts) and placed by the `LETTERS` table; each drops from above the window with
+easeOutElastic over 0.5 s, 0.2 s after the one before, on a clock that moves at most a twentieth of
+a second a frame. The screen is up while the warm-up cameras and the lens compile their pipelines, the picture loads and
+the startup map's rooms and light settle, and then until ten frames in a row take under 0.1 s;
+then the box reads Done!. It stays until the wordmark has landed and a second more, which a left or
+right click skips once loading is done, and gives up waiting after 20 s. The warm-up cameras stay off behind a shut `WarmUpGate` until
 the picture has been up two frames, since each pipeline compiled in a frame holds that frame back
 from the window. It then goes to `AfterStartup`, the main menu or onboarding, and the main menu's first
 picture is the startup screen's (`BackgroundSet::Startup`), so the one leads into the other. **`Joining`** ([`src/common/joining.rs`](src/common/joining.rs),

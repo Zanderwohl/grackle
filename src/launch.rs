@@ -66,9 +66,7 @@ pub fn run() {
                    name: Some("grackle.app".to_owned()),
                    present_mode: PresentMode::AutoVsync,
                    prevent_default_event_handling: true,
-                   // Shown by `startup_screen::show_the_window` once there is something in it, so
-                   // the startup work before the first frame is not a blank window.
-                   visible: false,
+                   visible: true,
                    ..default()
                }),
                 primary_cursor_options: None,

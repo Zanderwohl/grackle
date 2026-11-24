@@ -1142,7 +1142,7 @@ continue = "Continue"
 # The screen between connecting to a server and its first screen.
 [startup]
 title = "Starting Grackle"
-studio = "pikaia.space"
+done = "Done!"
 compiling = "Compiling shaders"
 background = "Loading the picture"
 rooms = "Building rooms"

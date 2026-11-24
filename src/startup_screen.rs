@@ -8,12 +8,11 @@
 //! [`FRAMES_BEFORE_WARMING_UP`] frames: each pipeline they compile holds its frame back from the
 //! window, and before the picture is up that is a blank window that does not answer.
 //!
-//! The window opens hidden (`launch.rs`) and is shown once the picture has been drawn
-//! ([`show_the_window`]), or at once by a launch that does not start here.
-//!
-//! Over the picture, centered, is the title in Nabla (`fonts/Nabla_Regular/`). It is a COLRv1
-//! color font, which Bevy's text does not paint, so it is drawn from its plain outlines in one
-//! color. The window waits for the font as it does for the picture.
+//! Over the picture, centered, the wordmark drops in a letter at a time, bouncing as it lands. Its
+//! letters are PNGs in [`WORDMARK_DIR`], pre-rendered from Nabla, a COLRv1 color font that
+//! Bevy's text does not paint, and placed by [`LETTERS`]. The screen stays up until they have all
+//! landed and a second more ([`SHORTEST_SECONDS`]), unless a click skips the wait once loading is
+//! done. The warm-ups wait for the letters as they do for the picture.
 //!
 //! The picture is a [`BackgroundSet::Startup`] pick, which the main menu shows again on its first
 //! showing, so the one screen leads into the other.
@@ -29,10 +28,43 @@ use crate::title_background::{BackgroundSet, TitleBackground, WantsBackground};
 use crate::tool::bake_job::{BakeKind, BakeProgress, BakeStatus};
 
 const BACKGROUND: Color = Color::srgb(0.07, 0.07, 0.08);
-/// The folder under a pack's `fonts/` the title is set in; the default font without it.
-const TITLE_FONT_FOLDER: &str = "Nabla_Regular";
-/// 100 pt at 96 logical px to the inch, since Bevy sizes text in logical pixels.
-const TITLE_SIZE_PX: f32 = 100.0 * 96.0 / 72.0;
+/// Shipped with the binary at this path, not looked up across packs.
+const WORDMARK_DIR: &str = "default/images/wordmark";
+
+struct Letter {
+    file: &'static str,
+    /// Logical pixels from the wordmark's top left; the PNGs are drawn at twice this.
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+}
+
+/// "pikaia.space" in Nabla at 100 pt (133⅓ px), as Chrome lays it out, each letter cropped to the
+/// pixels it paints.
+const LETTERS: [Letter; 12] = [
+    Letter { file: "p", x: 0.0, y: 20.0, width: 58.0, height: 118.0 },
+    Letter { file: "i", x: 69.33, y: 1.5, width: 58.0, height: 119.0 },
+    Letter { file: "k", x: 138.66, y: 0.0, width: 58.0, height: 121.0 },
+    Letter { file: "a", x: 207.99, y: 20.0, width: 58.0, height: 101.0 },
+    Letter { file: "i", x: 277.33, y: 1.5, width: 58.0, height: 119.0 },
+    Letter { file: "a", x: 346.66, y: 20.0, width: 58.0, height: 101.0 },
+    Letter { file: "period", x: 415.99, y: 90.5, width: 31.0, height: 31.0 },
+    Letter { file: "s", x: 457.59, y: 20.0, width: 58.0, height: 101.0 },
+    Letter { file: "p", x: 526.92, y: 20.0, width: 58.0, height: 118.0 },
+    Letter { file: "a", x: 596.25, y: 20.0, width: 58.0, height: 101.0 },
+    Letter { file: "c", x: 665.58, y: 20.0, width: 58.0, height: 101.0 },
+    Letter { file: "e", x: 734.91, y: 20.0, width: 58.0, height: 101.0 },
+];
+const WORDMARK_SIZE: Vec2 = Vec2::new(792.91, 138.0);
+const LETTER_FALL_SECONDS: f32 = 0.5;
+const LETTER_SPACING_SECONDS: f32 = 0.2;
+const WORDMARK_SECONDS: f32 = (LETTERS.len() - 1) as f32 * LETTER_SPACING_SECONDS + LETTER_FALL_SECONDS;
+/// On the wordmark's clock, so the screen outlasts the drop by a second however the frames went.
+const SHORTEST_SECONDS: f32 = WORDMARK_SECONDS + 1.0;
+/// The most the wordmark's clock moves in a frame, so a frame held back by a pipeline compile
+/// slows the drop rather than skipping it.
+const WORDMARK_MOST_PER_FRAME: f32 = 1.0 / 20.0;
 const WINDOW_WIDTH: f32 = 320.0;
 /// From the window's edges, as the window safe zone is.
 const MARGIN: f32 = 20.0;
@@ -44,10 +76,6 @@ const QUICK_FRAMES: u32 = 10;
 pub const GIVE_UP_SECONDS: f32 = 20.0;
 /// Frames the picture is drawn before the warm-ups start, so it reaches the window first.
 const FRAMES_BEFORE_WARMING_UP: u32 = 2;
-/// Frames the picture is drawn before the window is shown, so it never shows empty.
-const FRAMES_BEFORE_SHOWING: u32 = 1;
-/// The window is shown by now whatever the picture is doing.
-const SHOW_BY_SECONDS: f32 = 3.0;
 
 /// Where [`AppMode::Starting`] goes once it is done. Inserted with that state by
 /// [`crate::onboarding::OnboardingPlugin`].
@@ -71,10 +99,9 @@ impl Plugin for StartupScreenPlugin {
                 Update,
                 (
                     show_or_hide,
-                    show_the_title.after(show_or_hide).before(watch_the_steps),
+                    drop_the_letters.after(watch_the_steps),
                     (watch_the_steps, finish_starting).chain().run_if(in_state(AppMode::Starting)),
                     open_the_warm_ups.after(watch_the_steps),
-                    show_the_window.after(watch_the_steps),
                 ),
             )
             .add_systems(EguiPrimaryContextPass, startup_window.run_if(in_state(AppMode::Starting)));
@@ -88,7 +115,7 @@ pub struct StartupSteps {
     pub warm_ups_total: usize,
     pub warm_ups_left: usize,
     pub lens_warming: bool,
-    /// The picture and the title are both on screen.
+    /// The picture is on screen and every letter of the wordmark has loaded.
     pub picture_ready: bool,
     pub rooms: Option<BakeStatus>,
     pub light: Option<BakeStatus>,
@@ -96,6 +123,10 @@ pub struct StartupSteps {
     pub quick_frames: u32,
     /// Real seconds since the screen went up.
     pub seconds: f32,
+    /// Seconds of the wordmark's drop played, from when the picture is up.
+    pub wordmark_seconds: f32,
+    /// A primary or secondary click: hand over as soon as loading is done.
+    pub skipped: bool,
 }
 
 const WARM_UP_WEIGHT: f32 = 4.0;
@@ -122,7 +153,12 @@ impl StartupSteps {
         1.0 - left as f32 / total as f32
     }
 
+    /// Loaded, and the wordmark has played or a click skipped it.
     pub fn done(&self) -> bool {
+        self.loaded() && (self.skipped || self.wordmark_seconds >= SHORTEST_SECONDS)
+    }
+
+    pub fn loaded(&self) -> bool {
         self.warmed_up()
             && self.picture_ready
             && settled(self.rooms.as_ref())
@@ -131,6 +167,9 @@ impl StartupSteps {
     }
 
     pub fn progress(&self) -> StartupProgress {
+        if self.loaded() {
+            return StartupProgress { fraction: 1.0, line: get!("startup.done") };
+        }
         let settle = (self.quick_frames as f32 / QUICK_FRAMES as f32).min(1.0);
         let done = self.warm_up_fraction() * WARM_UP_WEIGHT
             + f32::from(u8::from(self.picture_ready)) * PICTURE_WEIGHT
@@ -152,9 +191,49 @@ impl StartupSteps {
 #[derive(Component)]
 struct StartupRoot;
 
-/// Hidden until its font has loaded, so it never shows in the fallback face first.
+/// An index into [`LETTERS`].
 #[derive(Component)]
-struct StartupTitle(Handle<Font>);
+struct WordmarkLetter {
+    index: usize,
+    image: Handle<Image>,
+}
+
+/// easeOutBounce: 0 at 0 and 1 at 1, never past 1, landing with three bounces.
+pub fn ease_out_bounce(t: f32) -> f32 {
+    const N: f32 = 7.5625;
+    const D: f32 = 2.75;
+    let t = t.clamp(0.0, 1.0);
+    if t < 1.0 / D {
+        N * t * t
+    } else if t < 2.0 / D {
+        let t = t - 1.5 / D;
+        N * t * t + 0.75
+    } else if t < 2.5 / D {
+        let t = t - 2.25 / D;
+        N * t * t + 0.9375
+    } else {
+        let t = t - 2.625 / D;
+        N * t * t + 0.984375
+    }
+}
+
+/// easeOutElastic: 0 at 0 and 1 at 1, swinging past 1 and back as it settles.
+pub fn ease_out_elastic(t: f32) -> f32 {
+    const C4: f32 = 2.0 * std::f32::consts::PI / 3.0;
+    match t {
+        t if t <= 0.0 => 0.0,
+        t if t >= 1.0 => 1.0,
+        t => 2f32.powf(-10.0 * t) * ((t * 10.0 - 0.75) * C4).sin() + 1.0,
+    }
+}
+
+/// The ease the letters land with.
+const LETTER_EASE: fn(f32) -> f32 = ease_out_elastic;
+
+/// How far letter `index` has fallen, 0 to 1, `seconds` into the drop.
+fn fallen(index: usize, seconds: f32) -> f32 {
+    LETTER_EASE((seconds - index as f32 * LETTER_SPACING_SECONDS) / LETTER_FALL_SECONDS)
+}
 
 /// Under the egui window, on the egui context's camera, as the joining screen's root is.
 fn show_or_hide(
@@ -162,35 +241,38 @@ fn show_or_hide(
     mode: Res<State<AppMode>>,
     existing: Query<(Entity, Has<UiTargetCamera>), With<StartupRoot>>,
     camera: Query<Entity, With<bevy_egui::PrimaryEguiContext>>,
-    title_font: TitleFont,
+    asset_server: Option<Res<AssetServer>>,
 ) {
     let wanted = *mode.get() == AppMode::Starting;
     let camera = camera.single().ok();
     if wanted && existing.is_empty() {
-        let font = title_font.load();
         let mut root = commands.spawn((
             StartupRoot,
             WantsBackground(BackgroundSet::Startup),
             GlobalZIndex(10),
-            Node {
-                position_type: PositionType::Absolute,
-                width: Val::Percent(100.0),
-                height: Val::Percent(100.0),
-                justify_content: JustifyContent::Center,
-                align_items: AlignItems::Center,
-                ..default()
-            },
+            Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() },
             BackgroundColor(BACKGROUND),
-            children![(
-                StartupTitle(font.clone()),
-                Text::new(get!("startup.studio")),
-                TextFont { font: font.into(), font_size: bevy::text::FontSize::Px(TITLE_SIZE_PX), ..default() },
-                TextColor(Color::WHITE),
-                TextShadow::default(),
-                Pickable::IGNORE,
-                Visibility::Hidden,
-            )],
         ));
+        // In order, so a later letter is drawn over an earlier one, as the font lays them.
+        root.with_children(|root| {
+            for (index, letter) in LETTERS.iter().enumerate() {
+                let image = asset_server
+                    .as_ref()
+                    .map_or_else(Handle::default, |assets| assets.load(format!("{WORDMARK_DIR}/{}.png", letter.file)));
+                root.spawn((
+                    WordmarkLetter { index, image: image.clone() },
+                    ImageNode::new(image),
+                    Node {
+                        position_type: PositionType::Absolute,
+                        top: Val::Px(-letter.height),
+                        width: Val::Px(letter.width),
+                        height: Val::Px(letter.height),
+                        ..default()
+                    },
+                    Pickable::IGNORE,
+                ));
+            }
+        });
         if let Some(camera) = camera {
             root.insert(UiTargetCamera(camera));
         }
@@ -207,55 +289,35 @@ fn show_or_hide(
     }
 }
 
-#[derive(bevy::ecs::system::SystemParam)]
-struct TitleFont<'w> {
-    fonts: Option<Res<'w, crate::common::fonts::PackFonts>>,
-    packs: Option<Res<'w, crate::common::assets::Assets>>,
-    asset_server: Option<Res<'w, AssetServer>>,
-}
-
-impl TitleFont<'_> {
-    fn load(&self) -> Handle<Font> {
-        let (Some(fonts), Some(packs), Some(asset_server)) = (&self.fonts, &self.packs, &self.asset_server) else {
-            return Handle::default();
-        };
-        let Some(font) = fonts.fonts.iter().find(|font| font.folder == TITLE_FONT_FOLDER) else {
-            warn!("No pack has the font {TITLE_FONT_FOLDER}; the startup title is in the default font");
-            return Handle::default();
-        };
-        match packs.asset_path(&font.face_pack, &font.face_path()) {
-            Some(path) => asset_server.load(path),
-            None => Handle::default(),
-        }
-    }
-}
-
-/// A font that will not load is swapped for the default rather than leaving the title hidden.
-fn show_the_title(
-    asset_server: Option<Res<AssetServer>>,
-    mut titles: Query<(&mut StartupTitle, &mut TextFont, &mut Visibility)>,
+/// Each letter at its own x, from just above the window to its place in the centered wordmark.
+fn drop_the_letters(
+    window: Query<&Window, With<bevy::window::PrimaryWindow>>,
+    ui_scale: Option<Res<UiScale>>,
+    steps: Res<StartupSteps>,
+    mut letters: Query<(&WordmarkLetter, &mut Node)>,
 ) {
-    for (mut title, mut font, mut visibility) in &mut titles {
-        if *visibility != Visibility::Hidden {
-            continue;
-        }
-        let loaded = match &asset_server {
-            Some(asset_server) if title.0 != Handle::default() => {
-                if asset_server.load_state(&title.0).is_failed() {
-                    warn!("The startup title's font did not load; using the default font");
-                    title.0 = Handle::default();
-                    font.font = Handle::<Font>::default().into();
-                    true
-                } else {
-                    asset_server.is_loaded_with_dependencies(&title.0)
-                }
-            }
-            _ => true,
-        };
-        if loaded {
-            *visibility = Visibility::Inherited;
+    let Ok(window) = window.single() else { return };
+    // `Val::Px` is in logical pixels divided by `UiScale`.
+    let window = Vec2::new(window.width(), window.height()) / ui_scale.map_or(1.0, |scale| scale.0);
+    let corner = (window - WORDMARK_SIZE) / 2.0;
+    for (letter, mut node) in &mut letters {
+        let place = &LETTERS[letter.index];
+        let top = -place.height + (corner.y + place.y + place.height) * fallen(letter.index, steps.wordmark_seconds);
+        let wanted = (Val::Px(corner.x + place.x), Val::Px(top));
+        if (node.left, node.top) != wanted {
+            (node.left, node.top) = wanted;
         }
     }
+}
+
+/// A letter that will not load is passed over rather than holding the window hidden.
+fn letters_loaded(asset_server: Option<&AssetServer>, letters: &Query<&WordmarkLetter>) -> bool {
+    let Some(asset_server) = asset_server else { return true };
+    letters.iter().all(|letter| {
+        letter.image == Handle::default()
+            || asset_server.is_loaded_with_dependencies(&letter.image)
+            || asset_server.load_state(&letter.image).is_failed()
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -266,7 +328,9 @@ fn watch_the_steps(
     lens: Option<Res<crate::game::forward_camera::LensWarmUp>>,
     roots: Query<(), With<StartupRoot>>,
     pictures: Query<&Visibility, With<TitleBackground>>,
-    titles: Query<&Visibility, With<StartupTitle>>,
+    letters: Query<&WordmarkLetter>,
+    asset_server: Option<Res<AssetServer>>,
+    clicks: Option<Res<ButtonInput<MouseButton>>>,
     bakes: Option<Res<BakeProgress>>,
     mut frames_up: Local<u32>,
 ) {
@@ -280,37 +344,20 @@ fn watch_the_steps(
     }
     // With no picture in any pack there is nothing to wait for once the root has had a frame to
     // ask for one.
-    let title_shown = titles.iter().all(|visibility| *visibility != Visibility::Hidden);
-    steps.picture_ready = title_shown
+    steps.picture_ready = letters_loaded(asset_server.as_deref(), &letters)
         && (pictures.iter().any(|visibility| *visibility != Visibility::Hidden) || (pictures.is_empty() && *frames_up > 2));
+    if steps.picture_ready {
+        steps.wordmark_seconds += delta.min(WORDMARK_MOST_PER_FRAME);
+    }
+    if clicks.is_some_and(|clicks| clicks.any_just_pressed([MouseButton::Left, MouseButton::Right])) {
+        steps.skipped = true;
+    }
     steps.rooms = bakes.as_deref().and_then(|bakes| bakes.get(BakeKind::Rooms)).cloned();
     steps.light = bakes.as_deref().and_then(|bakes| bakes.get(BakeKind::Sunlight)).cloned();
     steps.quick_frames = match delta < QUICK_FRAME_SECONDS {
         true => steps.quick_frames.saturating_add(1),
         false => 0,
     };
-}
-
-/// Every frame until shown, since a window hidden by mistake is a process with nothing on screen.
-fn show_the_window(
-    mut windows: Query<&mut Window, With<bevy::window::PrimaryWindow>>,
-    steps: Res<StartupSteps>,
-    mode: Res<State<AppMode>>,
-    mut frames_shown: Local<u32>,
-    mut done: Local<bool>,
-) {
-    if *done {
-        return;
-    }
-    let Ok(mut window) = windows.single_mut() else { return };
-    if steps.picture_ready {
-        *frames_shown += 1;
-    }
-    if *frames_shown > FRAMES_BEFORE_SHOWING || steps.seconds >= SHOW_BY_SECONDS || *mode.get() != AppMode::Starting {
-        window.visible = true;
-        *done = true;
-        info!("Showing the window {:.2} s into startup", steps.seconds);
-    }
 }
 
 fn open_the_warm_ups(
@@ -375,6 +422,7 @@ mod tests {
             rooms: status(BakeState::UpToDate),
             light: status(BakeState::Skipped),
             quick_frames: QUICK_FRAMES,
+            wordmark_seconds: SHORTEST_SECONDS,
             ..default()
         }
     }
@@ -407,17 +455,64 @@ mod tests {
         app
     }
 
-    /// With no warm-ups, bakes or pictures in the app, only settling is left, so it hands over.
+    /// Breaks if loading done ends the screen before the wordmark has played and a second more,
+    /// or if a click before then does not end it.
+    #[test]
+    fn the_wordmark_plays_out_unless_a_click_skips_it() {
+        let playing = StartupSteps { wordmark_seconds: SHORTEST_SECONDS - 0.1, ..finished() };
+        assert!(playing.loaded() && !playing.done());
+        assert_eq!(playing.progress().line, get!("startup.done"));
+        assert!(StartupSteps { skipped: true, ..playing.clone() }.done());
+        let loading = StartupSteps { skipped: true, rooms: status(BakeState::Baking), ..playing };
+        assert!(!loading.done(), "a click skipped loading as well as the wordmark");
+        assert!((WORDMARK_SECONDS - 2.7).abs() < 1e-5);
+    }
+
+    #[test]
+    fn a_letter_falls_from_above_and_lands_after_its_turn() {
+        assert_eq!(ease_out_bounce(0.0), 0.0);
+        assert!((ease_out_bounce(1.0) - 1.0).abs() < 1e-6);
+        for step in 0..=100 {
+            let eased = ease_out_bounce(step as f32 / 100.0);
+            assert!((0.0..=1.0 + 1e-6).contains(&eased), "{eased}");
+        }
+        assert_eq!(ease_out_elastic(0.0), 0.0);
+        assert_eq!(ease_out_elastic(1.0), 1.0);
+        assert!((0..100).any(|step| ease_out_elastic(step as f32 / 100.0) > 1.0), "elastic never swung past");
+        assert_eq!(fallen(3, 3.0 * LETTER_SPACING_SECONDS), 0.0, "a letter started before its turn");
+        assert!((fallen(3, 3.0 * LETTER_SPACING_SECONDS + LETTER_FALL_SECONDS) - 1.0).abs() < 1e-6);
+        let last = LETTERS.len() - 1;
+        assert!((fallen(last, WORDMARK_SECONDS) - 1.0).abs() < 1e-6, "the last letter is still falling");
+    }
+
+    /// With no warm-ups, bakes or pictures in the app, only settling and the wordmark are left.
     #[test]
     fn startup_hands_over_to_where_it_was_told() {
         let mut app = app(AppMode::Onboarding);
         for _ in 0..QUICK_FRAMES + 4 {
             app.update();
         }
+        assert_eq!(*app.world().resource::<State<AppMode>>().get(), AppMode::Starting, "it left before the wordmark played");
+        app.world_mut().resource_mut::<StartupSteps>().wordmark_seconds = SHORTEST_SECONDS;
+        app.update();
+        app.update();
         assert_eq!(*app.world().resource::<State<AppMode>>().get(), AppMode::Onboarding);
         app.update();
         let mut roots = app.world_mut().query_filtered::<(), With<StartupRoot>>();
         assert_eq!(roots.iter(app.world()).count(), 0, "the screen outlived its state");
+    }
+
+    #[test]
+    fn a_click_skips_to_the_menu_once_loaded() {
+        let mut app = app(AppMode::MainMenu);
+        app.init_resource::<ButtonInput<MouseButton>>();
+        for _ in 0..QUICK_FRAMES + 4 {
+            app.update();
+        }
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Right);
+        app.update();
+        app.update();
+        assert_eq!(*app.world().resource::<State<AppMode>>().get(), AppMode::MainMenu);
     }
 
     /// Breaks if the warm-ups draw before the picture is up, or never start.
@@ -454,4 +549,5 @@ mod tests {
         assert_eq!(*app.world().resource::<State<AppMode>>().get(), AppMode::MainMenu);
     }
 }
+
 
