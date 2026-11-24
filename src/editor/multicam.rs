@@ -231,6 +231,31 @@ fn bloom_texture_width(camera: UVec2) -> u64 {
     camera.x as u64 * BLOOM_MAX_MIP as u64 / camera.y.max(1) as u64
 }
 
+/// Physical pixels, or `None` while the camera is off.
+fn placement(single: bool, axis: CameraAxis, screen_pos: UVec2, start: UVec2, area: UVec2) -> Option<(UVec2, UVec2)> {
+    if single && axis != CameraAxis::None {
+        return None;
+    }
+    let size = match single {
+        true => area.max(UVec2::ONE),
+        false => UVec2::new((area.x / 2).max(1), (area.y / 2).max(1)),
+    };
+    if !renderable(size) {
+        return None;
+    }
+    let at = match single {
+        true => start,
+        false => start + screen_pos * size,
+    };
+    Some((at, size))
+}
+
+/// The cameras share one main texture and a clear wipes all of it, so only the lowest-ordered one clears.
+/// With none clearing, the last frame stays wherever nothing is drawn.
+fn clearer(shown: impl Iterator<Item = (isize, u32)>) -> Option<u32> {
+    shown.min_by_key(|(order, _)| *order).map(|(_, id)| id)
+}
+
 /// Below this a viewport shows nothing worth a render pass.
 const MIN_CAMERA_SIDE: u32 = 16;
 
@@ -475,7 +500,8 @@ fn hands_free(
     sketch: Option<&crate::prop::sketch_edit::SketchSession>,
 ) -> bool {
     match mode {
-        AppMode::Editor => tool.is_some_and(|tool| *tool.get() == crate::tool::Tools::Select),
+        // A spectating client changes only what it sees.
+        AppMode::Editor => tool.is_some_and(|tool| matches!(tool.get(), crate::tool::Tools::Select | crate::tool::Tools::Spectate)),
         AppMode::Prop => {
             prop_tool.is_none_or(|tool| tool.task.is_none())
                 && sketch.is_none_or(|session| session.editing().is_none())
@@ -529,11 +555,12 @@ fn offer_view_toggles(
             _ => get!("viewport.toggle_side"),
         };
         // The area shares the windows' layer and rises over them once clicked.
-        let center = (min + size / 2.0) * to_points;
-        if ctx
-            .layer_id_at(egui::pos2(center.x, center.y))
-            .is_some_and(|layer| layer.id != id && matches!(layer.order, egui::Order::Middle | egui::Order::Foreground))
-        {
+        let covered = [Vec2::ZERO, Vec2::X, Vec2::Y, Vec2::ONE, Vec2::splat(0.5)].iter().any(|corner| {
+            let at = (min + size * *corner) * to_points;
+            ctx.layer_id_at(egui::pos2(at.x, at.y))
+                .is_some_and(|layer| layer.id != id && matches!(layer.order, egui::Order::Middle | egui::Order::Foreground))
+        });
+        if covered {
             continue;
         }
         let clicked = egui::Area::new(id)
@@ -890,41 +917,21 @@ impl MulticamPlugin {
             return;
         };
 
-        let camera_size = match state.single {
-            true => viewport_size.max(UVec2::ONE),
-            false => UVec2::new((viewport_size.x / 2).max(1), (viewport_size.y / 2).max(1)),
+        let placed = |multicam: &Multicam| {
+            placement(state.single, multicam.axis, multicam.screen_pos, viewport_start, viewport_size)
         };
-
-        // See `renderable`.
-        let showing = renderable(camera_size);
-        let shown = |multicam: &Multicam| showing && (!state.single || multicam.axis == CameraAxis::None);
-        // The cameras share one main texture and a clear wipes all of it, so only the lowest shown one
-        // clears; with none clearing, the last frame stays wherever nothing is drawn.
-        let clearing = cameras
-            .iter()
-            .filter(|(_, multicam)| shown(multicam))
-            .min_by_key(|(camera, _)| camera.order)
-            .map(|(_, multicam)| multicam.id);
+        let clearing = clearer(cameras.iter().filter(|(_, multicam)| placed(multicam).is_some()).map(|(camera, multicam)| (camera.order, multicam.id)));
 
         for (mut camera, multicam) in cameras {
             let clears = clearing == Some(multicam.id);
             if matches!(camera.clear_color, ClearColorConfig::None) == clears {
                 camera.clear_color = if clears { ClearColorConfig::Default } else { ClearColorConfig::None };
             }
-            let shown = shown(multicam);
-            if camera.is_active != shown {
-                camera.is_active = shown;
+            let placement = placed(multicam);
+            if camera.is_active != placement.is_some() {
+                camera.is_active = placement.is_some();
             }
-            if !shown {
-                continue;
-            }
-            let camera_pos = match state.single {
-                true => viewport_start,
-                false => viewport_start + UVec2::new(
-                    multicam.screen_pos.x * camera_size.x,
-                    multicam.screen_pos.y * camera_size.y,
-                ),
-            };
+            let Some((camera_pos, camera_size)) = placement else { continue };
 
             let wanted = Viewport {
                 physical_position: camera_pos,
@@ -1189,6 +1196,22 @@ mod tests {
         initialize(&mut world, offer_view_toggles);
         initialize(&mut world, face_the_near_sides);
         initialize(&mut world, frame_the_starting_room);
+    }
+
+    #[test]
+    fn the_single_view_is_the_free_camera_alone_and_it_clears() {
+        let (start, area) = (UVec2::new(10, 20), UVec2::new(800, 600));
+        let cameras = [(CameraAxis::None, UVec2::new(0, 0), 4, 0), (CameraAxis::X, UVec2::new(1, 0), 3, 1), (CameraAxis::Y, UVec2::new(0, 1), 2, 2), (CameraAxis::Z, UVec2::new(1, 1), 1, 3)];
+        let shown = |single| cameras.iter().filter_map(move |&(axis, at, order, id)| placement(single, axis, at, start, area).map(|place| (place, order, id)));
+
+        let single: Vec<_> = shown(true).collect();
+        assert_eq!(single.iter().map(|(place, _, id)| (*place, *id)).collect::<Vec<_>>(), vec![((start, area), 0)]);
+        assert_eq!(clearer(single.iter().map(|(_, order, id)| (*order, *id))), Some(0));
+
+        let grid: Vec<_> = shown(false).collect();
+        assert_eq!(grid.len(), 4);
+        assert_eq!(grid[3].0, (start + UVec2::new(400, 300), UVec2::new(400, 300)));
+        assert_eq!(clearer(grid.iter().map(|(_, order, id)| (*order, *id))), Some(3));
     }
 
     /// Breaks if the play camera, which has the default layers, can see an
