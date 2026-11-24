@@ -329,7 +329,7 @@ impl MulticamPlugin {
                     camera_pos,
                     Bloom::NATURAL,
                     Tonemapping::TonyMcMapface,
-                    viewport_layers(),
+                    viewport_layers().with(crate::editor::viewport_gizmos::own_layer(idx as u32)),
                     Multicam {
                         name: camera_name.to_string(),
                         screen_pos: UVec2::new((idx % 2) as u32, (idx / 2) as u32),

@@ -27,7 +27,10 @@ use crate::prop::baked::{parts_of_bodies, SurfaceMaterials};
 use crate::prop::figure::{clear_the_figure, pose_the_figure, refresh_the_figure, ScaleFigure};
 use crate::prop::document::{Pick, PropEditor};
 use crate::prop::gizmo::HoveredPick;
-use crate::prop::plane::draw_square;
+use crate::prop::plane::{draw_square, shown_planes, Datum};
+use crate::editor::multicam::Multicam;
+use crate::editor::viewport_gizmos::{self, ViewportGizmos};
+use crate::for_each_viewport;
 use crate::prop::feature::{Axis, BodyRef, FeatureOp, PatternKind, PropFeatureId};
 use crate::prop::refs::{CurveRef, Resolve};
 use crate::prop::tool::ActiveTool;
@@ -110,6 +113,7 @@ pub struct PropViewPlugin;
 impl Plugin for PropViewPlugin {
     fn build(&self, app: &mut App) {
         crate::common::air_lit::ensure(app);
+        viewport_gizmos::ensure(app);
         app.init_resource::<PropBuild>()
             .init_resource::<SurfaceMaterials>()
             .init_resource::<HiddenForModeling>()
@@ -379,6 +383,8 @@ fn draw_the_bench(
     tool: Res<ActiveTool>,
     mut rig: Local<Option<(u64, crate::prop::rig::PropRig)>>,
     mut regions: Local<RegionHatching>,
+    cameras: Query<(&Camera, &GlobalTransform, &Projection, &Multicam)>,
+    mut viewport_gizmos: ViewportGizmos,
 ) {
     gizmos.grid(
         Quat::from_rotation_x(std::f32::consts::FRAC_PI_2),
@@ -505,19 +511,34 @@ fn draw_the_bench(
             gizmos.line(point.at - axis * marker, point.at + axis * marker, color);
         }
     }
-    for datum in &build.evaluated.planes {
-        let pick = Pick::Plane(datum.id);
-        let color = if editor.picks().contains(&pick) {
-            picked_color(&pick)
-        } else if hovered.0.as_ref() == Some(&pick) {
+    let plane_color = |pick: &Pick| {
+        if editor.picks().contains(pick) {
+            picked_color(pick)
+        } else if hovered.0.as_ref() == Some(pick) {
             HOVERED
-        } else if datum.id.feature().is_none() {
-            // Always there, so quieter than planes somebody made.
-            PLANE.with_alpha(0.35)
         } else {
             PLANE
-        };
-        draw_square(&mut gizmos, &datum.corners, color);
+        }
+    };
+    for datum in build.evaluated.planes.iter().filter(|datum| datum.id.feature().is_some()) {
+        draw_square(&mut gizmos, &datum.corners, plane_color(&Pick::Plane(datum.id)));
+    }
+    let origins: Vec<Datum> = build.evaluated.planes.iter().filter(|datum| datum.id.feature().is_none()).cloned().collect();
+    for (camera, at, projection, multicam) in &cameras {
+        if !camera.is_active {
+            continue;
+        }
+        let scale = viewport_gizmos::pixels_per_meter(camera, projection, at, Vec3::ZERO);
+        for (datum, alpha) in shown_planes(&origins, scale) {
+            // Always there, so quieter than planes somebody made.
+            let color = plane_color(&Pick::Plane(datum.id));
+            let color = color.with_alpha(color.alpha() * alpha * 0.35);
+            for_each_viewport!(viewport_gizmos, |id, g| {
+                if id == multicam.id {
+                    draw_square(g, &datum.corners, color);
+                }
+            });
+        }
     }
 }
 

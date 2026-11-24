@@ -23,6 +23,7 @@ use crate::prop::reference::{Located, Pointer, EDGE_PICK_PX};
 use crate::prop::refs::{AnyRef, CurveRef, Resolve, Scope};
 use crate::prop::view::PropBuild;
 use crate::tool::tool_helpers::dashed_line;
+use crate::editor::viewport_gizmos;
 
 /// Meters. Points nearer than this to the line or plane they are tested
 /// against are on it; the same order as picking's surface tolerance.
@@ -252,6 +253,49 @@ pub fn midplane(a: &Plane, b: &Plane) -> Option<Plane> {
 /// Meters. An origin plane's half-width on an empty prop.
 pub(crate) const MIN_ORIGIN_HALF: f32 = 0.05;
 
+/// Meters across the smallest square an origin plane is drawn as.
+const SMALLEST_ORIGIN_SIDE: f32 = 0.01;
+
+/// Below this an origin square is not offered to a click.
+const PICKABLE_ALPHA: f32 = 0.5;
+
+/// Half-widths and alphas of an origin plane's squares: a power of ten meters
+/// across from a centimeter up, each faded by a tenth of its side on screen.
+pub fn origin_squares(pixels_per_meter: f32) -> Vec<(f32, f32)> {
+    viewport_gizmos::decades_from(SMALLEST_ORIGIN_SIDE / 10.0, pixels_per_meter)
+        .map(|(unit, alpha)| (unit * 5.0, alpha))
+        .collect()
+}
+
+/// An origin plane is its [`origin_squares`], and none with no scale (the
+/// origin behind the view).
+pub fn shown_planes(planes: &[Datum], pixels_per_meter: Option<f32>) -> Vec<(Datum, f32)> {
+    planes
+        .iter()
+        .flat_map(|datum| match (datum.id, pixels_per_meter) {
+            (PlaneRef::Origin(which), Some(scale)) => {
+                origin_squares(scale).into_iter().map(|(half, alpha)| (Datum::origin(which, half), alpha)).collect()
+            }
+            (PlaneRef::Origin(_), None) => vec![],
+            _ => vec![(datum.clone(), 1.0)],
+        })
+        .collect()
+}
+
+/// [`plane_under`] among the planes a view of this scale shows clearly.
+pub fn shown_plane_under<P: Fn(Vec3) -> Option<Vec2>>(
+    planes: &[Datum],
+    pixels_per_meter: Option<f32>,
+    pointer: &Pointer<P>,
+) -> Option<PlaneRef> {
+    let shown: Vec<Datum> = shown_planes(planes, pixels_per_meter)
+        .into_iter()
+        .filter(|(_, alpha)| *alpha >= PICKABLE_ALPHA)
+        .map(|(datum, _)| datum)
+        .collect();
+    plane_under(&shown, pointer)
+}
+
 /// A plane as evaluated: the plane, and the square it is drawn and picked as.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Datum {
@@ -435,7 +479,7 @@ pub fn plane_under<P: Fn(Vec3) -> Option<Vec2>>(planes: &[Datum], pointer: &Poin
 }
 
 /// Dashes scale with the square, so a small prop is not drawn solid.
-pub fn draw_square(gizmos: &mut Gizmos, corners: &[Vec3; 4], color: Color) {
+pub fn draw_square<C: GizmoConfigGroup>(gizmos: &mut Gizmos<C>, corners: &[Vec3; 4], color: Color) {
     let side = corners[0].distance(corners[1]);
     for i in 0..4 {
         dashed_line(gizmos, corners[i], corners[(i + 1) % 4], color, side / 24.0, side / 48.0);

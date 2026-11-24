@@ -28,11 +28,13 @@ use crate::prop::curve::{clamped_knots, Curve2};
 use crate::prop::sketch::{PlacedSketch, Sketch, SketchId};
 use crate::prop::view::PropBuild;
 use crate::tool::tool_helpers::dashed_line;
+use crate::editor::viewport_gizmos::{self, ViewportGizmos};
+use crate::for_each_viewport;
 
 /// Meters between grid lines, and what an unsnapped point rounds to.
 pub const GRID: f32 = 0.005;
 
-/// Meters the grid is drawn behind the plane, away from the viewer.
+/// Meters the grid is drawn behind the plane, at least; zoomed out, half a pixel.
 const GRID_BEHIND: f32 = 0.0001;
 
 /// Pixels within which the cursor lands on a point rather than the grid.
@@ -41,8 +43,10 @@ const SNAP_PX: f32 = 10.0;
 /// Pixels a press must travel before it is a drag rather than a click.
 const DRAG_PX: f32 = 3.0;
 
-/// Grid lines each way past which the grid is not drawn: a sketch the size of
-/// a cannon at five millimeters would be thousands of lines.
+/// Sketch reaches from its center the grid's center may follow the view.
+const GRID_CENTER_REACH: f32 = 4.0;
+
+/// Lines each way a grid decade stops at.
 const MAX_GRID_LINES: i32 = 200;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -309,6 +313,7 @@ pub struct SketchEditPlugin;
 impl Plugin for SketchEditPlugin {
     fn build(&self, app: &mut App) {
         crate::common::keybind::ensure(app);
+        viewport_gizmos::ensure(app);
         app.init_resource::<SketchSession>()
             .add_systems(
                 Update,
@@ -365,8 +370,8 @@ fn keep_the_session(
     }
 }
 
-/// Turns the perspective view to look straight down the sketch's plane, with
-/// the plane's `y` up, and puts it back on leaving. Waits for the sketch to be
+/// Turns the perspective view to look straight down the sketch's plane (see
+/// [`nearest_face_on`]), and puts it back on leaving. Waits for the sketch to be
 /// evaluated, which a sketch made this frame is not yet.
 fn aim_the_view(
     mut session: ResMut<SketchSession>,
@@ -409,12 +414,11 @@ fn aim_the_view(
             let Some(placed) = live(&session, &editor, &build) else { return };
             let (center, radius) = extent(&placed.sketch);
             let center = placed.plane.lift(center);
-            let facing = Transform::from_translation(center + *placed.plane.normal * radius * 3.2)
-                .looking_at(center, *placed.plane.y());
             for (entity, transform, projection, multicam) in &mut cameras {
                 if multicam.axis != CameraAxis::None {
                     continue;
                 }
+                let facing = nearest_face_on(&placed.plane, center, radius * 3.2, transform.rotation);
                 if session.saved.is_none() {
                     session.saved = Some((entity, *transform, projection.clone(), pivot.0));
                 }
@@ -425,6 +429,21 @@ fn aim_the_view(
             session.view = ViewChange::None;
         }
     }
+}
+
+/// From the side `from` already looks from, so the view swings at most a
+/// quarter turn, with whichever of the plane's four edges up rolls least.
+fn nearest_face_on(plane: &crate::prop::plane::Plane, center: Vec3, distance: f32, from: Quat) -> Transform {
+    let (x, y) = (*plane.x, *plane.y());
+    let side = match (from * Vec3::NEG_Z).dot(*plane.normal) > 0.0 {
+        true => -1.0,
+        false => 1.0,
+    };
+    [y, x, -y, -x]
+        .map(|up| Transform::from_translation(center + *plane.normal * side * distance).looking_at(center, up))
+        .into_iter()
+        .min_by(|a, b| from.angle_between(a.rotation).total_cmp(&from.angle_between(b.rotation)))
+        .expect("four candidates")
 }
 
 /// The middle of a sketch's points and how far they reach from it, in its
@@ -803,48 +822,78 @@ struct RegionCache {
     hatched: Vec<(Vec2, Vec2)>,
 }
 
+/// Lines snap to their own decade, so the grid does not slide as the view moves.
+fn draw_the_grid<C: GizmoConfigGroup>(
+    gizmos: &mut Gizmos<C>,
+    placed: &PlacedSketch,
+    camera: &Camera,
+    at: &GlobalTransform,
+    projection: &Projection,
+) {
+    if !camera.is_active {
+        return;
+    }
+    let plane = &placed.plane;
+    let eye = at.translation();
+    // At a grazing angle the hit is far past the sketch; looking away there is none.
+    let (sketch_center, reach) = extent(&placed.sketch);
+    let sketch_center = placed.world(sketch_center);
+    let looked_at = plane.hit(Ray3d::new(eye, at.forward())).map_or(sketch_center, |hit| {
+        sketch_center + (hit - sketch_center).clamp_length_max(reach * GRID_CENTER_REACH)
+    });
+    let scale = |point: Vec3| viewport_gizmos::pixels_per_meter(camera, projection, at, point);
+    let ahead = eye + *at.forward() * eye.distance(sketch_center);
+    let Some(pixels_per_meter) = scale(looked_at).or_else(|| scale(sketch_center)).or_else(|| scale(ahead)) else {
+        return;
+    };
+    let Some(viewport) = camera.logical_viewport_size() else { return };
+    // Gizmos in one plane depth-fight, so the grid sits just behind it.
+    let facing = (eye - plane.origin).dot(*plane.normal).signum();
+    let behind = -*plane.normal * facing * GRID_BEHIND.max(0.5 / pixels_per_meter);
+    let center = plane.flatten(looked_at);
+    // Nothing finer than the snap is drawn, so every line is somewhere a point can land.
+    for (unit, alpha) in viewport_gizmos::decades_from(GRID, pixels_per_meter) {
+        let half = ((viewport.length() / (unit * pixels_per_meter)).ceil() as i32).min(MAX_GRID_LINES);
+        let middle = (center / unit).round() * unit;
+        let span = half as f32 * unit;
+        let color = GRID_COLOR.with_alpha(GRID_COLOR.alpha() * alpha);
+        for i in -half..=half {
+            let offset = i as f32 * unit;
+            gizmos.line(
+                placed.world(middle + Vec2::new(offset, -span)) + behind,
+                placed.world(middle + Vec2::new(offset, span)) + behind,
+                color,
+            );
+            gizmos.line(
+                placed.world(middle + Vec2::new(-span, offset)) + behind,
+                placed.world(middle + Vec2::new(span, offset)) + behind,
+                color,
+            );
+        }
+    }
+}
+
 /// Regions are hatched so a closed shape is visibly closed. Drawn from the
 /// document rather than the build, so nothing lags a drag.
 fn draw_the_session(
     session: Res<SketchSession>,
     editor: Res<PropEditor>,
     build: Res<PropBuild>,
-    mouse: Res<CurrentMouseInput>,
-    cameras: Query<(Entity, &GlobalTransform, &Multicam)>,
+    grid_cameras: Query<(Entity, &Camera, &GlobalTransform, &Projection, &Multicam)>,
     mut cache: Local<RegionCache>,
     mut gizmos: Gizmos,
+    mut viewport_gizmos: ViewportGizmos,
 ) {
     let Some(placed) = live(&session, &editor, &build) else { return };
-    let (center, reach) = extent(&placed.sketch);
+    let (_, reach) = extent(&placed.sketch);
     let marker = reach * 0.02;
 
-    // Gizmos in one plane depth-fight, so the grid sits just behind the plane
-    // as seen from the view under the pointer, or else the perspective view.
-    let viewer = cameras
-        .iter()
-        .find(|(entity, ..)| Some(*entity) == mouse.in_camera)
-        .or_else(|| cameras.iter().find(|(.., multicam)| multicam.axis == CameraAxis::None))
-        .map(|(_, at, _)| at.translation());
-    let facing = viewer.map_or(1.0, |eye| (eye - placed.world(center)).dot(*placed.plane.normal).signum());
-    let behind = -*placed.plane.normal * facing * GRID_BEHIND;
-
-    // Snapped to the grid's own lines, so the grid does not slide as the
-    // sketch grows.
-    let half = ((reach * 1.6 / GRID).ceil() as i32).min(MAX_GRID_LINES);
-    let middle = (center / GRID).round() * GRID;
-    for i in -half..=half {
-        let offset = i as f32 * GRID;
-        let span = half as f32 * GRID;
-        gizmos.line(
-            placed.world(middle + Vec2::new(offset, -span)) + behind,
-            placed.world(middle + Vec2::new(offset, span)) + behind,
-            GRID_COLOR,
-        );
-        gizmos.line(
-            placed.world(middle + Vec2::new(-span, offset)) + behind,
-            placed.world(middle + Vec2::new(span, offset)) + behind,
-            GRID_COLOR,
-        );
+    for (_, camera, at, projection, multicam) in &grid_cameras {
+        for_each_viewport!(viewport_gizmos, |id, g| {
+            if id == multicam.id {
+                draw_the_grid(g, &placed, camera, at, projection);
+            }
+        });
     }
 
     // `reach` comes from the sketch, so the sketch is the whole key.
@@ -1216,6 +1265,29 @@ pub fn hatch(outer: &[Vec2], holes: &[Vec<Vec2>], spacing: f32) -> Vec<(Vec2, Ve
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn facing_the_sketch_turns_no_more_than_a_quarter_turn() {
+        let plane = crate::prop::plane::OriginPlane::Xz.plane();
+        let mut seed = 12345u32;
+        let mut next = || {
+            seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+            (seed >> 8) as f32 / (1u32 << 24) as f32
+        };
+        for _ in 0..2000 {
+            let from = Quat::from_euler(EulerRot::YXZ, next() * 6.3, next() * 6.3, next() * 6.3);
+            let to = super::nearest_face_on(&plane, Vec3::ZERO, 1.0, from).rotation;
+            let swing = (from * Vec3::NEG_Z).angle_between(to * Vec3::NEG_Z).to_degrees();
+            assert!(swing <= 90.01, "{swing}° from {from:?}");
+            // The roll is the nearest of four, so never more than an eighth turn on top.
+            let turn = from.angle_between(to).to_degrees();
+            assert!(turn <= 135.01, "{turn}° from {from:?}");
+        }
+        // From just behind the plane, it looks from behind rather than swinging round.
+        let behind = Transform::from_xyz(0.1, -1.0, 0.0).looking_at(Vec3::ZERO, Vec3::Z);
+        let to = super::nearest_face_on(&plane, Vec3::ZERO, 1.0, behind.rotation);
+        assert!(to.translation.y < 0.0);
+    }
+
     use super::*;
 
     #[test]

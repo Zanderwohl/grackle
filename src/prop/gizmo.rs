@@ -22,7 +22,7 @@ use crate::prop::feature::FeatureOp;
 use crate::prop::figure::{FigureReach, ScaleFigure, ScaleFigureMarker};
 use crate::prop::hold::HoldSpec;
 use crate::prop::profile::Placement;
-use crate::prop::plane::plane_under;
+use crate::prop::plane::shown_plane_under;
 use crate::prop::feature::{Axis, Evaluated};
 use crate::prop::refs::CurveRef;
 use crate::prop::reference::{corner_under, edge_under, point_under, segment_under, Pointer};
@@ -437,13 +437,14 @@ fn pick_in_the_viewport(
     grab: Res<GizmoGrab>,
     hold_handles: Res<HoldHandles>,
     build: Res<crate::prop::view::PropBuild>,
-    cameras: Query<(&Camera, &GlobalTransform), With<Multicam>>,
+    cameras: Query<(&Camera, &GlobalTransform, &Projection), With<Multicam>>,
     stand_in: Res<crate::prop::stand_in::StandInGrab>,
 ) {
     let under = (!hold_handles.0 && grab.held.is_none() && !stand_in.busy())
         .then(|| {
             let ray = mouse.world_pos?;
-            let (camera, at) = cameras.get(mouse.in_camera?).ok()?;
+            let (camera, at, projection) = cameras.get(mouse.in_camera?).ok()?;
+            let scale = crate::editor::viewport_gizmos::pixels_per_meter(camera, projection, at, Vec3::ZERO);
             let evaluated = &build.evaluated;
             let hit = evaluated.face_under(ray.origin, *ray.direction);
             let pointer = Pointer {
@@ -451,7 +452,7 @@ fn pick_in_the_viewport(
                 face: hit.map(|(_, _, distance)| distance),
                 project: |p: Vec3| camera.world_to_viewport(at, p).ok(),
             };
-            let mut candidates = candidates_under(evaluated, &pointer, hit);
+            let mut candidates = candidates_under(evaluated, &pointer, hit, scale);
             Some(match tool.task {
                 None => candidates.next(),
                 Some(task) => candidates.find(|pick| accepts(task, editor.picks(), &tool.moved_on, pick, editor.doc(), evaluated)),
@@ -481,6 +482,7 @@ fn candidates_under<'a, P: Fn(Vec3) -> Option<Vec2>>(
     evaluated: &'a Evaluated,
     pointer: &'a Pointer<P>,
     hit: Option<(crate::prop::feature::BodyRef, &'a crate::prop::solid::Polygon, f32)>,
+    pixels_per_meter: Option<f32>,
 ) -> impl Iterator<Item = Pick> + 'a {
     let geom = |pickable: &crate::prop::reference::Pickable| Pick::Geom(pickable.reference.clone());
     let finders: Vec<Box<dyn Fn() -> Option<Pick> + 'a>> = vec![
@@ -524,7 +526,7 @@ fn candidates_under<'a, P: Fn(Vec3) -> Option<Vec2>>(
             });
             segment_under(axes, pointer)
         }),
-        Box::new(move || plane_under(&evaluated.planes, pointer).map(Pick::Plane)),
+        Box::new(move || shown_plane_under(&evaluated.planes, pixels_per_meter, pointer).map(Pick::Plane)),
         Box::new(move || {
             evaluated
                 .region_in_front_of(pointer.ray, pointer.face)
