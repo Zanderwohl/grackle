@@ -11,6 +11,10 @@
 //! The window opens hidden (`launch.rs`) and is shown once the picture has been drawn
 //! ([`show_the_window`]), or at once by a launch that does not start here.
 //!
+//! Over the picture, centered, is the title in Nabla (`fonts/Nabla_Regular/`). It is a COLRv1
+//! color font, which Bevy's text does not paint, so it is drawn from its plain outlines in one
+//! color. The window waits for the font as it does for the picture.
+//!
 //! The picture is a [`BackgroundSet::Startup`] pick, which the main menu shows again on its first
 //! showing, so the one screen leads into the other.
 
@@ -25,6 +29,10 @@ use crate::title_background::{BackgroundSet, TitleBackground, WantsBackground};
 use crate::tool::bake_job::{BakeKind, BakeProgress, BakeStatus};
 
 const BACKGROUND: Color = Color::srgb(0.07, 0.07, 0.08);
+/// The folder under a pack's `fonts/` the title is set in; the default font without it.
+const TITLE_FONT_FOLDER: &str = "Nabla_Regular";
+/// 100 pt at 96 logical px to the inch, since Bevy sizes text in logical pixels.
+const TITLE_SIZE_PX: f32 = 100.0 * 96.0 / 72.0;
 const WINDOW_WIDTH: f32 = 320.0;
 /// From the window's edges, as the window safe zone is.
 const MARGIN: f32 = 20.0;
@@ -63,6 +71,7 @@ impl Plugin for StartupScreenPlugin {
                 Update,
                 (
                     show_or_hide,
+                    show_the_title.after(show_or_hide).before(watch_the_steps),
                     (watch_the_steps, finish_starting).chain().run_if(in_state(AppMode::Starting)),
                     open_the_warm_ups.after(watch_the_steps),
                     show_the_window.after(watch_the_steps),
@@ -79,6 +88,7 @@ pub struct StartupSteps {
     pub warm_ups_total: usize,
     pub warm_ups_left: usize,
     pub lens_warming: bool,
+    /// The picture and the title are both on screen.
     pub picture_ready: bool,
     pub rooms: Option<BakeStatus>,
     pub light: Option<BakeStatus>,
@@ -142,22 +152,44 @@ impl StartupSteps {
 #[derive(Component)]
 struct StartupRoot;
 
+/// Hidden until its font has loaded, so it never shows in the fallback face first.
+#[derive(Component)]
+struct StartupTitle(Handle<Font>);
+
 /// Under the egui window, on the egui context's camera, as the joining screen's root is.
 fn show_or_hide(
     mut commands: Commands,
     mode: Res<State<AppMode>>,
     existing: Query<(Entity, Has<UiTargetCamera>), With<StartupRoot>>,
     camera: Query<Entity, With<bevy_egui::PrimaryEguiContext>>,
+    title_font: TitleFont,
 ) {
     let wanted = *mode.get() == AppMode::Starting;
     let camera = camera.single().ok();
     if wanted && existing.is_empty() {
+        let font = title_font.load();
         let mut root = commands.spawn((
             StartupRoot,
             WantsBackground(BackgroundSet::Startup),
             GlobalZIndex(10),
-            Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() },
+            Node {
+                position_type: PositionType::Absolute,
+                width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                ..default()
+            },
             BackgroundColor(BACKGROUND),
+            children![(
+                StartupTitle(font.clone()),
+                Text::new(get!("startup.studio")),
+                TextFont { font: font.into(), font_size: bevy::text::FontSize::Px(TITLE_SIZE_PX), ..default() },
+                TextColor(Color::WHITE),
+                TextShadow::default(),
+                Pickable::IGNORE,
+                Visibility::Hidden,
+            )],
         ));
         if let Some(camera) = camera {
             root.insert(UiTargetCamera(camera));
@@ -175,6 +207,57 @@ fn show_or_hide(
     }
 }
 
+#[derive(bevy::ecs::system::SystemParam)]
+struct TitleFont<'w> {
+    fonts: Option<Res<'w, crate::common::fonts::PackFonts>>,
+    packs: Option<Res<'w, crate::common::assets::Assets>>,
+    asset_server: Option<Res<'w, AssetServer>>,
+}
+
+impl TitleFont<'_> {
+    fn load(&self) -> Handle<Font> {
+        let (Some(fonts), Some(packs), Some(asset_server)) = (&self.fonts, &self.packs, &self.asset_server) else {
+            return Handle::default();
+        };
+        let Some(font) = fonts.fonts.iter().find(|font| font.folder == TITLE_FONT_FOLDER) else {
+            warn!("No pack has the font {TITLE_FONT_FOLDER}; the startup title is in the default font");
+            return Handle::default();
+        };
+        match packs.asset_path(&font.face_pack, &font.face_path()) {
+            Some(path) => asset_server.load(path),
+            None => Handle::default(),
+        }
+    }
+}
+
+/// A font that will not load is swapped for the default rather than leaving the title hidden.
+fn show_the_title(
+    asset_server: Option<Res<AssetServer>>,
+    mut titles: Query<(&mut StartupTitle, &mut TextFont, &mut Visibility)>,
+) {
+    for (mut title, mut font, mut visibility) in &mut titles {
+        if *visibility != Visibility::Hidden {
+            continue;
+        }
+        let loaded = match &asset_server {
+            Some(asset_server) if title.0 != Handle::default() => {
+                if asset_server.load_state(&title.0).is_failed() {
+                    warn!("The startup title's font did not load; using the default font");
+                    title.0 = Handle::default();
+                    font.font = Handle::<Font>::default().into();
+                    true
+                } else {
+                    asset_server.is_loaded_with_dependencies(&title.0)
+                }
+            }
+            _ => true,
+        };
+        if loaded {
+            *visibility = Visibility::Inherited;
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn watch_the_steps(
     mut steps: ResMut<StartupSteps>,
@@ -183,6 +266,7 @@ fn watch_the_steps(
     lens: Option<Res<crate::game::forward_camera::LensWarmUp>>,
     roots: Query<(), With<StartupRoot>>,
     pictures: Query<&Visibility, With<TitleBackground>>,
+    titles: Query<&Visibility, With<StartupTitle>>,
     bakes: Option<Res<BakeProgress>>,
     mut frames_up: Local<u32>,
 ) {
@@ -196,8 +280,9 @@ fn watch_the_steps(
     }
     // With no picture in any pack there is nothing to wait for once the root has had a frame to
     // ask for one.
-    steps.picture_ready = pictures.iter().any(|visibility| *visibility != Visibility::Hidden)
-        || (pictures.is_empty() && *frames_up > 2);
+    let title_shown = titles.iter().all(|visibility| *visibility != Visibility::Hidden);
+    steps.picture_ready = title_shown
+        && (pictures.iter().any(|visibility| *visibility != Visibility::Hidden) || (pictures.is_empty() && *frames_up > 2));
     steps.rooms = bakes.as_deref().and_then(|bakes| bakes.get(BakeKind::Rooms)).cloned();
     steps.light = bakes.as_deref().and_then(|bakes| bakes.get(BakeKind::Sunlight)).cloned();
     steps.quick_frames = match delta < QUICK_FRAME_SECONDS {
@@ -224,6 +309,7 @@ fn show_the_window(
     if *frames_shown > FRAMES_BEFORE_SHOWING || steps.seconds >= SHOW_BY_SECONDS || *mode.get() != AppMode::Starting {
         window.visible = true;
         *done = true;
+        info!("Showing the window {:.2} s into startup", steps.seconds);
     }
 }
 
@@ -368,3 +454,4 @@ mod tests {
         assert_eq!(*app.world().resource::<State<AppMode>>().get(), AppMode::MainMenu);
     }
 }
+

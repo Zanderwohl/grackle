@@ -468,8 +468,9 @@ in a team mode is still a gamemode question.
 `Prop`, `Animation`, `Material`, `Weapon`, `Lang`, `Play`, `MainMenu`, `Onboarding`, `Joining` or `Starting`, iterable in that order, which is
 the Mode menu's order, with a separator above Play and above the main menu (`AppMode::in_the_menu`
 leaves out the last three). **`Starting`** ([`src/startup_screen.rs`](src/startup_screen.rs)) is the
-*initial* state of a bare launch: a title picture under a progress window in the bottom right, with
-no button, up while the warm-up cameras and the lens compile their pipelines, the picture loads and
+*initial* state of a bare launch: a title picture with "pikaia.space" centered over it in Nabla at
+100 pt (133⅓ logical px; drawn from the font's plain outlines in one color, since Bevy's text does
+not paint COLRv1), and a progress window in the bottom right with no button, up while the warm-up cameras and the lens compile their pipelines, the picture loads and
 the startup map's rooms and light settle, and then until ten frames in a row take under 0.1 s, or
 20 s at most. The window opens hidden and is shown once the picture has been drawn (3 s at most; at once for a
 launch that does not start here), and the warm-up cameras stay off behind a shut `WarmUpGate` until
