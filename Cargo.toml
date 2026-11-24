@@ -4,11 +4,28 @@ version = "0.1.0"
 edition = "2024"
 default-run = "grackle"
 
+# Half of a cold build of this crate was writing full debug info: file and line survive for
+# backtraces, local variables in a debugger do not.
+[profile.dev.package.grackle]
+debug = "line-tables-only"
+
+[profile.test.package.grackle]
+debug = "line-tables-only"
+
+# Debug info on optimized dependencies is slow to produce and steps through badly anyway.
 [profile.dev.package."*"]
 opt-level = 3
+debug = false
 
 [profile.test.package."*"]
 opt-level = 3
+debug = false
+
+# The doc comments hold only `text` and `toml` blocks, and a doctest run needs the lib built a
+# second time, without `cfg(test)`.
+[lib]
+path = "src/lib.rs"
+doctest = false
 
 [profile.release]
 lto = true
@@ -117,14 +134,44 @@ objc2 = { version = "0.6.1", features = ["relax-sign-encoding"] }
 [profile.dev.package.objc2]
 debug-assertions = false
 
+# No binary has tests of its own, and testing one builds the lib a second time, without
+# `cfg(test)`, and links a test harness per binary.
 [[bin]]
 name = "grackle"
 path = "src/bin/grackle.rs"
+test = false
 
 [[bin]]
-name = "ensure_lang"
-path = "src/bin/ensure_lang.rs"
+name = "bake_body_clips"
+path = "src/bin/bake_body_clips.rs"
+test = false
 
 [[bin]]
 name = "crate_drop"
 path = "src/bin/crate_drop.rs"
+test = false
+
+[[bin]]
+name = "decal_images"
+path = "src/bin/decal_images.rs"
+test = false
+
+[[bin]]
+name = "default_materials"
+path = "src/bin/default_materials.rs"
+test = false
+
+[[bin]]
+name = "ensure_lang"
+path = "src/bin/ensure_lang.rs"
+test = false
+
+[[bin]]
+name = "map_stats"
+path = "src/bin/map_stats.rs"
+test = false
+
+[[bin]]
+name = "new_map_template"
+path = "src/bin/new_map_template.rs"
+test = false
