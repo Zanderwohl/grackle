@@ -14,6 +14,7 @@ use bevy_vector_shapes::prelude::*;
 use crate::common::app_mode::AppMode;
 use crate::common::painter;
 use crate::common::render_layers;
+use crate::tool::room::{Room, VolumeOrder};
 use crate::tool::selection::EditorSelectable;
 use crate::get;
 
@@ -94,6 +95,8 @@ pub struct MulticamState {
     pub debug_mouse_circle: bool,
     pub draw_ortho_cameras: bool,
     pub draw_perspective_cameras: bool,
+    /// Only the free camera, across the whole viewport area.
+    pub single: bool,
 }
 
 #[derive(Component)]
@@ -102,6 +105,8 @@ pub struct Multicam {
     pub screen_pos: UVec2,
     pub id: u32,
     pub axis: CameraAxis,
+    /// Looking the other way along `axis`: Back, Bottom or Left.
+    pub flipped: bool,
 }
 
 #[derive(PartialEq, Clone, Copy, Eq)]
@@ -114,6 +119,66 @@ pub enum CameraAxis {
 
 #[derive(Component)]
 pub struct MulticamTestScene;
+
+/// Which way up the top and bottom views are: the prop editor puts a prop's
+/// forward (-Z) up the screen, the map editor -X.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SideFrame {
+    Map,
+    Prop,
+}
+
+impl SideFrame {
+    pub fn of(mode: AppMode) -> Self {
+        if mode.shows_a_prop() { SideFrame::Prop } else { SideFrame::Map }
+    }
+}
+
+/// An ortho view's rotation, stated outright for each side rather than turned
+/// by half a turn, so toggling cannot drift. `None` for the free camera.
+pub fn side_rotation(axis: CameraAxis, flipped: bool, frame: SideFrame) -> Option<Quat> {
+    let top_up = match frame {
+        SideFrame::Map => Vec3::NEG_X,
+        SideFrame::Prop => Vec3::NEG_Z,
+    };
+    let (looking, up) = match (axis, flipped) {
+        (CameraAxis::None, _) => return None,
+        (CameraAxis::X, false) => (Vec3::NEG_X, Vec3::Y),
+        (CameraAxis::X, true) => (Vec3::X, Vec3::Y),
+        (CameraAxis::Y, false) => (Vec3::NEG_Y, top_up),
+        (CameraAxis::Y, true) => (Vec3::Y, top_up),
+        (CameraAxis::Z, false) => (Vec3::NEG_Z, Vec3::Y),
+        (CameraAxis::Z, true) => (Vec3::Z, Vec3::Y),
+    };
+    Some(Transform::IDENTITY.looking_to(looking, up).rotation)
+}
+
+/// Unflipped first.
+fn side_names(axis: CameraAxis) -> Option<[String; 2]> {
+    match axis {
+        CameraAxis::None => None,
+        CameraAxis::X => Some([get!("viewport.front"), get!("viewport.back")]),
+        CameraAxis::Y => Some([get!("viewport.top"), get!("viewport.bottom")]),
+        CameraAxis::Z => Some([get!("viewport.right"), get!("viewport.left")]),
+    }
+}
+
+/// A viewport's clickable label. An ortho view's two names share one grid
+/// cell, so the node is as wide as the longer; the hidden one is still laid out.
+#[derive(Component)]
+pub struct ViewLabel {
+    pub camera: Entity,
+}
+
+#[derive(Component)]
+struct SideName {
+    camera: Entity,
+    flipped: bool,
+}
+
+/// Padding round a side label's click area, in logical pixels.
+const SIDE_TOGGLE_PADDING: f32 = 5.0;
+const LABEL_INSET: f32 = 12.0;
 
 impl MulticamState {
     /// The one place a window size is divided by, so a zero-width window is handled once (see
@@ -164,6 +229,31 @@ fn renderable(camera: UVec2) -> bool {
 /// one pixel tall asked for 901120.
 fn bloom_texture_width(camera: UVec2) -> u64 {
     camera.x as u64 * BLOOM_MAX_MIP as u64 / camera.y.max(1) as u64
+}
+
+/// Physical pixels, or `None` while the camera is off.
+fn placement(single: bool, axis: CameraAxis, screen_pos: UVec2, start: UVec2, area: UVec2) -> Option<(UVec2, UVec2)> {
+    if single && axis != CameraAxis::None {
+        return None;
+    }
+    let size = match single {
+        true => area.max(UVec2::ONE),
+        false => UVec2::new((area.x / 2).max(1), (area.y / 2).max(1)),
+    };
+    if !renderable(size) {
+        return None;
+    }
+    let at = match single {
+        true => start,
+        false => start + screen_pos * size,
+    };
+    Some((at, size))
+}
+
+/// The cameras share one main texture and a clear wipes all of it, so only the lowest-ordered one clears.
+/// With none clearing, the last frame stays wherever nothing is drawn.
+fn clearer(shown: impl Iterator<Item = (isize, u32)>) -> Option<u32> {
+    shown.min_by_key(|(order, _)| *order).map(|(_, id)| id)
 }
 
 /// Below this a viewport shows nothing worth a render pass.
@@ -220,6 +310,7 @@ impl Default for MulticamState {
             debug_window: false,
             draw_ortho_cameras: false,
             draw_perspective_cameras: true,
+            single: false,
         }
     }
 }
@@ -251,7 +342,260 @@ impl Plugin for MulticamPlugin {
             // After transform propagation, so gizmos use this frame's global transforms.
             .add_systems(PostUpdate, Self::draw_camera_gizmos.after(TransformSystems::Propagate).run_if(in_state(AppMode::Editor)))
             .add_systems(EguiPrimaryContextPass, Self::debug_window.run_if(in_state(AppMode::Editor)))
+            .add_systems(EguiPrimaryContextPass, offer_view_toggles.run_if(crate::common::app_mode::showing_the_viewports))
+            .add_systems(OnEnter(AppMode::Editor), face_the_near_sides)
+            .add_systems(Update, frame_the_starting_room.run_if(in_state(AppMode::Editor)))
+            // Before the prop modes frame their views, which read the side.
+            .add_systems(OnEnter(AppMode::Prop), face_the_near_sides.before(crate::prop::view::PropSceneSystems::Build))
+            .add_systems(OnEnter(AppMode::Animation), face_the_near_sides.before(crate::prop::view::PropSceneSystems::Build))
         ;
+    }
+}
+
+/// Where an ortho view was left on each side, written only when its side
+/// changes. The prop modes keep a separate pair, since they reframe on entry.
+#[derive(Component)]
+pub struct SideViews {
+    /// The frame the camera's transform is in now.
+    frame: SideFrame,
+    /// Near side, then far side; `None` until the view has been left there.
+    map: [Option<Transform>; 2],
+    prop: [Option<Transform>; 2],
+    /// `FeatureTimeline::adoptions` last framed, and one seen but not yet:
+    /// framing waits a frame so the last map's rooms are gone.
+    near_framed: Option<u64>,
+    near_pending: Option<u64>,
+}
+
+impl Default for SideViews {
+    fn default() -> Self {
+        Self { frame: SideFrame::Map, map: [None; 2], prop: [None; 2], near_framed: None, near_pending: None }
+    }
+}
+
+impl SideViews {
+    fn slots(&mut self, frame: SideFrame) -> &mut [Option<Transform>; 2] {
+        match frame {
+            SideFrame::Map => &mut self.map,
+            SideFrame::Prop => &mut self.prop,
+        }
+    }
+}
+
+/// How far outside the starting room a map's views first stand, in meters.
+const STARTING_STANDOFF: f32 = 1.0;
+
+/// The bounds of a map's starting room, the first in map order. `None` until
+/// every room has its place, since until then which is first is unknown.
+fn starting_room(rooms: &Query<(&Room, Option<&VolumeOrder>)>) -> Option<(Vec3, Vec3)> {
+    let mut placed = Vec::new();
+    for (room, order) in rooms {
+        placed.push((order?, room));
+    }
+    placed.into_iter().min_by(|(a, _), (b, _)| a.cmp(b)).map(|(_, room)| room.bounds())
+}
+
+/// Outside the room, so every inward face is toward the camera and in front
+/// of its near clip.
+fn first_position(axis: CameraAxis, flipped: bool, room: (Vec3, Vec3)) -> Option<Vec3> {
+    let (min, max) = room;
+    let mut at = (min + max) / 2.0;
+    // A near side looks along -axis, so it stands past the room's maximum; a
+    // far side along +axis, so before its minimum.
+    let along = |min: f32, max: f32| if flipped { min - STARTING_STANDOFF } else { max + STARTING_STANDOFF };
+    match axis {
+        CameraAxis::None => return None,
+        CameraAxis::X => at.x = along(min.x, max.x),
+        CameraAxis::Y => at.y = along(min.y, max.y),
+        CameraAxis::Z => at.z = along(min.z, max.z),
+    }
+    Some(at)
+}
+
+/// Once per opened map.
+fn frame_the_starting_room(
+    timeline: Option<Res<crate::editor::editable::FeatureTimeline>>,
+    rooms: Query<(&Room, Option<&VolumeOrder>)>,
+    mut cameras: Query<(&Multicam, &mut Transform, &mut SideViews)>,
+) {
+    let Some(timeline) = timeline else { return };
+    let adoption = timeline.adoptions();
+    let room = starting_room(&rooms);
+    for (multicam, mut transform, mut views) in &mut cameras {
+        if views.near_framed == Some(adoption) {
+            continue;
+        }
+        if views.near_pending != Some(adoption) {
+            views.near_pending = Some(adoption);
+            continue;
+        }
+        let Some(room) = room else { continue };
+        for flipped in [false, true] {
+            let (Some(at), Some(rotation)) =
+                (first_position(multicam.axis, flipped, room), side_rotation(multicam.axis, flipped, SideFrame::Map))
+            else {
+                continue;
+            };
+            if views.frame == SideFrame::Map && multicam.flipped == flipped {
+                transform.translation = at;
+            } else {
+                views.map[flipped as usize] = Some(Transform { translation: at, rotation, ..*transform });
+            }
+        }
+        views.near_framed = Some(adoption);
+    }
+}
+
+fn leave_side(multicam: &Multicam, transform: &Transform, views: &mut SideViews) {
+    let frame = views.frame;
+    views.slots(frame)[multicam.flipped as usize] = Some(*transform);
+}
+
+/// To where that side was left, else `fallback`.
+fn show_side(
+    multicam: &mut Multicam,
+    transform: &mut Transform,
+    views: &mut SideViews,
+    flipped: bool,
+    frame: SideFrame,
+    fallback: impl FnOnce(&Transform) -> Vec3,
+) {
+    let Some(rotation) = side_rotation(multicam.axis, flipped, frame) else { return };
+    transform.translation = match views.slots(frame)[flipped as usize] {
+        Some(left) => left.translation,
+        None => fallback(transform),
+    };
+    transform.rotation = rotation;
+    views.frame = frame;
+    multicam.flipped = flipped;
+}
+
+fn show_name(camera: Entity, flipped: bool, names: &mut Query<(&SideName, &mut Visibility)>) {
+    for (name, mut visibility) in names.iter_mut().filter(|(name, _)| name.camera == camera) {
+        *visibility = if name.flipped == flipped { Visibility::Inherited } else { Visibility::Hidden };
+    }
+}
+
+/// A prop mode reframes its views on entry, so its pair is forgotten.
+fn face_the_near_sides(
+    mode: Res<State<AppMode>>,
+    mut cameras: Query<(Entity, &mut Multicam, &mut Transform, &mut SideViews)>,
+    mut names: Query<(&SideName, &mut Visibility)>,
+) {
+    let frame = SideFrame::of(*mode.get());
+    for (camera, mut multicam, mut transform, mut views) in &mut cameras {
+        leave_side(&multicam, &transform, &mut views);
+        if frame == SideFrame::Prop {
+            views.prop = [None; 2];
+        }
+        show_side(&mut multicam, &mut transform, &mut views, false, frame, |current| current.translation);
+        show_name(camera, false, &mut names);
+    }
+}
+
+fn hands_free(
+    mode: AppMode,
+    tool: Option<&State<crate::tool::Tools>>,
+    prop_tool: Option<&crate::prop::tool::ActiveTool>,
+    sketch: Option<&crate::prop::sketch_edit::SketchSession>,
+) -> bool {
+    match mode {
+        // A spectating client changes only what it sees.
+        AppMode::Editor => tool.is_some_and(|tool| matches!(tool.get(), crate::tool::Tools::Select | crate::tool::Tools::Spectate)),
+        AppMode::Prop => {
+            prop_tool.is_none_or(|tool| tool.task.is_none())
+                && sketch.is_none_or(|session| session.editing().is_none())
+        }
+        // The prop editor's tool may still be waiting, but nothing here uses it.
+        AppMode::Animation => true,
+        _ => false,
+    }
+}
+
+/// An egui button, so a click on the label reaches no tool. The free camera's
+/// toggles the single view; an ortho view's, its side.
+fn offer_view_toggles(
+    mut contexts: EguiContexts,
+    mode: Res<State<AppMode>>,
+    tool: Option<Res<State<crate::tool::Tools>>>,
+    prop_tool: Option<Res<crate::prop::tool::ActiveTool>>,
+    sketch: Option<Res<crate::prop::sketch_edit::SketchSession>>,
+    window: Single<&Window, With<PrimaryWindow>>,
+    labels: Query<(&ViewLabel, &ComputedNode)>,
+    mut state: ResMut<MulticamState>,
+    mut cameras: Query<(&Camera, &mut Multicam, &mut Transform, Option<&mut SideViews>)>,
+    mut names: Query<(&SideName, &mut Visibility)>,
+    rooms: Query<(&Room, Option<&VolumeOrder>)>,
+) {
+    if !hands_free(*mode.get(), tool.as_deref(), prop_tool.as_deref(), sketch.as_deref()) {
+        return;
+    }
+    let Ok(ctx) = contexts.ctx_mut() else {
+        warn!("multicam::offer_view_toggles: no egui context");
+        return;
+    };
+    // Window logical pixels to egui points, which differ under egui zoom.
+    let to_points = window.scale_factor() / ctx.pixels_per_point();
+    let mut toggled = Vec::new();
+    for (label, computed) in &labels {
+        let Ok((camera, multicam, ..)) = cameras.get(label.camera) else { continue };
+        if !camera.is_active {
+            continue;
+        }
+        let Some(viewport) = camera.logical_viewport_rect() else { continue };
+        let size = computed.size() * computed.inverse_scale_factor();
+        if size.x <= 0.0 {
+            continue;
+        }
+        let min = viewport.min + Vec2::splat(LABEL_INSET - SIDE_TOGGLE_PADDING);
+        let size = size + Vec2::splat(2.0 * SIDE_TOGGLE_PADDING);
+        let id = egui::Id::new(("viewport_toggle", label.camera));
+        let tooltip = match multicam.axis {
+            CameraAxis::None => get!("viewport.toggle_grid"),
+            _ => get!("viewport.toggle_side"),
+        };
+        // The area shares the windows' layer and rises over them once clicked.
+        let covered = [Vec2::ZERO, Vec2::X, Vec2::Y, Vec2::ONE, Vec2::splat(0.5)].iter().any(|corner| {
+            let at = (min + size * *corner) * to_points;
+            ctx.layer_id_at(egui::pos2(at.x, at.y))
+                .is_some_and(|layer| layer.id != id && matches!(layer.order, egui::Order::Middle | egui::Order::Foreground))
+        });
+        if covered {
+            continue;
+        }
+        let clicked = egui::Area::new(id)
+            .fixed_pos(egui::pos2(min.x * to_points, min.y * to_points))
+            .constrain(false)
+            .show(ctx, |ui| {
+                let (_, response) = ui.allocate_exact_size(
+                    egui::vec2(size.x * to_points, size.y * to_points),
+                    egui::Sense::click(),
+                );
+                response
+                    .on_hover_cursor(egui::CursorIcon::PointingHand)
+                    .on_hover_text(tooltip)
+                    .clicked()
+            })
+            .inner;
+        if clicked && multicam.axis == CameraAxis::None {
+            state.single = !state.single;
+        } else if clicked {
+            toggled.push(label.camera);
+        }
+    }
+    let frame = SideFrame::of(*mode.get());
+    for camera in toggled {
+        let Ok((_, mut multicam, mut transform, Some(mut views))) = cameras.get_mut(camera) else { continue };
+        let flipped = !multicam.flipped;
+        let axis = multicam.axis;
+        leave_side(&multicam, &transform, &mut views);
+        show_side(&mut multicam, &mut transform, &mut views, flipped, frame, |current| match (frame, flipped) {
+            (SideFrame::Map, true) => starting_room(&rooms)
+                .and_then(|room| first_position(axis, true, room))
+                .unwrap_or(current.translation),
+            _ => current.translation,
+        });
+        show_name(camera, flipped, &mut names);
     }
 }
 
@@ -302,11 +646,16 @@ impl MulticamPlugin {
         });
 
         let dist = 5.0;
+        let ortho = |axis: CameraAxis, at: Vec3| Transform {
+            translation: at,
+            rotation: side_rotation(axis, false, SideFrame::Map).unwrap_or_default(),
+            ..default()
+        };
         let cameras = [
             (get!("viewport.free"), Transform::from_xyz(-2.5, 4.5, 9.0).looking_at(Vec3::ZERO, Vec3::Y), &perspective, CameraAxis::None),
-            (get!("viewport.front"), Transform::from_xyz(dist, 0.0, 0.0).looking_at(Vec3::ZERO, Vec3::Y), &orthographic, CameraAxis::X),
-            (get!("viewport.top"), Transform::from_xyz(0.0, dist, 0.0).looking_at(Vec3::ZERO, -Vec3::X), &orthographic, CameraAxis::Y),
-            (get!("viewport.right"), Transform::from_xyz(0.0, 0.0, dist).looking_at(Vec3::ZERO, Vec3::Y), &orthographic, CameraAxis::Z),
+            (get!("viewport.front"), ortho(CameraAxis::X, Vec3::new(dist, 0.0, 0.0)), &orthographic, CameraAxis::X),
+            (get!("viewport.top"), ortho(CameraAxis::Y, Vec3::new(0.0, dist, 0.0)), &orthographic, CameraAxis::Y),
+            (get!("viewport.right"), ortho(CameraAxis::Z, Vec3::new(0.0, 0.0, dist)), &orthographic, CameraAxis::Z),
         ];
         let cameras_len = cameras.len();
 
@@ -335,10 +684,14 @@ impl MulticamPlugin {
                         screen_pos: UVec2::new((idx % 2) as u32, (idx / 2) as u32),
                         id: idx as u32,
                         axis,
+                        flipped: false,
                     },
                     projection.clone(),
                 ))
                 .id();
+            if axis != CameraAxis::None {
+                commands.entity(camera).insert(SideViews::default());
+            }
 
                 commands
                     .spawn((
@@ -350,15 +703,31 @@ impl MulticamPlugin {
                         }
                     ))
                     .with_children(|parent| {
-                        parent.spawn((
-                            Node {
-                                position_type: PositionType::Absolute,
-                                top: Val::Px(12.),
-                                left: Val::Px(12.),
-                                ..Default::default()
-                            },
-                            Text::new(camera_name),
-                        ));
+                        let label = Node {
+                            position_type: PositionType::Absolute,
+                            top: Val::Px(LABEL_INSET),
+                            left: Val::Px(LABEL_INSET),
+                            ..Default::default()
+                        };
+                        match side_names(axis) {
+                            None => {
+                                parent.spawn((ViewLabel { camera }, label, Text::new(camera_name)));
+                            }
+                            Some([near, far]) => {
+                                parent
+                                    .spawn((ViewLabel { camera }, Node { display: Display::Grid, ..label }))
+                                    .with_children(|names| {
+                                        for (flipped, name) in [(false, near), (true, far)] {
+                                            names.spawn((
+                                                SideName { camera, flipped },
+                                                Node { grid_row: GridPlacement::start(1), grid_column: GridPlacement::start(1), ..default() },
+                                                Text::new(name),
+                                                if flipped { Visibility::Hidden } else { Visibility::Inherited },
+                                            ));
+                                        }
+                                    });
+                            }
+                        }
                         parent.spawn((
                             SpectatingLabel,
                             Node {
@@ -548,25 +917,21 @@ impl MulticamPlugin {
             return;
         };
 
-        let camera_size = UVec2::new(
-            (viewport_size.x / 2).max(1),
-            (viewport_size.y / 2).max(1),
-        );
-
-        // See `renderable`.
-        let showing = renderable(camera_size);
+        let placed = |multicam: &Multicam| {
+            placement(state.single, multicam.axis, multicam.screen_pos, viewport_start, viewport_size)
+        };
+        let clearing = clearer(cameras.iter().filter(|(_, multicam)| placed(multicam).is_some()).map(|(camera, multicam)| (camera.order, multicam.id)));
 
         for (mut camera, multicam) in cameras {
-            if camera.is_active != showing {
-                camera.is_active = showing;
+            let clears = clearing == Some(multicam.id);
+            if matches!(camera.clear_color, ClearColorConfig::None) == clears {
+                camera.clear_color = if clears { ClearColorConfig::Default } else { ClearColorConfig::None };
             }
-            if !showing {
-                continue;
+            let placement = placed(multicam);
+            if camera.is_active != placement.is_some() {
+                camera.is_active = placement.is_some();
             }
-            let camera_pos = viewport_start + UVec2::new(
-                multicam.screen_pos.x * camera_size.x,
-                multicam.screen_pos.y * camera_size.y,
-            );
+            let Some((camera_pos, camera_size)) = placement else { continue };
 
             let wanted = Viewport {
                 physical_position: camera_pos,
@@ -773,6 +1138,81 @@ fn draw_rect(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn each_ortho_view_flips_to_face_straight_back_with_the_same_up() {
+        for frame in [SideFrame::Map, SideFrame::Prop] {
+            for axis in [CameraAxis::X, CameraAxis::Y, CameraAxis::Z] {
+                let near = side_rotation(axis, false, frame).unwrap();
+                let far = side_rotation(axis, true, frame).unwrap();
+                assert!((near * Vec3::NEG_Z + far * Vec3::NEG_Z).length() < 1e-5);
+                assert!((near * Vec3::Y - far * Vec3::Y).length() < 1e-5);
+            }
+        }
+        assert!(side_rotation(CameraAxis::None, false, SideFrame::Map).is_none());
+    }
+
+    #[test]
+    fn each_side_comes_back_where_it_was_left() {
+        let mut multicam = Multicam { name: String::new(), screen_pos: UVec2::ZERO, id: 0, axis: CameraAxis::X, flipped: false };
+        let mut transform = Transform::from_xyz(5.0, 1.0, 2.0);
+        let mut views = SideViews::default();
+        let toggle = |multicam: &mut Multicam, transform: &mut Transform, views: &mut SideViews| {
+            let flipped = !multicam.flipped;
+            leave_side(multicam, transform, views);
+            show_side(multicam, transform, views, flipped, SideFrame::Map, |_| Vec3::new(-9.0, 2.0, 0.0));
+        };
+
+        toggle(&mut multicam, &mut transform, &mut views);
+        assert_eq!(transform.translation, Vec3::new(-9.0, 2.0, 0.0));
+        transform.translation.y = 3.0;
+        toggle(&mut multicam, &mut transform, &mut views);
+        assert_eq!(transform.translation, Vec3::new(5.0, 1.0, 2.0));
+        assert_eq!(transform.rotation, side_rotation(CameraAxis::X, false, SideFrame::Map).unwrap());
+        toggle(&mut multicam, &mut transform, &mut views);
+        assert_eq!(transform.translation, Vec3::new(-9.0, 3.0, 0.0));
+        assert_eq!(transform.rotation, side_rotation(CameraAxis::X, true, SideFrame::Map).unwrap());
+    }
+
+    #[test]
+    fn both_sides_first_stand_just_outside_the_starting_room() {
+        let room = (Vec3::new(-8.0, 0.0, -8.0), Vec3::new(8.0, 4.0, 8.0));
+        assert_eq!(first_position(CameraAxis::X, false, room), Some(Vec3::new(9.0, 2.0, 0.0)));
+        assert_eq!(first_position(CameraAxis::X, true, room), Some(Vec3::new(-9.0, 2.0, 0.0)));
+        assert_eq!(first_position(CameraAxis::Y, false, room), Some(Vec3::new(0.0, 5.0, 0.0)));
+        assert_eq!(first_position(CameraAxis::Y, true, room), Some(Vec3::new(0.0, -1.0, 0.0)));
+        assert_eq!(first_position(CameraAxis::Z, false, room), Some(Vec3::new(0.0, 2.0, 9.0)));
+        assert_eq!(first_position(CameraAxis::Z, true, room), Some(Vec3::new(0.0, 2.0, -9.0)));
+        assert_eq!(first_position(CameraAxis::None, false, room), None);
+    }
+
+    /// Bevy refuses a system whose queries conflict only when it first runs, which no other test does.
+    #[test]
+    fn the_viewport_systems_have_no_conflicting_queries() {
+        fn initialize<M>(world: &mut World, system: impl IntoSystem<(), (), M>) {
+            IntoSystem::into_system(system).initialize(world);
+        }
+        let mut world = World::new();
+        initialize(&mut world, offer_view_toggles);
+        initialize(&mut world, face_the_near_sides);
+        initialize(&mut world, frame_the_starting_room);
+    }
+
+    #[test]
+    fn the_single_view_is_the_free_camera_alone_and_it_clears() {
+        let (start, area) = (UVec2::new(10, 20), UVec2::new(800, 600));
+        let cameras = [(CameraAxis::None, UVec2::new(0, 0), 4, 0), (CameraAxis::X, UVec2::new(1, 0), 3, 1), (CameraAxis::Y, UVec2::new(0, 1), 2, 2), (CameraAxis::Z, UVec2::new(1, 1), 1, 3)];
+        let shown = |single| cameras.iter().filter_map(move |&(axis, at, order, id)| placement(single, axis, at, start, area).map(|place| (place, order, id)));
+
+        let single: Vec<_> = shown(true).collect();
+        assert_eq!(single.iter().map(|(place, _, id)| (*place, *id)).collect::<Vec<_>>(), vec![((start, area), 0)]);
+        assert_eq!(clearer(single.iter().map(|(_, order, id)| (*order, *id))), Some(0));
+
+        let grid: Vec<_> = shown(false).collect();
+        assert_eq!(grid.len(), 4);
+        assert_eq!(grid[3].0, (start + UVec2::new(400, 300), UVec2::new(400, 300)));
+        assert_eq!(clearer(grid.iter().map(|(_, order, id)| (*order, *id))), Some(3));
+    }
 
     /// Breaks if the play camera, which has the default layers, can see an
     /// editor handle.

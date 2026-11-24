@@ -11,7 +11,7 @@ use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
 
 use crate::common::app_mode::AppMode;
 use crate::editor::input::{CurrentKeyboardInput, CurrentMouseInput};
-use crate::editor::multicam::{CameraAxis, Multicam};
+use crate::editor::multicam::{side_rotation, CameraAxis, Multicam, SideFrame};
 use crate::game::viewmodel::{VIEWMODEL_FOV, VIEWMODEL_NEAR};
 use crate::prop::document::PropEditor;
 use crate::prop::view::{PropBuild, PropSceneSystems};
@@ -141,14 +141,12 @@ fn frame_one(
 ) {
     let distance = (radius * FRAMING_MARGIN * 2.0).max(*DISTANCE_RANGE.start());
 
-    let (offset, up) = match multicam.axis {
+    *transform = match side_rotation(multicam.axis, multicam.flipped, SideFrame::Prop) {
+        Some(rotation) => Transform::from_translation(center + rotation * Vec3::Z * distance).with_rotation(rotation),
         // Over the shoulder rather than square on, so a box reads as a box.
-        CameraAxis::None => (Vec3::new(-0.6, 0.5, 1.0).normalize(), Vec3::Y),
-        CameraAxis::X => (Vec3::X, Vec3::Y),
-        CameraAxis::Y => (Vec3::Y, Vec3::NEG_Z),
-        CameraAxis::Z => (Vec3::Z, Vec3::Y),
+        None => Transform::from_translation(center + Vec3::new(-0.6, 0.5, 1.0).normalize() * distance)
+            .looking_at(center, Vec3::Y),
     };
-    *transform = Transform::from_translation(center + offset * distance).looking_at(center, up);
 
     // Orthographic scale is world units per pixel, so it depends on viewport width.
     if let Projection::Orthographic(ortho) = projection {

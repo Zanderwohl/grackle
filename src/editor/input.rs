@@ -7,7 +7,7 @@ use bevy::camera::RenderTarget;
 use bevy::picking::pointer::{PointerId, PointerLocation};
 use crate::common::app_mode::authoring;
 use crate::common::keybind::{Action, Actions};
-use crate::editor::multicam::Multicam;
+use crate::editor::multicam::{CameraAxis, Multicam, MulticamState};
 
 pub struct EditorInputPlugin;
 
@@ -171,7 +171,9 @@ impl EditorInputPlugin {
         cameras: Query<(Entity, &Camera, &RenderTarget, &GlobalTransform, &Multicam)>,
         pointers: Query<(&PointerId, &PointerLocation)>,
         mut evr_motion: MessageReader<MouseMotion>,
+        state: Option<Res<MulticamState>>,
     ) {
+        let single = state.is_some_and(|state| state.single);
         // We don't want to grab mouse input while over egui windows or panels.
         let ctx = egui_contexts.ctx_mut();
         if ctx.is_err() { warn!("input::mouse_input: no egui context: {}", ctx.unwrap_err()); return; }
@@ -205,7 +207,12 @@ impl EditorInputPlugin {
 
         let mut locations = Vec::new();
         for (_, pointer) in pointers {
-            for (camera_entity, camera, render_target, camera_transform, _cam_multicam) in &cameras {
+            for (camera_entity, camera, render_target, camera_transform, multicam) in &cameras {
+                // Off in the single view, but keeping its old viewport. `is_active` would also drop the
+                // frame a resize turns every camera off.
+                if single && multicam.axis != CameraAxis::None {
+                    continue;
+                }
                 if let Some(pointer_loc) = pointer.location() {
                     if pointer_loc.is_in_viewport(camera, render_target, &primary_window_entity) {
                         if pressed.is_some() {

@@ -227,7 +227,7 @@ mod tests {
             .spawn((
                 Transform::default(),
                 Projection::Perspective(PerspectiveProjection::default()),
-                Multicam { name: String::new(), screen_pos: UVec2::ZERO, id: 0, axis: CameraAxis::None },
+                Multicam { name: String::new(), screen_pos: UVec2::ZERO, id: 0, axis: CameraAxis::None, flipped: false },
             ))
             .id();
 
