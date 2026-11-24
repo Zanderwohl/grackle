@@ -12,10 +12,8 @@ use bevy::prelude::*;
 
 use crate::common::render_layers;
 
-/// How many editor viewports there are, each with its own layer.
 pub const VIEWPORTS: u32 = 4;
 
-/// The layer only viewport `id` draws.
 pub fn own_layer(id: u32) -> usize {
     render_layers::VIEWPORT_FIRST + id as usize
 }
@@ -49,8 +47,7 @@ macro_rules! for_each_viewport {
     }};
 }
 
-/// Registers the four groups once; every plugin drawing with them calls it,
-/// since plugins stand alone in tests.
+/// Every plugin drawing with these calls it, since plugins stand alone in tests.
 pub fn ensure(app: &mut App) {
     if app.world().contains_resource::<ViewportGizmosRegistered>() {
         return;
@@ -89,21 +86,19 @@ pub fn pixels_per_meter(camera: &Camera, projection: &Projection, at: &GlobalTra
 const FADE_OUT: (f32, f32) = (15.0, 7.0);
 const FADE_IN: (f32, f32) = (500.0, 400.0);
 
-/// How opaque a decade whose unit is `pixels` long on screen is drawn, 0 to 1:
-/// a lerp in pixels, never in time.
+/// 0 to 1 for a decade whose unit is `pixels` long on screen.
 pub fn decade_alpha(pixels: f32) -> f32 {
     let fade_in = ((FADE_IN.0 - pixels) / (FADE_IN.0 - FADE_IN.1)).clamp(0.0, 1.0);
     fade_out(pixels).min(fade_in)
 }
 
-/// [`decade_alpha`] for the smallest decade there is, which has none below it
-/// to hand over to and so stays as it is zoomed in.
+/// [`decade_alpha`] for the smallest decade, which has none below it to hand
+/// over to.
 pub fn fade_out(pixels: f32) -> f32 {
     ((pixels - FADE_OUT.1) / (FADE_OUT.0 - FADE_OUT.1)).clamp(0.0, 1.0)
 }
 
-/// Every unit `base` × 10ᵏ with a nonzero alpha at `pixels_per_meter`, with
-/// that alpha.
+/// Every unit `base` × 10ᵏ with a nonzero alpha, and that alpha.
 pub fn decades(base: f32, pixels_per_meter: f32) -> impl Iterator<Item = (f32, f32)> {
     let base_pixels = base * pixels_per_meter;
     let (low, high) = match base_pixels > 0.0 && base_pixels.is_finite() {
@@ -115,6 +110,16 @@ pub fn decades(base: f32, pixels_per_meter: f32) -> impl Iterator<Item = (f32, f
         let alpha = decade_alpha(unit * pixels_per_meter);
         (alpha > 0.0).then_some((unit, alpha))
     })
+}
+
+/// [`decades`] with `base` the smallest there is: nothing finer, and `base`
+/// itself only fading out.
+pub fn decades_from(base: f32, pixels_per_meter: f32) -> impl Iterator<Item = (f32, f32)> {
+    let smallest = fade_out(base * pixels_per_meter);
+    (smallest > 0.0)
+        .then_some((base, smallest))
+        .into_iter()
+        .chain(decades(base, pixels_per_meter).filter(move |(unit, _)| *unit > base * 1.5))
 }
 
 #[cfg(test)]
@@ -130,6 +135,13 @@ mod tests {
         assert_eq!(decade_alpha(400.0), 1.0);
         assert_eq!(decade_alpha(500.0), 0.0);
         assert!((decade_alpha(450.0) - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn nothing_finer_than_the_smallest_decade_is_shown() {
+        let shown: Vec<(f32, f32)> = decades_from(0.005, 1e6).collect();
+        assert_eq!(shown, vec![(0.005, 1.0)]);
+        assert!(decades_from(0.005, 1.0).all(|(unit, _)| unit >= 0.005));
     }
 
     #[test]

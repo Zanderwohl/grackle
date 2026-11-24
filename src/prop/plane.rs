@@ -259,22 +259,16 @@ const SMALLEST_ORIGIN_SIDE: f32 = 0.01;
 /// Below this an origin square is not offered to a click.
 const PICKABLE_ALPHA: f32 = 0.5;
 
-/// The half-widths an origin plane is drawn at in a view of this scale, each
-/// with its alpha: squares a power of ten meters across from a centimeter up,
-/// faded by a tenth of their side on screen as a grid's decades are.
+/// Half-widths and alphas of an origin plane's squares: a power of ten meters
+/// across from a centimeter up, each faded by a tenth of its side on screen.
 pub fn origin_squares(pixels_per_meter: f32) -> Vec<(f32, f32)> {
-    let tenth = SMALLEST_ORIGIN_SIDE / 10.0;
-    let smallest = viewport_gizmos::fade_out(tenth * pixels_per_meter);
-    (smallest > 0.0)
-        .then_some((tenth, smallest))
-        .into_iter()
-        .chain(viewport_gizmos::decades(tenth, pixels_per_meter).filter(|(unit, _)| *unit > tenth * 1.5))
+    viewport_gizmos::decades_from(SMALLEST_ORIGIN_SIDE / 10.0, pixels_per_meter)
         .map(|(unit, alpha)| (unit * 5.0, alpha))
         .collect()
 }
 
-/// The planes as a view of this scale draws them, each with its alpha: an
-/// origin plane as its [`origin_squares`], or as evaluated with no scale.
+/// An origin plane is its [`origin_squares`], and none with no scale (the
+/// origin behind the view).
 pub fn shown_planes(planes: &[Datum], pixels_per_meter: Option<f32>) -> Vec<(Datum, f32)> {
     planes
         .iter()
@@ -282,6 +276,7 @@ pub fn shown_planes(planes: &[Datum], pixels_per_meter: Option<f32>) -> Vec<(Dat
             (PlaneRef::Origin(which), Some(scale)) => {
                 origin_squares(scale).into_iter().map(|(half, alpha)| (Datum::origin(which, half), alpha)).collect()
             }
+            (PlaneRef::Origin(_), None) => vec![],
             _ => vec![(datum.clone(), 1.0)],
         })
         .collect()

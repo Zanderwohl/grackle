@@ -34,8 +34,7 @@ use crate::for_each_viewport;
 /// Meters between grid lines, and what an unsnapped point rounds to.
 pub const GRID: f32 = 0.005;
 
-/// Meters the grid is drawn behind the plane, away from the viewer, at the
-/// least; zoomed out it is half a pixel.
+/// Meters the grid is drawn behind the plane, at least; zoomed out, half a pixel.
 const GRID_BEHIND: f32 = 0.0001;
 
 /// Pixels within which the cursor lands on a point rather than the grid.
@@ -44,8 +43,10 @@ const SNAP_PX: f32 = 10.0;
 /// Pixels a press must travel before it is a drag rather than a click.
 const DRAG_PX: f32 = 3.0;
 
-/// Lines each way a grid decade stops at, however much of the view it would
-/// take to fill.
+/// Sketch reaches from its center the grid's center may follow the view.
+const GRID_CENTER_REACH: f32 = 4.0;
+
+/// Lines each way a grid decade stops at.
 const MAX_GRID_LINES: i32 = 200;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -430,9 +431,8 @@ fn aim_the_view(
     }
 }
 
-/// Looking straight at `center` from `distance` away, from the side of the
-/// plane `from` already looks from, so the view direction swings at most a
-/// quarter turn, and with whichever of the plane's four edges up turns the least.
+/// From the side `from` already looks from, so the view swings at most a
+/// quarter turn, with whichever of the plane's four edges up rolls least.
 fn nearest_face_on(plane: &crate::prop::plane::Plane, center: Vec3, distance: f32, from: Quat) -> Transform {
     let (x, y) = (*plane.x, *plane.y());
     let side = match (from * Vec3::NEG_Z).dot(*plane.normal) > 0.0 {
@@ -822,9 +822,7 @@ struct RegionCache {
     hatched: Vec<(Vec2, Vec2)>,
 }
 
-/// The grid in decades of [`GRID`], each faded by how far apart its lines are
-/// in this view, round where the view looks at the plane. Lines snap to their
-/// own decade, so the grid does not slide as the view moves.
+/// Lines snap to their own decade, so the grid does not slide as the view moves.
 fn draw_the_grid<C: GizmoConfigGroup>(
     gizmos: &mut Gizmos<C>,
     placed: &PlacedSketch,
@@ -837,16 +835,24 @@ fn draw_the_grid<C: GizmoConfigGroup>(
     }
     let plane = &placed.plane;
     let eye = at.translation();
-    let looked_at = plane
-        .hit(Ray3d::new(eye, at.forward()))
-        .unwrap_or_else(|| eye - *plane.normal * (eye - plane.origin).dot(*plane.normal));
-    let Some(pixels_per_meter) = viewport_gizmos::pixels_per_meter(camera, projection, at, looked_at) else { return };
+    // At a grazing angle the hit is far past the sketch; looking away there is none.
+    let (sketch_center, reach) = extent(&placed.sketch);
+    let sketch_center = placed.world(sketch_center);
+    let looked_at = plane.hit(Ray3d::new(eye, at.forward())).map_or(sketch_center, |hit| {
+        sketch_center + (hit - sketch_center).clamp_length_max(reach * GRID_CENTER_REACH)
+    });
+    let scale = |point: Vec3| viewport_gizmos::pixels_per_meter(camera, projection, at, point);
+    let ahead = eye + *at.forward() * eye.distance(sketch_center);
+    let Some(pixels_per_meter) = scale(looked_at).or_else(|| scale(sketch_center)).or_else(|| scale(ahead)) else {
+        return;
+    };
     let Some(viewport) = camera.logical_viewport_size() else { return };
     // Gizmos in one plane depth-fight, so the grid sits just behind it.
-    let facing = (eye - looked_at).dot(*plane.normal).signum();
+    let facing = (eye - plane.origin).dot(*plane.normal).signum();
     let behind = -*plane.normal * facing * GRID_BEHIND.max(0.5 / pixels_per_meter);
     let center = plane.flatten(looked_at);
-    for (unit, alpha) in viewport_gizmos::decades(GRID, pixels_per_meter) {
+    // Nothing finer than the snap is drawn, so every line is somewhere a point can land.
+    for (unit, alpha) in viewport_gizmos::decades_from(GRID, pixels_per_meter) {
         let half = ((viewport.length() / (unit * pixels_per_meter)).ceil() as i32).min(MAX_GRID_LINES);
         let middle = (center / unit).round() * unit;
         let span = half as f32 * unit;

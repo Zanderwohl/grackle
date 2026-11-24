@@ -523,7 +523,6 @@ fn draw_the_bench(
     for datum in build.evaluated.planes.iter().filter(|datum| datum.id.feature().is_some()) {
         draw_square(&mut gizmos, &datum.corners, plane_color(&Pick::Plane(datum.id)));
     }
-    // Each view draws the origin planes at its own scale.
     let origins: Vec<Datum> = build.evaluated.planes.iter().filter(|datum| datum.id.feature().is_none()).cloned().collect();
     for (camera, at, projection, multicam) in &cameras {
         if !camera.is_active {

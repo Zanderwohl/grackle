@@ -80,7 +80,7 @@ mod tests {
 
     #[test]
     fn no_two_features_share_a_layer() {
-        let viewports = VIEWPORT_FIRST..VIEWPORT_FIRST + 4;
+        let viewports = VIEWPORT_FIRST..VIEWPORT_FIRST + crate::editor::viewport_gizmos::VIEWPORTS as usize;
         let all: Vec<usize> = [WORLD, VIEWMODEL, EDITOR_ONLY, THUMBNAIL, GIZMOS, WARM_UP, INSIDE_HEAD, PORTRAIT, HUD_PORTRAIT, PAINTER]
             .into_iter()
             .chain(viewports)

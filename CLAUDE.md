@@ -1067,7 +1067,10 @@ first person. It renders linear into `Rgba16Float` with no tonemapping, since
 the viewmodel camera tonemaps the lens with everything else, and it does not
 draw `render_layers::GIZMOS` — gizmos live there, drawn by the editor
 viewports and the play camera — or a debug overlay from the eye would sit in
-the lens. `ForwardCameraPlugin` is added in
+the lens. `draw_gizmos_on_their_own_layer` moves every gizmo group still on
+the default layer there, and leaves a group with a layer of its own alone:
+each editor viewport's (`viewport_gizmos`, from `render_layers::VIEWPORT_FIRST`)
+is drawn by that viewport only, so a grid fades by that view's zoom. `ForwardCameraPlugin` is added in
 `launch.rs`, as `WorldPropPlugin` is, since the game's tests have no renderer.
 
 **The lens is drawn once at startup, out of sight.** Bevy compiles a pipeline
