@@ -1,0 +1,408 @@
+name_key = "prop.untitled"
+archetype = "obstacle"
+next_id = 19
+
+[[features]]
+id = 0
+name = "Prism"
+enabled = true
+
+[features.op]
+feature = "primitive"
+
+[features.op.shape]
+kind = "prism"
+sides = 8
+radius = 0.12
+height = 2.0
+
+[features.op.placement]
+origin = [
+    0.0,
+    1.0,
+    0.0,
+]
+rotation = [
+    0.0,
+    0.0,
+    0.0,
+]
+
+[features.op.surface]
+style = "metal"
+tint = [
+    0.42,
+    0.43999997,
+    0.47,
+]
+
+[[features]]
+id = 1
+name = "Prism"
+enabled = true
+
+[features.op]
+feature = "primitive"
+
+[features.op.shape]
+kind = "prism"
+sides = 8
+radius = 0.15
+height = 0.2
+
+[features.op.placement]
+origin = [
+    0.0,
+    2.0,
+    0.0,
+]
+rotation = [
+    0.0,
+    0.0,
+    0.0,
+]
+
+[features.op.surface]
+style = "metal"
+tint = [
+    0.42,
+    0.43999997,
+    0.47,
+]
+
+[[features]]
+id = 2
+name = "Prism"
+enabled = true
+
+[features.op]
+feature = "primitive"
+
+[features.op.shape]
+kind = "prism"
+sides = 8
+radius = 0.12
+height = 0.4
+
+[features.op.placement]
+origin = [
+    0.0,
+    2.2,
+    0.0,
+]
+rotation = [
+    0.0,
+    0.0,
+    0.0,
+]
+
+[features.op.surface]
+style = "metal"
+tint = [
+    0.42,
+    0.43999997,
+    0.47,
+]
+
+[[features]]
+id = 3
+name = "Plane"
+enabled = true
+
+[features.op]
+feature = "plane"
+
+[features.op.def]
+kind = "offset"
+distance = 0.02
+
+[features.op.def.from]
+origin = "xy"
+
+[[features]]
+id = 4
+name = "Sketch"
+enabled = true
+
+[features.op]
+feature = "sketch"
+
+[features.op.on]
+feature = 3
+
+[features.op.sketch]
+next_id = 5
+regions = []
+
+[[features.op.sketch.points]]
+id = 0
+at = [
+    0.0000000014309856,
+    2.4,
+]
+
+[[features.op.sketch.points]]
+id = 1
+at = [
+    -1.0,
+    2.4,
+]
+
+[[features.op.sketch.points]]
+id = 3
+at = [
+    -0.9998755,
+    3.4,
+]
+
+[[features.op.sketch.entities]]
+kind = "line"
+id = 2
+a = 0
+b = 1
+construction = false
+
+[[features.op.sketch.entities]]
+kind = "arc"
+id = 4
+center = 1
+start = 0
+end = 3
+clockwise = false
+construction = false
+
+[[features]]
+id = 5
+name = "Plane"
+enabled = true
+
+[features.op]
+feature = "plane"
+
+[features.op.def]
+kind = "through"
+
+[[features.op.def.through]]
+ref = "face"
+
+[features.op.def.through.face.element]
+face = 1
+
+[features.op.def.through.face.source]
+feature = 2
+
+[[features]]
+id = 8
+name = "Sweep"
+enabled = true
+
+[features.op]
+feature = "sweep"
+orient = "minimal"
+twist = 0.0
+scale = 1.0
+op = "new_body"
+
+[[features.op.path.curves]]
+kind = "sketch"
+sketch = 4
+entity = 4
+
+[features.op.profile]
+from = "face"
+
+[features.op.profile.face.element]
+face = 1
+
+[features.op.profile.face.source]
+feature = 2
+
+[features.op.surface]
+style = "metal"
+tint = [
+    0.42,
+    0.44,
+    0.47,
+]
+
+[[features]]
+id = 11
+name = "Union"
+enabled = true
+
+[features.op]
+feature = "union"
+bodies = [
+    8,
+    2,
+    1,
+    0,
+]
+
+[[features]]
+id = 15
+name = "Pattern"
+enabled = true
+
+[features.op]
+feature = "pattern"
+count = 3
+targets = [11]
+
+[features.op.along]
+kind = "linear"
+spacing = -0.35
+
+[features.op.along.direction]
+kind = "along"
+
+[features.op.along.direction.curve]
+kind = "axis"
+axis = "z"
+
+[[features]]
+id = 16
+name = "Box Collider"
+enabled = true
+
+[features.op]
+feature = "collider"
+roles = [
+    "shots",
+    "solid",
+]
+
+[features.op.shape]
+kind = "box"
+size = [
+    0.26692113,
+    2.61,
+    0.96196127,
+]
+
+[features.op.placement]
+origin = [
+    0.012166828,
+    1.31,
+    -0.34763196,
+]
+rotation = [
+    0.0,
+    0.0,
+    0.0,
+]
+
+[[features]]
+id = 17
+name = "Box Collider"
+enabled = true
+
+[features.op]
+feature = "collider"
+roles = [
+    "shots",
+    "solid",
+]
+
+[features.op.shape]
+kind = "box"
+size = [
+    0.62364995,
+    0.33410957,
+    0.961234,
+]
+
+[features.op.placement]
+origin = [
+    -0.70873904,
+    3.3059447,
+    -0.34837884,
+]
+rotation = [
+    0.0,
+    0.0,
+    0.0,
+]
+
+[[features]]
+id = 18
+name = "Sphere Collider"
+enabled = true
+
+[features.op]
+feature = "collider"
+roles = [
+    "shots",
+    "solid",
+]
+
+[features.op.shape]
+kind = "sphere"
+radius = 0.5408523
+
+[features.op.placement]
+origin = [
+    -0.351,
+    2.925,
+    -0.327,
+]
+rotation = [
+    0.0,
+    0.0,
+    0.0,
+]
+
+[hold]
+grip = [
+    0.0,
+    0.0,
+    0.0,
+]
+grip_rotation = [
+    -0.8054,
+    0.9568,
+    -1.279,
+]
+support = [
+    0.0,
+    0.0,
+    -0.07,
+]
+support_rotation = [
+    -1.374,
+    0.3441,
+    -1.2572,
+]
+two_handed = true
+carry = [
+    0.05,
+    -0.14,
+    -0.22,
+]
+carry_rotation = [
+    0.0,
+    0.0,
+    0.0,
+]
+
+[viewmodel]
+across = [
+    0.35,
+    -0.71,
+]
+depth = 0.3
+rotation = [
+    0.0,
+    0.0,
+    0.0,
+]
+
+[stand_in]
+shown = true
+class = "mercenary"
+at = [
+    0.6,
+    0.0,
+    0.0,
+]
+yaw = 0.0

@@ -72,6 +72,7 @@ corrections.
 | Straw-man knockdown | "It thinks twice as long" is the obvious reading, and it is wrong. | The output is twice as long, but most of the extra tokens restate the prompt. |
 | Fragment cadence | Six legs. One GPU, one server build, one sampler, one question set. | All six legs ran on the same GPU, server build, sampler, and question set. |
 | Dressed metaphor | That is information loss wearing the costume of a style fix. | The change was labeled a style fix, but it removes the units column, so readers lose information. |
+| Topic-Comment structure | A point, defined by its constraints. | A constraint-defined point. |
 
 ## Scope
 
