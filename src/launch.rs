@@ -39,6 +39,7 @@ use crate::tool::ToolPlugin;
 use crate::common::app_mode::StartInPlay;
 
 pub fn run() {
+    crate::common::assets::start_beside_the_packs();
     let editor_params = startup::EditorParams::new()
         .unwrap_or_else(|message| {
             eprintln!("Startup error:\n{}", message);

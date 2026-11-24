@@ -247,6 +247,22 @@ impl Assets {
 
 /// Where Bevy's `AssetServer` reads from, which every pack sits under.
 pub const ASSET_ROOT: &str = "assets";
+/// Moves into the executable's folder when the working directory holds no `assets/default` and
+/// that folder does. A binary double-clicked in Finder or a Linux file manager starts in the
+/// home folder, and every pack, cache and log path is relative to the working directory.
+pub fn start_beside_the_packs() {
+    let default_pack = Path::new(ASSET_ROOT).join("default");
+    if default_pack.is_dir() {
+        return;
+    }
+    let Some(folder) = std::env::current_exe().ok().and_then(|exe| exe.parent().map(Path::to_path_buf)) else {
+        return;
+    };
+    if folder.join(&default_pack).is_dir() && let Err(e) = std::env::set_current_dir(&folder) {
+        eprintln!("Could not move into {}: {e}", folder.display());
+    }
+}
+
 /// Where somebody's own unsorted work goes: a pack like any other, last so it
 /// overrides the shipped one, and gitignored.
 pub const USER_PACK: &str = "assets/user";
