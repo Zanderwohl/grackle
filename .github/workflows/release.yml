@@ -1,0 +1,155 @@
+# Builds the game for Linux, Windows and macOS and publishes them as a GitHub release.
+# Run by hand from the Actions tab; nothing triggers it on a push or a pull request.
+#
+# The release's version is `version` in Cargo.toml and its tag is `v{version}`. A tag that
+# already exists stops the run, so bump the version in a commit before releasing again.
+
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish a GitHub release (off keeps the archives as workflow artifacts only)
+        type: boolean
+        default: true
+      prerelease:
+        description: Mark the release as a pre-release
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.read.outputs.version }}
+      tag: ${{ steps.read.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: read
+        name: Read the version and check its tag is free
+        env:
+          PUBLISH: ${{ inputs.publish }}
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name == "grackle") | .version')
+          tag="v$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          if [ "$PUBLISH" = "true" ] && git ls-remote --exit-code --tags origin "refs/tags/$tag" > /dev/null; then
+            echo "::error::Tag $tag already exists. Bump version in Cargo.toml and run again."
+            exit 1
+          fi
+          echo "Building Grackle $version ($tag)"
+
+  build:
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # 22.04 rather than latest: the binary needs the glibc it was linked against or newer.
+          - platform: linux-x86_64
+            os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            exe: grackle
+          - platform: windows-x86_64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            exe: grackle.exe
+          - platform: macos-arm64
+            os: macos-latest
+            target: aarch64-apple-darwin
+            exe: grackle
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      ARCHIVE: grackle-${{ needs.version.outputs.version }}-${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --locked --bin grackle --target ${{ matrix.target }}
+
+      # Every pack, cache and log path is relative to the working directory, and the game moves
+      # into its own folder when started elsewhere, so the archive is that folder as it runs.
+      - name: Stage
+        run: |
+          root="staging/Grackle"
+          mkdir -p "$root/assets"
+          cp "target/${{ matrix.target }}/release/${{ matrix.exe }}" "$root/"
+          cp -R assets/default "$root/assets/default"
+          cp packaging/README.txt "$root/README.txt"
+          echo "${{ needs.version.outputs.version }}" > "$root/VERSION.txt"
+
+      - name: Archive (Linux)
+        if: runner.os == 'Linux'
+        run: tar -C staging -czf "$ARCHIVE.tar.gz" Grackle
+
+      - name: Archive (macOS)
+        if: runner.os == 'macOS'
+        run: ditto -c -k --keepParent staging/Grackle "$ARCHIVE.zip"
+
+      - name: Archive (Windows)
+        if: runner.os == 'Windows'
+        run: 7z a -tzip "$ARCHIVE.zip" ./staging/Grackle
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARCHIVE }}
+          path: ${{ env.ARCHIVE }}.*
+          compression-level: 0
+          if-no-files-found: error
+
+  release:
+    needs: [version, build]
+    if: inputs.publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.version.outputs.tag }}
+          VERSION: ${{ needs.version.outputs.version }}
+          PRERELEASE: ${{ inputs.prerelease }}
+        run: |
+          flags=()
+          if [ "$PRERELEASE" = "true" ]; then flags+=(--prerelease); fi
+          gh release create "$TAG" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "Grackle $VERSION" \
+            --generate-notes \
+            "${flags[@]}"
