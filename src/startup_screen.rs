@@ -1,26 +1,22 @@
-//! [`AppMode::Starting`]: the first screen of a bare launch, a title picture under a progress
-//! window in the bottom right, up while the first frames compile pipelines and bake the startup
-//! map. Without it those frames are a still window that reads as a hung process. It hands over to
-//! [`AfterStartup`] once every step is done and frames have come quickly for a while, or after
-//! [`GIVE_UP_SECONDS`] whatever is left.
+//! [`AppMode::Starting`]: the first screen of a bare launch. A title picture, the wordmark and a
+//! progress window cover the first frames, which compile pipelines and bake the startup map and
+//! would otherwise leave a still window that looks hung. It hands over to [`AfterStartup`] once
+//! loading is done and the wordmark has played ([`SHORTEST_SECONDS`]), or after
+//! [`GIVE_UP_SECONDS`].
 //!
-//! The warm-ups wait behind a shut [`WarmUpGate`] until the picture has been drawn for
-//! [`FRAMES_BEFORE_WARMING_UP`] frames: each pipeline they compile holds its frame back from the
-//! window, and before the picture is up that is a blank window that does not answer.
+//! The warm-ups wait behind a shut [`WarmUpGate`] until the picture and letters have been drawn
+//! for [`FRAMES_BEFORE_WARMING_UP`] frames, since each pipeline compiled in a frame holds that
+//! frame back from the window.
 //!
-//! Over the picture, centered, the wordmark drops in a letter at a time, bouncing as it lands. Its
-//! letters are PNGs in [`WORDMARK_DIR`], pre-rendered from Nabla, a COLRv1 color font that
-//! Bevy's text does not paint, and placed by [`LETTERS`]. The screen stays up until they have all
-//! landed and a second more ([`SHORTEST_SECONDS`]), unless a click skips the wait once loading is
-//! done. The warm-ups wait for the letters as they do for the picture.
-//!
-//! The picture is a [`BackgroundSet::Startup`] pick, which the main menu shows again on its first
-//! showing, so the one screen leads into the other.
+//! The letters are PNGs in [`WORDMARK_DIR`], pre-rendered from Nabla because Bevy's text does not
+//! paint COLRv1 color fonts. The picture is a [`BackgroundSet::Startup`] pick, which the main menu
+//! shows again on its first showing.
 
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts, EguiPrimaryContextPass};
 
 use crate::common::app_mode::AppMode;
+use crate::common::keybind::{self, Action, Actions};
 use crate::common::joining::{bake_fraction, settled};
 use crate::game::warm_up::{WarmUp, WarmUpGate};
 use crate::get;
@@ -40,8 +36,8 @@ struct Letter {
     height: f32,
 }
 
-/// "pikaia.space" in Nabla at 100 pt (133⅓ px), as Chrome lays it out, each letter cropped to the
-/// pixels it paints.
+/// "pikaia.space" in Nabla at 100 pt (133⅓ px) as Chrome lays it out, each letter cropped to its
+/// painted pixels.
 const LETTERS: [Letter; 12] = [
     Letter { file: "p", x: 0.0, y: 20.0, width: 58.0, height: 118.0 },
     Letter { file: "i", x: 69.33, y: 1.5, width: 58.0, height: 119.0 },
@@ -94,6 +90,7 @@ impl Plugin for StartupScreenPlugin {
         if app.world().contains_resource::<AfterStartup>() {
             app.insert_resource(WarmUpGate { open: false });
         }
+        keybind::ensure(app);
         app.init_resource::<StartupSteps>()
             .add_systems(
                 Update,
@@ -108,7 +105,6 @@ impl Plugin for StartupScreenPlugin {
     }
 }
 
-/// What startup has left, measured each frame by [`watch_the_steps`].
 #[derive(Resource, Clone, Debug, Default, PartialEq)]
 pub struct StartupSteps {
     /// The most warm-up entities seen at once, so the share done is measured against it.
@@ -125,7 +121,7 @@ pub struct StartupSteps {
     pub seconds: f32,
     /// Seconds of the wordmark's drop played, from when the picture is up.
     pub wordmark_seconds: f32,
-    /// A primary or secondary click: hand over as soon as loading is done.
+    /// [`Action::SkipIntro`] was pressed; the screen ends once loading is done.
     pub skipped: bool,
 }
 
@@ -153,7 +149,6 @@ impl StartupSteps {
         1.0 - left as f32 / total as f32
     }
 
-    /// Loaded, and the wordmark has played or a click skipped it.
     pub fn done(&self) -> bool {
         self.loaded() && (self.skipped || self.wordmark_seconds >= SHORTEST_SECONDS)
     }
@@ -227,7 +222,6 @@ pub fn ease_out_elastic(t: f32) -> f32 {
     }
 }
 
-/// The ease the letters land with.
 const LETTER_EASE: fn(f32) -> f32 = ease_out_elastic;
 
 /// How far letter `index` has fallen, 0 to 1, `seconds` into the drop.
@@ -327,10 +321,10 @@ fn watch_the_steps(
     warm_ups: Query<(), With<WarmUp>>,
     lens: Option<Res<crate::game::forward_camera::LensWarmUp>>,
     roots: Query<(), With<StartupRoot>>,
-    pictures: Query<&Visibility, With<TitleBackground>>,
+    pictures: Query<(&Visibility, &ImageNode), With<TitleBackground>>,
     letters: Query<&WordmarkLetter>,
     asset_server: Option<Res<AssetServer>>,
-    clicks: Option<Res<ButtonInput<MouseButton>>>,
+    actions: Res<Actions>,
     bakes: Option<Res<BakeProgress>>,
     mut frames_up: Local<u32>,
 ) {
@@ -343,13 +337,15 @@ fn watch_the_steps(
         *frames_up += 1;
     }
     // With no picture in any pack there is nothing to wait for once the root has had a frame to
-    // ask for one.
-    steps.picture_ready = letters_loaded(asset_server.as_deref(), &letters)
-        && (pictures.iter().any(|visibility| *visibility != Visibility::Hidden) || (pictures.is_empty() && *frames_up > 2));
+    // ask for one, and one that will not load is passed over, as a letter is.
+    let failed = |node: &ImageNode| asset_server.as_ref().is_some_and(|assets| assets.load_state(&node.image).is_failed());
+    let picture_up = pictures.iter().any(|(visibility, node)| *visibility != Visibility::Hidden || failed(node));
+    steps.picture_ready =
+        letters_loaded(asset_server.as_deref(), &letters) && (picture_up || (pictures.is_empty() && *frames_up > 2));
     if steps.picture_ready {
         steps.wordmark_seconds += delta.min(WORDMARK_MOST_PER_FRAME);
     }
-    if clicks.is_some_and(|clicks| clicks.any_just_pressed([MouseButton::Left, MouseButton::Right])) {
+    if actions.just_pressed(Action::SkipIntro) {
         steps.skipped = true;
     }
     steps.rooms = bakes.as_deref().and_then(|bakes| bakes.get(BakeKind::Rooms)).cloned();
@@ -505,11 +501,15 @@ mod tests {
     #[test]
     fn a_click_skips_to_the_menu_once_loaded() {
         let mut app = app(AppMode::MainMenu);
-        app.init_resource::<ButtonInput<MouseButton>>();
+        app.add_plugins(bevy::input::InputPlugin);
         for _ in 0..QUICK_FRAMES + 4 {
             app.update();
         }
-        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Right);
+        app.world_mut().write_message(bevy::input::mouse::MouseButtonInput {
+            button: MouseButton::Right,
+            state: bevy::input::ButtonState::Pressed,
+            window: Entity::PLACEHOLDER,
+        });
         app.update();
         app.update();
         assert_eq!(*app.world().resource::<State<AppMode>>().get(), AppMode::MainMenu);

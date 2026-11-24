@@ -475,10 +475,11 @@ COLRv1 color fonts) and placed by the `LETTERS` table; each drops from above the
 easeOutElastic over 0.5 s, 0.2 s after the one before, on a clock that moves at most a twentieth of
 a second a frame. The screen is up while the warm-up cameras and the lens compile their pipelines, the picture loads and
 the startup map's rooms and light settle, and then until ten frames in a row take under 0.1 s;
-then the box reads Done!. It stays until the wordmark has landed and a second more, which a left or
-right click skips once loading is done, and gives up waiting after 20 s. The warm-up cameras stay off behind a shut `WarmUpGate` until
+then the box reads Done!. It stays until the wordmark has landed and a second more, which `Action::SkipIntro`
+(a left or right click, in the `Menu` context) skips once loading is done, and gives up waiting after 20 s. The warm-up cameras stay off behind a shut `WarmUpGate` until
 the picture has been up two frames, since each pipeline compiled in a frame holds that frame back
-from the window. It then goes to `AfterStartup`, the main menu or onboarding, and the main menu's first
+from the window; every warm-up particle spawner is restarted once it opens, so a burst that died
+behind it is drawn again. A picture that will not load counts as up, so it cannot hold the gate. It then goes to `AfterStartup`, the main menu or onboarding, and the main menu's first
 picture is the startup screen's (`BackgroundSet::Startup`), so the one leads into the other. **`Joining`** ([`src/common/joining.rs`](src/common/joining.rs),
 [`src/joining_screen.rs`](src/joining_screen.rs)) is where a client is from the moment its role
 becomes a client until the server's files are fetched and built: `follow_the_server` records the

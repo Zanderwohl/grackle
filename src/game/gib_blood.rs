@@ -677,12 +677,6 @@ fn warm_up_the_blood(mut commands: Commands, effects: Res<BloodEffects>) {
     }
 }
 
-fn start_the_warm_up(mut spawners: Query<&mut EffectSpawner, (With<WarmUp>, Added<EffectSpawner>)>) {
-    for mut spawner in &mut spawners {
-        spawner.active = true;
-    }
-}
-
 /// Added in `launch.rs` beside `DecalPlugin`: Hanabi needs a renderer, which the
 /// game's tests do not have.
 pub struct GibBloodPlugin;
@@ -696,7 +690,7 @@ impl Plugin for GibBloodPlugin {
         app.add_systems(Startup, (make_the_effects, warm_up_the_blood).chain())
             // Ungated: corpses arrive from the wire whenever.
             .add_systems(Update, (bleed_from_new_gibs, (follow_the_severed_ends, follow_the_stumps)).chain())
-            .add_systems(Update, (spurt_from_hits, end_the_bursts, start_the_warm_up));
+            .add_systems(Update, (spurt_from_hits, end_the_bursts));
     }
 }
 

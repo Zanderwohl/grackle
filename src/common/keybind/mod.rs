@@ -52,8 +52,9 @@ pub enum Context {
     PropEditor,
     Animation,
     Play,
-    /// While a menu in Play holds the mouse. Play's keys are not read then, so the two contexts
-    /// do not clash: the class picker's choices share the weapon buckets' digits.
+    /// While a menu in Play holds the mouse, or on the startup screen. Play's keys are not read
+    /// then, so the two contexts do not clash: the class picker's choices share the weapon
+    /// buckets' digits.
     Menu,
 }
 
@@ -190,6 +191,7 @@ actions! {
     Choice8 => "choice_8", Menu, false, false;
     Choice9 => "choice_9", Menu, false, false;
     Choice0 => "choice_0", Menu, false, false;
+    SkipIntro => "skip_intro", Menu, false, false;
 
     PerfOverlay => "perf_overlay", Everywhere, false, true;
     ShowHitboxes => "show_hitboxes", Everywhere, false, true;

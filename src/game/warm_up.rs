@@ -26,9 +26,9 @@ const FRAMES: u32 = 10;
 #[derive(Component)]
 pub struct WarmUp;
 
-/// While shut, the warm-up cameras are off and the warm-up does not count down, so the frames
-/// before it draw only what is on screen. The startup screen shuts it until its picture is up,
-/// since every pipeline compiled in a frame holds that frame back from the window.
+/// While shut, the warm-up cameras are off and the warm-up does not count down. The startup screen
+/// shuts it until its picture is up, since each pipeline compiled in a frame holds that frame back
+/// from the window.
 #[derive(Resource, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct WarmUpGate {
     pub open: bool,
@@ -54,7 +54,25 @@ struct WarmUpPlugin;
 
 impl Plugin for WarmUpPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, spawn_cameras).add_systems(Update, (follow_the_gate, end_the_warm_up.run_if(is_open)));
+        app.add_systems(Startup, spawn_cameras)
+            .add_systems(Update, (follow_the_gate, (start_the_particles, end_the_warm_up).run_if(is_open)));
+    }
+}
+
+/// On a warm-up spawner once it has been started with the gate open.
+#[derive(Component)]
+struct ParticlesStarted;
+
+/// A burst spawned behind a shut gate can live and die with no camera on, compiling nothing, so
+/// each warm-up spawner is switched on and restarted once the gate is open.
+fn start_the_particles(
+    mut commands: Commands,
+    mut spawners: Query<(Entity, &mut bevy_hanabi::EffectSpawner), (With<WarmUp>, Without<ParticlesStarted>)>,
+) {
+    for (entity, mut spawner) in &mut spawners {
+        spawner.active = true;
+        spawner.reset();
+        commands.entity(entity).insert(ParticlesStarted);
     }
 }
 

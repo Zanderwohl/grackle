@@ -109,6 +109,7 @@ fn defaults(action: Action) -> Vec<Chord> {
         Action::Choice8 => vec![key(K::Digit8)],
         Action::Choice9 => vec![key(K::Digit9)],
         Action::Choice0 => vec![key(K::Digit0)],
+        Action::SkipIntro => vec![Chord::mouse(MouseButton::Left), Chord::mouse(MouseButton::Right)],
         Action::Humiliate => vec![key(K::KeyH)],
         Action::Suicide => vec![key(K::KeyO)],
         Action::Explode => vec![key(K::KeyP)],
