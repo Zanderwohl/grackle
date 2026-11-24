@@ -1139,6 +1139,16 @@ name = "Name"
 field_of_view = "Field of view"
 continue = "Continue"
 
+# The first screen of a bare launch, while it loads.
+[startup]
+title = "Starting Grackle"
+done = "Done!"
+compiling = "Compiling shaders"
+background = "Loading the picture"
+rooms = "Building rooms"
+light = "Lighting the map"
+settling = "Settling"
+
 # The screen between connecting to a server and its first screen.
 [joining]
 title = "Joining { server }"
@@ -1208,6 +1218,7 @@ main_menu = "Main Menu"
 play = "Play"
 onboarding = "Onboarding"
 joining = "Joining"
+starting = "Starting"
 
 # Every authoring mode's File pulldown. The entries mean whatever the thing
 # you are editing makes of them — a blueprint, a prop, a set of clips — which
@@ -2163,6 +2174,7 @@ choice_7 = "Menu choice 7"
 choice_8 = "Menu choice 8"
 choice_9 = "Menu choice 9"
 choice_0 = "Menu choice 10"
+skip_intro = "Skip the startup screen"
 humiliate = "Humiliate"
 suicide = "Suicide"
 explode = "Explode"

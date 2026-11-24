@@ -26,6 +26,24 @@ const FRAMES: u32 = 10;
 #[derive(Component)]
 pub struct WarmUp;
 
+/// While shut, the warm-up cameras are off and the warm-up does not count down. The startup screen
+/// shuts it until its picture is up, since each pipeline compiled in a frame holds that frame back
+/// from the window.
+#[derive(Resource, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WarmUpGate {
+    pub open: bool,
+}
+
+impl Default for WarmUpGate {
+    fn default() -> Self {
+        Self { open: true }
+    }
+}
+
+pub fn is_open(gate: Option<Res<WarmUpGate>>) -> bool {
+    gate.is_none_or(|gate| gate.open)
+}
+
 pub fn ensure(app: &mut App) {
     if !app.is_plugin_added::<WarmUpPlugin>() {
         app.add_plugins(WarmUpPlugin);
@@ -36,16 +54,47 @@ struct WarmUpPlugin;
 
 impl Plugin for WarmUpPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, spawn_cameras).add_systems(Update, end_the_warm_up);
+        app.add_systems(Startup, spawn_cameras)
+            .add_systems(Update, (follow_the_gate, (start_the_particles, end_the_warm_up).run_if(is_open)));
     }
 }
 
-fn spawn_cameras(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
+/// On a warm-up spawner once it has been started with the gate open.
+#[derive(Component)]
+struct ParticlesStarted;
+
+/// A burst spawned behind a shut gate can live and die with no camera on, compiling nothing, so
+/// each warm-up spawner is switched on and restarted once the gate is open.
+fn start_the_particles(
+    mut commands: Commands,
+    mut spawners: Query<(Entity, &mut bevy_hanabi::EffectSpawner), (With<WarmUp>, Without<ParticlesStarted>)>,
+) {
+    for (entity, mut spawner) in &mut spawners {
+        spawner.active = true;
+        spawner.reset();
+        commands.entity(entity).insert(ParticlesStarted);
+    }
+}
+
+/// Every frame rather than on change: a camera spawned shut is switched on by the first frame the
+/// gate is open.
+fn follow_the_gate(gate: Option<Res<WarmUpGate>>, mut cameras: Query<&mut Camera, With<WarmUp>>) {
+    let open = is_open(gate);
+    for mut camera in &mut cameras {
+        if camera.is_active != open {
+            camera.is_active = open;
+        }
+    }
+}
+
+fn spawn_cameras(mut commands: Commands, mut images: ResMut<Assets<Image>>, gate: Option<Res<WarmUpGate>>) {
+    let active = is_open(gate);
     let mut camera = |tonemapping: Tonemapping, dither: DebandDither, projection: Projection, name: &'static str| {
         let target = images.add(Image::new_target_texture(4, 4, TextureFormat::Rgba16Float, None));
         commands.spawn((
             WarmUp,
             Camera3d::default(),
+            Camera { is_active: active, ..default() },
             RenderTarget::Image(target.into()),
             Hdr,
             tonemapping,
@@ -70,6 +119,7 @@ fn spawn_cameras(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
     commands.spawn((
         WarmUp,
         Camera3d::default(),
+        Camera { is_active: active, ..default() },
         RenderTarget::Image(portrait.into()),
         Projection::Orthographic(OrthographicProjection::default_3d()),
         RenderLayers::layer(render_layers::WARM_UP),

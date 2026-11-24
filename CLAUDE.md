@@ -465,9 +465,22 @@ in a team mode is still a gamemode question.
 ## Editor and game in one process
 
 `AppMode` ([`src/common/app_mode.rs`](src/common/app_mode.rs)) is `Editor`,
-`Prop`, `Animation`, `Material`, `Weapon`, `Lang`, `Play`, `MainMenu`, `Onboarding` or `Joining`, iterable in that order, which is
+`Prop`, `Animation`, `Material`, `Weapon`, `Lang`, `Play`, `MainMenu`, `Onboarding`, `Joining` or `Starting`, iterable in that order, which is
 the Mode menu's order, with a separator above Play and above the main menu (`AppMode::in_the_menu`
-leaves out the last two). **`Joining`** ([`src/common/joining.rs`](src/common/joining.rs),
+leaves out the last three). **`Starting`** ([`src/startup_screen.rs`](src/startup_screen.rs)) is the
+*initial* state of a bare launch: a title picture, the "pikaia.space" wordmark centered over it, and
+a progress window in the bottom right with no button. The wordmark's letters are PNGs in
+`assets/default/images/wordmark/`, pre-rendered from Nabla in Chrome (Bevy's text does not paint
+COLRv1 color fonts) and placed by the `LETTERS` table; each drops from above the window with
+easeOutElastic over 0.5 s, 0.2 s after the one before, on a clock that moves at most a twentieth of
+a second a frame. The screen is up while the warm-up cameras and the lens compile their pipelines, the picture loads and
+the startup map's rooms and light settle, and then until ten frames in a row take under 0.1 s;
+then the box reads Done!. It stays until the wordmark has landed and a second more, which `Action::SkipIntro`
+(a left or right click, in the `Menu` context) skips once loading is done, and gives up waiting after 20 s. The warm-up cameras stay off behind a shut `WarmUpGate` until
+the picture has been up two frames, since each pipeline compiled in a frame holds that frame back
+from the window; every warm-up particle spawner is restarted once it opens, so a burst that died
+behind it is drawn again. A picture that will not load counts as up, so it cannot hold the gate. It then goes to `AfterStartup`, the main menu or onboarding, and the main menu's first
+picture is the startup screen's (`BackgroundSet::Startup`), so the one leads into the other. **`Joining`** ([`src/common/joining.rs`](src/common/joining.rs),
 [`src/joining_screen.rs`](src/joining_screen.rs)) is where a client is from the moment its role
 becomes a client until the server's files are fetched and built: `follow_the_server` records the
 server's mode in `ServerMode` instead of switching while it lasts, and `finish_joining` goes there
@@ -478,12 +491,12 @@ none; never the last one shown): "Joining {server}", a progress bar — comparin
 downloading by bytes to 80%, building by weighted steps to 100% (`joining::progress`) — a line
 naming the phase and file, and Disconnect, which leaves as the pause menu's does and drops
 everything held for the server. **`Onboarding`** ([`src/onboarding.rs`](src/onboarding.rs)) is never in the
-menu: it is the *initial* state, inserted by `OnboardingPlugin` when the saved player name is
+menu: it is where startup goes (`AfterStartup`, inserted by `OnboardingPlugin` with `Starting`) when the saved player name is
 blank and the command line names nothing to open or play (`EditorParams::chooses_where_to_start`:
 any mode flag (`--editor` among them), `--map`, `--serve`, `--connect`, `--server-config`, `--server-profile`, `--spectate`, `--rounds` or
 `--class`; not `--lang`, `--game` or `--profile`). It asks for a name and a field of
 view (45°–110°, default 80°), and Continue writes those two fields to `PlayerSettings`, leaving the rest as the Settings window left them, requests File → Demo
-Maps → Demo Scene and enters the main menu. A bare launch by a named player starts there too.
+Maps → Demo Scene and enters the main menu. A bare launch by a named player starts up into the main menu.
 Any start flag skips onboarding and the main menu, unnamed player or not, and starts in the map
 editor, where the flags take it on from. `--editor` opens the map editor and nothing else.
 

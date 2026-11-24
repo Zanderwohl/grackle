@@ -1,0 +1,6 @@
+Name: Nabla
+File: Nabla-Regular-VariableFont_EDPT,EHLT.ttf
+Designer: Arthur Reinders Folmer, Just van Rossum
+Copyright: Copyright 2022 The Nabla Project Authors (https://github.com/justvanrossum/nabla)
+License: SIL Open Font License, Version 1.1
+License File: OFL.txt
