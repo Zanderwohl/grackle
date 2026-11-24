@@ -1,6 +1,6 @@
 //! The first screen for somebody with no name saved: a name and a field of view, then on to the
-//! main menu with the demo scene asked for. Started as the initial [`AppMode`] rather than switched
-//! to, so the main menu's `OnEnter` never runs before it.
+//! main menu with the demo scene asked for. Reached from [`AppMode::Starting`], never from the main
+//! menu, so the main menu's `OnEnter` never runs before it.
 
 use bevy::prelude::*;
 use bevy_egui::egui::{self, Id, LayerId, Ui, UiBuilder};
@@ -11,6 +11,7 @@ use crate::common::file_menu::{FileAction, DEMO_SCENE};
 use crate::common::player_settings::{self, PlayerSettings, NAME_LIMIT};
 use crate::editor::panels::CurrentFilePath;
 use crate::get;
+use crate::startup_screen::AfterStartup;
 
 const WIDTH: f32 = 320.0;
 
@@ -25,10 +26,11 @@ impl Plugin for OnboardingPlugin {
     fn build(&self, app: &mut App) {
         let unnamed = app.world().get_resource::<PlayerSettings>().is_some_and(needs_onboarding);
         if !self.skip {
-            match unnamed {
-                true => app.insert_state(AppMode::Onboarding),
-                false => app.insert_state(AppMode::MainMenu),
+            let after = match unnamed {
+                true => AppMode::Onboarding,
+                false => AppMode::MainMenu,
             };
+            app.insert_state(AppMode::Starting).insert_resource(AfterStartup(after));
         }
         app.init_resource::<Draft>()
             .add_systems(Update, follow_the_settings.run_if(in_state(AppMode::Onboarding)))
@@ -161,19 +163,24 @@ mod tests {
     #[test]
     fn the_screen_shows_a_name_applied_from_the_settings_window() {
         let mut app = app(PlayerSettings::default(), false);
+        app.world_mut().resource_mut::<NextState<AppMode>>().set(AppMode::Onboarding);
+        app.update();
         app.world_mut().resource_mut::<PlayerSettings>().name = "Ada".into();
         app.update();
         assert_eq!(app.world().resource::<Draft>().name, "Ada");
     }
 
-    /// A bare launch goes to the main menu, after onboarding for somebody unnamed; a start flag
-    /// skips both and lands in the map editor, where the flags take it from.
+    /// A bare launch starts up, then goes to the main menu, after onboarding for somebody unnamed;
+    /// a start flag skips all three and lands in the map editor, where the flags take it from.
     #[test]
-    fn a_bare_launch_starts_in_the_main_menu_and_a_start_flag_skips_onboarding() {
+    fn a_bare_launch_starts_up_into_the_main_menu_and_a_start_flag_skips_onboarding() {
         let mode = |app: &App| *app.world().resource::<State<AppMode>>().get();
+        let after = |app: &App| app.world().get_resource::<AfterStartup>().map(|after| after.0);
         let named = PlayerSettings { name: "Ada".into(), ..default() };
-        assert_eq!(mode(&app(PlayerSettings::default(), false)), AppMode::Onboarding);
-        assert_eq!(mode(&app(named.clone(), false)), AppMode::MainMenu);
+        let unnamed_app = app(PlayerSettings::default(), false);
+        assert_eq!((mode(&unnamed_app), after(&unnamed_app)), (AppMode::Starting, Some(AppMode::Onboarding)));
+        let named_app = app(named.clone(), false);
+        assert_eq!((mode(&named_app), after(&named_app)), (AppMode::Starting, Some(AppMode::MainMenu)));
         assert_eq!(mode(&app(PlayerSettings::default(), true)), AppMode::Editor);
         assert_eq!(mode(&app(named, true)), AppMode::Editor);
     }

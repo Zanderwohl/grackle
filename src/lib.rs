@@ -11,6 +11,7 @@ pub mod server_browser;
 pub mod title_background;
 pub mod onboarding;
 pub mod joining_screen;
+pub mod startup_screen;
 pub mod tool;
 pub mod prop;
 pub mod game;

@@ -163,8 +163,9 @@ struct WarmUpCamera;
 #[derive(Component)]
 struct WarmUpLens;
 
+/// Present until the lens's pipelines are compiled; the startup screen waits on it.
 #[derive(Resource)]
-struct LensWarmUp {
+pub(crate) struct LensWarmUp {
     shader: Handle<Shader>,
     frames: u32,
 }
@@ -186,6 +187,7 @@ fn warm_up_the_lens(
     mut materials: ResMut<Assets<LensMaterial>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut images: ResMut<Assets<Image>>,
+    gate: Option<Res<crate::game::warm_up::WarmUpGate>>,
 ) {
     // Not the lenses' own view: a pass may not sample what it is drawing into.
     let target = images.add(Image::new_target_texture(4, 4, TextureFormat::Rgba16Float, None));
@@ -193,7 +195,7 @@ fn warm_up_the_lens(
     commands.spawn((
         WarmUpCamera,
         Camera3d::default(),
-        Camera { order: FORWARD_CAMERA_ORDER, ..default() },
+        Camera { order: FORWARD_CAMERA_ORDER, is_active: crate::game::warm_up::is_open(gate), ..default() },
         RenderTarget::Image(target.into()),
         Hdr,
         Tonemapping::None,
@@ -218,8 +220,19 @@ fn end_the_warm_up(
     asset_server: Res<AssetServer>,
     warm_up: Option<ResMut<LensWarmUp>>,
     drawn: Query<Entity, Or<(With<WarmUpCamera>, With<WarmUpLens>)>>,
+    gate: Option<Res<crate::game::warm_up::WarmUpGate>>,
+    mut cameras: Query<&mut Camera, With<WarmUpCamera>>,
 ) {
     let Some(mut warm_up) = warm_up else { return };
+    let open = crate::game::warm_up::is_open(gate);
+    for mut camera in &mut cameras {
+        if camera.is_active != open {
+            camera.is_active = open;
+        }
+    }
+    if !open {
+        return;
+    }
     if !asset_server.is_loaded_with_dependencies(&warm_up.shader) {
         return;
     }

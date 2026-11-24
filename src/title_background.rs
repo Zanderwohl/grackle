@@ -1,6 +1,8 @@
-//! The main menu's and the joining screen's backgrounds: a picture chosen at random from every
-//! pack's [`TITLE_BACKGROUNDS_DIR`] or [`LOADING_BACKGROUNDS_DIR`] each time the screen goes up,
-//! sized to cover the window. A loading picture is never the one shown the time before.
+//! The startup screen's, the main menu's and the joining screen's backgrounds: a picture chosen at
+//! random from every pack's [`TITLE_BACKGROUNDS_DIR`] or [`LOADING_BACKGROUNDS_DIR`] each time the
+//! screen goes up, sized to cover the window. A loading picture is never the one shown the time
+//! before, and the main menu's first picture is the startup screen's, so the one leads into the
+//! other.
 
 use std::path::PathBuf;
 
@@ -20,7 +22,7 @@ pub struct TitleBackgroundPlugin;
 
 impl Plugin for TitleBackgroundPlugin {
     fn build(&self, app: &mut App) {
-        let shown = |mode: Res<State<AppMode>>| matches!(mode.get(), AppMode::MainMenu | AppMode::Joining);
+        let shown = |mode: Res<State<AppMode>>| matches!(mode.get(), AppMode::Starting | AppMode::MainMenu | AppMode::Joining);
         app.init_resource::<TitlePictures>().add_systems(Update, (hang_a_background, cover_the_window.run_if(shown)).chain());
     }
 }
@@ -32,12 +34,14 @@ pub struct TitleBackground;
 pub enum BackgroundSet {
     Title,
     Loading,
+    /// A title picture, kept for the next [`BackgroundSet::Title`] to show again.
+    Startup,
 }
 
 impl BackgroundSet {
     fn folder(self) -> &'static str {
         match self {
-            BackgroundSet::Title => TITLE_BACKGROUNDS_DIR,
+            BackgroundSet::Title | BackgroundSet::Startup => TITLE_BACKGROUNDS_DIR,
             BackgroundSet::Loading => LOADING_BACKGROUNDS_DIR,
         }
     }
@@ -54,6 +58,8 @@ struct TitlePictures {
     paths: std::collections::HashMap<BackgroundSet, Vec<String>>,
     loaded: std::collections::HashMap<String, Handle<Image>>,
     last_loading: Option<String>,
+    /// The startup screen's pick, until the main menu shows it.
+    after_startup: Option<String>,
 }
 
 /// Every picture directly in [`TITLE_BACKGROUNDS_DIR`] across `listings` (lowest priority first), as
@@ -111,7 +117,7 @@ fn hang_a_background(
 ) {
     for (root, wants) in &roots {
         let Some(asset_server) = &asset_server else { continue };
-        let TitlePictures { paths, loaded, last_loading } = &mut *pictures;
+        let TitlePictures { paths, loaded, last_loading, after_startup } = &mut *pictures;
         let mut scan = |set: BackgroundSet| -> Vec<String> {
             paths
                 .entry(set)
@@ -122,7 +128,12 @@ fn hang_a_background(
                 .clone()
         };
         let path = match wants.0 {
-            BackgroundSet::Title => scan(BackgroundSet::Title).choose(&mut rand::rng()).cloned(),
+            BackgroundSet::Title => after_startup.take().or_else(|| scan(BackgroundSet::Title).choose(&mut rand::rng()).cloned()),
+            BackgroundSet::Startup => {
+                let picked = scan(BackgroundSet::Title).choose(&mut rand::rng()).cloned();
+                after_startup.clone_from(&picked);
+                picked
+            }
             BackgroundSet::Loading => {
                 let mut choices = scan(BackgroundSet::Loading);
                 if choices.is_empty() {

@@ -123,11 +123,11 @@ fn skip_materials_without_a_library(library: Option<Res<crate::material::library
 }
 
 /// Nothing will bake it further: up to date, turned off, or out of date with auto-bake off.
-fn settled(status: Option<&BakeStatus>) -> bool {
+pub(crate) fn settled(status: Option<&BakeStatus>) -> bool {
     status.is_none_or(|status| matches!(status.state, BakeState::UpToDate | BakeState::Skipped | BakeState::Stale))
 }
 
-fn bake_fraction(status: Option<&BakeStatus>) -> f32 {
+pub(crate) fn bake_fraction(status: Option<&BakeStatus>) -> f32 {
     match settled(status) {
         true => 1.0,
         // Short of 1 until it settles, since a bake can finish and be asked for again.

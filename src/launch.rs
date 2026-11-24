@@ -66,7 +66,9 @@ pub fn run() {
                    name: Some("grackle.app".to_owned()),
                    present_mode: PresentMode::AutoVsync,
                    prevent_default_event_handling: true,
-                   visible: true,
+                   // Shown by `startup_screen::show_the_window` once there is something in it, so
+                   // the startup work before the first frame is not a blank window.
+                   visible: false,
                    ..default()
                }),
                 primary_cursor_options: None,
@@ -135,6 +137,7 @@ pub fn run() {
         .add_plugins((crate::main_menu::MainMenuPlugin, crate::common::lan_discovery::LanDiscoveryPlugin, crate::server_browser::ServerBrowserPlugin))
         .add_plugins(crate::onboarding::OnboardingPlugin { skip: editor_params.chooses_where_to_start() })
         .add_plugins(crate::joining_screen::JoiningScreenPlugin)
+        .add_plugins(crate::startup_screen::StartupScreenPlugin)
         .add_systems(Startup, move || {
             // Read before the log existed, so said now.
             if let Some(problem) = &settings_problem {

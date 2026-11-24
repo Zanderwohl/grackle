@@ -38,6 +38,10 @@ pub enum AppMode {
     /// Between connecting to a server and its first screen: fetching its files and building them.
     /// Never offered by the Mode menu. See [`crate::common::joining`].
     Joining,
+    /// The first screen of a bare launch, up while the first frames compile pipelines and bake,
+    /// then on to the main menu or onboarding. Never offered by the Mode menu. See
+    /// [`crate::startup_screen`].
+    Starting,
 }
 
 impl AppMode {
@@ -87,6 +91,7 @@ impl AppMode {
             AppMode::Play => get!("app_mode.play"),
             AppMode::Onboarding => get!("app_mode.onboarding"),
             AppMode::Joining => get!("app_mode.joining"),
+            AppMode::Starting => get!("app_mode.starting"),
         }
     }
 
@@ -105,9 +110,9 @@ impl AppMode {
         true
     }
 
-    /// Onboarding and joining are passed through, never chosen.
+    /// Onboarding, joining and starting are passed through, never chosen.
     pub fn in_the_menu(self) -> bool {
-        !matches!(self, AppMode::Onboarding | AppMode::Joining)
+        !matches!(self, AppMode::Onboarding | AppMode::Joining | AppMode::Starting)
     }
 
     /// Joining is not offered, but a client is in it while networked.
@@ -178,7 +183,7 @@ impl CameFrom {
     pub fn after_a_round(self, role: Option<&NetRole>) -> AppMode {
         let online = role.is_some_and(NetRole::is_online);
         match self.0 {
-            AppMode::Play | AppMode::Onboarding | AppMode::Joining => AppMode::Editor,
+            AppMode::Play | AppMode::Onboarding | AppMode::Joining | AppMode::Starting => AppMode::Editor,
             mode if online && !mode.offered_networked() => AppMode::Editor,
             mode => mode,
         }
