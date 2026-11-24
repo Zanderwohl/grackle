@@ -144,10 +144,13 @@ impl Plugin for ForwardCameraPlugin {
     }
 }
 
-/// At startup, after every plugin has registered its gizmo groups.
+/// At startup, after every plugin has registered its gizmo groups. A group
+/// already on a layer of its own (one editor viewport's) keeps it.
 fn draw_gizmos_on_their_own_layer(mut store: ResMut<GizmoConfigStore>) {
     for (_, config, _) in store.iter_mut() {
-        config.render_layers = RenderLayers::layer(render_layers::GIZMOS);
+        if config.render_layers == RenderLayers::default() {
+            config.render_layers = RenderLayers::layer(render_layers::GIZMOS);
+        }
     }
 }
 
@@ -313,6 +316,22 @@ mod tests {
 
     use super::*;
     use crate::prop::surface::Surface;
+
+    #[test]
+    fn a_viewport_gizmo_group_keeps_its_own_layer() {
+        use crate::editor::viewport_gizmos::{self, Viewport2};
+        use bevy::gizmos::config::DefaultGizmoConfigGroup;
+        let mut world = World::new();
+        let mut store = GizmoConfigStore::default();
+        store.insert(GizmoConfig::default(), DefaultGizmoConfigGroup);
+        let own = RenderLayers::layer(viewport_gizmos::own_layer(2));
+        store.insert(GizmoConfig { render_layers: own.clone(), ..default() }, Viewport2);
+        world.insert_resource(store);
+        world.run_system_once(draw_gizmos_on_their_own_layer).unwrap();
+        let store = world.resource::<GizmoConfigStore>();
+        assert_eq!(store.config::<DefaultGizmoConfigGroup>().0.render_layers, RenderLayers::layer(render_layers::GIZMOS));
+        assert_eq!(store.config::<Viewport2>().0.render_layers, own);
+    }
 
     #[test]
     fn only_a_forward_camera_part_is_given_the_lens() {
