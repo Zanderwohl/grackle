@@ -300,10 +300,8 @@ pub fn sync_world_props(
     }
 }
 
-/// A client draws the server's instances only. One stood up while this machine was the authority,
-/// as after a link that failed or a disconnect with the server's map still open, would stand
-/// where the server's does, never taken, so a pickup would always look ready. The features
-/// forget them too, so going back to solo stands them up again.
+/// One stood up while this machine was solo, as after a failed link, would stand where the server's
+/// does and never be taken. The features forget them too, so going back to solo stands them up.
 fn drop_our_own_instances(
     mut commands: Commands,
     ours: Query<Entity, With<OfPropFeature>>,
@@ -1241,8 +1239,7 @@ mod tests {
         assert!(turned.angle_between(Quat::IDENTITY) > 0.1, "the fan stood still");
     }
 
-    /// Fails if a client, which is sent the instance and draws it, does not hide a pickup taken
-    /// on the server and show it again when it is back.
+    /// Fails if a client does not hide a pickup taken on the server, or show it when it is back.
     #[test]
     fn a_client_hides_a_pickup_the_server_says_is_taken() {
         let mut app = app_with_assets();
@@ -1267,8 +1264,8 @@ mod tests {
         assert!(shown(&mut app), "a pickup back was still hidden");
     }
 
-    /// Fails if a machine that becomes a client keeps the pickups it stood up alone, which stand
-    /// where the server's do and are never taken, or if going back to solo does not stand them up.
+    /// Fails if a machine that becomes a client keeps the pickups it stood up alone, or going back
+    /// to solo does not stand them up.
     #[test]
     fn a_client_draws_only_the_servers_pickups() {
         let mut app = app_with_assets();

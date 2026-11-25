@@ -827,10 +827,13 @@ a node with `PlateText` children, given its leaning panel after layout, repainte
 or `swatch` changes, its text black or white by `Swatch::text`. Its lines and panel stay hidden
 until the panel is laid out; the plate's own `Visibility` is its owner's, which is how a name tag
 hides one that is off screen. Name tags and the watched and killer banners are plates too. A **`PlateBar`**
-([`src/game/plate_bar.rs`](src/game/plate_bar.rs)) is a plate's panel as a bar: its swatch over the
-left `t` of its width, and the swatch at a fifth of its chroma over the rest, the colored panel
-drawn whole inside a node that clips it, so `t` moves only the clip. The panel behind the health
-number is one, `t` the viewed body's health over its class's (`fill_the_health_bar`).
+([`src/game/plate_bar.rs`](src/game/plate_bar.rs)) is a plate's panel as a bar: its swatch over
+`t` of its width from the end its `BarDirection` fills from, and the swatch at a fifth of its
+chroma over the rest, the colored panel drawn whole inside a node that clips it, so `t` moves only
+the clip. Below its `attention_below`, a `#FF3333` glow pulses under it: the outline stroked 5 px
+past the edge at 20% opacity and 1 Hz at the threshold, to 30 px, 40% and 3 Hz at empty, on real
+time. The panel behind the health number is one, `t` the viewed body's health over its class's
+(`fill_the_health_bar`), glowing below 0.2.
 
 **The viewmodel's arms are solved, not authored.** `place_the_viewmodel_arms`
 calls the same `grip_with` that puts a body's hands on a weapon, so a grip

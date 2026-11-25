@@ -431,8 +431,7 @@ fn dress_new_client(add: On<Add<LinkOf>>, mut commands: Commands) {
         ));
 }
 
-/// Seconds a link may go without finishing the handshake before it is dropped. A client gives up
-/// on a server that does not answer well before this.
+/// Before a link that has not connected is dropped. A client gives up well before this.
 const UNCONNECTED_LINK_SECONDS: f32 = 10.0;
 
 /// Seconds a link has waited to connect, each frame counting at most [`LONGEST_FRAME_SECONDS`].
@@ -872,8 +871,7 @@ mod tests {
         assert!(catalog.weapons.iter().any(|weapon| weapon.key == "pistol"), "the server's pistol does not load");
     }
 
-    /// Fails if a file larger than a client's download window stalls, which it does when the
-    /// client's receipts never free the window. The file is a round's map with a long name.
+    /// Fails if a file larger than a client's download window stalls.
     #[test]
     fn a_file_larger_than_the_download_window_arrives() {
         use crate::common::app_mode::AppMode;

@@ -635,8 +635,8 @@ fn report_nav(state: Res<NavBake>, mut progress: ResMut<BakeProgress>, role: Opt
     bake_job::report(&mut progress, BakeKind::Sight, state.sight.status());
 }
 
-/// A client's server runs the bots, so a graph baked or kept here would be one nobody walks. One
-/// left from before joining is dropped, so going back to solo bakes the map then standing.
+/// Only the server's bots walk a graph. One kept from before joining is dropped, so going back to
+/// solo bakes the map as it stands then.
 fn forget_the_graph_as_a_client(mut state: ResMut<NavBake>, role: Option<Res<NetRole>>) {
     if has_authority(role) || (state.graph.cells().is_empty() && !state.bake.is_baking() && !state.sight.is_baking()) {
         return;

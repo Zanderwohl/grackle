@@ -189,3 +189,9 @@ title = "GRACKLE"
 name = "Name"
 field_of_view = "Sichtfeld"
 continue = "Weiter"
+
+[settings.general]
+accessibility = "Barrierefreiheit"
+crouch_toggle = "Ducken umschalten"
+sighting_toggle = "Zielen umschalten"
+reduce_particles = "Weniger Partikel"

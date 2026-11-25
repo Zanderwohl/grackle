@@ -280,8 +280,8 @@ impl PlayerInput {
 #[derive(Resource, Default, Debug, Clone, Copy)]
 pub struct InputLatch(pub PlayerInput);
 
-/// Whether crouch is toggled down, with the crouch toggle on. Apart from the latch, which the pause
-/// menu clears, so the body ducks again once the menu closes. A new body starts standing.
+/// Kept apart from the latch, which the pause menu clears, so the body ducks again once the menu
+/// closes.
 #[derive(Resource, Default, Debug, Clone, Copy)]
 pub struct CrouchToggled(pub bool);
 
@@ -610,7 +610,13 @@ pub fn gather_input(
             toggled.0 ^= actions.just_pressed(Action::Crouch);
             toggled.0
         }
-        false => actions.pressed(Action::Crouch),
+        false => {
+            // So turning the toggle on again starts standing.
+            if toggled.0 {
+                toggled.0 = false;
+            }
+            actions.pressed(Action::Crouch)
+        }
     };
     input.hold_sights = !access.sighting_toggle;
 }

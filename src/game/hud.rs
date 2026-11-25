@@ -167,7 +167,8 @@ impl HudZone {
     /// The panel as a [`PlateBar`], filled by [`fill_the_health_bar`], in place of [`Self::panel`].
     fn bar(self) -> impl Bundle {
         let corners = leaning_corners(self != HudZone::Ammo, Corner::squircle(34.0), Corner::squircle(10.0));
-        (HealthBar, PlateBar::with_corners(Swatch::neutral(), 1.0, self != HudZone::Ammo, corners), self.panel_node())
+        let bar = PlateBar::with_corners(Swatch::neutral(), 1.0, self != HudZone::Ammo, corners).attention_below(HEALTH_ATTENTION);
+        (HealthBar, bar, self.panel_node())
     }
 
     /// The readout over a panel: as wide, and centered on the panel rather
@@ -232,6 +233,9 @@ pub(crate) fn panel_style(swatch: &Swatch) -> ShapeStyle {
         ..default()
     }
 }
+
+/// The share of its class's health below which the health bar glows red.
+const HEALTH_ATTENTION: f32 = 0.2;
 
 /// The bar behind the health number, colored over the share of health left.
 #[derive(Component)]

@@ -170,7 +170,8 @@ pub fn work_the_sights(
         match (weapon, scope) {
             (Some(_), Some(scope)) if allowed => {
                 if input.hold_sights {
-                    next.up = down;
+                    // Held across a switch, the new weapon waits for a press of its own.
+                    next.up = down && (went_down || next.up);
                 } else if went_down {
                     next.up = !next.up;
                 }
@@ -264,6 +265,15 @@ mod tests {
         }
         assert!(!tick(&mut world).up, "the sights stayed up once let go");
         assert!(!tick(&mut world).up, "the sights came back up with nothing held");
+
+        press(&mut world, body);
+        assert!(tick(&mut world).up);
+        world.get_mut::<Sights>(body).unwrap().weapon = None;
+        press(&mut world, body);
+        assert!(!tick(&mut world).up, "a switch made holding the button raised the new sights");
+        tick(&mut world);
+        press(&mut world, body);
+        assert!(tick(&mut world).up, "a fresh press after the switch did not raise them");
     }
 
     /// Fails if the scoped primary is not what fires while sighted, or is while not.

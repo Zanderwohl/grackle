@@ -67,16 +67,15 @@ pub struct Chunk {
 }
 
 const CHUNK_BYTES: usize = 32 * 1024;
-/// Sent per frame to all clients together, shared out a chunk at a time in turn. Every client is
-/// sent from one socket, and a burst larger than the system will queue is dropped
-/// (`ENOBUFS` on macOS) and sent again.
+/// Sent per frame to all clients together. Every client is sent from one socket, and a burst
+/// larger than the system will queue is dropped (`ENOBUFS` on macOS) and sent again.
 const BYTES_PER_FRAME: usize = 128 * 1024;
 /// Sent to one client and not yet reported [`Received`]. A client that stops reading, as while it
 /// bakes, is sent no more than this, and Lightyear resends no more than this to it.
 const WINDOW_BYTES: u64 = 256 * 1024;
 /// Before Lightyear sends an unacknowledged chunk again. Its own delay is 1.5 round trips, a few
-/// milliseconds on a LAN and shorter than a client takes to acknowledge, so every chunk went out
-/// twice.
+/// milliseconds on a LAN and shorter than a client takes to acknowledge, so every chunk would go
+/// out twice.
 const RESEND_AFTER: std::time::Duration = std::time::Duration::from_millis(100);
 /// Seconds between manifest rebuilds at least: a drag changes the map every frame.
 const REBUILD_INTERVAL: f32 = 0.25;

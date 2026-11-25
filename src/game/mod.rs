@@ -878,6 +878,12 @@ mod tests {
         assert!(!frame(&mut app, true), "a second press did not stand");
         assert!(!frame(&mut app, false));
         assert!(frame(&mut app, true));
+        let toggle = |app: &mut App, on: bool| app.world_mut().resource_mut::<PlayerSettings>().accessibility.crouch_toggle = on;
+        toggle(&mut app, false);
+        assert!(!frame(&mut app, false), "turned off, the toggle still ducked");
+        toggle(&mut app, true);
+        assert!(!frame(&mut app, false), "turned on again, the old toggle ducked");
+        assert!(frame(&mut app, true));
         enter(&mut app);
         app.update();
         assert!(!frame(&mut app, false), "a new body started ducked");

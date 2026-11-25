@@ -84,8 +84,7 @@ impl DebrisDecals {
     }
 }
 
-/// How this machine's controls and HUD behave. Acted on where the input is gathered or drawn,
-/// never by the server: hold-to-sight travels in the input itself.
+/// Acted on by this machine, not the server: hold-to-sight travels in the input.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AccessibilitySettings {
@@ -94,7 +93,7 @@ pub struct AccessibilitySettings {
     /// Each press of a scope's button raises or lowers the sights; off, they are up while it is
     /// held.
     pub sighting_toggle: bool,
-    /// No flames along the bottom of the HUD while on fire, only those up its sides.
+    /// Leaves out the HUD's flames along the bottom and the flames on the body or corpse viewed.
     pub reduce_particles: bool,
 }
 
