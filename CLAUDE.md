@@ -815,7 +815,7 @@ round rather than with a body: without one its crosshair and readouts hide. Each
 crosshair leaves, so several can be up at once.
 
 The **kill feed** ([`src/game/kill_feed.rs`](src/game/kill_feed.rs)) is up to five recent deaths
-at the top right of the safe zone, in the order they happened, oldest at the top. A line is up
+at the top right of the window safe zone, in the order they happened, oldest at the top. A line is up
 for ten seconds, or twenty if it names us; the latest two naming us are kept, and the other
 slots go to the latest of the rest, so ours are bumped less. It is built from the `Died` every
 machine gets, so spectators and every mode see it. "Killer [icon] victim" or "killer + assist [icon] victim" is
@@ -2792,9 +2792,9 @@ body like any switch, and choosing a team from `.` ends it. A client reads
 its seat off the server's `TeamOptions`, so the view below runs on every
 machine from what it is told.
 
-- **The view is a list, not cameras**: every living body's eye (by
-  `PlayerId`), then every **spectator camera** the seat may look through —
-  or every spawn point (by entity) on a map with none — stepped with the
+- **The view is a list, not cameras**: every **spectator camera** the seat
+  may look through, then every living body's eye (by `PlayerId`), then — on
+  a map with no camera — every spawn point (by entity), stepped with the
   left button and back with the right, wrapping. A `SpectatorCamera`
   ([`src/editor/spectator_camera.rs`](src/editor/spectator_camera.rs)) is a
   placed feature like a prop — a `PointRef` and a turn — with a field of
@@ -2827,9 +2827,13 @@ machine from what it is told.
   its row is lit on both scoreboards (which go up with the round, not with a
   body), damage direction is its hits, and the viewmodel, its arms, kicks and
   reloads are its, and so is the apparent muzzle its shots are drawn from;
-  the weapon selector stays ours, since it answers this machine's input. Their
-  name is on a name-tag panel at the bottom middle of the safe zone, with the
-  goal under it for a bot (`name_whoever_is_watched`). With `F8` on, a
+  the weapon selector stays ours, since it answers this machine's input. Looking out
+  of a body but not a spectator camera, "Spectating {name}" is on a plate at the top middle of the
+  safe zone in their color, and a vignette darkens the window's edges; through the post-game the
+  same plate says "{winner} wins!" instead, a team in a team mode
+  ([`src/game/top_banner.rs`](src/game/top_banner.rs)). It sits 1.5 of its own heights down, clear
+  of the kill feed's first line. A watched bot's name and goal are also on a name-tag panel at the
+  bottom middle of the safe zone while `F8` is on (`name_whoever_is_watched`). With `F8` on, a
   watched bot's every want and its pull is a table top right of the window
   safe zone, alphabetical, the chosen one bright
   ([`src/game/pull_table.rs`](src/game/pull_table.rs)).
@@ -2947,7 +2951,7 @@ again, and cuts back in rather than swinging from the corpse.
 [documentation/kill-cam.md](documentation/kill-cam.md)): the match slows to a
 stop over a second while the view swings out over our corpse and glides to a
 framing of the killer, head to feet and never further than we died, holds a
-second, then spectates (from their eye) until the next body, which cuts it
+second, then spectates from the top of the list, a spectator camera first, until the next body, which cuts it
 short at any point. Until it spectates, a panel at the middle of the window
 safe zone's right edge names the killer and the weapon (`Died` carries the killing `Cause`).
 The killer is `Died`'s, the last hit; a death at our own

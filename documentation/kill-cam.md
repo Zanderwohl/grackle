@@ -38,7 +38,7 @@ All times are real seconds from the moment the kill cam starts.
 | 0 | 0.5 | The death cam: from our eye out to third person over our corpse, as now | Slowing from full speed |
 | 0.5 | 1.0 | Glides from wherever it was to the killer's framing | Still slowing; stopped at 1.0 |
 | 1.0 | 2.0 | Holds on the killer | Stopped |
-| 2.0 | respawn | The spectator cycle, starting on the killer's eye | Live |
+| 2.0 | respawn | The spectator cycle, starting on its first spectator camera | Live |
 
 - **The rate falls linearly** from 1 to 0 over the first second, so the view sees half a second
   of match time and ends half a second behind it.
@@ -119,7 +119,7 @@ records drawn `GlobalTransform`s and puts old ones back for the render.
       player
 - [x] Killer framing, pulled short of walls; never further than our pivot
 - [x] `place_camera` glides to the framing and holds there
-- [x] Spectator cycle while dead after the hold, starting on the killer's eye
+- [x] Spectator cycle while dead after the hold, starting on its first spectator camera
 - [x] `Replay` + `ReplayHistory`: record, play, restore in `First`
 - [x] Hide meshes born after the view time; ghost meshes despawned before it
 - [x] The death cam's pivot follows the replayed corpse

@@ -26,6 +26,7 @@ pub mod body_mesh;
 pub mod bot;
 pub mod match_cycle;
 pub mod match_banner;
+pub mod top_banner;
 pub mod bot_sense;
 pub mod bot_think;
 pub mod bot_fight;
@@ -130,7 +131,7 @@ impl Plugin for GamePlugin {
             .add_plugins((crate::game::class_choice::ClassChoicePlugin, crate::game::class_picker::ClassPickerPlugin))
             .add_plugins((crate::game::team_choice::TeamChoicePlugin, crate::game::team_picker::TeamPickerPlugin, crate::game::spectate::SpectatePlugin, crate::game::kill_cam::KillCamPlugin))
             .add_plugins(crate::game::damage_direction::DamageDirectionPlugin)
-            .add_plugins(crate::game::name_tag::NameTagPlugin)
+            .add_plugins((crate::game::name_tag::NameTagPlugin, crate::game::top_banner::TopBannerPlugin))
             .add_plugins((crate::game::plate::PlatePlugin, crate::game::plate_bar::PlateBarPlugin, crate::game::plate_button::PlateButtonPlugin, crate::game::kill_feed::KillFeedPlugin, crate::game::taunt_menu::TauntMenuPlugin))
             .add_plugins(crate::game::trigger::TriggerPlugin)
             .init_state::<AppMode>()

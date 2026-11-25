@@ -16,7 +16,7 @@ use crate::game::respawn::OurIdentity;
 use crate::game::player::{start_the_death_cam, DeathCam, LocalPlayer, OurLastBody, Player, PlayerCamera, CAMERA_RADIUS};
 use crate::game::ragdoll::{CorpseOf, Ragdoll};
 use crate::game::replay::Replay;
-use crate::game::spectate::{SpectatorView, Viewpoint};
+use crate::game::spectate::SpectatorView;
 use crate::game::team_choice::TeamOptions;
 
 /// Seconds out from the eye to third person over our body.
@@ -270,8 +270,9 @@ fn run_the_kill_cam(
     }
 
     if phase == Phase::Spectate {
+        // From the top of the spectator list, where the cameras are.
         if was != Phase::Spectate {
-            view.at = Some(Viewpoint::Eye(kill_cam.killer));
+            *view = SpectatorView::default();
         }
         if replay.is_some() {
             commands.remove_resource::<Replay>();
@@ -399,11 +400,38 @@ mod tests {
         }
         assert!(world.resource::<KillCam>().spectating());
         assert!(!world.contains_resource::<Replay>(), "still replaying while spectating");
-        assert_eq!(world.resource::<SpectatorView>().at, Some(Viewpoint::Eye(PlayerId(7))));
+        assert_eq!(world.resource::<SpectatorView>().at, None, "spectating did not start from the top of the list");
 
         world.spawn(LocalPlayer);
         tick(&mut world, 0.1);
         assert!(!world.contains_resource::<KillCam>(), "outlived the respawn");
+    }
+
+    /// Breaks if spectating after the kill cam starts on a body while a spectator camera stands.
+    #[test]
+    fn spectating_after_the_kill_cam_starts_in_a_camera() {
+        use crate::editor::spectator_camera::{SpectatorCameraSpec, Viewers};
+        use crate::game::pause_menu::MouseHeld;
+        use crate::game::player::InputLatch;
+        use crate::game::respawn::Seat;
+        use crate::game::spectate::{watch, Viewpoint};
+        use bevy::ecs::system::RunSystemOnce;
+
+        let mut world = World::new();
+        world.insert_resource(TeamOptions { seat: Seat::Playing(None), ..default() });
+        world.init_resource::<crate::common::keybind::Actions>();
+        world.init_resource::<MouseHeld>();
+        world.init_resource::<InputLatch>();
+        world.init_resource::<SpectatorView>();
+        let mut cam = KillCam::new(PlayerId(7), None, 0.0, Vec3::ZERO);
+        cam.elapsed = SWING_SECONDS + GLIDE_SECONDS + HOLD_SECONDS;
+        assert!(cam.spectating());
+        world.insert_resource(cam);
+        world.spawn((Player::default(), PlayerId(7)));
+        let camera = world.spawn((Transform::default(), SpectatorCameraSpec { fov: 1.0, order: 0, viewers: Viewers::default() })).id();
+
+        world.run_system_once(watch).unwrap();
+        assert_eq!(world.resource::<SpectatorView>().at, Some(Viewpoint::Camera(camera)));
     }
 
     /// Breaks if the phases do not come in order, or the glide does not arrive.

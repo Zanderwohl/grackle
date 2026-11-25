@@ -26,7 +26,8 @@ pub const LAST_FRAG_GRACE: f32 = 2.0;
 #[derive(Resource, Default)]
 pub struct MatchCycle;
 
-/// Who won the match just ended; only they come back in the post-game. Authority only.
+/// Who won the match just ended; only they come back in the post-game. Picked by the authority and
+/// stated to clients with the phase.
 #[derive(Resource, Clone, Debug, Default, PartialEq)]
 pub struct Winners(pub Vec<PlayerId>);
 
@@ -328,8 +329,12 @@ fn follow_the_server_phase(
     phase: Res<State<MatchPhase>>,
     mut next: ResMut<NextState<MatchPhase>>,
     mut number: ResMut<MatchNumber>,
+    mut winners: ResMut<Winners>,
 ) {
-    let Some(stated) = server.0 else { return };
+    let Some(stated) = server.0.as_ref() else { return };
+    if winners.0 != stated.winners {
+        winners.0.clone_from(&stated.winners);
+    }
     let restart = stated.phase == MatchPhase::PreGame && number.0 != stated.number;
     if *phase.get() != stated.phase || restart {
         info!("Server says the match is now {:?}", stated.phase);

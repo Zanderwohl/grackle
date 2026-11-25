@@ -697,6 +697,11 @@ healing = "Healing"
 waiting = "Waiting for players"
 start = "Start!"
 between_rounds = "Waiting for next round to start."
+wins = "{ winner } wins!"
+tie = "{ winners } tie!"
+# Between the names of those who tied.
+and = " and "
+spectating = "Spectating { name }"
 
 [hud]
 reloading = "Reloading"
