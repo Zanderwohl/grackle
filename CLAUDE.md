@@ -268,6 +268,7 @@ shape is a new producer and not a rewrite of every consumer — see
 | `src/common/` | Shared: i18n, geometry, rays, gamemodes, items. |
 | `src/unlock/` | The crate-drop prototype. Orthogonal — see above. |
 | `src/bin/` | `ensure_lang` (fills missing translation keys), `new_map_template` (writes the new-map, demo-scene, arena, cloister, waterworks and showcase blueprints), `map_stats` (bakes a blueprint's nav graph headless and prints its statistics and top-down charts of each field), `decal_images` (rasterizes the default pack's decal SVGs), `bake_body_clips` (seeds a pack's body animations from the pose functions they replace, and writes the clips `seed::WRITTEN` generates key by key), `default_materials` (writes the default pack's materials), `crate_drop`. |
+| `scripts/` | `encode_sounds.sh` (encodes every pack's sounds to Ogg Vorbis; see [documentation/sounds.md](documentation/sounds.md)). |
 | `assets/default/` | The default pack: `lang/`, `blueprints/`, `servers/` (example `--server-config` files), `images/backgrounds/title/` (main-menu backgrounds). |
 | `assets/user/` | The user pack: gitignored, made at startup with `blueprints/`, `props/` and `images/backgrounds/title/`, last in `default_packs()` so it overrides the shipped one. A new map or prop is saved here unless the document already has a folder. Also holds `settings.toml`, the player settings, `shortcuts.toml`, `server.toml` (the Round tab) and `recent.toml` (the File menu's Recent lists). |
 | `cache/` | Gitignored, derived from the packs and maps: `thumbnails/{pack}/props/{name}.png`, `nav/{hash}.bin`, `lightmap/{hash}.bin`, `postcards/{pack}/{map}/*.png`, `rounds/{pack}/{map}/*.jsonl`, `trash/{kind}/` (deleted pack files, kept 30 days). What is about one pack file is filed under its pack and name ([`src/common/cache_path.rs`](src/common/cache_path.rs)); a file in no pack under `_no_pack/`, and a map with no file under `_no_pack/untitled` (its postcards in `_no_pack/untitled_{hash}`, so two unsaved maps keep a set each). Safe to delete, though the trash is the only copy of what is in it. |
@@ -1828,8 +1829,9 @@ link-local address, or it named a `.local` host. A host is never muted, since
 it may be the machine on the room's speakers. Bevy plays
 MP3, FLAC and WAV through the features named in `Cargo.toml`, Ogg Vorbis by
 default; an Opus file is listed but will not decode. **A pack's sounds are Ogg Vorbis** (q9, about 320 kbps stereo,
-resampled to 48 kHz at most), encoded with `oggenc` beside the original they came from; an original over 1 MB
-is named in its folder's `.gitignore`. Where one place holds a sound in several formats, the one earliest
+resampled to 48 kHz at most), encoded by `scripts/encode_sounds.sh` beside the original they came from; an
+original over 1 MB is named in its folder's `.gitignore`. Adding one is in
+[documentation/sounds.md](documentation/sounds.md). Where one place holds a sound in several formats, the one earliest
 in `SOUND_EXTENSIONS` (Ogg first) is the track (`music::one_format_each`).
 
 ## Editing a material
