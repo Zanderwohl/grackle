@@ -1827,7 +1827,10 @@ a client is on a local network when its server is at a loopback, private or
 link-local address, or it named a `.local` host. A host is never muted, since
 it may be the machine on the room's speakers. Bevy plays
 MP3, FLAC and WAV through the features named in `Cargo.toml`, Ogg Vorbis by
-default; an Opus file is listed but will not decode.
+default; an Opus file is listed but will not decode. **A pack's sounds are Ogg Vorbis** (q9, about 320 kbps stereo,
+resampled to 48 kHz at most), encoded with `oggenc` beside the original they came from; an original over 1 MB
+is named in its folder's `.gitignore`. Where one place holds a sound in several formats, the one earliest
+in `SOUND_EXTENSIONS` (Ogg first) is the track (`music::one_format_each`).
 
 ## Editing a material
 

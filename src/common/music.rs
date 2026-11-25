@@ -23,6 +23,11 @@
 //! is written.
 //!
 //! The highest-priority pack's copy of a folder or a loose file wins whole.
+//!
+//! Where one place holds a sound in several formats (`shot.wav` beside
+//! `shot.ogg`), only the one earliest in [`SOUND_EXTENSIONS`] is a track: the
+//! pack's sounds are Ogg Vorbis, and the others are the originals they were
+//! encoded from.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -34,8 +39,9 @@ use crate::common::attribution::{self, PackListing, ATTRIBUTION_FILE};
 
 pub const MUSIC_DIR: &str = "music";
 
-/// Matched without case.
-pub const SOUND_EXTENSIONS: [&str; 6] = ["ogg", "oga", "opus", "mp3", "wav", "flac"];
+/// Matched without case, most preferred first. Opus is last because Bevy lists
+/// it and will not decode it.
+pub const SOUND_EXTENSIONS: [&str; 6] = ["ogg", "oga", "flac", "wav", "mp3", "opus"];
 
 const KEYS: [&str; 6] = ["title", "artist", "copyright", "license", "license file", "source"];
 
@@ -149,9 +155,34 @@ impl Track {
 }
 
 pub fn is_sound(file: &str) -> bool {
-    file.rsplit_once('.').is_some_and(|(stem, ext)| {
-        !stem.is_empty() && SOUND_EXTENSIONS.iter().any(|known| known.eq_ignore_ascii_case(ext))
-    })
+    sound_rank(file).is_some()
+}
+
+/// The place of `file`'s extension in [`SOUND_EXTENSIONS`]; `None` if it is not a sound.
+fn sound_rank(file: &str) -> Option<usize> {
+    let name = file.rsplit('/').next().unwrap_or(file);
+    let (stem, ext) = name.rsplit_once('.')?;
+    if stem.is_empty() {
+        return None;
+    }
+    SOUND_EXTENSIONS.iter().position(|known| known.eq_ignore_ascii_case(ext))
+}
+
+/// The sound files among `files`, one per path without its extension: the
+/// format earliest in [`SOUND_EXTENSIONS`]. Sorted by path.
+pub fn one_format_each<'a>(files: impl IntoIterator<Item = &'a String>) -> Vec<String> {
+    let mut best: BTreeMap<&str, (usize, &String)> = BTreeMap::new();
+    for file in files {
+        let Some(rank) = sound_rank(file) else { continue };
+        let stem = file.rsplit_once('.').map_or(file.as_str(), |(stem, _)| stem);
+        let entry = best.entry(stem).or_insert((rank, file));
+        if rank < entry.0 {
+            *entry = (rank, file);
+        }
+    }
+    let mut chosen: Vec<String> = best.into_values().map(|(_, file)| file.clone()).collect();
+    chosen.sort();
+    chosen
 }
 
 /// `listings` lowest priority first. A folder with nothing to play is skipped,
@@ -163,15 +194,19 @@ pub fn discover(listings: &[PackListing], source: &dyn AssetSource) -> (MusicLib
     let mut loose: BTreeMap<String, Track> = BTreeMap::new();
     for listing in listings {
         let mut in_this_pack: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        let mut loose_here = Vec::new();
         for file in &listing.files {
             let Some(rest) = file.strip_prefix(MUSIC_DIR).and_then(|rest| rest.strip_prefix('/')) else { continue };
             match rest.split('/').collect::<Vec<_>>()[..] {
-                [name] if is_sound(name) => {
-                    loose.insert(name.to_owned(), Track { pack: listing.pack.clone(), path: file.clone() });
-                }
+                [_] => loose_here.push(file.clone()),
                 [folder, _] => in_this_pack.entry(folder.to_owned()).or_default().push(file.clone()),
                 _ => {}
             }
+        }
+        // Keyed without the extension, so a higher pack's `a.ogg` replaces a lower one's `a.mp3`.
+        for file in one_format_each(&loose_here) {
+            let stem = file.rsplit_once('.').map_or(file.as_str(), |(stem, _)| stem).to_owned();
+            loose.insert(stem, Track { pack: listing.pack.clone(), path: file });
         }
         for (folder, files) in in_this_pack {
             folders.insert(folder, (listing.pack.clone(), files));
@@ -181,15 +216,11 @@ pub fn discover(listings: &[PackListing], source: &dyn AssetSource) -> (MusicLib
     let mut warnings = Vec::new();
     let mut credits = Vec::new();
     for (folder, (pack, files)) in folders {
-        let mut tracks: Vec<Track> = files
-            .iter()
-            .filter(|file| is_sound(file.rsplit('/').next().unwrap_or(file)))
-            .map(|file| Track { pack: pack.clone(), path: file.clone() })
-            .collect();
+        let tracks: Vec<Track> =
+            one_format_each(&files).into_iter().map(|path| Track { pack: pack.clone(), path }).collect();
         if tracks.is_empty() {
             continue;
         }
-        tracks.sort_by(|a, b| a.path.cmp(&b.path));
         let attribution_path = format!("{MUSIC_DIR}/{folder}/{ATTRIBUTION_FILE}");
         let attribution = match files.contains(&attribution_path) {
             false => None,
@@ -313,6 +344,30 @@ pub(crate) mod tests {
     fn sound_files_are_known_by_extension_without_case() {
         assert!(is_sound("a.OGG") && is_sound("b.flac") && is_sound("c.d.mp3"));
         assert!(!is_sound("attribution.txt") && !is_sound(".ogg") && !is_sound("ogg"));
+    }
+
+    #[test]
+    fn one_place_with_several_formats_is_one_track_in_the_preferred_one() {
+        let (listings, files) = memory_packs(&[
+            (
+                "default",
+                &[
+                    ("music/Shot/attribution.txt", "Title: Shot"),
+                    ("music/Shot/shot.wav", ""),
+                    ("music/Shot/shot.OGG", ""),
+                    ("music/Shot/echo.mp3", ""),
+                    ("music/Shot/echo.flac", ""),
+                    ("music/loose.mp3", ""),
+                    ("music/loose.wav", ""),
+                    ("music/other.mp3", ""),
+                ],
+            ),
+            ("user", &[("music/other.ogg", "")]),
+        ]);
+        let (library, _) = discover(&listings, &files);
+        let paths: Vec<&str> = library.tracks().map(|track| track.path.as_str()).collect();
+        assert_eq!(paths, ["music/Shot/echo.flac", "music/Shot/shot.OGG", "music/loose.wav", "music/other.ogg"]);
+        assert_eq!(library.track("music/other.ogg").unwrap().pack, PathBuf::from("user"));
     }
 
     #[test]
