@@ -243,9 +243,9 @@ regions = [19]
 [features.op.surface]
 style = "plastic"
 tint = [
-    0.2594474,
-    0.54728514,
     0.23943725,
+    0.41893354,
+    0.54728514,
 ]
 
 [[features]]
