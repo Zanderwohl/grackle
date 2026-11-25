@@ -194,6 +194,7 @@ impl Plugin for WorldPropPlugin {
                     .chain()
                     .run_if(crate::common::net::has_authority),
             )
+            .add_systems(Update, drop_our_own_instances.run_if(crate::common::net::is_remote_client))
             // Not authority-gated, as the room rebuild beside it is not: a
             // client predicting its movement walks into its own copy.
             .add_systems(
@@ -296,6 +297,21 @@ pub fn sync_world_props(
         if features.get(of.0).is_err() {
             commands.entity(instance).despawn();
         }
+    }
+}
+
+/// One stood up while this machine was solo, as after a failed link, would stand where the server's
+/// does and never be taken. The features forget them too, so going back to solo stands them up.
+fn drop_our_own_instances(
+    mut commands: Commands,
+    ours: Query<Entity, With<OfPropFeature>>,
+    features: Query<Entity, With<StandsFor>>,
+) {
+    for instance in &ours {
+        commands.entity(instance).despawn();
+    }
+    for feature in &features {
+        commands.entity(feature).remove::<StandsFor>();
     }
 }
 
@@ -1221,6 +1237,51 @@ mod tests {
         let drawn = world.query::<&DrawnProp>().single(world).unwrap();
         let turned = world.get::<Transform>(drawn.parts[0]).unwrap().rotation;
         assert!(turned.angle_between(Quat::IDENTITY) > 0.1, "the fan stood still");
+    }
+
+    /// Fails if a client does not hide a pickup taken on the server, or show it when it is back.
+    #[test]
+    fn a_client_hides_a_pickup_the_server_says_is_taken() {
+        let mut app = app_with_assets();
+        app.insert_resource(crate::common::net::NetRole::Client { host: "localhost".into(), port: 1 });
+        adopt_pickup(&mut app, PickupStyle::Quake);
+        let instance = app
+            .world_mut()
+            .spawn((WorldProp { model: "hovering".into(), at: Vec3::ZERO, rotation: Quat::IDENTITY }, Pickup::default()))
+            .id();
+        let shown = |app: &mut App| {
+            app.update();
+            app.update();
+            let world = app.world_mut();
+            let drawn = world.get::<DrawnProp>(instance).expect("the client drew nothing").parts.clone();
+            assert!(!drawn.is_empty());
+            drawn.iter().all(|part| world.get::<Visibility>(*part) != Some(&Visibility::Hidden))
+        };
+        assert!(shown(&mut app), "a pickup standing was hidden");
+        app.world_mut().get_mut::<Pickup>(instance).unwrap().taken = true;
+        assert!(!shown(&mut app), "a pickup taken was still drawn");
+        app.world_mut().get_mut::<Pickup>(instance).unwrap().taken = false;
+        assert!(shown(&mut app), "a pickup back was still hidden");
+    }
+
+    /// Fails if a machine that becomes a client keeps the pickups it stood up alone, or going back
+    /// to solo does not stand them up.
+    #[test]
+    fn a_client_draws_only_the_servers_pickups() {
+        let mut app = app_with_assets();
+        adopt_pickup(&mut app, PickupStyle::Quake);
+        app.world_mut().spawn((PropMarker, PropModel("hovering".into()), Transform::default()));
+        let ours = |app: &mut App| {
+            app.update();
+            app.update();
+            let world = app.world_mut();
+            world.query_filtered::<(), With<WorldProp>>().iter(world).count()
+        };
+        assert_eq!(ours(&mut app), 1, "solo stood up no pickup");
+        app.insert_resource(crate::common::net::NetRole::Client { host: "localhost".into(), port: 1 });
+        assert_eq!(ours(&mut app), 0, "a client kept the pickup it stood up alone");
+        app.insert_resource(crate::common::net::NetRole::Solo);
+        assert_eq!(ours(&mut app), 1, "back to solo, the pickup was not stood up again");
     }
 
     /// Fails if a TF2 pickup turns while it is being placed, or stops turning

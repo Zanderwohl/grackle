@@ -226,7 +226,7 @@ fn send_postcards(
     server: Option<Single<&Endpoint, With<Server>>>,
     joined: Query<Entity, (With<ClientOf>, Added<Connected>)>,
     mut sent: Local<PrintedCards>,
-    mut sender: ServerMultiMessageSender,
+    mut sender: crate::common::net_transport::ToClients,
 ) -> Result {
     let Some(server) = server else { return Ok(()) };
     if press.pngs != *sent {

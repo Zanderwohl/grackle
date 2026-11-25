@@ -215,7 +215,7 @@ fn cue_the_closing_in(
 fn send_cues(
     mut cues: MessageReader<MusicCue>,
     server: Option<Single<&Endpoint, With<Server>>>,
-    mut sender: ServerMultiMessageSender,
+    mut sender: crate::common::net_transport::ToClients,
 ) -> Result {
     let Some(server) = server else { return Ok(()) };
     for cue in cues.read() {

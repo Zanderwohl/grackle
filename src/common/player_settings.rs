@@ -84,6 +84,25 @@ impl DebrisDecals {
     }
 }
 
+/// Acted on by this machine, not the server: hold-to-sight travels in the input.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AccessibilitySettings {
+    /// Each press of crouch ducks or stands, rather than holding it to duck.
+    pub crouch_toggle: bool,
+    /// Each press of a scope's button raises or lowers the sights; off, they are up while it is
+    /// held.
+    pub sighting_toggle: bool,
+    /// Leaves out the HUD's flames along the bottom and the flames on the body or corpse viewed.
+    pub reduce_particles: bool,
+}
+
+impl Default for AccessibilitySettings {
+    fn default() -> Self {
+        Self { crouch_toggle: false, sighting_toggle: true, reduce_particles: false }
+    }
+}
+
 #[derive(Resource, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PlayerSettings {
@@ -95,11 +114,12 @@ pub struct PlayerSettings {
     pub field_of_view: u32,
     pub debris: DebrisDecals,
     pub sound: SoundSettings,
+    pub accessibility: AccessibilitySettings,
 }
 
 impl Default for PlayerSettings {
     fn default() -> Self {
-        Self { name: String::new(), auto_reload: true, field_of_view: DEFAULT_FIELD_OF_VIEW, debris: DebrisDecals::default(), sound: SoundSettings::default() }
+        Self { name: String::new(), auto_reload: true, field_of_view: DEFAULT_FIELD_OF_VIEW, debris: DebrisDecals::default(), sound: SoundSettings::default(), accessibility: AccessibilitySettings::default() }
     }
 }
 

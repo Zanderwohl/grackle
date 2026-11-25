@@ -1988,6 +1988,10 @@ player = "Player"
 name = "Name"
 auto_reload = "Auto-reload"
 field_of_view = "Field of view"
+accessibility = "Accessibility"
+crouch_toggle = "Crouch toggle"
+sighting_toggle = "Sighting toggle"
+reduce_particles = "Reduce particles"
 
 [settings.graphics]
 debris = "Debris decals"

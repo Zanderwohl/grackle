@@ -601,18 +601,21 @@ fn hull_middle(drawn: &Transform, boxes: &Hitboxes, tick: Option<&PhysicsBody>) 
 }
 
 /// Our own afterburn is drawn in first person too: the faint glow on the arms
-/// is the only other sign of being on fire.
+/// is the only other sign of being on fire. With reduced particles the body we
+/// view starts none: they rise across the middle of the view.
 #[allow(clippy::type_complexity)]
 fn follow_the_burning(
     mut commands: Commands,
     time: Res<Time<EffectSimulation>>,
-    bodies: Query<(&Transform, &Hitboxes, Has<OnFire>, Option<&Player>, Option<&PhysicsBody>)>,
+    settings: Option<Res<crate::common::player_settings::PlayerSettings>>,
+    bodies: Query<(&Transform, &Hitboxes, Has<OnFire>, Option<&Player>, Option<&PhysicsBody>, Has<crate::game::player::LocalPlayer>, Has<crate::game::player::Watched>)>,
     mut afterburns: Query<
         (Entity, &mut Afterburn, &mut Transform, &mut EffectProperties, Option<&mut EffectSpawner>),
         Without<Hitboxes>,
     >,
 ) {
     let dt = time.delta_secs();
+    let reduced = settings.is_some_and(|settings| settings.accessibility.reduce_particles);
     for (entity, mut afterburn, mut transform, mut properties, spawner) in &mut afterburns {
         let body = bodies.get(afterburn.body).ok();
         let lit = body.is_some_and(|(_, _, burning, ..)| burning);
@@ -624,13 +627,15 @@ fn follow_the_burning(
             }
             continue;
         }
+        let viewed = body.is_some_and(|(.., ours, watched)| ours || watched);
+        let starts = lit && !(reduced && viewed);
         // Added by Hanabi in `PostUpdate`, so absent on an emitter's first frame.
         if let Some(mut spawner) = spawner
-            && spawner.active != lit
+            && spawner.active != starts
         {
-            spawner.active = lit;
+            spawner.active = starts;
         }
-        let Some((drawn, boxes, _, player, tick)) = body else { continue };
+        let Some((drawn, boxes, _, player, tick, ..)) = body else { continue };
         if !lit {
             continue;
         }
@@ -682,15 +687,24 @@ fn corpse_fire_box(least: Vec3, most: Vec3) -> (Vec3, Vec3) {
     ((least + most) * 0.5, ((most - least) * 0.5 * CORPSE_BOX_SHARE).max(Vec3::splat(CORPSE_LEAST_BOX)))
 }
 
+/// With reduced particles, the corpse the death cam follows starts no flames: it is in the middle
+/// of the view.
 fn follow_the_burnt_corpses(
     mut commands: Commands,
     time: Res<Time<EffectSimulation>>,
-    corpses: Query<&Ragdoll>,
+    settings: Option<Res<crate::common::player_settings::PlayerSettings>>,
+    death_cam: Option<Res<crate::game::player::DeathCam>>,
+    corpses: Query<(&Ragdoll, Option<&crate::game::ragdoll::CorpseOf>)>,
     mut fires: Query<(Entity, &mut CorpseFire, &mut Transform, &mut EffectProperties, Option<&mut EffectSpawner>)>,
 ) {
     let dt = time.delta_secs();
+    let reduced = settings.is_some_and(|settings| settings.accessibility.reduce_particles);
+    let followed = death_cam.and_then(|death_cam| death_cam.whose);
     for (entity, mut fire, mut transform, mut properties, spawner) in &mut fires {
-        let bounds = corpses.get(fire.corpse).ok().and_then(Ragdoll::bounds);
+        let corpse = corpses.get(fire.corpse).ok();
+        let bounds = corpse.and_then(|(ragdoll, _)| ragdoll.bounds());
+        let viewed = corpse.and_then(|(_, of)| of).is_some_and(|of| Some(of.0) == followed);
+        let starts = bounds.is_some() && !(reduced && viewed);
         fire.idle = if bounds.is_some() { 0.0 } else { fire.idle + dt };
         if fire.idle >= CORPSE_RISE_SECONDS.1 {
             commands.entity(entity).despawn();
@@ -698,9 +712,9 @@ fn follow_the_burnt_corpses(
         }
         // Added by Hanabi in `PostUpdate`, so absent on an emitter's first frame.
         if let Some(mut spawner) = spawner
-            && spawner.active != bounds.is_some()
+            && spawner.active != starts
         {
-            spawner.active = bounds.is_some();
+            spawner.active = starts;
         }
         let Some((least, most)) = bounds else { continue };
         let (center, half) = corpse_fire_box(least, most);

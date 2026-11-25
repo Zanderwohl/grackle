@@ -176,7 +176,9 @@ by them, fading as it forgets. The nav graph they walk — walks, steps, drops a
 the third bake), with knockback, pickup distance, traffic and, as a fourth bake,
 sightlines on it (`src/game/nav_field.rs`), rated into kinds of place — cramped,
 precarious, an ambush, a death trap — for the map's statistics (`src/game/nav_rating.rs`); all
-of it is drawn over the floor from its section of the Bakes panel. Three fields are
+of it is drawn over the floor from its section of the Bakes panel. Only the authority bakes
+the graph and its sightlines, since only it runs bots: a client reports both `Skipped` and drops
+a graph it had before joining (`forget_the_graph_as_a_client`). Three fields are
 derived from the sightlines and links in the bake's last pass, with no more rays
 (`src/game/nav_derived.rs`, [documentation/nav-derived-fields.md](documentation/nav-derived-fields.md)):
 **engagement range**, the median and quartiles of the distances a cell sees and
@@ -608,7 +610,12 @@ changes asks. `Escape` is Close (or answers the question by keeping the
 window), unless a binding is waiting for a key or a text field has the
 keyboard; `capture_binding` reads it from the keymap, since every action is quiet. Pages: **General** (the language, in
 `assets/user/settings.toml`; `--lang` overrides it for one run; and the
-player's name, auto-reload and field of view, which are `PlayerSettings`),
+player's name, auto-reload and field of view, which are `PlayerSettings`, and under
+**Accessibility**: a crouch toggle, each press of crouch ducking or standing (`CrouchToggled`,
+reset for each new body); a sighting toggle, on by default, which off holds the sights up only
+while a scope's button is held (`PlayerInput::hold_sights`, in the input so a replayed tick reads
+it as the server did); and reduce particles, which leaves only the side flames on the HUD while
+on fire and starts no afterburn flames on the body we view, ours or a watched one),
 **Graphics** (the debris decal caps, also `PlayerSettings`),
 **Sound** (master, effects and music volume and mute music on LAN, also
 `PlayerSettings`),
@@ -820,7 +827,14 @@ afterburn, the explosion for splash, `kill_headshot` for a headshot and the skul
 a node with `PlateText` children, given its leaning panel after layout, repainted when its size
 or `swatch` changes, its text black or white by `Swatch::text`. Its lines and panel stay hidden
 until the panel is laid out; the plate's own `Visibility` is its owner's, which is how a name tag
-hides one that is off screen. Name tags and the watched and killer banners are plates too.
+hides one that is off screen. Name tags and the watched and killer banners are plates too. A **`PlateBar`**
+([`src/game/plate_bar.rs`](src/game/plate_bar.rs)) is a plate's panel as a bar: its swatch over
+`t` of its width from the end its `BarDirection` fills from, and the swatch at a fifth of its
+chroma over the rest, the colored panel drawn whole inside a node that clips it, so `t` moves only
+the clip. Below its `attention_below`, a `#FF3333` glow pulses under it: the outline stroked 5 px
+past the edge at 20% opacity and 1 Hz at the threshold, to 30 px, 40% and 3 Hz at empty, on real
+time. The panel behind the health number is one, `t` the viewed body's health over its class's
+(`fill_the_health_bar`), glowing below 0.2.
 
 **The viewmodel's arms are solved, not authored.** `place_the_viewmodel_arms`
 calls the same `grip_with` that puts a body's hands on a weapon, so a grip
@@ -1690,7 +1704,9 @@ colliders (`Hitboxes`). A file's old `colliders` section is read as collider fea
 model; on the authority `sync_world_props`
 ([`src/game/world_prop.rs`](src/game/world_prop.rs)) stands one replicated
 `WorldProp` up per feature that names one, and every machine draws and collides
-with those. A broken breakable is remembered as a feature whose `StandsFor`
+with those. A client drops any instance it stood up itself while it was the authority
+(`drop_our_own_instances`): after a failed link or a disconnect it is solo with the server's map,
+and its copies would stand where the server's do, never taken. A broken breakable is remembered as a feature whose `StandsFor`
 points at nothing, so the absence rule does not stand it straight back up;
 entering or leaving Play forgets. `WorldPropPlugin` is added in `launch.rs`
 beside `GamePlugin` rather than inside it, because it bakes models and the
@@ -3229,7 +3245,7 @@ hand, because a prop is photographed when it is baked.
 ### Raising the sights
 
 A `scope` action ([`src/game/sights.rs`](src/game/sights.rs)) toggles a body's
-`Sights` on each press: the weapon comes up to its prop's sighted pose
+`Sights` on each press, or holds them up while held when its input says `hold_sights`: the weapon comes up to its prop's sighted pose
 (`ViewmodelSpec::sighted`, the Fit workspace's Hold panel) over the scope's
 `raise` seconds and back down over `lower`, the viewmodel moving between the
 two framings. Only once it is all the way up does the view narrow to the
@@ -3552,7 +3568,7 @@ when what the map names, a saved prop, the catalog, a round or the sun bake
 changes, and sends it on connect and on change. A client compares it with its
 store and its own packs (by size, then hash; a local file with the same bytes
 is copied into the store), sends a `Want` naming only the hashes it lacks,
-takes `Chunk`s (128 KiB per client per frame) and, once every file is stored,
+takes `Chunk`s and, once every file is stored,
 mounts the session pack and writes `PacksChanged`, on which each loader reads
 again, the prop cache and the material library forget what they baked, and a
 lightmap goes where the sun bake looks. Each round's map is kept and listed in
@@ -3560,6 +3576,15 @@ lightmap goes where the sun bake looks. Each round's map is kept and listed in
 unmounts it. Client-to-server messages carry hashes only, and a `Want` is
 answered only for hashes in the current manifest. `Fetch` is the client's
 progress, which the joining screen draws; the comparison runs 8 MiB of local reads a frame.
+
+**Chunks go out under two limits** (`send_chunks`): 128 KiB a frame for all clients together
+(`BYTES_PER_FRAME`), shared a 32 KiB chunk at a time in turn, since every client is sent from one
+socket and a larger burst was dropped with `ENOBUFS`; and 256 KiB per client not yet reported back
+(`WINDOW_BYTES`), which each client drains by sending `Received` with the bytes it took each
+frame. A client that stops reading, as while it bakes, is sent no more than its window, and
+Lightyear resends no more than that to it. The channel waits `RESEND_AFTER` (100 ms) before
+resending: Lightyear's own wait is 1.5 round trips, a few milliseconds on a LAN, which sent every
+chunk twice.
 
 ### Finding a server on the LAN
 
@@ -4051,6 +4076,15 @@ Two things about assembling that entity are not optional and fail silently:
   bug and is a missing component.
 - **The client needs `ReplicationReceiver`**, or replication metadata arrives
   with nothing willing to interpret it.
+- **Send to clients with `ToClients`, never a bare `ServerMultiMessageSender`.**
+  Lightyear makes a `LinkOf` for any address that sends a packet, and it has no
+  channels until its handshake makes it a `ClientOf`; a message sent to it is
+  a `ChannelNotFound` error in the log, every frame. `ToClients` filters on
+  `ClientOf`. A client that disconnects often sends one more packet, and
+  Lightyear only removes links of connected clients, so
+  `drop_links_that_never_connect` despawns a link still unconnected after
+  `UNCONNECTED_LINK_SECONDS`; without it each one stayed until the server
+  closed and was counted as a client.
 
 `TICK_HZ` in `constants.rs` sets both `Time<Fixed>` and Lightyear's
 `tick_duration`. They are the same number from one place on purpose — a tick is

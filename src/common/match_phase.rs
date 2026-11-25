@@ -109,7 +109,7 @@ fn announce_the_phase(
     number: Res<MatchNumber>,
     server: Option<Single<&Endpoint, With<Server>>>,
     mut sent: Local<Option<PhaseStatement>>,
-    mut sender: ServerMultiMessageSender,
+    mut sender: crate::common::net_transport::ToClients,
 ) -> Result {
     if !role.is_authority() {
         return Ok(());
@@ -128,7 +128,7 @@ fn tell_new_clients_the_phase(
     phase: Option<Res<State<MatchPhase>>>,
     number: Res<MatchNumber>,
     joined: Query<Entity, (With<ClientOf>, Added<Connected>)>,
-    mut sender: ServerMultiMessageSender,
+    mut sender: crate::common::net_transport::ToClients,
 ) -> Result {
     if !role.is_authority() {
         return Ok(());
@@ -145,7 +145,7 @@ fn send_the_countdown(
     phase: Option<Res<State<MatchPhase>>>,
     countdown: Res<Countdown>,
     server: Option<Single<&Endpoint, With<Server>>>,
-    mut sender: ServerMultiMessageSender,
+    mut sender: crate::common::net_transport::ToClients,
 ) -> Result {
     let Some(server) = server else { return Ok(()) };
     if !role.is_authority() || !shows_the_cameras(phase_of(&phase)) {

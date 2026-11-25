@@ -9,7 +9,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use bevy::prelude::*;
 use lightyear::prelude::client::{Client, NetcodeClient, NetcodeConfig as ClientNetcodeConfig};
 use lightyear::prediction::prelude::PredictionManager;
-use lightyear::prelude::server::{NetcodeConfig as ServerNetcodeConfig, NetcodeServer, ServerUdpIo, Start, Started, Stop};
+use lightyear::prelude::server::{ClientOf, NetcodeConfig as ServerNetcodeConfig, NetcodeServer, ServerUdpIo, Start, Started, Stop};
 use lightyear::prelude::*;
 
 use crate::common::match_state::{MatchChannel, ServerClosing};
@@ -20,6 +20,10 @@ use crate::constants::{one_tick, DEV_PRIVATE_KEY, NETCODE_PROTOCOL_ID, TICK_HZ};
 /// cannot take a link entity somebody else spawned.
 #[derive(Component)]
 pub struct NetLink;
+
+/// Sends to the server's clients that have finished the handshake. A link that has not has no
+/// channels, so a message sent to it is an error in the log every frame.
+pub type ToClients<'w, 's> = ServerMultiMessageSender<'w, 's, With<ClientOf>>;
 
 /// What the link is doing, as against what [`NetRole`] asked for: a role
 /// changes instantly, a connection takes time and may fail.
@@ -137,6 +141,7 @@ impl Plugin for NetTransportPlugin {
                 (
                     close_the_old_link.run_if(resource_changed::<NetRole>),
                     finish_closing,
+                    drop_links_that_never_connect,
                     open_link_for_role.run_if(|pending: Res<OpenPending>| pending.0),
                     leave_the_servers_world.run_if(resource_changed::<NetRole>),
                     hear_the_server_close,
@@ -188,9 +193,9 @@ fn close_the_old_link(
     mut commands: Commands,
     role: Res<NetRole>,
     existing: Query<(Entity, Option<&Endpoint>), With<NetLink>>,
-    links_of: Query<&LinkOf>,
+    links_of: Query<&LinkOf, With<ClientOf>>,
     mut status: ResMut<NetStatus>,
-    mut sender: ServerMultiMessageSender,
+    mut sender: ToClients,
     mut pending: ResMut<OpenPending>,
 ) {
     for (link, server) in &existing {
@@ -236,7 +241,7 @@ fn close_the_server_before_quitting(
     mut exits: ResMut<Messages<AppExit>>,
     servers: Query<Entity, (With<NetLink>, With<Started>)>,
     closing: Query<(), With<Closing>>,
-    links_of: Query<&LinkOf>,
+    links_of: Query<&LinkOf, With<ClientOf>>,
     mut requests: MessageWriter<NetRequest>,
     mut held: Local<Option<AppExit>>,
 ) {
@@ -421,8 +426,41 @@ fn dress_new_client(add: On<Add<LinkOf>>, mut commands: Commands) {
             // Prediction syncs timelines against round-trip time; without
             // this, pings are dropped with a warning.
             PingManager::default(),
+            LinkAge::default(),
             Name::from("Client of"),
         ));
+}
+
+/// Before a link that has not connected is dropped. A client gives up well before this.
+const UNCONNECTED_LINK_SECONDS: f32 = 10.0;
+
+/// Seconds a link has waited to connect, each frame counting at most [`LONGEST_FRAME_SECONDS`].
+#[derive(Component, Default)]
+struct LinkAge(f32);
+
+/// So a host frame stalled by a bake does not age a link through its handshake at once.
+const LONGEST_FRAME_SECONDS: f32 = 0.1;
+
+/// Lightyear makes a link for any address that sends a packet, including a client that has just
+/// disconnected, and removes a link only when a connected client leaves. A link that never
+/// connects would otherwise stay until the server closes and be counted as a client.
+fn drop_links_that_never_connect(
+    mut commands: Commands,
+    time: Res<Time<Real>>,
+    mut links: Query<(Entity, &mut LinkAge, Option<&PeerAddr>), (With<LinkOf>, Without<Connected>)>,
+) {
+    let frame = time.delta_secs().min(LONGEST_FRAME_SECONDS);
+    for (link, mut age, address) in &mut links {
+        age.0 += frame;
+        if age.0 < UNCONNECTED_LINK_SECONDS {
+            continue;
+        }
+        match address {
+            Some(address) => info!("Dropping the link from {} that did not connect in {UNCONNECTED_LINK_SECONDS} s", address.0),
+            None => info!("Dropping a link that did not connect in {UNCONNECTED_LINK_SECONDS} s"),
+        }
+        commands.entity(link).try_despawn();
+    }
 }
 
 /// Reads the link's state into [`NetStatus`] for the UI. Decides nothing.
@@ -434,7 +472,7 @@ fn report_status(
         (Entity, Option<&Connected>, Option<&Connecting>, Option<&Disconnected>, Has<WasConnected>),
         (With<NetLink>, With<lightyear::prelude::client::Client>),
     >,
-    links_of: Query<&LinkOf>,
+    links_of: Query<&LinkOf, With<ClientOf>>,
     mut lost: MessageWriter<LinkLost>,
 ) {
     // A failure stays until the next role change, so it does not blink past
@@ -681,6 +719,51 @@ mod tests {
         (host, client)
     }
 
+    /// Fails if a link that never shook hands stays up and is counted as a client, or if a
+    /// connected client's link is dropped for its age.
+    #[test]
+    fn a_link_that_never_connects_is_dropped_and_not_counted() {
+        let (mut host, mut client) = connected_pair();
+        let server = host.world_mut().query_filtered::<Entity, (With<NetLink>, With<Started>)>().single(host.world()).unwrap();
+        let stray = host.world_mut().spawn(LinkOf { endpoint: server }).id();
+        host.update();
+        assert_eq!(*host.world().resource::<NetStatus>(), NetStatus::Hosting { clients: 1 }, "the stray link was counted");
+        let theirs = host.world_mut().query_filtered::<Entity, With<Connected>>().single(host.world()).unwrap();
+        host.world_mut().entity_mut(stray).insert(LinkAge(UNCONNECTED_LINK_SECONDS));
+        host.world_mut().entity_mut(theirs).insert(LinkAge(UNCONNECTED_LINK_SECONDS));
+        run_until(&mut [&mut host, &mut client], 0.1, |_| false);
+        assert!(host.world().get_entity(stray).is_err(), "the stray link outlived its wait");
+        assert!(host.world().get_entity(theirs).is_ok(), "a connected client was dropped");
+        assert_eq!(*client.world().resource::<NetStatus>(), NetStatus::Connected);
+    }
+
+    /// Fails if a client does not see a pickup taken and put back.
+    #[test]
+    fn a_client_sees_a_pickup_taken_and_restocked() {
+        use crate::game::world_prop::{Pickup, WorldProp};
+        let (mut host, mut client) = connected_pair();
+        let prop = WorldProp { model: "health_pack".into(), at: Vec3::new(3.0, 0.0, 0.0), rotation: Quat::IDENTITY };
+        // As on a host, where the archetype, and so the `Pickup`, is known only once the model bakes.
+        let on_host = host.world_mut().spawn(prop).id();
+        let arrived = |apps: &[&mut App]| {
+            let world = apps[1].world();
+            world.try_query::<&WorldProp>().unwrap().iter(world).next().is_some()
+        };
+        assert!(run_until(&mut [&mut host, &mut client], 3.0, arrived), "the prop never reached the client");
+        host.world_mut().entity_mut(on_host).insert(Pickup::default());
+        let seen = |taken: bool| {
+            move |apps: &[&mut App]| {
+                let world = apps[1].world();
+                world.try_query::<&Pickup>().unwrap().iter(world).any(|pickup| pickup.taken == taken)
+            }
+        };
+        assert!(run_until(&mut [&mut host, &mut client], 3.0, seen(false)), "the pickup never reached the client");
+        host.world_mut().get_mut::<Pickup>(on_host).unwrap().taken = true;
+        assert!(run_until(&mut [&mut host, &mut client], 3.0, seen(true)), "the client never saw it taken");
+        host.world_mut().get_mut::<Pickup>(on_host).unwrap().taken = false;
+        assert!(run_until(&mut [&mut host, &mut client], 3.0, seen(false)), "the client never saw it back");
+    }
+
     fn closed() -> LinkLost {
         LinkLost { loss: LinkLoss::Disconnected, message: get!("net.lost.closed") }
     }
@@ -786,6 +869,43 @@ mod tests {
         assert_eq!(fetch.bytes_wanted, theirs.len() as u64, "the client fetched files it already had");
         let catalog = crate::common::weapon_file::load_catalog(assets, &assets.match_packs());
         assert!(catalog.weapons.iter().any(|weapon| weapon.key == "pistol"), "the server's pistol does not load");
+    }
+
+    /// Fails if a file larger than a client's download window stalls.
+    #[test]
+    fn a_file_larger_than_the_download_window_arrives() {
+        use crate::common::app_mode::AppMode;
+        use crate::common::resource::sync::{DownloadsRoot, Fetch, FetchPhase};
+        use crate::common::resource::{ContentHash, ResourceKind};
+        let port = free_port();
+        let mut host = networked_app(AppMode::Editor);
+        let mut loaded = crate::editor::save::parse(&std::fs::read_to_string("assets/default/blueprints/new.gmb").unwrap()).unwrap();
+        loaded.metadata.display_name = Some("long ".repeat(200_000));
+        let played = crate::editor::save::to_text(&loaded.timeline, &loaded.metadata).unwrap();
+        host.world_mut().insert_resource(loaded.timeline);
+        host.world_mut().insert_resource(loaded.metadata);
+        host.world_mut().write_message(NetRequest::Host { port });
+        let mut client = networked_app(AppMode::Editor);
+        let root = std::env::temp_dir().join(format!("grackle-downloads-{}-window", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        client.world_mut().insert_resource(DownloadsRoot(root.clone()));
+        assert!(run_until(&mut [&mut host], 2.0, |apps| matches!(*apps[0].world().resource::<NetStatus>(), NetStatus::Hosting { .. })));
+        client.world_mut().write_message(NetRequest::Join { host: "127.0.0.1".into(), port });
+        let mounted = |apps: &[&mut App]| apps[1].world().resource::<Fetch>().phase == FetchPhase::Mounted;
+        assert!(run_until(&mut [&mut host, &mut client], 15.0, mounted), "the server's files were never mounted");
+
+        host.world_mut().resource_mut::<NextState<AppMode>>().set(AppMode::Play);
+        let hash = ContentHash::of(played.as_bytes());
+        let arrived = |apps: &[&mut App]| {
+            let assets = apps[1].world().resource::<crate::common::assets::Assets>();
+            assets.session().is_some_and(|session| {
+                session.manifest.entries.iter().any(|entry| entry.key.kind() == ResourceKind::Blueprint && entry.key.hash == hash)
+            }) && apps[1].world().resource::<Fetch>().phase == FetchPhase::Mounted
+        };
+        assert!(run_until(&mut [&mut host, &mut client], 20.0, arrived), "the download stalled");
+        let stored = root.join("objects").join(crate::common::resource::store::object_name(hash, "gmb"));
+        assert_eq!(std::fs::read(&stored).unwrap().len(), played.len());
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// Fails if a client does not keep the map each round started on, or records no session.

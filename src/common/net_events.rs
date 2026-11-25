@@ -62,7 +62,7 @@ impl Plugin for NetEventsPlugin {
 fn send_hits(
     mut hits: MessageReader<DamageDealt>,
     server: Option<Single<&Endpoint, With<Server>>>,
-    mut sender: ServerMultiMessageSender,
+    mut sender: crate::common::net_transport::ToClients,
 ) -> Result {
     let Some(server) = server else {
         // A closed game; local readers have their own cursors, so no draining.
@@ -77,7 +77,7 @@ fn send_hits(
 fn send_deaths(
     mut deaths: MessageReader<Died>,
     server: Option<Single<&Endpoint, With<Server>>>,
-    mut sender: ServerMultiMessageSender,
+    mut sender: crate::common::net_transport::ToClients,
 ) -> Result {
     let Some(server) = server else { return Ok(()) };
     for death in deaths.read() {
@@ -113,7 +113,7 @@ fn receive_deaths(
 fn send_effects(
     mut effects: MessageReader<Effect>,
     server: Option<Single<&Endpoint, With<Server>>>,
-    mut sender: ServerMultiMessageSender,
+    mut sender: crate::common::net_transport::ToClients,
 ) -> Result {
     let Some(server) = server else { return Ok(()) };
     for effect in effects.read() {
@@ -136,7 +136,7 @@ fn receive_effects(
 fn send_shoves(
     mut shoves: MessageReader<RagdollShove>,
     server: Option<Single<&Endpoint, With<Server>>>,
-    mut sender: ServerMultiMessageSender,
+    mut sender: crate::common::net_transport::ToClients,
 ) -> Result {
     let Some(server) = server else { return Ok(()) };
     for shove in shoves.read() {

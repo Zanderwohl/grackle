@@ -52,6 +52,12 @@ pub struct Want {
     pub hashes: Vec<ContentHash>,
 }
 
+/// The bytes of chunks a client took this frame, which frees that much of its [`WINDOW_BYTES`].
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct Received {
+    pub bytes: u64,
+}
+
 /// Part of one file, in order from offset 0.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct Chunk {
@@ -61,8 +67,16 @@ pub struct Chunk {
 }
 
 const CHUNK_BYTES: usize = 32 * 1024;
-/// Per client per frame, so a song does not hold up the map stream for everybody.
+/// Sent per frame to all clients together. Every client is sent from one socket, and a burst
+/// larger than the system will queue is dropped (`ENOBUFS` on macOS) and sent again.
 const BYTES_PER_FRAME: usize = 128 * 1024;
+/// Sent to one client and not yet reported [`Received`]. A client that stops reading, as while it
+/// bakes, is sent no more than this, and Lightyear resends no more than this to it.
+const WINDOW_BYTES: u64 = 256 * 1024;
+/// Before Lightyear sends an unacknowledged chunk again. Its own delay is 1.5 round trips, a few
+/// milliseconds on a LAN and shorter than a client takes to acknowledge, so every chunk would go
+/// out twice.
+const RESEND_AFTER: std::time::Duration = std::time::Duration::from_millis(100);
 /// Seconds between manifest rebuilds at least: a drag changes the map every frame.
 const REBUILD_INTERVAL: f32 = 0.25;
 /// After which a file that keeps arriving damaged is given up on, and reads as missing.
@@ -100,13 +114,14 @@ impl Plugin for ResourceSyncPlugin {
     fn build(&self, app: &mut App) {
         crate::common::assets::ensure_packs_changed(app);
         app.add_channel::<ResourceChannel>(ChannelSettings {
-            mode: ChannelMode::OrderedReliable(ReliableSettings::default()),
+            mode: ChannelMode::OrderedReliable(ReliableSettings { rtt_resend_min_delay: RESEND_AFTER, ..default() }),
             ..default()
         })
         .add_direction(NetworkDirection::Bidirectional);
         app.register_message::<ManifestMessage>().add_direction(NetworkDirection::ServerToClient);
         app.register_message::<Chunk>().add_direction(NetworkDirection::ServerToClient);
         app.register_message::<Want>().add_direction(NetworkDirection::ClientToServer);
+        app.register_message::<Received>().add_direction(NetworkDirection::ClientToServer);
 
         app.init_resource::<PackAssets>()
             .init_resource::<DownloadsRoot>()
@@ -123,7 +138,7 @@ impl Plugin for ResourceSyncPlugin {
             .add_systems(
                 Update,
                 (
-                    (rebuild_the_manifest, send_the_manifest_to_new_clients, take_wants, send_chunks).chain(),
+                    (rebuild_the_manifest, send_the_manifest_to_new_clients, take_wants, take_receipts, send_chunks).chain(),
                     (forget_the_server_when_not_a_client, read_manifests, compare_some, read_chunks, mount_when_everything_is_stored).chain(),
                 ),
             );
@@ -240,7 +255,7 @@ fn rebuild_the_manifest(
     server: Option<Single<&Endpoint, With<Server>>>,
     mut packs_changed: MessageReader<PacksChanged>,
     mut served: ResMut<Served>,
-    mut sender: ServerMultiMessageSender,
+    mut sender: crate::common::net_transport::ToClients,
 ) -> Result {
     // Read every frame, so a change while not hosting is not taken for one after.
     let packs_changed = packs_changed.read().count() > 0;
@@ -348,7 +363,7 @@ fn send_the_manifest_to_new_clients(
     listing: Option<Res<crate::common::round_settings::ServerListing>>,
     player: Option<Res<crate::common::player_settings::PlayerSettings>>,
     joined: Query<Entity, (With<ClientOf>, Added<Connected>)>,
-    mut sender: ServerMultiMessageSender,
+    mut sender: crate::common::net_transport::ToClients,
 ) -> Result {
     if joined.is_empty() || served.generation == 0 {
         return Ok(());
@@ -365,6 +380,30 @@ fn send_the_manifest_to_new_clients(
 struct Outbox {
     queue: VecDeque<ContentHash>,
     current: Option<(ContentHash, Vec<u8>, usize)>,
+    /// Bytes sent and not yet reported [`Received`].
+    in_flight: u64,
+    /// So a send that keeps failing, or a client that keeps reporting more than it was sent, is
+    /// warned about once.
+    send_failing: bool,
+    overreported: bool,
+}
+
+impl Outbox {
+    fn has_work(&self) -> bool {
+        self.current.is_some() || !self.queue.is_empty()
+    }
+}
+
+fn take_receipts(mut links: Query<(&mut MessageReceiver<Received>, &mut Outbox), With<ClientOf>>) {
+    for (mut receiver, mut outbox) in &mut links {
+        for received in receiver.receive() {
+            if received.bytes > outbox.in_flight && !outbox.overreported {
+                warn!("A client reported {} bytes received with {} in flight", received.bytes, outbox.in_flight);
+                outbox.overreported = true;
+            }
+            outbox.in_flight = outbox.in_flight.saturating_sub(received.bytes);
+        }
+    }
 }
 
 fn take_wants(
@@ -407,41 +446,85 @@ fn read_source(assets: &PackAssets, source: &Source) -> Option<Vec<u8>> {
     }
 }
 
+/// Clients take turns a chunk at a time, starting a place further along each frame, until the
+/// frame's budget is spent or every client is out of work or window.
 fn send_chunks(
     assets: Res<PackAssets>,
     mut served: ResMut<Served>,
     mut links: Query<(Entity, &mut Outbox), With<ClientOf>>,
-    mut sender: ServerMultiMessageSender,
+    mut sender: crate::common::net_transport::ToClients,
+    mut turn: Local<usize>,
 ) -> Result {
-    for (link, mut outbox) in &mut links {
-        let mut budget = BYTES_PER_FRAME;
-        while budget > 0 {
-            if outbox.current.is_none() {
-                let Some(hash) = outbox.queue.pop_front() else { break };
-                let Some(bytes) = served.sources.get(&hash).and_then(|source| read_source(&assets, source)) else {
-                    warn!("{} is in the manifest but could not be read to send", hash.short());
-                    continue;
-                };
-                if ContentHash::of(&bytes) != hash {
-                    // Changed on disk since the manifest was built; the next one names the new bytes.
-                    served.force = true;
-                    continue;
+    let mut order: Vec<Entity> = links.iter().filter(|(_, outbox)| outbox.has_work()).map(|(link, _)| link).collect();
+    if order.is_empty() {
+        return Ok(());
+    }
+    *turn = turn.wrapping_add(1);
+    let start = *turn % order.len();
+    order.rotate_left(start);
+    let mut budget = BYTES_PER_FRAME;
+    while budget > 0 && !order.is_empty() {
+        order.retain(|link| {
+            if budget == 0 {
+                return true;
+            }
+            let Ok((_, mut outbox)) = links.get_mut(*link) else { return false };
+            match next_chunk(&assets, &mut served, &mut outbox, budget) {
+                Some(chunk) => {
+                    let sent = chunk.bytes.len();
+                    if let Err(e) = sender.send_to_entities::<_, ResourceChannel>(&chunk, core::iter::once(*link)) {
+                        if !outbox.send_failing {
+                            warn!("Could not send a piece of {} to a client: {e}", chunk.hash.short());
+                            outbox.send_failing = true;
+                        }
+                        return false;
+                    }
+                    outbox.send_failing = false;
+                    sent_from(&mut outbox, sent);
+                    // At least one, so empty files still cost something and the loop ends.
+                    budget = budget.saturating_sub(sent.max(1));
+                    true
                 }
-                outbox.current = Some((hash, bytes, 0));
+                None => false,
             }
-            let Some((hash, bytes, offset)) = outbox.current.as_mut() else { break };
-            let end = (*offset + CHUNK_BYTES.min(budget)).min(bytes.len());
-            let chunk = Chunk { hash: *hash, offset: *offset as u64, bytes: bytes[*offset..end].to_vec() };
-            sender.send_to_entities::<_, ResourceChannel>(&chunk, core::iter::once(link))?;
-            // At least one, so an empty file still costs something and the loop ends.
-            budget = budget.saturating_sub((end - *offset).max(1));
-            *offset = end;
-            if *offset >= bytes.len() {
-                outbox.current = None;
-            }
-        }
+        });
     }
     Ok(())
+}
+
+/// Moves past a piece once it is sent, so one that failed to send is sent again.
+fn sent_from(outbox: &mut Outbox, sent: usize) {
+    outbox.in_flight += sent as u64;
+    let Some((_, bytes, offset)) = outbox.current.as_mut() else { return };
+    *offset += sent;
+    if *offset >= bytes.len() {
+        outbox.current = None;
+    }
+}
+
+/// The next piece of what the client asked for, at most `limit` bytes, if it has window left.
+/// Takes nothing off the outbox until [`sent_from`].
+fn next_chunk(assets: &PackAssets, served: &mut Served, outbox: &mut Outbox, limit: usize) -> Option<Chunk> {
+    let room = WINDOW_BYTES.saturating_sub(outbox.in_flight);
+    if room == 0 {
+        return None;
+    }
+    while outbox.current.is_none() {
+        let hash = outbox.queue.pop_front()?;
+        let Some(bytes) = served.sources.get(&hash).and_then(|source| read_source(assets, source)) else {
+            warn!("{} is in the manifest but could not be read to send", hash.short());
+            continue;
+        };
+        if ContentHash::of(&bytes) != hash {
+            // Changed on disk since the manifest was built; the next one names the new bytes.
+            served.force = true;
+            continue;
+        }
+        outbox.current = Some((hash, bytes, 0));
+    }
+    let (hash, bytes, offset) = outbox.current.as_ref()?;
+    let end = (*offset + CHUNK_BYTES.min(room as usize).min(limit)).min(bytes.len());
+    Some(Chunk { hash: *hash, offset: *offset as u64, bytes: bytes[*offset..end].to_vec() })
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -639,14 +722,19 @@ fn read_chunks(
     root: Res<DownloadsRoot>,
     mut fetch: ResMut<Fetch>,
     mut receivers: Query<&mut MessageReceiver<Chunk>, With<Client>>,
-    mut senders: Query<&mut MessageSender<Want>, (With<Client>, With<Connected>)>,
+    mut senders: Query<(&mut MessageSender<Want>, &mut MessageSender<Received>), (With<Client>, With<Connected>)>,
 ) {
     if role.is_authority() {
         return;
     }
-    let Some(store) = root.store() else { return };
+    // Without a store nothing is kept, but every chunk is still reported, or the server stops.
+    let store = root.store();
+    let mut taken = 0u64;
     for mut receiver in &mut receivers {
         for chunk in receiver.receive() {
+            // Every chunk counts, wanted or not, since each was sent against our window.
+            taken += chunk.bytes.len() as u64;
+            let Some(store) = store.as_ref() else { continue };
             let Some((size, path)) = fetch.wanted.get(&chunk.hash).cloned() else { continue };
             let partial = fetch.partial.entry(chunk.hash).or_default();
             if chunk.offset != partial.len() as u64 || partial.len() as u64 + chunk.bytes.len() as u64 > size {
@@ -677,8 +765,14 @@ fn read_chunks(
         }
     }
 
+    if taken > 0 {
+        for (_, mut receipts) in &mut senders {
+            receipts.send::<ResourceChannel>(Received { bytes: taken });
+        }
+    }
+
     // While comparing, `wanted` is still being filled and nothing in it has been asked for yet.
-    if fetch.phase != FetchPhase::Downloading {
+    if store.is_none() || fetch.phase != FetchPhase::Downloading {
         return;
     }
     let mut again = Vec::new();
@@ -697,7 +791,7 @@ fn read_chunks(
         }
     }
     if !again.is_empty() {
-        for mut sender in &mut senders {
+        for (mut sender, _) in &mut senders {
             sender.send::<ResourceChannel>(Want { hashes: again.clone() });
         }
         fetch.asked.extend(again);
@@ -828,6 +922,28 @@ fn record_rounds(root: &DownloadsRoot, role: &NetRole, fetch: &mut Fetch, manife
 mod tests {
     use super::*;
 
+    /// Fails if a client is sent more than its window before it reports what it took, or is sent
+    /// nothing more once it has.
+    #[test]
+    fn a_client_is_sent_no_more_than_its_window_until_it_reports() {
+        let bytes = vec![7u8; 3 * WINDOW_BYTES as usize];
+        let hash = ContentHash::of(&bytes);
+        let assets = PackAssets::default();
+        let mut served = Served::default();
+        served.sources.insert(hash, Source::Bytes(bytes));
+        let mut outbox = Outbox { queue: VecDeque::from([hash]), ..default() };
+        let mut sent = 0u64;
+        while let Some(chunk) = next_chunk(&assets, &mut served, &mut outbox, usize::MAX) {
+            sent += chunk.bytes.len() as u64;
+            sent_from(&mut outbox, chunk.bytes.len());
+        }
+        assert_eq!(sent, WINDOW_BYTES);
+        outbox.in_flight -= CHUNK_BYTES as u64;
+        let chunk = next_chunk(&assets, &mut served, &mut outbox, usize::MAX).expect("a report frees room");
+        assert_eq!(chunk.offset, WINDOW_BYTES);
+        assert_eq!(chunk.bytes.len(), CHUNK_BYTES);
+    }
+
     #[test]
     fn every_message_crosses_the_wire() {
         let path = LogicalPath::new("props/crate.gpp").unwrap();
@@ -839,5 +955,7 @@ mod tests {
         assert_eq!(postcard::from_bytes::<Want>(&postcard::to_stdvec(&want).unwrap()).unwrap(), want);
         let chunk = Chunk { hash, offset: 0, bytes: b"crate".to_vec() };
         assert_eq!(postcard::from_bytes::<Chunk>(&postcard::to_stdvec(&chunk).unwrap()).unwrap(), chunk);
+        let received = Received { bytes: 32 * 1024 };
+        assert_eq!(postcard::from_bytes::<Received>(&postcard::to_stdvec(&received).unwrap()).unwrap(), received);
     }
 }

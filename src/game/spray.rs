@@ -309,7 +309,7 @@ fn send_pictures(
     mut art: ResMut<SprayArt>,
     server: Option<Single<&Endpoint, With<Server>>>,
     joined: Query<Entity, (With<ClientOf>, Added<Connected>)>,
-    mut sender: ServerMultiMessageSender,
+    mut sender: crate::common::net_transport::ToClients,
 ) -> Result {
     let changed = std::mem::take(&mut art.to_send);
     let Some(server) = server else { return Ok(()) };

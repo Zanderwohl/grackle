@@ -91,7 +91,7 @@ fn announce_mode_change(
     mode: Res<State<AppMode>>,
     role: Res<NetRole>,
     server: Option<Single<&Endpoint, With<Server>>>,
-    mut sender: ServerMultiMessageSender,
+    mut sender: crate::common::net_transport::ToClients,
 ) -> Result {
     if !role.is_authority() {
         return Ok(());
@@ -107,7 +107,7 @@ fn announce_mode_change(
 fn tell_new_clients(
     mode: Res<State<AppMode>>,
     joined: Query<Entity, (With<ClientOf>, Added<Connected>)>,
-    mut sender: ServerMultiMessageSender,
+    mut sender: crate::common::net_transport::ToClients,
 ) -> Result {
     for client in &joined {
         sender.send_to_entities::<_, MatchChannel>(

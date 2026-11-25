@@ -357,7 +357,7 @@ impl Plugin for TeamChoiceSyncPlugin {
 }
 
 #[allow(clippy::type_complexity)]
-fn send_offers(offers: Query<(Entity, &Offer), (With<ClientOf>, Changed<Offer>)>, mut sender: ServerMultiMessageSender) -> Result {
+fn send_offers(offers: Query<(Entity, &Offer), (With<ClientOf>, Changed<Offer>)>, mut sender: crate::common::net_transport::ToClients) -> Result {
     for (link, offer) in &offers {
         sender.send_to_entities::<_, TeamChannel>(&offer.0, core::iter::once(link))?;
     }
