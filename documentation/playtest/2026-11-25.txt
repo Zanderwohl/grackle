@@ -1,0 +1,23 @@
+d Pickups don't disappear on clients when picked up
+d Clients sometimes don't get lightmaps?
+d Jumping up stairs gets you stuck
+- A client'sd gun didn't work (primary fire) until she died during one life
+- mouse sometimes get un-grabbed?
+- Explosion particles can be seen through the wall
+- don't allow taunt-cancel
+- Configurable respawn time
+- When respawn menu is open, don't respawn until done
+- Zoom and crouch toggle accessibility setting
+
+- Make kill shot linger longer
+- Make it clearer you're spectating
+- Make it clear what the end condition is
+- Melee weapon/button (slot 3)
+d Tune down flames or reduction setting (in first person)
+- Shorter speed rounds for ultimate chicken horse mode
+  - Maybe winner or loser gets first pick to place/destroy
+- Modify halves of map based on team
+- Sounds.
+d Health bar, not just a number
+  d Indicator of low health
+- In-game chat
