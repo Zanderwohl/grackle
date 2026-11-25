@@ -717,7 +717,7 @@ fn bake_flight(
         }
         return;
     }
-    let baked = stand_up_bake(entity, faces, None, existing, material, commands, meshes);
+    let baked = stand_up_bake(entity, faces, flight.grain(), None, existing, material, commands, meshes);
     commands.entity(baked).insert(BakedStairs);
 }
 
@@ -741,20 +741,22 @@ fn bake_one(
     let faces = world_surface::share(volumes, index);
     let volume = &volumes[index];
     let air = (volume.fill == world_surface::Fill::Air).then(|| volume.shape.bounds());
-    stand_up_bake(entity, faces, air, existing, material, commands, meshes);
+    stand_up_bake(entity, faces, None, air, existing, material, commands, meshes);
 }
 
 /// `room`'s walls from `faces`, a mesh per slot, rebuilt on `existing` if it already has a bake.
+#[allow(clippy::too_many_arguments)]
 fn stand_up_bake(
     room: Entity,
     faces: Vec<world_surface::Face>,
+    grain: Option<world_surface::Grain>,
     air: Option<(Vec3, Vec3)>,
     existing: Option<Entity>,
     material: &Handle<StandardMaterial>,
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
 ) -> Entity {
-    let slots = world_surface::slot_meshes(&faces);
+    let slots = world_surface::slot_meshes(&faces, grain.as_ref());
     let bounds = crate::common::decal::bounds_of(&faces);
     let geometry = BakedRoomGeometry { room, faces_hash: lightmap::faces_hash(&faces), faces, bounds, air };
     let mut baked = match existing {

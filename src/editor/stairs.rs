@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::common::PointResolutionError;
 use crate::common::ray::PickBox;
-use crate::common::stairs::{Degenerate, Frame, Stairs, StairsShape, StairsStyle};
+use crate::common::stairs::{Degenerate, Frame, Stairs, StairsGrain, StairsShape, StairsStyle};
 use crate::editor::editable::{insert_if_changed, Feature, FeatureId, FeatureTrait, PointRef, BROKEN};
 use crate::editor::mirror::Mirroring;
 use crate::get;
@@ -239,6 +239,13 @@ impl FeatureTrait for EditorStairs {
                 changed |= material_button(ui, self.surfaces.slot_mut(slot), true);
                 ui.end_row();
             }
+            ui.label(get!("editor.features.stairs.grain.title"));
+            ui.horizontal(|ui| {
+                for grain in StairsGrain::ALL {
+                    changed |= ui.selectable_value(&mut self.style.grain, grain, get!(grain.name_key())).changed();
+                }
+            });
+            ui.end_row();
         });
         changed
     }

@@ -14,7 +14,7 @@ use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::common::csg::Polygon;
-use crate::common::world_surface::Face;
+use crate::common::world_surface::{Face, Grain};
 use crate::game::collision::Hull;
 use crate::game::player::WALKABLE;
 
@@ -27,7 +27,8 @@ pub const MOST_STEPS: usize = 256;
 /// The thinnest a thin collider is made, so a sweep still has a slab to stop on.
 const THINNEST_COLLIDER: f32 = 0.02;
 
-/// Flags and numbers rather than enums, so switching a choice off and back keeps its number.
+/// Flags and numbers rather than enums with data, so switching a choice off and back keeps its
+/// number.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
 pub struct StairsStyle {
     pub steps: bool,
@@ -38,11 +39,41 @@ pub struct StairsStyle {
     pub thick: bool,
     /// Meters, for a thin flight.
     pub thickness: f32,
+    #[serde(default, skip_serializing_if = "StairsGrain::is_world")]
+    pub grain: StairsGrain,
 }
 
 impl Default for StairsStyle {
     fn default() -> Self {
-        Self { steps: true, rise: 0.25, thick: true, thickness: 0.1 }
+        Self { steps: true, rise: 0.25, thick: true, thickness: 0.1, grain: StairsGrain::World }
+    }
+}
+
+/// Which way a material runs on a flight's faces.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum StairsGrain {
+    /// As on a room, so it continues from the room around it.
+    #[default]
+    World,
+    /// Start to end; across, on a riser.
+    Along,
+    /// Across the width; along the run, on a side.
+    Across,
+}
+
+impl StairsGrain {
+    pub const ALL: [StairsGrain; 3] = [StairsGrain::World, StairsGrain::Along, StairsGrain::Across];
+
+    pub fn is_world(&self) -> bool {
+        *self == StairsGrain::World
+    }
+
+    pub fn name_key(self) -> &'static str {
+        match self {
+            StairsGrain::World => "editor.features.stairs.grain.world",
+            StairsGrain::Along => "editor.features.stairs.grain.along",
+            StairsGrain::Across => "editor.features.stairs.grain.across",
+        }
     }
 }
 
@@ -152,6 +183,16 @@ impl StairsShape {
     /// ([`WALKABLE`]), so what the slowest can climb, all can.
     pub fn walkable(&self) -> bool {
         self.frame().is_ok_and(|frame| frame.ramp_normal().y >= WALKABLE)
+    }
+
+    /// `None` for [`StairsGrain::World`] and for a degenerate flight.
+    pub fn grain(&self) -> Option<Grain> {
+        let frame = self.frame().ok()?;
+        match self.style.grain {
+            StairsGrain::World => None,
+            StairsGrain::Along => Some(Grain { along: frame.along, fallback: frame.across, up: frame.up }),
+            StairsGrain::Across => Some(Grain { along: frame.across, fallback: frame.along, up: frame.up }),
+        }
     }
 
     pub fn steps(&self) -> Option<Steps> {
@@ -370,7 +411,7 @@ mod tests {
     #[test]
     fn a_thick_flight_is_closed_but_for_its_base_and_measures_its_volume() {
         for steps in [false, true] {
-            let style = StairsStyle { steps, rise: 0.5, thick: true, thickness: 0.1 };
+            let style = StairsStyle { steps, rise: 0.5, thick: true, thickness: 0.1, ..default() };
             let mut faces = flight(style).faces();
             // The base, so the volume is of a closed solid.
             if steps {
@@ -390,7 +431,7 @@ mod tests {
     #[test]
     fn a_thin_flight_is_closed() {
         for steps in [false, true] {
-            let style = StairsStyle { steps, rise: 0.5, thick: false, thickness: 0.1 };
+            let style = StairsStyle { steps, rise: 0.5, thick: false, thickness: 0.1, ..default() };
             // Ramp: 4 m by 2 m, 0.1 m deep straight down. Steps: four 1 × 2 × 0.1 slabs.
             let expected = 0.8;
             assert!((volume(&flight(style).faces()) - expected).abs() < 1e-3, "steps {steps}");
@@ -401,7 +442,7 @@ mod tests {
     #[test]
     fn every_tread_is_halved_by_the_ramp() {
         for thick in [false, true] {
-            let shape = flight(StairsStyle { steps: true, rise: 0.3, thick, thickness: 0.1 });
+            let shape = flight(StairsStyle { steps: true, rise: 0.3, thick, thickness: 0.1, ..default() });
             let ramp = shape.ramp().unwrap();
             let treads: Vec<Face> = shape.faces().into_iter().filter(|face| face.plane.normal.y > 0.99).collect();
             assert_eq!(treads.len(), 7);
@@ -510,5 +551,58 @@ mod tests {
             let down = Ray3d::new(Vec3::new(3.75, 4.0, 1.0), Dir3::NEG_Y);
             assert!((world.ray_distance(&down, 10.0).unwrap() - 2.25).abs() < 1e-3, "thick {thick}: the last tread is not the top");
         }
+    }
+
+    /// [`flight`] turned 30° about Y, so its walls lie off the world's axes.
+    fn turned(grain: StairsGrain) -> StairsShape {
+        let turn = Quat::from_rotation_y(30f32.to_radians());
+        let shape = flight(StairsStyle { steps: true, rise: 0.5, grain, ..default() });
+        StairsShape { start: turn * shape.start, end: turn * shape.end, width: turn * shape.width, height: turn * shape.height, ..shape }
+    }
+
+    #[test]
+    fn a_world_grain_leaves_the_flight_to_the_world_axes() {
+        assert_eq!(turned(StairsGrain::World).grain(), None);
+    }
+
+    /// Breaks if a tread, riser or side takes the wrong axis, or a face is stretched.
+    #[test]
+    fn a_turned_flight_takes_its_grain_from_its_own_axes() {
+        for (grain, tread, riser, side) in [(StairsGrain::Along, "along", "across", "along"), (StairsGrain::Across, "across", "across", "along")] {
+            let shape = turned(grain);
+            let frame = shape.frame().unwrap();
+            let axis = |name: &str| if name == "along" { frame.along } else { frame.across };
+            let grain = shape.grain().unwrap();
+            for face in shape.faces() {
+                let normal = face.plane.normal;
+                let (u, v) = grain.axes(normal);
+                let expected = if normal.dot(frame.up).abs() > 0.99 {
+                    tread
+                } else if normal.dot(frame.along).abs() > 0.99 {
+                    riser
+                } else {
+                    side
+                };
+                assert!(u.dot(axis(expected)).abs() > 0.999, "{grain:?}: u {u} on the face facing {normal} is not {expected}");
+                assert!(u.dot(normal).abs() < 1e-5 && v.dot(normal).abs() < 1e-5 && u.dot(v).abs() < 1e-5);
+                if normal.dot(frame.up).abs() < 0.99 {
+                    assert!(v.dot(frame.up) < 0.0, "v runs up the face facing {normal}");
+                }
+                let (a, b) = (face.vertices[0], face.vertices[1]);
+                let in_uv = Vec2::new((b - a).dot(u), (b - a).dot(v)).length();
+                assert!((in_uv - a.distance(b)).abs() < 1e-4, "the face facing {normal} is stretched");
+            }
+        }
+    }
+
+    /// Breaks if the ramp's top is projected onto an axis plane, which squashes it.
+    #[test]
+    fn a_ramp_along_its_grain_is_not_stretched() {
+        let shape = StairsShape { style: StairsStyle { steps: false, grain: StairsGrain::Along, ..default() }, ..flight(default()) };
+        let frame = shape.frame().unwrap();
+        let ramp = shape.ramp().unwrap();
+        let (u, _) = shape.grain().unwrap().axes(ramp.plane.normal);
+        let (bottom, top) = (frame.at(0.0, 0.0, 0.0), frame.at(frame.run, 0.0, frame.height));
+        assert!(((top - bottom).dot(u) - bottom.distance(top)).abs() < 1e-4);
     }
 }
