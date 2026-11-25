@@ -177,6 +177,7 @@ impl Plugin for GamePlugin {
             // reset writes it: without that plugin the first F5 would fail.
             .init_resource::<AnimationClock>()
             .init_resource::<InputLatch>()
+            .init_resource::<crate::game::player::CrouchToggled>()
             .init_resource::<crate::game::weapon_select::WeaponSelection>()
             // Also `DamagePlugin`'s; here too because the death cam reads it.
             .add_message::<crate::common::damage::Died>()
@@ -848,6 +849,37 @@ mod tests {
 
         tick(&mut app, 4);
         assert!(player_position(&mut app).y > rest + 0.05, "the latched press did not jump");
+    }
+
+    /// Fails if, with the crouch toggle on, a press does not duck until the next press, or a new
+    /// body starts ducked.
+    #[test]
+    fn with_the_crouch_toggle_each_press_ducks_or_stands() {
+        use crate::common::player_settings::PlayerSettings;
+        let mut app = headless(&[room(Vec3::new(-5.0, 0.0, -5.0), Vec3::new(5.0, 8.0, 5.0))]);
+        let mut settings = PlayerSettings::default();
+        settings.accessibility.crouch_toggle = true;
+        app.insert_resource(settings);
+        let frame = |app: &mut App, down: bool| {
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            match down {
+                true => keys.press(KeyCode::ControlLeft),
+                false => keys.release(KeyCode::ControlLeft),
+            }
+            crate::common::keybind::resolve_now(app.world_mut());
+            app.world_mut().resource_mut::<ButtonInput<KeyCode>>().clear();
+            app.world_mut().run_system_once(gather_input).unwrap();
+            latch(app).0.crouch
+        };
+        assert!(frame(&mut app, true), "a press did not duck");
+        assert!(frame(&mut app, false), "letting go stood up");
+        assert!(frame(&mut app, false), "ducking did not last");
+        assert!(!frame(&mut app, true), "a second press did not stand");
+        assert!(!frame(&mut app, false));
+        assert!(frame(&mut app, true));
+        enter(&mut app);
+        app.update();
+        assert!(!frame(&mut app, false), "a new body started ducked");
     }
 
     /// The tick that takes the latch empties it; the step must not, so a

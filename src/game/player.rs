@@ -243,6 +243,9 @@ pub struct PlayerInput {
     pub behead: bool,
     /// Put this player's spray on the wall in front of them, or move it there.
     pub spray: bool,
+    /// The sights are up while a scope's button is held, rather than each press raising or
+    /// lowering them. A preference, but in the input so a replayed tick reads it as the server did.
+    pub hold_sights: bool,
     /// Look direction about world Y, radians. An input because facing decides
     /// which way "forward" is, so a server needs it to reproduce movement.
     pub yaw: f32,
@@ -261,6 +264,7 @@ impl PlayerInput {
         *self = PlayerInput {
             yaw: self.yaw,
             pitch: self.pitch,
+            hold_sights: self.hold_sights,
             ..PlayerInput::default()
         };
     }
@@ -275,6 +279,11 @@ impl PlayerInput {
 /// same buffered input.
 #[derive(Resource, Default, Debug, Clone, Copy)]
 pub struct InputLatch(pub PlayerInput);
+
+/// Whether crouch is toggled down, with the crouch toggle on. Apart from the latch, which the pause
+/// menu clears, so the body ducks again once the menu closes. A new body starts standing.
+#[derive(Resource, Default, Debug, Clone, Copy)]
+pub struct CrouchToggled(pub bool);
 
 /// The input component a body carries.
 ///
@@ -545,11 +554,13 @@ pub fn measure_eyes(mut bodies: Query<(&crate::common::skeleton::Skeleton, &mut 
 /// to cover a new round, a respawn and a client being handed a body.
 pub fn aim_the_view_at_our_body(
     mut latch: ResMut<InputLatch>,
+    mut toggled: ResMut<CrouchToggled>,
     ours: Query<&Player, Added<LocalPlayer>>,
 ) {
     for body in &ours {
         latch.0.yaw = body.yaw;
         latch.0.pitch = body.pitch;
+        toggled.0 = false;
     }
 }
 
@@ -562,7 +573,13 @@ pub fn despawn_the_view(mut commands: Commands, cameras: Query<Entity, With<Play
 /// Read the actions into [`InputLatch`], once per frame.
 ///
 /// Runs before the fixed loop so a press reaches the same frame's steps.
-pub fn gather_input(actions: Res<Actions>, mut latch: ResMut<InputLatch>) {
+pub fn gather_input(
+    actions: Res<Actions>,
+    settings: Option<Res<crate::common::player_settings::PlayerSettings>>,
+    mut toggled: ResMut<CrouchToggled>,
+    mut latch: ResMut<InputLatch>,
+) {
+    let access = settings.map(|settings| settings.accessibility).unwrap_or_default();
     let input = &mut latch.0;
     input.movement = Vec2::new(
         actions.axis(Action::MoveLeft, Action::MoveRight),
@@ -588,7 +605,14 @@ pub fn gather_input(actions: Res<Actions>, mut latch: ResMut<InputLatch>) {
     input.spray |= actions.just_pressed(Action::Spray);
 
     input.sprint = actions.pressed(Action::Sprint);
-    input.crouch = actions.pressed(Action::Crouch);
+    input.crouch = match access.crouch_toggle {
+        true => {
+            toggled.0 ^= actions.just_pressed(Action::Crouch);
+            toggled.0
+        }
+        false => actions.pressed(Action::Crouch),
+    };
+    input.hold_sights = !access.sighting_toggle;
 }
 
 /// Read the mouse into the latch, once per frame.

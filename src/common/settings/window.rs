@@ -421,6 +421,14 @@ impl SettingsWindow {
             ui.end_row();
         });
         ui.checkbox(&mut player.auto_reload, get!("settings.general.auto_reload"));
+
+        ui.add_space(GAP.into());
+        ui.heading(get!("settings.general.accessibility"));
+        ui.add_space(5.0);
+        let access = &mut player.accessibility;
+        ui.checkbox(&mut access.crouch_toggle, get!("settings.general.crouch_toggle"));
+        ui.checkbox(&mut access.sighting_toggle, get!("settings.general.sighting_toggle"));
+        ui.checkbox(&mut access.reduce_particles, get!("settings.general.reduce_particles"));
     }
 
     fn graphics(&mut self, ui: &mut Ui) {

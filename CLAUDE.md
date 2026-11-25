@@ -609,7 +609,12 @@ changes asks. `Escape` is Close (or answers the question by keeping the
 window), unless a binding is waiting for a key or a text field has the
 keyboard; `capture_binding` reads it from the keymap, since every action is quiet. Pages: **General** (the language, in
 `assets/user/settings.toml`; `--lang` overrides it for one run; and the
-player's name, auto-reload and field of view, which are `PlayerSettings`),
+player's name, auto-reload and field of view, which are `PlayerSettings`, and under
+**Accessibility**: a crouch toggle, each press of crouch ducking or standing (`CrouchToggled`,
+reset for each new body); a sighting toggle, on by default, which off holds the sights up only
+while a scope's button is held (`PlayerInput::hold_sights`, in the input so a replayed tick reads
+it as the server did); and reduce particles, which leaves only the side flames on the HUD while
+on fire and starts no afterburn flames on the body we view, ours or a watched one),
 **Graphics** (the debris decal caps, also `PlayerSettings`),
 **Sound** (master, effects and music volume and mute music on LAN, also
 `PlayerSettings`),
@@ -3228,7 +3233,7 @@ hand, because a prop is photographed when it is baked.
 ### Raising the sights
 
 A `scope` action ([`src/game/sights.rs`](src/game/sights.rs)) toggles a body's
-`Sights` on each press: the weapon comes up to its prop's sighted pose
+`Sights` on each press, or holds them up while held when its input says `hold_sights`: the weapon comes up to its prop's sighted pose
 (`ViewmodelSpec::sighted`, the Fit workspace's Hold panel) over the scope's
 `raise` seconds and back down over `lower`, the viewmodel moving between the
 two framings. Only once it is all the way up does the view narrow to the

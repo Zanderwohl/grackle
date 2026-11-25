@@ -601,18 +601,22 @@ fn hull_middle(drawn: &Transform, boxes: &Hitboxes, tick: Option<&PhysicsBody>) 
 }
 
 /// Our own afterburn is drawn in first person too: the faint glow on the arms
-/// is the only other sign of being on fire.
+/// is the only other sign of being on fire. With reduced particles the body we
+/// view starts no flames, since they rise across the middle of the view; the
+/// HUD's side flames still show it burning.
 #[allow(clippy::type_complexity)]
 fn follow_the_burning(
     mut commands: Commands,
     time: Res<Time<EffectSimulation>>,
-    bodies: Query<(&Transform, &Hitboxes, Has<OnFire>, Option<&Player>, Option<&PhysicsBody>)>,
+    settings: Option<Res<crate::common::player_settings::PlayerSettings>>,
+    bodies: Query<(&Transform, &Hitboxes, Has<OnFire>, Option<&Player>, Option<&PhysicsBody>, Has<crate::game::player::LocalPlayer>, Has<crate::game::player::Watched>)>,
     mut afterburns: Query<
         (Entity, &mut Afterburn, &mut Transform, &mut EffectProperties, Option<&mut EffectSpawner>),
         Without<Hitboxes>,
     >,
 ) {
     let dt = time.delta_secs();
+    let reduced = settings.is_some_and(|settings| settings.accessibility.reduce_particles);
     for (entity, mut afterburn, mut transform, mut properties, spawner) in &mut afterburns {
         let body = bodies.get(afterburn.body).ok();
         let lit = body.is_some_and(|(_, _, burning, ..)| burning);
@@ -624,13 +628,15 @@ fn follow_the_burning(
             }
             continue;
         }
+        let viewed = body.is_some_and(|(.., ours, watched)| ours || watched);
+        let starts = lit && !(reduced && viewed);
         // Added by Hanabi in `PostUpdate`, so absent on an emitter's first frame.
         if let Some(mut spawner) = spawner
-            && spawner.active != lit
+            && spawner.active != starts
         {
-            spawner.active = lit;
+            spawner.active = starts;
         }
-        let Some((drawn, boxes, _, player, tick)) = body else { continue };
+        let Some((drawn, boxes, _, player, tick, ..)) = body else { continue };
         if !lit {
             continue;
         }

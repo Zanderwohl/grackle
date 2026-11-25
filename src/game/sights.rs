@@ -169,7 +169,9 @@ pub fn work_the_sights(
 
         match (weapon, scope) {
             (Some(_), Some(scope)) if allowed => {
-                if went_down {
+                if input.hold_sights {
+                    next.up = down;
+                } else if went_down {
                     next.up = !next.up;
                 }
                 next.raised = if next.up {
@@ -248,6 +250,20 @@ mod tests {
         press(&mut world, body);
         let sights = tick(&mut world);
         assert!(!sights.sighted() && sights.raised > 0.0, "{sights:?}");
+    }
+
+    /// Fails if, held to sight, the sights are not up while the button is held and lowering once it
+    /// is let go.
+    #[test]
+    fn held_to_sight_the_sights_are_up_only_while_held() {
+        let (mut world, body) = a_world();
+        world.get_mut::<Inputs>(body).unwrap().hold_sights = true;
+        for _ in 0..3 {
+            press(&mut world, body);
+            assert!(tick(&mut world).up, "the sights were down while held");
+        }
+        assert!(!tick(&mut world).up, "the sights stayed up once let go");
+        assert!(!tick(&mut world).up, "the sights came back up with nothing held");
     }
 
     /// Fails if the scoped primary is not what fires while sighted, or is while not.

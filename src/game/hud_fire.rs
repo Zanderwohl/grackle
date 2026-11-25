@@ -276,6 +276,7 @@ fn light_the_flames(
     root: Option<Single<&ComputedNode, With<HudFireRoot>>>,
     burning: Query<(), (Viewed, With<Player>, With<OnFire>)>,
     mut slots: Query<&mut FlameSlot>,
+    settings: Option<Res<crate::common::player_settings::PlayerSettings>>,
     mut owed: Local<(f32, f32)>,
 ) {
     let Some(root) = root else { return };
@@ -285,7 +286,10 @@ fn light_the_flames(
         return;
     }
     owed.0 += RATE * time.delta_secs();
-    owed.1 += FRONT_RATE * time.delta_secs();
+    // Reduced, only the side flames: the front ones cross the middle of the view.
+    if !settings.is_some_and(|settings| settings.accessibility.reduce_particles) {
+        owed.1 += FRONT_RATE * time.delta_secs();
+    }
     let (mut sides, mut fronts) = (owed.0.floor(), owed.1.floor());
     owed.0 -= sides;
     owed.1 -= fronts;
