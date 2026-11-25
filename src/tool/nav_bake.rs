@@ -28,7 +28,8 @@ use crate::game::nav_rating::MapStatistics;
 use crate::game::player::running_speed;
 use crate::get;
 use crate::game::collision::PropShape;
-use crate::tool::bake_job::{self, BackgroundBake, BakeJob, BakeKind, BakeProgress};
+use crate::common::net::{has_authority, NetRole};
+use crate::tool::bake_job::{self, BackgroundBake, BakeJob, BakeKind, BakeProgress, BakeStatus};
 use crate::tool::bakes::BakeSystems;
 use crate::tool::nav_cache;
 use crate::tool::room::{Block, MapVolumes, Room, VolumeOrder};
@@ -618,7 +619,13 @@ fn bake_nav_for_the_round(mut state: ResMut<NavBake>, inputs: NavInputs, setting
     state.dirty_since = None;
 }
 
-fn report_nav(state: Res<NavBake>, mut progress: ResMut<BakeProgress>) {
+fn report_nav(state: Res<NavBake>, mut progress: ResMut<BakeProgress>, role: Option<Res<NetRole>>) {
+    if !has_authority(role) {
+        for kind in [BakeKind::Nav, BakeKind::Sight] {
+            bake_job::report(&mut progress, kind, BakeStatus { state: bake_job::BakeState::Skipped, ..default() });
+        }
+        return;
+    }
     let mut status = state.bake.status();
     // A change not yet snapshot may or may not be what was baked; say so, so a round asks.
     if state.dirty_since.is_some() && status.state == bake_job::BakeState::UpToDate {
@@ -628,6 +635,20 @@ fn report_nav(state: Res<NavBake>, mut progress: ResMut<BakeProgress>) {
     bake_job::report(&mut progress, BakeKind::Sight, state.sight.status());
 }
 
+/// A client's server runs the bots, so a graph baked or kept here would be one nobody walks. One
+/// left from before joining is dropped, so going back to solo bakes the map then standing.
+fn forget_the_graph_as_a_client(mut state: ResMut<NavBake>, role: Option<Res<NetRole>>) {
+    if has_authority(role) || (state.graph.cells().is_empty() && !state.bake.is_baking() && !state.sight.is_baking()) {
+        return;
+    }
+    state.replace(None, (NavGraph::default(), Surface::default()));
+    state.bake.forget();
+    state.sight.forget();
+    state.snapshot = None;
+    state.dirty_since = None;
+    info!("Dropped the nav graph: the server runs the bots");
+}
+
 pub struct NavBakePlugin;
 
 impl Plugin for NavBakePlugin {
@@ -635,9 +656,10 @@ impl Plugin for NavBakePlugin {
         app.init_resource::<NavBake>()
             .add_message::<BakeNav>()
             .add_message::<ClearNav>()
-            // Ungated: the map can change during a round.
-            .add_systems(Update, (auto_bake_nav, report_nav).chain())
-            .add_systems(OnEnter(AppMode::Play), bake_nav_for_the_round.in_set(BakeSystems::All));
+            // Not gated on the mode, since the map can change during a round; gated on authority,
+            // since only the authority runs bots.
+            .add_systems(Update, (forget_the_graph_as_a_client, auto_bake_nav.run_if(has_authority), report_nav).chain())
+            .add_systems(OnEnter(AppMode::Play), bake_nav_for_the_round.in_set(BakeSystems::All).run_if(has_authority));
     }
 }
 
@@ -715,6 +737,31 @@ mod tests {
         }
         assert!(app.world().resource::<NavBake>().graph().cells().is_empty(), "a round without bots baked the graph");
         assert!(!app.world().resource::<NavBake>().bake.is_baking(), "a nav bake started in a round without bots");
+    }
+
+    /// Breaks if a client bakes a graph, or keeps one from before it joined: its server runs the bots.
+    #[test]
+    fn a_client_bakes_no_graph_and_drops_the_one_it_had() {
+        let mut app = headless();
+        // A map of its own, so the graph it caches is not found by the tests that expect none.
+        app.world_mut().spawn(Room::new(Vec3::new(20.0, 0.0, 0.0), Vec3::new(25.0, 3.0, 5.0)));
+        app.update();
+        app.world_mut().resource_mut::<NextState<AppMode>>().set(AppMode::Play);
+        app.update();
+        app.update();
+        assert!(!app.world().resource::<NavBake>().graph().cells().is_empty(), "solo baked no graph to drop");
+        app.world_mut().resource_mut::<NextState<AppMode>>().set(AppMode::Editor);
+        app.update();
+        app.insert_resource(NetRole::Client { host: "localhost".into(), port: 1 });
+        app.world_mut().resource_mut::<NextState<AppMode>>().set(AppMode::Play);
+        for _ in 0..4 {
+            app.update();
+        }
+        let nav = app.world().resource::<NavBake>();
+        assert!(nav.graph().cells().is_empty(), "a client kept a nav graph");
+        assert!(!nav.bake.is_baking() && !nav.sight.is_baking(), "a client started a nav bake");
+        let status = app.world().resource::<BakeProgress>().get(BakeKind::Nav).cloned().unwrap();
+        assert_eq!(status.state, bake_job::BakeState::Skipped);
     }
 
     /// Times each stage of the bake on a real map:

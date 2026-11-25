@@ -147,7 +147,7 @@ fn broadcast_map_changes(
     timeline: Res<FeatureTimeline>,
     server: Option<Single<&Endpoint, With<Server>>>,
     mut last: ResMut<LastMapSent>,
-    mut sender: ServerMultiMessageSender,
+    mut sender: crate::common::net_transport::ToClients,
 ) -> Result {
     let Some(server) = server else { return Ok(()) };
 
@@ -181,7 +181,7 @@ fn send_map_to_new_clients(
     metadata: Res<MapMetadata>,
     file: Option<Res<CurrentFilePath>>,
     joined: Query<Entity, (With<ClientOf>, Added<Connected>)>,
-    mut sender: ServerMultiMessageSender,
+    mut sender: crate::common::net_transport::ToClients,
 ) -> Result {
     if joined.is_empty() {
         return Ok(());
@@ -206,7 +206,7 @@ fn broadcast_metadata_changes(
     file: Option<Res<CurrentFilePath>>,
     server: Option<Single<&Endpoint, With<Server>>>,
     mut last: Local<Option<MetadataSnapshot>>,
-    mut sender: ServerMultiMessageSender,
+    mut sender: crate::common::net_transport::ToClients,
 ) -> Result {
     let Some(server) = server else { return Ok(()) };
     if !metadata.is_changed() && !file.as_ref().is_some_and(|file| file.is_changed()) {
