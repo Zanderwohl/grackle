@@ -266,7 +266,7 @@ mod tests {
         use crate::tool::room::{Room, RoomSlot};
         let rooms = [Room::new(Vec3::ZERO, Vec3::new(4.0, 3.0, 4.0))];
         let (_, walls) =
-            slot_meshes(&room_share(&rooms, 0)).into_iter().find(|(slot, _)| *slot == RoomSlot::Walls).unwrap();
+            slot_meshes(&room_share(&rooms, 0), None).into_iter().find(|(slot, _)| *slot == RoomSlot::Walls).unwrap();
         let normals = walls.attribute(Mesh::ATTRIBUTE_NORMAL).unwrap().as_float3().unwrap();
         let Some(bevy::mesh::VertexAttributeValues::Float32x4(tangents)) = walls.attribute(Mesh::ATTRIBUTE_TANGENT)
         else {

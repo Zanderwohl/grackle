@@ -147,13 +147,47 @@ fn touching(a: &Room, b: &Room) -> bool {
     (0..3).all(|axis| a_min[axis] <= b_max[axis] && b_min[axis] <= a_max[axis])
 }
 
+/// Which way a material's `u` runs on a feature's faces, in place of the world's axes. Unit
+/// vectors, at right angles.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Grain {
+    /// Projected onto each face, this is `u`.
+    pub along: Vec3,
+    /// What `u` follows on a face square to `along`.
+    pub fallback: Vec3,
+    /// `v` runs down it on a face that is not level.
+    pub up: Vec3,
+}
+
+/// A face square to the grain within this, as the sine of the angle between them, takes the
+/// fallback: near it, `along` projected onto the face is too short to say which way it runs.
+const SQUARE_TO_THE_GRAIN: f32 = 0.1;
+
+/// Below this, as the cosine between `v` and `up`, a face is level. Tiny, so `v` on a shallow
+/// slope still runs downhill instead of flipping where the rule changes.
+const LEVEL: f32 = 1.0e-4;
+
+impl Grain {
+    /// Unit, at right angles, in the face's plane. Projected onto the face rather than an axis
+    /// plane, so a slope is not stretched.
+    pub fn axes(&self, normal: Vec3) -> (Vec3, Vec3) {
+        let in_plane = |direction: Vec3| direction - normal * normal.dot(direction);
+        let along = in_plane(self.along);
+        let u = if along.length() >= SQUARE_TO_THE_GRAIN { along } else { in_plane(self.fallback) }.normalize();
+        let v = normal.cross(u);
+        // Down a wall, as image rows go; on a level face, as the world's floors and ceilings go.
+        let sign = if v.dot(self.up).abs() >= LEVEL { -v.dot(self.up) } else { v.dot(u.cross(self.up)) };
+        (u, if sign < 0.0 { -v } else { v })
+    }
+}
+
 /// Flat-shaded triangles, normals into the room, with mikktspace tangents for a
 /// material's normal map. UVs are world-space in material tiles
-/// ([`MATERIAL_TILE_METERS`]) across the face's two widest axes, so a material
-/// runs on across neighboring walls instead of stretching with the room, and
-/// `v` runs down a wall, as image rows do. `UV_1` is `lightmap_uv` of a face's index in `faces` and
-/// a vertex.
-pub fn mesh(faces: &[Face], lightmap_uv: impl Fn(usize, Vec3) -> Vec2) -> Mesh {
+/// ([`MATERIAL_TILE_METERS`]), measured from the world's origin, so a material runs on across
+/// neighboring walls instead of stretching with the room, and `v` runs down a wall, as image rows
+/// do. Without a [`Grain`] they lie across the face's two widest world axes. `UV_1` is
+/// `lightmap_uv` of a face's index in `faces` and a vertex.
+pub fn mesh(faces: &[Face], grain: Option<&Grain>, lightmap_uv: impl Fn(usize, Vec3) -> Vec2) -> Mesh {
     let mut positions: Vec<[f32; 3]> = Vec::new();
     let mut normals: Vec<[f32; 3]> = Vec::new();
     let mut uvs: Vec<[f32; 2]> = Vec::new();
@@ -163,8 +197,11 @@ pub fn mesh(faces: &[Face], lightmap_uv: impl Fn(usize, Vec3) -> Vec2) -> Mesh {
     for (index, face) in faces.iter().enumerate() {
         let normal = face.plane.normal;
         let flat = normal.abs();
+        let axes = grain.map(|grain| grain.axes(normal));
         let uv = |p: Vec3| -> [f32; 2] {
-            let (u, v) = if flat.x >= flat.y && flat.x >= flat.z {
+            let (u, v) = if let Some((u, v)) = axes {
+                (p.dot(u), p.dot(v))
+            } else if flat.x >= flat.y && flat.x >= flat.z {
                 (p.z, -p.y)
             } else if flat.y >= flat.z {
                 (p.x, p.z)
@@ -203,7 +240,7 @@ pub fn mesh(faces: &[Face], lightmap_uv: impl Fn(usize, Vec3) -> Vec2) -> Mesh {
 /// normals, so each can take its own material. A slot with no faces left —
 /// every one opened up by a neighbor — is left out. `UV_1` is into one
 /// [`Atlas`] of all of `faces`, which every slot shares.
-pub fn slot_meshes(faces: &[Face]) -> Vec<(RoomSlot, Mesh)> {
+pub fn slot_meshes(faces: &[Face], grain: Option<&Grain>) -> Vec<(RoomSlot, Mesh)> {
     let atlas = Atlas::of(faces);
     RoomSlot::ALL
         .into_iter()
@@ -211,7 +248,7 @@ pub fn slot_meshes(faces: &[Face]) -> Vec<(RoomSlot, Mesh)> {
             let mine: Vec<usize> =
                 (0..faces.len()).filter(|&index| RoomSlot::of(faces[index].plane.normal) == slot).collect();
             let shown: Vec<Face> = mine.iter().map(|&index| faces[index].clone()).collect();
-            (!mine.is_empty()).then(|| (slot, mesh(&shown, |index, point| atlas.uv(mine[index], point))))
+            (!mine.is_empty()).then(|| (slot, mesh(&shown, grain, |index, point| atlas.uv(mine[index], point))))
         })
         .collect()
 }
@@ -283,7 +320,7 @@ mod tests {
     #[test]
     fn a_rooms_slots_are_sorted_by_which_way_they_face() {
         let rooms = [Room::new(Vec3::ZERO, Vec3::new(10.0, 3.0, 10.0))];
-        let slots = slot_meshes(&room_share(&rooms, 0));
+        let slots = slot_meshes(&room_share(&rooms, 0), None);
         let tris: Vec<(RoomSlot, usize)> = slots.iter().map(|(slot, mesh)| (*slot, triangle_count(mesh))).collect();
         assert_eq!(tris, vec![(RoomSlot::Floor, 2), (RoomSlot::Walls, 8), (RoomSlot::Ceiling, 2)]);
     }
@@ -295,7 +332,7 @@ mod tests {
             Room::new(Vec3::ZERO, Vec3::new(4.0, 3.0, 4.0)),
             Room::new(Vec3::new(0.0, 3.0, 0.0), Vec3::new(4.0, 6.0, 4.0)),
         ];
-        let slots: Vec<RoomSlot> = slot_meshes(&room_share(&rooms, 0)).into_iter().map(|(slot, _)| slot).collect();
+        let slots: Vec<RoomSlot> = slot_meshes(&room_share(&rooms, 0), None).into_iter().map(|(slot, _)| slot).collect();
         assert_eq!(slots, vec![RoomSlot::Floor, RoomSlot::Walls]);
     }
 
@@ -310,7 +347,7 @@ mod tests {
         let point = Vec3::new(4.0, 3.0, 6.0);
         // On the back walls, which face -Z and so map x across and y down.
         let uv_at = |index: usize| {
-            let (_, walls) = slot_meshes(&room_share(&rooms, index))
+            let (_, walls) = slot_meshes(&room_share(&rooms, index), None)
                 .into_iter()
                 .find(|(slot, _)| *slot == RoomSlot::Walls)
                 .unwrap();
@@ -587,6 +624,22 @@ mod tests {
         assert!((t - 5.0).abs() < 1e-4, "A's wall beside the doorway, got {t}");
     }
 
+    /// Breaks if a level grain along X does not reproduce the world projection on a box.
+    #[test]
+    fn a_level_grain_along_x_is_the_world_projection_on_a_box() {
+        let rooms = [Room::new(Vec3::new(1.0, 0.5, -2.0), Vec3::new(5.0, 3.5, 2.0))];
+        let faces = room_share(&rooms, 0);
+        let grain = Grain { along: Vec3::X, fallback: Vec3::Z, up: Vec3::Y };
+        let uvs = |grain: Option<&Grain>| {
+            let mesh = mesh(&faces, grain, |_, _| Vec2::ZERO);
+            let Some(bevy::mesh::VertexAttributeValues::Float32x2(uvs)) = mesh.attribute(Mesh::ATTRIBUTE_UV_0) else { panic!() };
+            uvs.clone()
+        };
+        for (world, grained) in uvs(None).into_iter().zip(uvs(Some(&grain))) {
+            assert!(Vec2::from(world).abs_diff_eq(Vec2::from(grained), 1e-5), "{world:?} against {grained:?}");
+        }
+    }
+
     /// Breaks if the winding and the normals disagree, which culls every wall
     /// seen from inside the room.
     #[test]
@@ -595,7 +648,7 @@ mod tests {
             Room::new(Vec3::ZERO, Vec3::splat(10.0)),
             Room::new(Vec3::new(10.0, 2.0, 2.0), Vec3::new(20.0, 8.0, 8.0)),
         ];
-        let mesh = mesh(&room_share(&rooms, 0), |_, _| Vec2::ZERO);
+        let mesh = mesh(&room_share(&rooms, 0), None, |_, _| Vec2::ZERO);
         let Some(bevy::mesh::VertexAttributeValues::Float32x3(positions)) = mesh.attribute(Mesh::ATTRIBUTE_POSITION) else { panic!() };
         let Some(bevy::mesh::VertexAttributeValues::Float32x3(normals)) = mesh.attribute(Mesh::ATTRIBUTE_NORMAL) else { panic!() };
         let Some(Indices::U32(indices)) = mesh.indices() else { panic!() };
@@ -609,7 +662,7 @@ mod tests {
     #[test]
     fn the_mesh_has_a_triangle_pair_per_quad() {
         let rooms = [Room::new(Vec3::ZERO, Vec3::new(10.0, 3.0, 10.0))];
-        let mesh = mesh(&room_share(&rooms, 0), |_, _| Vec2::ZERO);
+        let mesh = mesh(&room_share(&rooms, 0), None, |_, _| Vec2::ZERO);
         let Some(Indices::U32(indices)) = mesh.indices() else { panic!() };
         assert_eq!(indices.len() / 3, 12);
     }

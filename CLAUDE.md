@@ -1936,7 +1936,9 @@ GPU path draws them ([`src/material/library.rs`](src/material/library.rs),
 - **Texture coordinates are world-space**, in tiles of
   `MATERIAL_TILE_METERS`, so a material runs on across neighboring walls and
   does not stretch with the room. The tile size is a stand-in: it belongs to
-  the material, which has nowhere to say it yet.
+  the material, which has nowhere to say it yet. A flight of stairs may instead
+  run its material along or across itself (`StairsGrain`): `world_surface::Grain`
+  projects each face onto its own plane in the flight's axes, so nothing stretches.
 - **A material is baked once per name** into a `TILE_TEXELS` tile, as the
   three maps `StandardMaterial` reads — color, glTF-packed
   metallic-roughness, normal — each with a full mip chain, by texture-graph's
