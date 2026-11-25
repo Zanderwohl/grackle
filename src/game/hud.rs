@@ -30,6 +30,7 @@ use crate::common::swatch::{Ink, Swatch};
 use crate::common::team::Team;
 use crate::common::ui_shape::{Corner, Path, ShapeMaterial, ShapeStyle};
 use crate::common::weapon::{Ammo, Equipped, WeaponCatalog};
+use crate::game::plate_bar::PlateBar;
 use crate::game::player::{Player, Viewed};
 use crate::game::viewmodel::VIEWMODEL_CAMERA_ORDER;
 use crate::get;
@@ -148,19 +149,25 @@ impl HudZone {
     /// out past the panel's edge. First among its siblings, so it is under
     /// them.
     fn panel(self) -> impl Bundle {
+        (self, self.panel_node(), Pickable::IGNORE)
+    }
+
+    fn panel_node(self) -> Node {
         let size = self.size();
-        (
-            self,
-            Node {
-                position_type: PositionType::Absolute,
-                left: Val::Px(0.0),
-                bottom: Val::Px(self.raised()),
-                width: Val::Px(size.x),
-                height: Val::Px(size.y),
-                ..default()
-            },
-            Pickable::IGNORE,
-        )
+        Node {
+            position_type: PositionType::Absolute,
+            left: Val::Px(0.0),
+            bottom: Val::Px(self.raised()),
+            width: Val::Px(size.x),
+            height: Val::Px(size.y),
+            ..default()
+        }
+    }
+
+    /// The panel as a [`PlateBar`], filled by [`fill_the_health_bar`], in place of [`Self::panel`].
+    fn bar(self) -> impl Bundle {
+        let corners = leaning_corners(self != HudZone::Ammo, Corner::squircle(34.0), Corner::squircle(10.0));
+        (HealthBar, PlateBar::with_corners(Swatch::neutral(), 1.0, self != HudZone::Ammo, corners), self.panel_node())
     }
 
     /// The readout over a panel: as wide, and centered on the panel rather
@@ -226,6 +233,20 @@ pub(crate) fn panel_style(swatch: &Swatch) -> ShapeStyle {
     }
 }
 
+/// The bar behind the health number, colored over the share of health left.
+#[derive(Component)]
+struct HealthBar;
+
+/// The share of its class's health the viewed body has, full with no body.
+fn fill_the_health_bar(body: Option<Single<&Damageable, Viewed>>, mut bars: Query<&mut PlateBar, With<HealthBar>>) {
+    let t = body.map_or(1.0, |health| health.health() as f32 / health.max().max(1) as f32);
+    for mut bar in &mut bars {
+        if bar.t != t {
+            bar.t = t;
+        }
+    }
+}
+
 /// Which readout a `Text` is, so one system can write them all.
 #[derive(Component, Clone, Copy, PartialEq, Eq, Debug)]
 enum HudText {
@@ -251,7 +272,7 @@ impl Plugin for HudPlugin {
                 (
                     spawn_the_hud,
                     toggle_safe_zone_outline,
-                    (outline_the_safe_zone, fill_in_the_readouts, dress_the_zones),
+                    (outline_the_safe_zone, fill_in_the_readouts, dress_the_zones, fill_the_health_bar),
                     paint_the_zones,
                 )
                     .chain()
@@ -429,7 +450,7 @@ fn health_readout(font: &Handle<Font>) -> impl Bundle {
             ..HudZone::Health.readout()
         },
         Pickable::IGNORE,
-        children![HudZone::Health.panel(), text(font, HudText::Health, BIG, 1.0)],
+        children![HudZone::Health.bar(), text(font, HudText::Health, BIG, 1.0)],
     )
 }
 
@@ -536,6 +557,7 @@ fn dress_the_zones(
 fn paint_the_zones(
     ours: Option<Single<(Option<&Team>, Option<&PlayerColor>), (Viewed, With<Player>)>>,
     zones: Query<&MaterialNode<ShapeMaterial>, With<HudZone>>,
+    mut bars: Query<&mut PlateBar, With<HealthBar>>,
     mut texts: Query<&mut TextColor, With<HudText>>,
     materials: Option<ResMut<Assets<ShapeMaterial>>>,
 ) {
@@ -543,6 +565,11 @@ fn paint_the_zones(
         let (team, color) = ours.into_inner();
         Swatch::of_body(team.copied(), color.copied())
     });
+    for mut bar in &mut bars {
+        if bar.swatch != swatch {
+            bar.swatch = swatch;
+        }
+    }
     let style = HudZone::style(&swatch);
     if let Some(mut materials) = materials {
         for zone in &zones {
@@ -826,6 +853,26 @@ mod tests {
     }
 
     /// Breaks if a spectator sees no readouts, or somebody else's, over the body they watch.
+    /// Breaks if the bar behind the health number is not the viewed body's share of its class's
+    /// health, or is not full with no body.
+    #[test]
+    fn the_health_bar_is_the_share_of_health_left() {
+        use bevy::ecs::system::RunSystemOnce;
+
+        let mut world = World::new();
+        let bar = world.spawn((HealthBar, PlateBar::new(Swatch::neutral(), 1.0))).id();
+        let mut health = Damageable::with_health(200);
+        health.apply(150);
+        world.spawn((Damageable::with_health(100), Player::default()));
+        let ours = world.spawn((LocalPlayer, health)).id();
+        world.run_system_once(fill_the_health_bar).unwrap();
+        assert_eq!(world.get::<PlateBar>(bar).unwrap().t, 0.25);
+
+        world.despawn(ours);
+        world.run_system_once(fill_the_health_bar).unwrap();
+        assert_eq!(world.get::<PlateBar>(bar).unwrap().t, 1.0);
+    }
+
     #[test]
     fn a_spectator_reads_the_watched_bodys_health() {
         use bevy::ecs::system::RunSystemOnce;

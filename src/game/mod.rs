@@ -80,6 +80,7 @@ pub mod taunt_menu;
 pub mod taunt_view;
 pub mod kill_icon;
 pub mod plate;
+pub mod plate_bar;
 pub mod postcards;
 pub mod plate_button;
 pub mod pickup_beam;
@@ -130,7 +131,7 @@ impl Plugin for GamePlugin {
             .add_plugins((crate::game::team_choice::TeamChoicePlugin, crate::game::team_picker::TeamPickerPlugin, crate::game::spectate::SpectatePlugin, crate::game::kill_cam::KillCamPlugin))
             .add_plugins(crate::game::damage_direction::DamageDirectionPlugin)
             .add_plugins(crate::game::name_tag::NameTagPlugin)
-            .add_plugins((crate::game::plate::PlatePlugin, crate::game::plate_button::PlateButtonPlugin, crate::game::kill_feed::KillFeedPlugin, crate::game::taunt_menu::TauntMenuPlugin))
+            .add_plugins((crate::game::plate::PlatePlugin, crate::game::plate_bar::PlateBarPlugin, crate::game::plate_button::PlateButtonPlugin, crate::game::kill_feed::KillFeedPlugin, crate::game::taunt_menu::TauntMenuPlugin))
             .add_plugins(crate::game::trigger::TriggerPlugin)
             .init_state::<AppMode>()
             .init_resource::<StartInPlay>()

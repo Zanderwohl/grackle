@@ -826,7 +826,11 @@ afterburn, the explosion for splash, `kill_headshot` for a headshot and the skul
 a node with `PlateText` children, given its leaning panel after layout, repainted when its size
 or `swatch` changes, its text black or white by `Swatch::text`. Its lines and panel stay hidden
 until the panel is laid out; the plate's own `Visibility` is its owner's, which is how a name tag
-hides one that is off screen. Name tags and the watched and killer banners are plates too.
+hides one that is off screen. Name tags and the watched and killer banners are plates too. A **`PlateBar`**
+([`src/game/plate_bar.rs`](src/game/plate_bar.rs)) is a plate's panel as a bar: its swatch over the
+left `t` of its width, and the swatch at a fifth of its chroma over the rest, the colored panel
+drawn whole inside a node that clips it, so `t` moves only the clip. The panel behind the health
+number is one, `t` the viewed body's health over its class's (`fill_the_health_bar`).
 
 **The viewmodel's arms are solved, not authored.** `place_the_viewmodel_arms`
 calls the same `grip_with` that puts a body's hands on a weapon, so a grip
