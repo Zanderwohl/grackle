@@ -62,10 +62,12 @@ pub fn shows_the_cameras(phase: Option<MatchPhase>) -> bool {
     matches!(phase, Some(MatchPhase::PreGame | MatchPhase::BetweenRounds))
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct PhaseStatement {
     pub phase: MatchPhase,
     pub number: u32,
+    /// The authority's pick for the post-game, so a client names the same winners; empty otherwise.
+    pub winners: Vec<crate::common::damage::PlayerId>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
@@ -78,7 +80,7 @@ pub struct CountdownMessage {
 pub struct CountdownChannel;
 
 /// The last phase the server stated, which a client in Play follows.
-#[derive(Resource, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Resource, Clone, Debug, Default, PartialEq, Eq)]
 pub struct ServerPhase(pub Option<PhaseStatement>);
 
 /// The messages, on both ends; the state is `MatchCyclePlugin`'s.
@@ -98,8 +100,12 @@ impl Plugin for MatchPhaseSyncPlugin {
     }
 }
 
-fn statement(phase: &Option<Res<State<MatchPhase>>>, number: &MatchNumber) -> Option<PhaseStatement> {
-    phase_of(phase).map(|phase| PhaseStatement { phase, number: number.0 })
+fn statement(phase: &Option<Res<State<MatchPhase>>>, number: &MatchNumber, winners: Option<&crate::game::match_cycle::Winners>) -> Option<PhaseStatement> {
+    let winners = |phase| match phase {
+        MatchPhase::PostGame => winners.map(|winners| winners.0.clone()).unwrap_or_default(),
+        _ => Vec::new(),
+    };
+    phase_of(phase).map(|phase| PhaseStatement { phase, number: number.0, winners: winners(phase) })
 }
 
 /// On a change of phase or number; nothing outside Play, where the phase does not exist.
@@ -107,6 +113,7 @@ fn announce_the_phase(
     role: Res<NetRole>,
     phase: Option<Res<State<MatchPhase>>>,
     number: Res<MatchNumber>,
+    winners: Option<Res<crate::game::match_cycle::Winners>>,
     server: Option<Single<&Endpoint, With<Server>>>,
     mut sent: Local<Option<PhaseStatement>>,
     mut sender: crate::common::net_transport::ToClients,
@@ -114,11 +121,11 @@ fn announce_the_phase(
     if !role.is_authority() {
         return Ok(());
     }
-    let now = statement(&phase, &number);
+    let now = statement(&phase, &number, winners.as_deref());
     if now == *sent {
         return Ok(());
     }
-    *sent = now;
+    sent.clone_from(&now);
     let (Some(now), Some(server)) = (now, server) else { return Ok(()) };
     sender.send::<_, MatchChannel>(&now, &server, &NetworkTarget::All)
 }
@@ -127,13 +134,14 @@ fn tell_new_clients_the_phase(
     role: Res<NetRole>,
     phase: Option<Res<State<MatchPhase>>>,
     number: Res<MatchNumber>,
+    winners: Option<Res<crate::game::match_cycle::Winners>>,
     joined: Query<Entity, (With<ClientOf>, Added<Connected>)>,
     mut sender: crate::common::net_transport::ToClients,
 ) -> Result {
     if !role.is_authority() {
         return Ok(());
     }
-    let Some(now) = statement(&phase, &number) else { return Ok(()) };
+    let Some(now) = statement(&phase, &number, winners.as_deref()) else { return Ok(()) };
     for client in &joined {
         sender.send_to_entities::<_, MatchChannel>(&now, core::iter::once(client))?;
     }
@@ -180,7 +188,7 @@ mod tests {
     /// Postcard refuses an internally tagged enum; the phase must survive the wire's encoding.
     #[test]
     fn a_statement_survives_the_wire_encoding() {
-        let sent = PhaseStatement { phase: MatchPhase::PostGame, number: 7 };
+        let sent = PhaseStatement { phase: MatchPhase::PostGame, number: 7, winners: vec![crate::common::damage::PlayerId(3)] };
         let bytes = postcard::to_allocvec(&sent).unwrap();
         assert_eq!(postcard::from_bytes::<PhaseStatement>(&bytes).unwrap(), sent);
         let sent = CountdownMessage { phase: MatchPhase::BetweenRounds, left: Some(3.5) };

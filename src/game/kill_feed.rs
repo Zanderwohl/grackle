@@ -1,4 +1,4 @@
-//! Recent deaths, at most [`LINES`], at the top right of the [`SafeZone`], oldest at the top: each a
+//! Recent deaths, at most [`LINES`], at the top right of the [`WindowSafeZone`], oldest at the top: each a
 //! [`Plate`] in the killer's color reading "killer [icon] victim" or "killer + assist [icon]
 //! victim", the icon being what killed ([`kill_icon::icon_for`]). A body that killed itself or was
 //! killed by the map with somebody's help reads "assist finished off [icon] victim", and without
@@ -27,7 +27,7 @@ use crate::common::damage::{DamageSource, Died, How, PlayerId};
 use crate::common::fonts::DisplayFont;
 use crate::common::lang::fill_uncached_random;
 use crate::common::swatch::Swatch;
-use crate::game::hud::{SafeZone, MARGIN_X, MARGIN_Y};
+use crate::game::hud::WindowSafeZone;
 use crate::common::weapon::WeaponCatalog;
 use crate::game::kill_cam::our_id;
 use crate::game::kill_icon::{self, KillIcons};
@@ -153,7 +153,7 @@ impl KillFeed {
     }
 }
 
-/// The column the plates stand in. Goes when the HUD does: it is the safe zone's child.
+/// The column the plates stand in. Goes when the HUD does: it is the window safe zone's child.
 #[derive(Component)]
 struct FeedColumn;
 
@@ -242,7 +242,7 @@ fn show_the_feed(
     mut icons: ResMut<KillIcons>,
     pack: Option<Res<crate::common::assets::Assets>>,
     mut images: Option<ResMut<Assets<Image>>>,
-    zone: Option<Single<Entity, With<SafeZone>>>,
+    zone: Option<Single<Entity, With<WindowSafeZone>>>,
     column: Option<Single<(Entity, Option<&Children>, Ref<FeedColumn>), With<FeedColumn>>>,
     plates: Query<&ShowsLine>,
 ) {
@@ -252,8 +252,8 @@ fn show_the_feed(
             FeedColumn,
             Node {
                 position_type: PositionType::Absolute,
-                top: Val::Px(MARGIN_Y),
-                right: Val::Px(MARGIN_X),
+                top: Val::Px(0.0),
+                right: Val::Px(0.0),
                 flex_direction: FlexDirection::Column,
                 align_items: AlignItems::FlexEnd,
                 ..default()
@@ -505,7 +505,7 @@ mod tests {
         world.init_resource::<DisplayFont>();
         world.init_resource::<KillFeed>();
         world.init_resource::<KillIcons>();
-        world.spawn(SafeZone);
+        world.spawn(WindowSafeZone);
         world.run_system_once(show_the_feed).unwrap();
 
         let shown = |world: &mut World| -> Vec<String> {
@@ -545,7 +545,7 @@ mod tests {
         world.init_resource::<KillIcons>();
         world.init_resource::<Assets<Image>>();
         world.init_resource::<crate::common::assets::Assets>();
-        world.spawn(SafeZone);
+        world.spawn(WindowSafeZone);
         world.run_system_once(show_the_feed).unwrap();
         let words = Words { before: "Ana".into(), icon: "kill_rocket".into(), after: "Bo".into() };
         world.resource_mut::<KillFeed>().push(words, Swatch::neutral(), false);

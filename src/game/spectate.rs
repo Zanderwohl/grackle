@@ -1,7 +1,8 @@
 //! Watching a match from [`Seat::Spectating`]: no body, and a view the left
 //! and right mouse buttons step forward and back through, wrapping — every
-//! living body's eye, then every spectator camera the seat may look through,
-//! or every spawn point on a map with none. Every machine works its list out
+//! spectator camera the seat may look through, then every living body's eye,
+//! then every spawn point on a map with no camera. A dead player spectating
+//! after the kill cam starts at the top of the same list. Every machine works its list out
 //! from what it can see; the seat is the server's, read off [`TeamOptions`].
 
 use bevy::prelude::*;
@@ -36,9 +37,10 @@ pub enum Viewpoint {
 /// is or was copied from, then which copy (0 for the original).
 pub type CameraRank = (u32, u64, usize);
 
-/// Bodies by id, then cameras by rank, then spawns by index only when there
-/// is no camera. Indexes rather than `Entity`'s own order, which is not its
-/// index's, so the order does not depend on archetypes.
+/// Cameras by rank, then bodies by id, then spawns by index only when there
+/// is no camera, so a view that starts at the top starts in a camera, else on
+/// a body. Indexes rather than `Entity`'s own order, which is not its index's,
+/// so the order does not depend on archetypes.
 pub fn viewpoints(
     bodies: impl IntoIterator<Item = PlayerId>,
     cameras: impl IntoIterator<Item = (Entity, CameraRank)>,
@@ -55,7 +57,7 @@ pub fn viewpoints(
     spawns.sort_by_key(|spawn| spawn.index());
     let bodies = bodies.into_iter().map(Viewpoint::Eye);
     let cameras = cameras.into_iter().map(|(camera, _)| Viewpoint::Camera(camera));
-    bodies.chain(cameras).chain(spawns.into_iter().map(Viewpoint::Spawn)).collect()
+    cameras.chain(bodies).chain(spawns.into_iter().map(Viewpoint::Spawn)).collect()
 }
 
 /// The entity index breaks ties, so the order is the same every frame.
@@ -306,7 +308,7 @@ mod tests {
     }
 
     #[test]
-    fn bodies_come_first_by_id_then_spawns_with_no_camera() {
+    fn bodies_come_first_by_id_with_no_camera_then_spawns() {
         let list = viewpoints([PlayerId(7), PlayerId(2)], [], [spawn(9), spawn(3)]);
         assert_eq!(
             list,
@@ -315,17 +317,17 @@ mod tests {
     }
 
     #[test]
-    fn cameras_follow_the_bodies_by_order_then_feature_and_take_the_spawns_place() {
+    fn cameras_come_before_the_bodies_by_order_then_feature_and_take_the_spawns_place() {
         let cameras = [(spawn(20), (1000, 4, 0)), (spawn(21), (5, 9, 0)), (spawn(22), (1000, 2, 1)), (spawn(23), (1000, 2, 0))];
         let list = viewpoints([PlayerId(1)], cameras, [spawn(3)]);
         assert_eq!(
             list,
             vec![
-                Viewpoint::Eye(PlayerId(1)),
                 Viewpoint::Camera(spawn(21)),
                 Viewpoint::Camera(spawn(23)),
                 Viewpoint::Camera(spawn(22)),
                 Viewpoint::Camera(spawn(20)),
+                Viewpoint::Eye(PlayerId(1)),
             ]
         );
     }

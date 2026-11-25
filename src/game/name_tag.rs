@@ -10,8 +10,8 @@
 //! While `F8` shows the bots ([`ShowBots`]), every bot's tag is up whether
 //! aimed at or not, with its goal on a second line.
 //!
-//! A spectator watching somebody has their name on the same panel at the
-//! bottom middle of the [`SafeZone`], with the goal under it for a bot.
+//! While `F8` is on, a spectator watching a bot has its name and goal on the same panel at the
+//! bottom middle of the [`SafeZone`].
 //!
 //! Until a [`KillCam`] hands over to spectating, the same panel at the middle of the right edge
 //! of the [`WindowSafeZone`] says who killed us and with what, in their color.
@@ -423,10 +423,12 @@ fn place_the_tags(
     }
 }
 
-/// Puts the banner up in the safe zone once there is one, and fills it with whoever is watched.
-#[allow(clippy::type_complexity)]
+/// Puts the banner up in the safe zone once there is one, and fills it with the watched bot and
+/// its goal while `F8` shows the bots. The top banner names whoever is watched.
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn name_whoever_is_watched(
     font: Res<DisplayFont>,
+    show: Res<ShowBots>,
     zone: Option<Single<Entity, With<SafeZone>>>,
     watched: Option<Single<(Entity, &PlayerId, Option<&Team>, Option<&PlayerColor>), (With<Watched>, Without<Dying>)>>,
     thoughts: Query<&BotThought>,
@@ -440,7 +442,8 @@ fn name_whoever_is_watched(
         plates.commands.entity(*zone).with_child(watched_banner(&font.0));
         return;
     };
-    let Some((body, &id, team, color)) = watched.map(Single::into_inner) else {
+    let watched = watched.map(Single::into_inner).filter(|_| show.0);
+    let Some(((_, &id, team, color), thought)) = watched.and_then(|watched| Some((watched, thoughts.get(watched.0).ok()?))) else {
         visibility.set_if_neq(Visibility::Hidden);
         return;
     };
@@ -448,7 +451,7 @@ fn name_whoever_is_watched(
     let size = computed.size() * computed.inverse_scale_factor();
     let swatch = Swatch::of_body(team.copied(), color.copied());
     let plate = &mut *drawn;
-    plate.words.refresh(id, &standings, thoughts.get(body).ok());
+    plate.words.refresh(id, &standings, Some(thought));
     let ready = plates.fill(&mut shape, lines, &plate.words.name, plate.words.goal.as_deref(), swatch, size);
     visibility.set_if_neq(if ready { Visibility::Inherited } else { Visibility::Hidden });
 }
@@ -521,16 +524,22 @@ mod tests {
     }
 
 
-    /// Breaks if a spectator is not told who they are watching, or which goal a watched bot has:
-    /// the banner goes up in the safe zone and is filled with the watched body's name and goal.
+    /// Breaks if the bottom banner is up while `F8` is off, or with it on does not name the
+    /// watched bot and its goal.
     #[test]
-    fn the_banner_names_whoever_is_watched() {
+    fn the_banner_names_a_watched_bot_and_its_goal_while_bots_are_shown() {
         use bevy::ecs::system::RunSystemOnce;
         let mut world = World::new();
         world.init_resource::<DisplayFont>();
+        world.init_resource::<ShowBots>();
         world.spawn(SafeZone);
         world.spawn((Watched, PlayerId(7), BotThought::default()));
         world.run_system_once(name_whoever_is_watched).unwrap();
+        world.run_system_once(name_whoever_is_watched).unwrap();
+        let mut banners = world.query_filtered::<&Visibility, With<WatchedBanner>>();
+        assert_eq!(banners.single(&world).unwrap(), &Visibility::Hidden, "up with F8 off");
+
+        world.resource_mut::<ShowBots>().0 = true;
         world.run_system_once(name_whoever_is_watched).unwrap();
 
         let mut lines = world.query::<(&Text, &Node, Has<NameTagGoal>)>();
