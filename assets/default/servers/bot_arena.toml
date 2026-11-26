@@ -18,6 +18,8 @@
 #                   (default 15).
 # `between_rounds_length`  seconds of the scoreboard after the post-game
 #                   (default 15).
+# `respawn_time`    seconds a player waits after dying before coming back
+#                   (default 3).
 #
 # This one fills a round with eight bots, the host spectating, for five minutes.
 # The host spectates, so nobody is playing, which needs bot-only matches:

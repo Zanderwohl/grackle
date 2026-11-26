@@ -98,6 +98,7 @@ fn defaults(action: Action) -> Vec<Chord> {
         Action::ClassPicker => vec![key(K::Comma)],
         Action::Taunt => vec![key(K::KeyG)],
         Action::Spray => vec![key(K::KeyT)],
+        Action::PlayCancel => vec![key(K::KeyQ)],
         Action::Pause => vec![key(K::Escape)],
         Action::Choice1 => vec![key(K::Digit1)],
         Action::Choice2 => vec![key(K::Digit2)],

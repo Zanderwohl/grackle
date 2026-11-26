@@ -32,6 +32,7 @@ use crate::game::respawn::{choose_spawn, placed_spawns, team_name, HueStart, Ide
 use crate::game::score::Standing;
 use crate::common::match_phase::MatchPhase;
 use crate::game::match_cycle::{owed_a_body, Winners};
+use crate::game::picking::{AtAPicker, LinkAtAPicker};
 use crate::game::team_choice::{seat_for_a_bot, teams_in_play};
 
 /// Spawns bodies for connected clients and marks our own when it arrives.
@@ -58,9 +59,6 @@ impl Plugin for NetBodiesPlugin {
     }
 }
 
-/// A placeholder until gamemodes have numbers of their own.
-pub const RESPAWN_SECONDS: f32 = 3.0;
-
 /// Seconds left before each dead player is owed a body again.
 #[derive(Resource, Default, Debug)]
 pub struct RespawnTimers(pub HashMap<PlayerId, f32>);
@@ -76,6 +74,7 @@ impl RespawnTimers {
 fn start_respawn_timers(
     time: Res<Time>,
     role: Option<Res<NetRole>>,
+    round: Option<Res<RoundSettings>>,
     mut deaths: MessageReader<Died>,
     mut timers: ResMut<RespawnTimers>,
 ) {
@@ -89,8 +88,9 @@ fn start_respawn_timers(
         *left -= dt;
         *left > 0.0
     });
+    let wait = round.map_or_else(|| RoundSettings::default().respawn_time, |round| round.respawn_time);
     for id in deaths {
-        timers.0.insert(id, RESPAWN_SECONDS);
+        timers.0.insert(id, wait);
     }
 }
 
@@ -135,8 +135,9 @@ fn spawn_body_for(
 ///
 /// Keyed on absence, so joining, round start and death are one case with no
 /// queue. A player who died is not owed one until their [`RespawnTimers`]
-/// entry runs out, and one still choosing a team, or a class where the mode
-/// offers more than one, is owed none at all.
+/// entry runs out, nor while they have a picker up ([`crate::game::picking`]),
+/// and one still choosing a team, or a class where the mode offers more than
+/// one, is owed none at all.
 pub(crate) fn give_bodies_to_whoever_needs_one(
     mut commands: Commands,
     role: Option<Res<NetRole>>,
@@ -152,7 +153,7 @@ pub(crate) fn give_bodies_to_whoever_needs_one(
     rules: Res<GameRules>,
     catalog: Res<WeaponCatalog>,
     timers: Option<Res<RespawnTimers>>,
-    (seats, driven, round, mut taken, phase, winners, standing): (
+    (seats, driven, round, mut taken, phase, winners, standing, (we_pick, links_picking)): (
         Query<(Entity, Option<&RouteCosts>, Option<&BotMind>), With<BotSeat>>,
         Query<&BotOf, With<Player>>,
         Option<Res<RoundSettings>>,
@@ -161,6 +162,7 @@ pub(crate) fn give_bodies_to_whoever_needs_one(
         Option<Res<Winners>>,
         // Health too: `Dying` is inserted by command, a frame after the pool empties.
         Query<(&PhysicsBody, &Damageable), (With<Player>, Without<Dying>)>,
+        (Option<Res<AtAPicker>>, Query<(), With<LinkAtAPicker>>),
     ),
     standings: Query<&Standing>,
 ) {
@@ -222,7 +224,8 @@ pub(crate) fn give_bodies_to_whoever_needs_one(
                 who
             }
         };
-        if !waiting(who) && who.seat.is_playing()
+        let picking = we_pick.as_deref().is_some_and(|picking| picking.0);
+        if !waiting(who) && !picking && who.seat.is_playing()
             && let Some(class) = rules.class_for(who.class)
         {
             let spawn = place(who.team());
@@ -253,7 +256,7 @@ pub(crate) fn give_bodies_to_whoever_needs_one(
                 who
             }
         };
-        if waiting(who) || !who.seat.is_playing() {
+        if waiting(who) || links_picking.contains(link) || !who.seat.is_playing() {
             continue;
         }
         let Some(class) = rules.class_for(who.class) else { continue };
@@ -511,12 +514,29 @@ mod tests {
         let us = Identity { id: PlayerId(7), seat: Seat::Playing(Some(Team::Red)), color: 0, class: None };
         world.insert_resource(OurIdentity(us));
         world.init_resource::<RespawnTimers>();
-        world.resource_mut::<RespawnTimers>().0.insert(us.id, RESPAWN_SECONDS);
+        world.resource_mut::<RespawnTimers>().0.insert(us.id, RoundSettings::default().respawn_time);
 
         a_turn(&mut world);
         assert_eq!(world.query_filtered::<(), With<Player>>().iter(&world).count(), 0);
 
         world.resource_mut::<RespawnTimers>().0.clear();
+        a_turn(&mut world);
+        assert_eq!(world.query_filtered::<(), With<Player>>().iter(&world).count(), 1);
+    }
+
+    /// Breaks if a body is handed out while its player has the team or class picker up.
+    #[test]
+    fn nobody_comes_back_while_at_a_picker() {
+        let mut world = World::new();
+        a_map(&mut world);
+        let us = Identity { id: PlayerId(7), seat: Seat::Playing(Some(Team::Red)), color: 0, class: None };
+        world.insert_resource(OurIdentity(us));
+        world.insert_resource(AtAPicker(true));
+
+        a_turn(&mut world);
+        assert_eq!(world.query_filtered::<(), With<Player>>().iter(&world).count(), 0, "a body came back under the picker");
+
+        world.insert_resource(AtAPicker(false));
         a_turn(&mut world);
         assert_eq!(world.query_filtered::<(), With<Player>>().iter(&world).count(), 1);
     }

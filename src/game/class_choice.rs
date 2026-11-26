@@ -181,7 +181,7 @@ fn send_offers(offers: Query<(Entity, &ClassOffer), (With<ClientOf>, Changed<Cla
     Ok(())
 }
 
-fn send_our_choice(
+pub(crate) fn send_our_choice(
     role: Res<NetRole>,
     mut ours: MessageReader<ChooseClass>,
     mut clients: Query<&mut MessageSender<ChooseClass>, (With<Client>, With<Connected>)>,

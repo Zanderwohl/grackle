@@ -823,6 +823,7 @@ fn round_panel_ui(ui: &mut egui::Ui, settings: &mut RoundSettings, listing: &mut
         (&mut settings.pre_game_length, "editor.round.pre_game_length"),
         (&mut settings.post_game_length, "editor.round.post_game_length"),
         (&mut settings.between_rounds_length, "editor.round.between_rounds_length"),
+        (&mut settings.respawn_time, "editor.round.respawn_time"),
     ] {
         ui.horizontal(|ui| {
             ui.label(get!(key));

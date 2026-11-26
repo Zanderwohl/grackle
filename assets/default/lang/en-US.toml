@@ -300,6 +300,7 @@ frag_limit = "Frag limit"
 pre_game_length = "Pre-game length"
 post_game_length = "Post-game length"
 between_rounds_length = "Between-rounds length"
+respawn_time = "Respawn time"
 # Shown after the number, not while it is typed.
 seconds_suffix = " s"
 
@@ -713,6 +714,7 @@ spectating = "Spectating { name }"
 reloading = "Reloading"
 armor = "armor"
 taunt_default = "G for default"
+taunt_cancel = "Press '{ bind }' to cancel."
 
 [class.names]
 scout = "Scout"
@@ -2178,6 +2180,7 @@ team_picker = "Choose a team"
 class_picker = "Choose a class"
 taunt = "Taunt"
 spray = "Spray"
+play_cancel = "Cancel"
 pause = "Pause menu"
 choice_1 = "Menu choice 1"
 choice_2 = "Menu choice 2"

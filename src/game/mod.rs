@@ -101,6 +101,7 @@ pub mod tab_board;
 pub mod class_choice;
 pub mod class_picker;
 pub mod team_choice;
+pub mod picking;
 pub mod team_picker;
 pub mod trigger;
 pub mod ragdoll;
@@ -128,7 +129,7 @@ impl Plugin for GamePlugin {
             .add_plugins(crate::game::rounds::RoundHistoryPlugin)
             .add_plugins(crate::game::telemetry::TelemetryPlugin)
             .add_plugins(crate::game::tab_board::TabBoardPlugin)
-            .add_plugins((crate::game::class_choice::ClassChoicePlugin, crate::game::class_picker::ClassPickerPlugin))
+            .add_plugins((crate::game::class_choice::ClassChoicePlugin, crate::game::class_picker::ClassPickerPlugin, crate::game::picking::PickingPlugin))
             .add_plugins((crate::game::team_choice::TeamChoicePlugin, crate::game::team_picker::TeamPickerPlugin, crate::game::spectate::SpectatePlugin, crate::game::kill_cam::KillCamPlugin))
             .add_plugins(crate::game::damage_direction::DamageDirectionPlugin)
             .add_plugins((crate::game::name_tag::NameTagPlugin, crate::game::top_banner::TopBannerPlugin))
@@ -943,8 +944,8 @@ mod tests {
         );
     }
 
-    /// `G` starts the shipped wave, which stops a walking body and its gun;
-    /// `G` again gives both back, and so does waiting it out.
+    /// `G` starts the shipped wave, which stops a walking body and its gun; waiting it out gives
+    /// both back, and so does stopping it once it loops. Played once, it cannot be stopped.
     #[test]
     fn the_wave_stops_you_walking_and_g_again_lets_you_go() {
         use crate::game::condition::Condition;
@@ -998,13 +999,22 @@ mod tests {
         assert_eq!(body_yaw(&mut app), facing, "the wave let the body turn");
 
         ask(&mut app, stop);
-        assert_eq!(condition(&mut app).taunt, None, "asking to stop did not end the taunt");
+        assert!(condition(&mut app).taunt.is_some(), "asking to stop ended the wave, which plays once");
+        let wave_length = |app: &mut App, length| {
+            let mut taunts = app.world_mut().resource_mut::<crate::common::taunt::Taunts>();
+            let wave = taunts.0.iter_mut().find(|taunt| taunt.key == "wave").expect("no wave");
+            std::mem::replace(&mut wave.length, length)
+        };
+        let once = wave_length(&mut app, None);
+        ask(&mut app, stop);
+        assert_eq!(condition(&mut app).taunt, None, "asking to stop did not end a looping taunt");
         assert_ne!(body_yaw(&mut app), latch(&mut app).0.yaw, "the body snapped to the aim in one tick");
         tick(&mut app, 8);
         assert_eq!(body_yaw(&mut app), latch(&mut app).0.yaw, "the body did not turn back to the aim");
         assert!(walked(&mut app) > 0.5, "the body stayed stopped after the taunt");
 
         // Left alone, it ends by itself after its length.
+        wave_length(&mut app, once);
         ask(&mut app, wave);
         assert!(condition(&mut app).taunt.is_some());
         tick(&mut app, 2 * crate::constants::TICK_HZ as usize);
@@ -1013,7 +1023,8 @@ mod tests {
 
     /// The taunt menu as a player meets it: `G` puts it up and the plate offers a square per
     /// taunt, a digit plays the taunt over it rather than choosing a weapon, `G` while taunting
-    /// ends the taunt, and the pause menu takes the menu down.
+    /// leaves a taunt that plays once and `Q` ends one that loops, and the pause menu takes the
+    /// menu down.
     #[test]
     fn the_taunt_menu_opens_on_g_and_a_digit_plays_the_taunt_over_it() {
         use crate::common::taunt::{TauntId, TauntRequest};
@@ -1059,6 +1070,7 @@ mod tests {
             )
             .unwrap();
         assert!(shown.contains(&crate::get!("hud.taunt_default")), "the plate does not say G for default: {shown:?}");
+        assert!(shown.contains(&crate::get!("hud.taunt_cancel", "bind", "Q")), "the plate does not say how to cancel: {shown:?}");
         assert!(shown.contains(&"1".to_string()) && shown.contains(&"2".to_string()), "no square per taunt: {shown:?}");
 
         let held_before = app
@@ -1083,7 +1095,15 @@ mod tests {
         press(&mut app, KeyCode::KeyG);
         assert!(!open(&mut app), "G while taunting put the menu up");
         tick(&mut app, 1);
-        assert_eq!(taunting(&mut app), None, "G while taunting did not end it");
+        assert_eq!(taunting(&mut app), Some(TauntId::of("spar")), "G ended the spar, which plays once");
+        {
+            let mut taunts = app.world_mut().resource_mut::<crate::common::taunt::Taunts>();
+            taunts.0.iter_mut().find(|taunt| taunt.key == "spar").expect("no spar").length = None;
+        }
+        press(&mut app, KeyCode::KeyQ);
+        assert!(!open(&mut app), "cancel while taunting put the menu up");
+        tick(&mut app, 1);
+        assert_eq!(taunting(&mut app), None, "cancel did not end a looping taunt");
 
         press(&mut app, KeyCode::KeyG);
         assert!(open(&mut app));

@@ -120,6 +120,7 @@ impl Plugin for NetTransportPlugin {
             .add_plugins(crate::common::player_settings::PlayerSettingsSyncPlugin)
             .add_plugins(crate::game::team_choice::TeamChoiceSyncPlugin)
             .add_plugins(crate::game::class_choice::ClassChoiceSyncPlugin)
+            .add_plugins(crate::game::picking::PickingSyncPlugin)
             .add_plugins(crate::common::map_sync::MapSyncPlugin)
             // The server's files: weapons, models, tables, clips, materials and a round's map.
             .add_plugins(crate::common::resource::sync::ResourceSyncPlugin)
