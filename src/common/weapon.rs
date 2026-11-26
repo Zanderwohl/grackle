@@ -699,25 +699,40 @@ impl Loadout {
 /// The authority reads it from disk; a client's is replaced wholesale by the
 /// server's.
 ///
-/// Lists rather than maps: it is compared for equality to decide whether to
-/// send it, and a `HashMap` iterates in an arbitrary order. A few dozen
-/// weapons make a scan free.
-#[derive(Resource, Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+/// Lists rather than maps, so two reads of the same files compare equal and walk in load order.
+/// `get` is asked many times per bot per tick, so an id finds its place through `index`.
+#[derive(Resource, Clone, Debug, Default)]
 pub struct WeaponCatalog {
-    pub weapons: Vec<Weapon>,
+    weapons: Vec<Weapon>,
+    /// Each id's place in `weapons`. Only `insert` adds a weapon, so it cannot fall out of step.
+    index: bevy::platform::collections::HashMap<WeaponId, usize>,
     pub loadouts: Vec<(Class, Loadout)>,
+}
+
+impl PartialEq for WeaponCatalog {
+    fn eq(&self, other: &WeaponCatalog) -> bool {
+        self.weapons == other.weapons && self.loadouts == other.loadouts
+    }
 }
 
 impl WeaponCatalog {
     pub fn get(&self, id: WeaponId) -> Option<&Weapon> {
-        self.weapons.iter().find(|weapon| weapon.id == id)
+        self.index.get(&id).map(|&at| &self.weapons[at])
+    }
+
+    /// In load order.
+    pub fn weapons(&self) -> &[Weapon] {
+        &self.weapons
     }
 
     /// Replaces a weapon of the same id, so a later pack can retune one.
     pub fn insert(&mut self, weapon: Weapon) {
-        match self.weapons.iter_mut().find(|already| already.id == weapon.id) {
-            Some(already) => *already = weapon,
-            None => self.weapons.push(weapon),
+        match self.index.get(&weapon.id) {
+            Some(&at) => self.weapons[at] = weapon,
+            None => {
+                self.index.insert(weapon.id, self.weapons.len());
+                self.weapons.push(weapon);
+            }
         }
     }
 

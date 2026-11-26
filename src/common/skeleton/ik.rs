@@ -138,8 +138,8 @@ pub fn solve(
     let lower_rotation = aim(bent.lower, bent.axis);
 
     // World orientation to rest-relative, parent-frame rotation.
-    pose.set(chain.upper, (parent * bones[upper].rest).inverse() * upper_rotation);
-    pose.set(chain.lower, (upper_rotation * bones[lower].rest).inverse() * lower_rotation);
+    skeleton.set_joint(pose, upper, (parent * bones[upper].rest).inverse() * upper_rotation);
+    skeleton.set_joint(pose, lower, (upper_rotation * bones[lower].rest).inverse() * lower_rotation);
     keep_tip(skeleton, pose, tip, lower_rotation);
     bent.reach
 }
@@ -191,16 +191,15 @@ fn parent_rotation(skeleton: &Skeleton, pose: &Pose, root: &Transform, index: us
 }
 
 /// The chain's tip and its world rotation, read before the chain is rewritten.
-fn held_tip(skeleton: &Skeleton, pose: &Pose, root: &Transform, chain: &Chain) -> Option<(&'static str, usize, Quat)> {
-    let tip = chain.tip?;
-    let index = skeleton.index_of(tip)?;
-    Some((tip, index, skeleton.posed_bone(pose, root, index).rotation))
+fn held_tip(skeleton: &Skeleton, pose: &Pose, root: &Transform, chain: &Chain) -> Option<(usize, Quat)> {
+    let index = skeleton.index_of(chain.tip?)?;
+    Some((index, skeleton.posed_bone(pose, root, index).rotation))
 }
 
 /// Restores what [`held_tip`] read, under the tip's parent's new `rotation`.
-fn keep_tip(skeleton: &Skeleton, pose: &mut Pose, tip: Option<(&'static str, usize, Quat)>, rotation: Quat) {
-    if let Some((tip, index, was)) = tip {
-        pose.set(tip, (rotation * skeleton.bones()[index].rest).inverse() * was);
+fn keep_tip(skeleton: &Skeleton, pose: &mut Pose, tip: Option<(usize, Quat)>, rotation: Quat) {
+    if let Some((index, was)) = tip {
+        skeleton.set_joint(pose, index, (rotation * skeleton.bones()[index].rest).inverse() * was);
     }
 }
 
@@ -245,8 +244,8 @@ pub fn plant_feet(
                 target += toes - roll * toes;
             }
             let reach = solve(skeleton, pose, root, chain, target, root.rotation * limb.pole);
-            if let (Some(tip), Some(foot)) = (chain.tip, foot) {
-                set_world_rotation(skeleton, pose, root, tip, roll * foot.rotation);
+            if let (Some(tip), Some(foot)) = (chain.tip.and_then(|tip| skeleton.index_of(tip)), foot) {
+                set_world_rotation_at(skeleton, pose, root, tip, roll * foot.rotation);
             }
             reach
         })
@@ -265,15 +264,18 @@ pub fn reach_or_leave(
     pole: Vec3,
 ) -> Reach {
     let joints = chain.bones().chain(chain.tip).count();
-    let mut before = Scratch::<(&'static str, Quat), 8>::new(joints, ("", Quat::IDENTITY));
+    let mut before = Scratch::<(Option<usize>, Quat), 8>::new(joints, (None, Quat::IDENTITY));
     for (slot, joint) in before.iter_mut().zip(chain.bones().chain(chain.tip)) {
-        *slot = (joint, pose.joint(joint));
+        let index = skeleton.index_of(joint);
+        *slot = (index, index.map_or(Quat::IDENTITY, |index| skeleton.joint(pose, index)));
     }
 
     let reach = solve(skeleton, pose, root, chain, target, pole);
     if reach != Reach::Reached {
-        for &(joint, rotation) in before.iter() {
-            pose.set(joint, rotation);
+        for &(index, rotation) in before.iter() {
+            if let Some(index) = index {
+                skeleton.set_joint(pose, index, rotation);
+            }
         }
     }
     reach
@@ -287,12 +289,18 @@ pub fn set_world_rotation(
     name: &'static str,
     wanted: Quat,
 ) {
-    let Some(index) = skeleton.index_of(name) else { return };
+    if let Some(index) = skeleton.index_of(name) {
+        set_world_rotation_at(skeleton, pose, root, index, wanted);
+    }
+}
+
+/// [`set_world_rotation`] by bone index.
+pub fn set_world_rotation_at(skeleton: &Skeleton, pose: &mut Pose, root: &Transform, index: usize, wanted: Quat) {
     let posed = skeleton.posed_bone(pose, root, index).rotation;
-    let base = posed * pose.joint(name).inverse();
+    let base = posed * skeleton.joint(pose, index).inverse();
     // Renormalized: the product drifts off unit length by parts in a million, which an angle
     // read off it by `acos` of a dot product magnifies to a fifth of a degree.
-    pose.set(name, (base.inverse() * wanted).normalize());
+    skeleton.set_joint(pose, index, (base.inverse() * wanted).normalize());
 }
 
 /// Which way an elbow points: back, a little out and down. `side` is +1 on the
@@ -499,8 +507,9 @@ fn unturn_the_root(skeleton: &Skeleton, pose: &mut Pose, legs: Quat) {
     // the first root's, since a pose has one offset.
     let offset = pose.root_offset * hip + first.head;
     pose.root_offset = (legs * offset - first.head) / hip;
-    for bone in skeleton.bones().iter().filter(|bone| bone.parent.is_none()) {
-        pose.set(bone.name, bone.rest.inverse() * legs * bone.rest * pose.joint(bone.name));
+    for (index, bone) in skeleton.bones().iter().enumerate().filter(|(_, bone)| bone.parent.is_none()) {
+        let turned = bone.rest.inverse() * legs * bone.rest * skeleton.joint(pose, index);
+        skeleton.set_joint(pose, index, turned);
     }
 }
 
@@ -508,9 +517,8 @@ fn unturn_the_root(skeleton: &Skeleton, pose: &mut Pose, legs: Quat) {
 fn twist_back(skeleton: &Skeleton, pose: &mut Pose, root: &Transform, turn: f32) {
     let up = root.rotation * Vec3::Y;
     for &(index, share) in &skeleton.anatomy().twist {
-        let bone = &skeleton.bones()[index];
         let posed = skeleton.posed_bone(pose, root, index).rotation;
-        set_world_rotation(skeleton, pose, root, bone.name, Quat::from_axis_angle(up, turn * share) * posed);
+        set_world_rotation_at(skeleton, pose, root, index, Quat::from_axis_angle(up, turn * share) * posed);
     }
 }
 
@@ -540,9 +548,10 @@ fn facing_pose(
     // A squat, then a hunch: the hips go down with the duck and the body above them leans in
     // late, so the head drops rather than swinging forward on its way down.
     let lean = crouch * crouch;
-    for (index, name) in skeleton.bones().iter().map(|bone| bone.name).enumerate() {
+    for index in 0..skeleton.bones().len() {
         if !matches!(skeleton.anatomy().region_of(index), Regions::LEGS | Regions::NONE) {
-            pose.set(name, standing.joint(name).slerp(crouched.joint(name), lean));
+            let leaned = skeleton.joint(&standing, index).slerp(skeleton.joint(&crouched, index), lean);
+            skeleton.set_joint(pose, index, leaned);
         }
     }
     // Blended knees do not follow blended hips down, and the feet sink through the floor.
@@ -598,7 +607,10 @@ pub fn finish_pose_into(
 /// for any other rig.
 fn fallback_pose(skeleton: &Skeleton, state: AnimationState, inputs: &PoseInputs, pose: &mut Pose) {
     match skeleton.kind() {
-        super::rig::HUMANOID => *pose = state.pose(inputs),
+        super::rig::HUMANOID => {
+            *pose = state.pose(inputs);
+            pose.lay_out_for(skeleton.layout());
+        }
         _ => pose.reset_to_rest(),
     }
 }
@@ -641,8 +653,9 @@ fn plant_by(skeleton: &Skeleton, pose: &mut Pose, root: &Transform, offsets: &[F
     let anatomy = skeleton.anatomy();
     for foot in &anatomy.feet {
         let Some(limb) = anatomy.limbs.get(foot.limb) else { continue };
-        for name in limb.chain.bones().chain(limb.chain.tip) {
-            pose.set(name, pose.joint(name).slerp(loose.joint(name), free));
+        for index in limb.chain.bones().chain(limb.chain.tip).filter_map(|name| skeleton.index_of(name)) {
+            let freed = skeleton.joint(pose, index).slerp(skeleton.joint(&loose, index), free);
+            skeleton.set_joint(pose, index, freed);
         }
     }
 }
@@ -695,6 +708,7 @@ fn clip_pose(
     root: &Transform,
     pose: &mut Pose,
 ) {
+    pose.lay_out_for(skeleton.layout());
     pose.reset_to_rest();
     let floor = root.translation.y;
     let ground = move |_: Vec3| floor;
@@ -785,9 +799,9 @@ fn digitigrade(skeleton: &Skeleton, pose: &mut Pose, root: &Transform, chain: &C
     let thigh_rotation = aim(thigh_direction, bent.axis);
     let shin_rotation = aim(bent.lower, bent.axis);
     let meta_rotation = aim(meta_direction, bent.axis);
-    pose.set(chain.upper, (parent * bones[leg.thigh].rest).inverse() * thigh_rotation);
-    pose.set(bones[leg.shin].name, (thigh_rotation * bones[leg.shin].rest).inverse() * shin_rotation);
-    pose.set(chain.lower, (shin_rotation * bones[leg.meta].rest).inverse() * meta_rotation);
+    skeleton.set_joint(pose, leg.thigh, (parent * bones[leg.thigh].rest).inverse() * thigh_rotation);
+    skeleton.set_joint(pose, leg.shin, (thigh_rotation * bones[leg.shin].rest).inverse() * shin_rotation);
+    skeleton.set_joint(pose, leg.meta, (shin_rotation * bones[leg.meta].rest).inverse() * meta_rotation);
     keep_tip(skeleton, pose, tip, meta_rotation);
     bent.reach
 }
@@ -809,10 +823,7 @@ fn fabrik(skeleton: &Skeleton, pose: &mut Pose, root: &Transform, chain: &Chain,
     let Some(indices) = chain.bones().map(|name| skeleton.index_of(name)).collect::<Option<Vec<_>>>() else {
         return Reach::Impossible;
     };
-    let tip = chain.tip.and_then(|tip| {
-        let index = skeleton.index_of(tip)?;
-        Some((tip, index, skeleton.posed_bone(pose, root, index).rotation))
-    });
+    let tip = held_tip(skeleton, pose, root, chain);
     let lengths: Vec<f32> = indices.iter().map(|index| bones[*index].length).collect();
     let pole = pole.normalize_or_zero();
 
@@ -880,13 +891,13 @@ fn fabrik(skeleton: &Skeleton, pose: &mut Pose, root: &Transform, chain: &Chain,
             let wanted = (points[at + 1] - head).normalize_or(frame * Vec3::Y);
             let allowed = frame * bone.limit.nearest(frame.inverse() * wanted);
             let rotation = aim(allowed, hinge);
-            pose.set(bone.name, frame.inverse() * rotation);
+            skeleton.set_joint(pose, *index, frame.inverse() * rotation);
         }
     }
 
-    if let Some((tip, index, was)) = tip {
+    if let Some((index, was)) = tip {
         let lower = skeleton.posed_bone(pose, root, *indices.last().unwrap_or(&index)).rotation;
-        pose.set(tip, (lower * bones[index].rest).inverse() * was);
+        skeleton.set_joint(pose, index, (lower * bones[index].rest).inverse() * was);
     }
     let reached = joints(pose).last().copied().unwrap_or(base);
     match reached.distance(target) <= FABRIK_REACHED {

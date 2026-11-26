@@ -959,7 +959,7 @@ mod tests {
     #[test]
     fn only_a_long_range_weapon_camps() {
         let catalog = crate::common::weapon_file::default_catalog();
-        for weapon in &catalog.weapons {
+        for weapon in catalog.weapons() {
             let long = crate::game::bot_fight::comfortable_range(weapon, crate::game::bot_fight::Footwork::default().comfort).is_some_and(|range| range > LONG_RANGE);
             assert_eq!(long, weapon.key == "sniper_rifle", "{} long-range: {long}", weapon.key);
         }

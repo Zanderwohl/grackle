@@ -125,9 +125,9 @@ mod tests {
         assert_eq!(assets.list(Path::new(SESSION_PACK), "weapons"), vec!["pistol.toml".to_owned()]);
 
         let catalog = crate::common::weapon_file::load_catalog(&assets, &assets.match_packs());
-        let keys: Vec<&str> = catalog.weapons.iter().map(|weapon| weapon.key.as_str()).collect();
+        let keys: Vec<&str> = catalog.weapons().iter().map(|weapon| weapon.key.as_str()).collect();
         assert_eq!(keys, ["pistol"], "the catalog held a weapon the server did not send");
-        assert_eq!(catalog.weapons[0].deploy, 1.75, "the catalog was not built from the server's pistol");
+        assert_eq!(catalog.weapons()[0].deploy, 1.75, "the catalog was not built from the server's pistol");
 
         assert!(assets.unmount().is_some());
         assert!(!assets.packs().iter().any(|pack| is_session_pack(pack)));

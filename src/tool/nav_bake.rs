@@ -368,7 +368,7 @@ impl NavInputs<'_, '_> {
 /// worth baking for.
 fn launcher_in(catalog: &WeaponCatalog) -> Option<Launcher> {
     catalog
-        .weapons
+        .weapons()
         .iter()
         .filter_map(|weapon| match weapon.primary.action {
             WeaponAction::Projectile(rocket) if rocket.gravity_factor == 0.0 && rocket.explosion_radius > 0.0 && rocket.damage > 0 => {

@@ -2302,8 +2302,13 @@ hands, the bone a weapon hangs from, the head, the look shares, the viewmodel's
 bones, a region per bone, and leg, arm and hip in meters. Clips, the grip, hats,
 hitboxes, the viewmodel, the look pass, foot planting and the ragdoll all ask
 it, so a rig of another shape is a new builder; see
-[documentation/rigs.md](documentation/rigs.md). A pose stays keyed by bone name,
-so one pose fits every build.
+[documentation/rigs.md](documentation/rigs.md). **A pose is stored by bone
+index** in its rig's `BoneLayout` (the rig's bone names in its parents-first
+order, interned per distinct list, so every build of a rig shares one); a
+skeleton reads and writes it through `Skeleton::joint`/`set_joint`, which do no
+name lookup. Name lookups (`Skeleton::index_of`, `Pose::joint`) are hashed, for
+authoring and seeds. A pose built by name with no rig keeps those joints by
+name until a rig lays it out, so one pose still fits every build.
 
 A bone's shape is a `Profile`: a handful of rings down its length, each a
 multiplier on the bone's own thickness. So nothing here is a second opinion

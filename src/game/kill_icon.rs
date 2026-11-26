@@ -59,7 +59,7 @@ fn draw_the_icons_ahead(
 ) {
     icons.images.clear();
     let (Some(pack), Some(mut images)) = (pack, images) else { return };
-    let named = catalog.iter().flat_map(|catalog| catalog.weapons.iter().filter_map(|weapon| weapon.icon.clone()));
+    let named = catalog.iter().flat_map(|catalog| catalog.weapons().iter().filter_map(|weapon| weapon.icon.clone()));
     for name in named.collect::<Vec<_>>().iter().map(String::as_str).chain([SKULL, EXPLOSION, FLAME, HEADSHOT]) {
         icons.get(name, |relative| pack.read_from_packs(relative), &mut images);
     }
@@ -131,7 +131,7 @@ mod tests {
     fn every_icon_a_shipped_weapon_names_draws() {
         let catalog = crate::common::weapon_file::default_catalog();
         let mut named = 0;
-        for name in catalog.weapons.iter().filter_map(|weapon| weapon.icon.as_deref()).chain([SKULL, EXPLOSION, FLAME, HEADSHOT]) {
+        for name in catalog.weapons().iter().filter_map(|weapon| weapon.icon.as_deref()).chain([SKULL, EXPLOSION, FLAME, HEADSHOT]) {
             let bytes = shipped(&format!("icons/{name}.svg")).unwrap_or_else(|| panic!("no icons/{name}.svg"));
             let image = rasterize(&bytes).unwrap_or_else(|e| panic!("{name}: {e}"));
             assert!(image.data.as_ref().unwrap().chunks(4).any(|pixel| pixel[3] > 0), "{name} is empty");

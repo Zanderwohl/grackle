@@ -626,7 +626,7 @@ fn arm_the_warm_up_body(
     catalog: Option<Res<WeaponCatalog>>,
     bodies: Query<Entity, (With<crate::game::warm_up::WarmUp>, With<Class>, Without<crate::common::weapon::Equipped>)>,
 ) {
-    let Some(weapon) = catalog.as_ref().and_then(|catalog| catalog.weapons.iter().find(|weapon| weapon.model.is_some())) else {
+    let Some(weapon) = catalog.as_ref().and_then(|catalog| catalog.weapons().iter().find(|weapon| weapon.model.is_some())) else {
         return;
     };
     for body in &bodies {

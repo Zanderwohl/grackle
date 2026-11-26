@@ -5,7 +5,8 @@
 //! one animation or IK result is valid on every build; a stored position would
 //! put one class's hand through another's knee.
 //!
-//! A pose names only the joints it moves, so layering is composition.
+//! A pose names only the joints it moves, so layering is composition. It stores them by bone
+//! index in the rig's [`BoneLayout`], so a rig working on its own pose never looks a name up.
 //!
 //! Plain math over `bevy_math`: builds for wasm as-is.
 
@@ -178,6 +179,48 @@ pub struct Skeleton {
     build: Build,
     bones: Vec<Bone>,
     anatomy: super::anatomy::Anatomy,
+    layout: &'static BoneLayout,
+}
+
+/// A rig's bone names in its own order, parents first, each name's place in that list being the
+/// index a [`Pose`] stores its joint at. Interned per distinct list, so every build of one rig
+/// shares one, and a pose made on one Scout is laid out for every Scout.
+#[derive(Debug)]
+pub struct BoneLayout {
+    names: Vec<&'static str>,
+    index: HashMap<&'static str, usize>,
+}
+
+impl BoneLayout {
+    /// Leaked once per distinct list, which is bounded by the rigs a pack ships.
+    pub fn intern(names: &[&'static str]) -> &'static BoneLayout {
+        use std::sync::Mutex;
+        static LAYOUTS: OnceLock<Mutex<Vec<&'static BoneLayout>>> = OnceLock::new();
+        let mut layouts = LAYOUTS.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(known) = layouts.iter().find(|layout| layout.names == names) {
+            return known;
+        }
+        let index = names.iter().enumerate().map(|(index, name)| (*name, index)).collect();
+        let leaked: &'static BoneLayout = Box::leak(Box::new(BoneLayout { names: names.to_vec(), index }));
+        layouts.push(leaked);
+        leaked
+    }
+
+    pub fn index_of(&self, name: &str) -> Option<usize> {
+        self.index.get(name).copied()
+    }
+
+    pub fn names(&self) -> &[&'static str] {
+        &self.names
+    }
+
+    pub fn len(&self) -> usize {
+        self.names.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.names.is_empty()
+    }
 }
 
 /// What a rig is built from: a rig file's name, or `None` for the humanoid built in code, and
@@ -240,9 +283,23 @@ impl Skeleton {
         &self.bones
     }
 
-    /// Also the index into [`Skeleton::posed_bones`].
+    /// Also the index into [`Skeleton::posed_bones`] and into a [`Pose`] laid out for this rig.
     pub fn index_of(&self, name: &str) -> Option<usize> {
-        self.bones.iter().position(|bone| bone.name == name)
+        self.layout.index_of(name)
+    }
+
+    pub fn layout(&self) -> &'static BoneLayout {
+        self.layout
+    }
+
+    /// The joint at bone `index`, read by index when the pose is laid out for this rig.
+    pub fn joint(&self, pose: &Pose, index: usize) -> Quat {
+        pose.joint_in(self.layout, index)
+    }
+
+    /// Sets the joint at bone `index`, laying the pose out for this rig first if it is not.
+    pub fn set_joint(&self, pose: &mut Pose, index: usize, rotation: Quat) {
+        pose.set_in(self.layout, index, rotation);
     }
 
     pub fn proportions(&self) -> Proportions {
@@ -254,7 +311,8 @@ impl Skeleton {
     }
 
     pub(super) fn from_parts(build: Build, bones: Vec<Bone>, anatomy: super::anatomy::Anatomy) -> Skeleton {
-        Skeleton { build, bones, anatomy }
+        let names: Vec<&'static str> = bones.iter().map(|bone| bone.name).collect();
+        Skeleton { build, bones, anatomy, layout: BoneLayout::intern(&names) }
     }
 
     pub fn anatomy(&self) -> &super::anatomy::Anatomy {
@@ -291,7 +349,7 @@ impl Skeleton {
                 Some(parent) => globals[parent],
                 None => root,
             };
-            let global = parent.mul_transform(self.local(pose, bone));
+            let global = parent.mul_transform(self.local(pose, bone, index));
             visit(Self::place(bone, &global));
             globals[index] = global;
         }
@@ -321,7 +379,7 @@ impl Skeleton {
             Some(parent) => self.global(pose, root, parent),
             None => *root,
         };
-        parent.mul_transform(self.local(pose, bone))
+        parent.mul_transform(self.local(pose, bone, index))
     }
 
     /// The root the bones hang from, moved by the pose's root offset.
@@ -334,10 +392,10 @@ impl Skeleton {
         root
     }
 
-    fn local(&self, pose: &Pose, bone: &Bone) -> Transform {
+    fn local(&self, pose: &Pose, bone: &Bone, index: usize) -> Transform {
         Transform {
             translation: bone.head,
-            rotation: bone.rest * pose.joint(bone.name),
+            rotation: bone.rest * self.joint(pose, index),
             scale: Vec3::ONE,
         }
     }
@@ -431,12 +489,35 @@ impl PosedBone {
 
 /// Joint rotations away from rest. Sparse: a pose names only the joints it
 /// moves, and is valid on any skeleton with those bones.
-#[derive(Component, Clone, Debug, Default, PartialEq)]
+///
+/// Stored by bone index in a rig's [`BoneLayout`] once it has one, so a rig reading or writing a
+/// joint does no name lookup. A joint named with no layout, or one the layout lacks, is kept by
+/// name in `loose`, which is where a pose built by name with no rig in hand puts everything.
+#[derive(Component, Clone, Debug, Default)]
 pub struct Pose {
     /// The body's offset from standing, in hip-heights so it means the same on
     /// every build.
     pub root_offset: Vec3,
-    joints: HashMap<&'static str, Quat>,
+    layout: Option<&'static BoneLayout>,
+    /// By the layout's index. `None` is a joint this pose does not name.
+    joints: Vec<Option<Quat>>,
+    loose: Vec<(&'static str, Quat)>,
+}
+
+impl PartialEq for Pose {
+    fn eq(&self, other: &Pose) -> bool {
+        if self.root_offset != other.root_offset {
+            return false;
+        }
+        if self.same_layout(other) && self.loose.is_empty() && other.loose.is_empty() {
+            let shared = self.joints.len().min(other.joints.len());
+            return self.joints[..shared] == other.joints[..shared]
+                && self.joints[shared..].iter().all(Option::is_none)
+                && other.joints[shared..].iter().all(Option::is_none);
+        }
+        self.posed_joints().count() == other.posed_joints().count()
+            && self.posed_joints().all(|(name, rotation)| other.named(name) == Some(rotation))
+    }
 }
 
 impl Pose {
@@ -444,29 +525,91 @@ impl Pose {
         Pose::default()
     }
 
-    /// Identity for a bone this pose does not name.
+    fn same_layout(&self, other: &Pose) -> bool {
+        match (self.layout, other.layout) {
+            (Some(a), Some(b)) => std::ptr::eq(a, b),
+            (None, None) => true,
+            _ => false,
+        }
+    }
+
+    fn is_laid_out_for(&self, layout: &'static BoneLayout) -> bool {
+        self.layout.is_some_and(|ours| std::ptr::eq(ours, layout))
+    }
+
+    fn named(&self, name: &str) -> Option<Quat> {
+        if let Some(index) = self.layout.and_then(|layout| layout.index_of(name)) {
+            return self.joints.get(index).copied().flatten();
+        }
+        self.loose.iter().find(|(loose, _)| *loose == name).map(|(_, rotation)| *rotation)
+    }
+
+    /// Identity for a bone this pose does not name. By name: a rig reading its own bones asks
+    /// [`Skeleton::joint`], which reads by index.
     pub fn joint(&self, name: &str) -> Quat {
-        self.joints.get(name).copied().unwrap_or(Quat::IDENTITY)
+        self.named(name).unwrap_or(Quat::IDENTITY)
     }
 
+    /// By name: a rig writing its own bones asks [`Skeleton::set_joint`].
     pub fn set(&mut self, name: &'static str, rotation: Quat) {
-        self.joints.insert(name, rotation);
+        if let Some(index) = self.layout.and_then(|layout| layout.index_of(name)) {
+            self.put(index, rotation);
+            return;
+        }
+        match self.loose.iter_mut().find(|(loose, _)| *loose == name) {
+            Some((_, slot)) => *slot = rotation,
+            None => self.loose.push((name, rotation)),
+        }
     }
 
-    /// Back to [`Pose::rest`], keeping the joints' storage for reuse.
+    fn put(&mut self, index: usize, rotation: Quat) {
+        if self.joints.len() <= index {
+            self.joints.resize(index + 1, None);
+        }
+        self.joints[index] = Some(rotation);
+    }
+
+    /// See [`Skeleton::joint`].
+    pub fn joint_in(&self, layout: &'static BoneLayout, index: usize) -> Quat {
+        if self.is_laid_out_for(layout) && self.loose.is_empty() {
+            return self.joints.get(index).copied().flatten().unwrap_or(Quat::IDENTITY);
+        }
+        self.joint(layout.names[index])
+    }
+
+    /// See [`Skeleton::set_joint`].
+    pub fn set_in(&mut self, layout: &'static BoneLayout, index: usize, rotation: Quat) {
+        self.lay_out_for(layout);
+        self.put(index, rotation);
+    }
+
+    /// Moves every joint to where `layout` keeps it. Free when the pose is already laid out for
+    /// it, which is every pose a rig works on after its first write.
+    pub fn lay_out_for(&mut self, layout: &'static BoneLayout) {
+        if self.is_laid_out_for(layout) {
+            return;
+        }
+        let named: Vec<(&'static str, Quat)> = self.posed_joints().collect();
+        self.layout = Some(layout);
+        self.joints.clear();
+        self.joints.resize(layout.len(), None);
+        self.loose.clear();
+        for (name, rotation) in named {
+            self.set(name, rotation);
+        }
+    }
+
+    /// Back to [`Pose::rest`], keeping the joints' storage and layout for reuse.
     pub fn reset_to_rest(&mut self) {
         self.root_offset = Vec3::ZERO;
-        self.joints.clear();
+        self.joints.fill(None);
+        self.loose.clear();
     }
 
     /// A joint only one side names blends toward rest. Slerp takes the short
     /// way, since a long way round bends a knee backwards in transit.
     pub fn lerp(from: &Pose, to: &Pose, t: f32) -> Pose {
-        let mut blended = Pose {
-            root_offset: from.root_offset,
-            joints: HashMap::with_capacity(from.joints.len().max(to.joints.len())),
-        };
-        blended.joints.extend(from.joints.iter().map(|(name, rotation)| (*name, *rotation)));
+        let mut blended = from.clone();
         blended.blend_toward(to, t);
         blended
     }
@@ -475,20 +618,42 @@ impl Pose {
     pub fn blend_toward(&mut self, to: &Pose, t: f32) {
         let t = t.clamp(0.0, 1.0);
         self.root_offset = self.root_offset.lerp(to.root_offset, t);
-        // Each joint once: a joint both sides name is blended here and skipped
-        // below, rather than slerped twice.
-        for (name, rotation) in self.joints.iter_mut() {
-            *rotation = rotation.slerp(to.joint(name), t);
+        if let Some(layout) = to.layout {
+            self.lay_out_for(layout);
         }
-        for (name, rotation) in &to.joints {
-            self.joints.entry(*name).or_insert_with(|| Quat::IDENTITY.slerp(*rotation, t));
+        if self.same_layout(to) && self.loose.is_empty() && to.loose.is_empty() {
+            if self.joints.len() < to.joints.len() {
+                self.joints.resize(to.joints.len(), None);
+            }
+            for (index, ours) in self.joints.iter_mut().enumerate() {
+                let theirs = to.joints.get(index).copied().flatten();
+                *ours = match (*ours, theirs) {
+                    (Some(ours), theirs) => Some(ours.slerp(theirs.unwrap_or(Quat::IDENTITY), t)),
+                    (None, Some(theirs)) => Some(Quat::IDENTITY.slerp(theirs, t)),
+                    (None, None) => None,
+                };
+            }
+            return;
+        }
+        // Each joint once: a joint both sides name is blended here and skipped below, rather
+        // than slerped twice.
+        let ours: Vec<(&'static str, Quat)> = self.posed_joints().collect();
+        for (name, rotation) in &ours {
+            self.set(name, rotation.slerp(to.joint(name), t));
+        }
+        for (name, rotation) in to.posed_joints() {
+            if !ours.iter().any(|(ours, _)| *ours == name) {
+                self.set(name, Quat::IDENTITY.slerp(rotation, t));
+            }
         }
     }
 
     /// `*self = from.clone()`, keeping this pose's storage.
     pub fn copy_from(&mut self, from: &Pose) {
         self.root_offset = from.root_offset;
+        self.layout = from.layout;
         self.joints.clone_from(&from.joints);
+        self.loose.clone_from(&from.loose);
     }
 
     pub fn with(mut self, name: &'static str, rotation: Quat) -> Pose {
@@ -497,7 +662,12 @@ impl Pose {
     }
 
     pub fn posed_joints(&self) -> impl Iterator<Item = (&'static str, Quat)> + '_ {
-        self.joints.iter().map(|(name, rotation)| (*name, *rotation))
+        let names = self.layout.map_or(&[][..], |layout| layout.names());
+        names
+            .iter()
+            .zip(&self.joints)
+            .filter_map(|(name, rotation)| rotation.map(|rotation| (*name, rotation)))
+            .chain(self.loose.iter().copied())
     }
 }
 
@@ -618,7 +788,7 @@ pub fn humanoid(proportions: Proportions) -> Skeleton {
     for problem in anatomy.problems(&builder.bones) {
         warn!("The humanoid rig: {problem}");
     }
-    Skeleton { build: Build::humanoid(proportions), bones: builder.bones, anatomy }
+    Skeleton::from_parts(Build::humanoid(proportions), builder.bones, anatomy)
 }
 
 /// How much of the aim's pitch the neck takes; the head takes the rest. A head alone at eighty
@@ -814,6 +984,61 @@ fn bone_rotation(along: Vec3) -> Quat {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_build_of_a_rig_shares_one_layout() {
+        let short = humanoid(Proportions { height: 1.6, ..Proportions::DEFAULT });
+        let tall = humanoid(Proportions { height: 2.0, ..Proportions::DEFAULT });
+        assert!(std::ptr::eq(short.layout(), tall.layout()));
+        for (index, bone) in short.bones().iter().enumerate() {
+            assert_eq!(short.index_of(bone.name), Some(index));
+        }
+    }
+
+    #[test]
+    fn a_pose_reads_the_same_by_name_and_by_index() {
+        let skeleton = humanoid(Proportions::DEFAULT);
+        let bent = Quat::from_rotation_x(0.4);
+        let by_name = Pose::rest().with(bone::SHIN_L, bent);
+        let mut by_index = Pose::rest();
+        let shin = skeleton.index_of(bone::SHIN_L).unwrap();
+        skeleton.set_joint(&mut by_index, shin, bent);
+        assert_eq!(by_name, by_index, "a loose pose and a laid-out one naming the same joints differ");
+        assert_eq!(skeleton.joint(&by_name, shin), bent);
+        assert_eq!(by_index.joint(bone::SHIN_L), bent);
+        let mut laid_out = by_name.clone();
+        laid_out.lay_out_for(skeleton.layout());
+        assert_eq!(laid_out, by_name);
+        assert_eq!(posed(&skeleton, &laid_out)[bone::FOOT_L].head, posed(&skeleton, &by_name)[bone::FOOT_L].head);
+    }
+
+    #[test]
+    fn a_pose_laid_out_for_one_rig_still_reads_on_another() {
+        let skeleton = humanoid(Proportions::DEFAULT);
+        let other = BoneLayout::intern(&["tail", bone::CHEST]);
+        let turned = Quat::from_rotation_y(0.3);
+        let mut pose = Pose::rest();
+        pose.set_in(other, 1, turned);
+        pose.set_in(other, 0, turned);
+        let chest = skeleton.index_of(bone::CHEST).unwrap();
+        assert_eq!(skeleton.joint(&pose, chest), turned);
+        pose.lay_out_for(skeleton.layout());
+        assert_eq!(skeleton.joint(&pose, chest), turned);
+        assert_eq!(pose.joint("tail"), turned, "a joint the new rig lacks was dropped");
+    }
+
+    #[test]
+    fn blending_a_loose_pose_into_a_laid_out_one_blends_every_joint_once() {
+        let skeleton = humanoid(Proportions::DEFAULT);
+        let mut pose = Pose::rest();
+        let chest = skeleton.index_of(bone::CHEST).unwrap();
+        skeleton.set_joint(&mut pose, chest, Quat::from_rotation_x(1.0));
+        let to = Pose::rest().with(bone::CHEST, Quat::from_rotation_x(0.0)).with(bone::NECK, Quat::from_rotation_x(1.0));
+        pose.blend_toward(&to, 0.5);
+        assert!(pose.joint(bone::CHEST).abs_diff_eq(Quat::from_rotation_x(0.5), 1e-5));
+        assert!(pose.joint(bone::NECK).abs_diff_eq(Quat::from_rotation_x(0.5), 1e-5));
+        assert_eq!(pose.posed_joints().count(), 2);
+    }
 
     fn posed(skeleton: &Skeleton, pose: &Pose) -> HashMap<&'static str, PosedBone> {
         skeleton

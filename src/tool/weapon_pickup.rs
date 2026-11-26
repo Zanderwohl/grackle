@@ -34,14 +34,14 @@ fn offer_the_catalog(
 ) {
     let Some(ctx) = previews.ctx() else { return };
     if WEAPONS.take_open(ctx) {
-        previews.want_pictures(catalog.weapons.iter().filter_map(|weapon| weapon.model.as_deref()));
+        previews.want_pictures(catalog.weapons().iter().filter_map(|weapon| weapon.model.as_deref()));
     }
     if *offered == Some(previews.pictures()) && !catalog.is_changed() {
         return;
     }
     *offered = Some(previews.pictures());
     let mut choices: Vec<Choice> = catalog
-        .weapons
+        .weapons()
         .iter()
         .map(|weapon| Choice {
             label: get!(weapon.name_key),
