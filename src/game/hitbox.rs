@@ -3,6 +3,7 @@
 //! The pose is sampled on the tick rather than read off the body: the drawn
 //! pose is written at frame rate, so reading it here would make where a body
 //! can be hit depend on the viewer's frame rate. See [`crate::common::hitbox`].
+//! A client resolves no hits, so it boxes the pose it drew rather than sampling another.
 //!
 //! Built in the drawn pose's order: the animator, claims standing, the look,
 //! then the layer stack, whose clips are at most a frame behind the tick.
@@ -20,7 +21,7 @@ use crate::common::skeleton::{
 };
 use crate::common::skeleton::clip::Clip;
 use crate::common::skeleton::ik::{animator_pose_into, ducked_pose_into};
-use crate::common::skeleton::rig::ScratchPose;
+use crate::common::skeleton::rig::{Pose, ScratchPose};
 use crate::common::skeleton::play::{apply_stack_where, ClipStack, Frames, Layer};
 use crate::common::skeleton::state::{AnimationState, BodyRequests};
 use crate::game::player::{step_player, LocalPlayer, PhysicsBody, Player, ViewMode};
@@ -49,7 +50,9 @@ impl Plugin for HitboxPlugin {
                 .after(step_player)
                 // A replay steps only the client's own movement, which reads no
                 // boxes, and the clock it would box against is not rolled back.
-                .run_if(not(lightyear::prelude::is_in_rollback)))
+                .run_if(not(lightyear::prelude::is_in_rollback))
+                // In the editor the animation clock is stopped and nothing shoots.
+                .run_if(crate::common::app_mode::simulating))
             // A gizmo is not an entity, so the prop editor's hiding cannot
             // reach it. `update_hitboxes` keeps running regardless.
             .add_systems(
@@ -71,6 +74,7 @@ fn toggle_hitboxes(actions: Res<crate::common::keybind::Actions>, mut show: ResM
 
 /// Recompute every body's boxes from a pose sampled on this tick.
 pub fn update_hitboxes(
+    role: Option<Res<crate::common::net::NetRole>>,
     clock: Res<AnimationClock>,
     // Absent with no clips loaded and in tests; every state is then a function.
     library: Option<Res<ClipLibrary>>,
@@ -83,9 +87,12 @@ pub fn update_hitboxes(
         Option<&PhysicsBody>,
         (Option<&Player>, Option<&ClipStack>, Option<&BodyRequests>),
         &mut Hitboxes,
+        Option<&Pose>,
     )>,
 ) {
-    for ((skeleton, animator, phase, gait), stance, global, offset, physics, layers, mut boxes) in
+    // A client resolves no hits, and only draws with the boxes, so the pose it already drew does.
+    let client = crate::common::net::is_remote_client(role);
+    for ((skeleton, animator, phase, gait), stance, global, offset, physics, layers, mut boxes, drawn) in
         &mut bodies
     {
         let (player, stack, requests) = layers;
@@ -101,6 +108,25 @@ pub fn update_hitboxes(
         let ducked = player.zip(stance).map(|(player, stance)| SkeletonRoot(Vec3::Y * player.duck.feet_from_center(*stance)));
         let root = skeleton_root(&placed, ducked.as_ref().or(offset));
         let crouch = player.map(|player| player.duck.amount);
+        // The body box is the hull, wherever a duck draws the feet: blasts and shots are measured
+        // from where the body is, not from where it is drawn catching up.
+        let hull = physics.zip(stance).map(|(physics, stance)| Box3 { center: physics.current, half_extents: stance.half_extents() });
+        // A body shown rather than simulated has no stance; infer it from the animation.
+        let stance = || stance.copied().unwrap_or_else(|| {
+            if animator.state().ducks() {
+                Stance::Crouched
+            } else {
+                Stance::Standing
+            }
+        });
+        if client && let Some(drawn) = drawn {
+            let mut fresh = hitboxes(skeleton, drawn, &root, stance());
+            if let Some(hull) = hull {
+                fresh.body = hull;
+            }
+            boxes.set_if_neq(fresh);
+            continue;
+        }
 
         let clips = library.as_deref();
         let gait = gait.copied().unwrap_or_default();
@@ -114,9 +140,6 @@ pub fn update_hitboxes(
         let mut pose = ScratchPose::take();
         animator_pose_into(skeleton, animator, &inputs, &root, clips, crouch, &mut pose);
         let pose = &mut *pose;
-        // The body box is the hull, wherever a duck draws the feet: blasts and shots are measured
-        // from where the body is, not from where it is drawn catching up.
-        let hull = physics.zip(stance).map(|(physics, stance)| Box3 { center: physics.current, half_extents: stance.half_extents() });
         if let Some(stack) = stack {
             let still = AnimationState::from_requests(&BodyRequests {
                 crouching: requests.is_some_and(|requests| requests.crouching),
@@ -144,17 +167,7 @@ pub fn update_hitboxes(
                 playing.layer != Layer::Flinch
             });
         }
-        // A body shown rather than simulated has no stance; infer it from the
-        // animation.
-        let stance = stance.copied().unwrap_or_else(|| {
-            if animator.state().ducks() {
-                Stance::Crouched
-            } else {
-                Stance::Standing
-            }
-        });
-
-        let mut fresh = hitboxes(skeleton, pose, &root, stance);
+        let mut fresh = hitboxes(skeleton, pose, &root, stance());
         if let Some(hull) = hull {
             fresh.body = hull;
         }

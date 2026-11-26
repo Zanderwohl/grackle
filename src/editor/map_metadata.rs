@@ -84,7 +84,7 @@ fn feature_and_copy(text: &str) -> Option<(FeatureId, Option<u32>)> {
 }
 
 /// Strongly typed map metadata, written at the top of a blueprint.
-#[derive(Resource, Debug, Clone)]
+#[derive(Resource, Debug, Clone, PartialEq)]
 pub struct MapMetadata {
     /// What the map is called to a player; `None` falls back to the file name.
     pub display_name: Option<String>,
@@ -128,6 +128,11 @@ impl Default for MapMetadata {
 impl MapMetadata {
     pub fn reset_to_new_map_defaults(&mut self) {
         *self = Self::default();
+    }
+
+    /// Asked first, so a frame with nothing to sync does not mark the resource changed.
+    pub fn authors_ui_needs_sync(&self) -> bool {
+        self.authors_ui_synced_from != self.authors
     }
 
     /// Call each frame before drawing the panel; refreshes the text only when `authors` changed, so an
