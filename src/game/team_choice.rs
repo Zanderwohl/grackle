@@ -364,7 +364,7 @@ fn send_offers(offers: Query<(Entity, &Offer), (With<ClientOf>, Changed<Offer>)>
     Ok(())
 }
 
-fn send_our_choice(
+pub(crate) fn send_our_choice(
     role: Res<NetRole>,
     mut ours: MessageReader<ChooseTeam>,
     mut clients: Query<&mut MessageSender<ChooseTeam>, (With<Client>, With<Connected>)>,

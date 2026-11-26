@@ -132,7 +132,10 @@ pub fn toggle_conditions(
         }
         let wanted = match input.taunt {
             None => continue,
-            Some(TauntRequest::Stop) => None,
+            Some(TauntRequest::Stop) => match condition.taunt {
+                Some(id) if taunts.as_deref().is_some_and(|taunts| !taunts.may_stop(id)) => continue,
+                _ => None,
+            },
             // Without a clip for this rig it would hold the body in rest; another weapon's taunt
             // would move this one as if it were that weapon.
             Some(TauntRequest::Start(id)) => match taunts.as_deref().and_then(|taunts| taunts.get(id)) {

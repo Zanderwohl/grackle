@@ -37,8 +37,8 @@ All times are real seconds from the moment the kill cam starts.
 | --- | --- | --- | --- |
 | 0 | 0.5 | The death cam: from our eye out to third person over our corpse, as now | Slowing from full speed |
 | 0.5 | 1.0 | Glides from wherever it was to the killer's framing | Still slowing; stopped at 1.0 |
-| 1.0 | 2.0 | Holds on the killer | Stopped |
-| 2.0 | respawn | The spectator cycle, starting on its first spectator camera | Live |
+| 1.0 | 3.0 | Holds on the killer | Stopped |
+| 3.0 | respawn | The spectator cycle, starting on its first spectator camera | Live |
 
 - **The rate falls linearly** from 1 to 0 over the first second, so the view sees half a second
   of match time and ends half a second behind it.

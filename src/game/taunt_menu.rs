@@ -1,6 +1,8 @@
 //! The taunt menu: `G` puts it up, `G` again plays the default taunt (the held weapon's own, else
-//! the first the body's rig has a clip for) and a digit plays the one over it. Up, it owns the digits, so a press does not
-//! also choose a weapon. `G` while taunting ends the taunt instead.
+//! the first the body's rig has a clip for), a digit plays the one over it, and `Q`
+//! ([`Action::PlayCancel`]) puts it down. Up, it owns the digits, so a press does not
+//! also choose a weapon. `G` or `Q` while taunting ends a taunt that loops; one that plays once
+//! plays out ([`Taunts::may_stop`]).
 //!
 //! What is on this machine's screen, so local: choosing writes a [`TauntRequest`] onto the latch
 //! and the authority decides. [`answer_the_taunt_keys`] is the one writer of [`TauntMenu`]; it
@@ -10,7 +12,7 @@
 use bevy::prelude::*;
 
 use crate::common::app_mode::AppMode;
-use crate::common::keybind::{Action, Actions};
+use crate::common::keybind::{Action, Actions, Keymap};
 use crate::common::fonts::DisplayFont;
 use crate::common::player_color::PlayerColor;
 use crate::common::skeleton::rig::HUMANOID;
@@ -87,10 +89,18 @@ fn offered(
 
 /// What a frame's keys do to the menu and the latch, given what was up and whether a taunt is
 /// playing. Pure, so the rules are testable without a world.
-fn answer(open: bool, taunting: bool, offered: &[TauntId], g: bool, digit: Option<usize>) -> (TauntMenu, Option<TauntRequest>) {
+fn answer(
+    open: bool,
+    taunting: bool,
+    stoppable: bool,
+    offered: &[TauntId],
+    g: bool,
+    digit: Option<usize>,
+    cancel: bool,
+) -> (TauntMenu, Option<TauntRequest>) {
     let shut = |answered| TauntMenu { open: false, answered, body: None };
     if taunting {
-        return match g {
+        return match (g || cancel) && stoppable {
             true => (shut(true), Some(TauntRequest::Stop)),
             false => (shut(false), None),
         };
@@ -100,6 +110,9 @@ fn answer(open: bool, taunting: bool, offered: &[TauntId], g: bool, digit: Optio
             true => (TauntMenu { open: true, answered: true, body: None }, None),
             false => (shut(false), None),
         };
+    }
+    if cancel {
+        return (shut(false), None);
     }
     let chosen = match (g, digit) {
         (true, _) => offered.first(),
@@ -133,7 +146,16 @@ pub fn answer_the_taunt_keys(
 
     let digit = DIGITS.iter().position(|action| actions.just_pressed(*action));
     let offered: Vec<TauntId> = offered(taunts.as_deref(), weapons.as_deref(), rig, equipped).into_iter().map(|(id, _)| id).collect();
-    let (next, request) = answer(open, condition.taunt.is_some(), &offered, actions.just_pressed(Action::Taunt), digit);
+    let stoppable = condition.taunt.is_none_or(|id| taunts.as_deref().is_none_or(|taunts| taunts.may_stop(id)));
+    let (next, request) = answer(
+        open,
+        condition.taunt.is_some(),
+        stoppable,
+        &offered,
+        actions.just_pressed(Action::Taunt),
+        digit,
+        actions.just_pressed(Action::PlayCancel),
+    );
     if request.is_some() {
         latch.0.taunt = request;
     }
@@ -147,8 +169,8 @@ fn close_the_menu(mut menu: ResMut<TauntMenu>) {
 #[derive(Component)]
 struct TauntMenuRoot;
 
-/// What the menu was built from: the taunts' ids and icons, and the colors.
-type Built = (Vec<(TauntId, Option<String>)>, Swatch);
+/// What the menu was built from: the taunts' ids and icons, the colors, and the key that cancels.
+type Built = (Vec<(TauntId, Option<String>)>, Swatch, Option<String>);
 
 /// The squares' panel: the plate's deep color, see-through, as an unchosen card is.
 fn square_style(swatch: &Swatch) -> ShapeStyle {
@@ -177,6 +199,7 @@ fn show_the_taunt_menu(
     pack: Option<Res<crate::common::assets::Assets>>,
     mut images: Option<ResMut<Assets<Image>>>,
     mut materials: Option<ResMut<Assets<ShapeMaterial>>>,
+    keymap: Option<Res<Keymap>>,
     mut built_from: Local<Option<Built>>,
 ) {
     let Ok((root, mut node)) = roots.single_mut() else {
@@ -212,7 +235,8 @@ fn show_the_taunt_menu(
     let Some((rig, equipped, team, color)) = ours else { return };
 
     let swatch = Swatch::of_body(team.copied(), color.copied());
-    let wanted = (offered(taunts.as_deref(), weapons.as_deref(), rig, equipped), swatch);
+    let cancel = keymap.as_deref().and_then(|keymap| keymap.chords(Action::PlayCancel).first()).map(|chord| chord.label());
+    let wanted = (offered(taunts.as_deref(), weapons.as_deref(), rig, equipped), swatch, cancel);
     if built_from.as_ref() == Some(&wanted) {
         return;
     }
@@ -295,10 +319,16 @@ fn show_the_taunt_menu(
         ))
         .add_children(&cells)
         .id();
-    let title = commands.spawn(plate_text(&font.0, get!("hud.taunt_default"), TITLE_SIZE)).id();
+    let mut lines = vec![commands.spawn(plate_text(&font.0, get!("hud.taunt_default"), TITLE_SIZE)).id()];
+    // An exception to the no-instructions rule: the menu holds the digits, so it says how to
+    // close it without choosing.
+    if let Some(bind) = &wanted.2 {
+        lines.push(commands.spawn(plate_text(&font.0, get!("hud.taunt_cancel", "bind", bind), TITLE_SIZE)).id());
+    }
+    lines.push(row);
     let plate = commands
         .spawn((Plate::new(swatch), Node { max_width: Val::Percent(100.0), ..plate_node() }))
-        .add_children(&[title, row])
+        .add_children(&lines)
         .id();
     commands.entity(root).despawn_children().add_child(plate);
     *built_from = Some(wanted);
@@ -314,43 +344,62 @@ mod tests {
 
     #[test]
     fn g_puts_the_menu_up_and_g_again_plays_the_default() {
-        let (menu, request) = answer(false, false, BOTH, true, None);
+        let (menu, request) = answer(false, false, true, BOTH, true, None, false);
         assert!(menu.is_open() && request.is_none(), "G did not put the menu up: {menu:?} {request:?}");
-        let (menu, request) = answer(true, false, BOTH, true, None);
+        let (menu, request) = answer(true, false, true, BOTH, true, None, false);
         assert!(!menu.is_open(), "the menu stayed up after a choice");
         assert_eq!(request, Some(TauntRequest::Start(WAVE)));
     }
 
     #[test]
     fn a_digit_plays_the_taunt_over_it_and_holds_the_key() {
-        let (menu, request) = answer(true, false, BOTH, false, Some(1));
+        let (menu, request) = answer(true, false, true, BOTH, false, Some(1), false);
         assert_eq!(request, Some(TauntRequest::Start(SPAR)));
         assert!(!menu.is_open() && menu.holds_the_digits(), "the digit would also choose a weapon");
 
-        let (menu, request) = answer(true, false, BOTH, false, Some(5));
+        let (menu, request) = answer(true, false, true, BOTH, false, Some(5), false);
         assert_eq!(request, None, "a digit with nothing over it played something");
         assert!(menu.is_open() && menu.holds_the_digits());
     }
 
     #[test]
     fn digits_are_the_weapons_while_the_menu_is_down() {
-        let (menu, request) = answer(false, false, BOTH, false, Some(0));
+        let (menu, request) = answer(false, false, true, BOTH, false, Some(0), false);
         assert_eq!(request, None);
         assert!(!menu.holds_the_digits(), "a closed menu took a weapon's digit");
     }
 
     #[test]
     fn g_while_taunting_ends_it_and_the_menu_stays_down() {
-        let (menu, request) = answer(true, true, BOTH, true, None);
+        let (menu, request) = answer(true, true, true, BOTH, true, None, false);
         assert_eq!(request, Some(TauntRequest::Stop));
         assert!(!menu.is_open());
-        let (menu, _) = answer(true, true, BOTH, false, None);
+        let (menu, _) = answer(true, true, true, BOTH, false, None, false);
         assert!(!menu.is_open(), "the menu stayed up over a taunt");
     }
 
     #[test]
+    fn a_taunt_that_loops_stops_on_g_or_cancel_and_one_that_plays_once_does_not() {
+        for (g, cancel) in [(true, false), (false, true)] {
+            let (_, request) = answer(false, true, true, BOTH, g, None, cancel);
+            assert_eq!(request, Some(TauntRequest::Stop), "a looping taunt did not stop");
+            let (menu, request) = answer(false, true, false, BOTH, g, None, cancel);
+            assert_eq!(request, None, "a taunt that plays once was stopped");
+            assert!(!menu.is_open());
+        }
+    }
+
+    #[test]
+    fn cancel_puts_the_menu_down_and_plays_nothing() {
+        let (menu, request) = answer(true, false, true, BOTH, false, None, true);
+        assert!(!menu.is_open() && request.is_none(), "cancel left the menu up or played a taunt: {menu:?} {request:?}");
+        let (menu, _) = answer(false, false, true, BOTH, false, None, true);
+        assert!(!menu.is_open(), "cancel opened the menu");
+    }
+
+    #[test]
     fn a_body_offered_nothing_gets_no_menu() {
-        let (menu, request) = answer(false, false, &[], true, None);
+        let (menu, request) = answer(false, false, true, &[], true, None, false);
         assert!(!menu.is_open() && request.is_none());
     }
 

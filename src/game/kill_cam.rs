@@ -26,7 +26,7 @@ pub const GLIDE_SECONDS: f32 = 0.5;
 /// Seconds over which the match slows to a stop.
 const SLOW_SECONDS: f32 = SWING_SECONDS + GLIDE_SECONDS;
 /// Seconds held on the killer before the spectator cycle.
-pub const HOLD_SECONDS: f32 = 1.0;
+pub const HOLD_SECONDS: f32 = 2.0;
 /// Seconds a `Died` naming our killer still starts the kill cam: on a client it and the despawn
 /// arrive in either order.
 pub const KILL_CAM_GRACE: f32 = 1.0;
@@ -395,7 +395,7 @@ mod tests {
         assert_eq!(world.resource::<KillCam>().killer, PlayerId(7));
         assert!(world.contains_resource::<Replay>());
 
-        for _ in 0..30 {
+        for _ in 0..40 {
             tick(&mut world, 0.1);
         }
         assert!(world.resource::<KillCam>().spectating());

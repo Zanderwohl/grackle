@@ -82,6 +82,8 @@ pub struct RoundSettings {
     pub post_game_length: f32,
     /// Seconds of the scoreboard between a post-game and the next pre-game.
     pub between_rounds_length: f32,
+    /// Seconds a player who died waits before they are owed a body again.
+    pub respawn_time: f32,
 }
 
 impl Default for RoundSettings {
@@ -97,6 +99,7 @@ impl Default for RoundSettings {
             pre_game_length: 10.0,
             post_game_length: 15.0,
             between_rounds_length: 15.0,
+            respawn_time: 3.0,
         }
     }
 }
@@ -214,6 +217,8 @@ pub struct ServerConfig {
     pub post_game_length: f32,
     /// Seconds.
     pub between_rounds_length: f32,
+    /// Seconds.
+    pub respawn_time: f32,
     /// Blank stands for the host's player name.
     pub name: String,
     pub motd: String,
@@ -235,6 +240,7 @@ impl Default for ServerConfig {
             pre_game_length: round.pre_game_length,
             post_game_length: round.post_game_length,
             between_rounds_length: round.between_rounds_length,
+            respawn_time: round.respawn_time,
             name: ServerListing::default().name,
             motd: ServerListing::default().motd,
             discoverable: ServerListing::default().discoverable,
@@ -257,6 +263,7 @@ impl ServerConfig {
             ("pre_game_length", config.pre_game_length),
             ("post_game_length", config.post_game_length),
             ("between_rounds_length", config.between_rounds_length),
+            ("respawn_time", config.respawn_time),
         ] {
             if !(length >= 0.0) {
                 return Err(format!("{key} must be a number of seconds, zero or more"));
@@ -316,6 +323,7 @@ impl ServerConfig {
             pre_game_length: self.pre_game_length,
             post_game_length: self.post_game_length,
             between_rounds_length: self.between_rounds_length,
+            respawn_time: self.respawn_time,
         }
     }
 
@@ -352,6 +360,7 @@ pub fn written_into(text: &str, settings: &RoundSettings, listing: &ServerListin
     doc["pre_game_length"] = seconds(settings.pre_game_length);
     doc["post_game_length"] = seconds(settings.post_game_length);
     doc["between_rounds_length"] = seconds(settings.between_rounds_length);
+    doc["respawn_time"] = seconds(settings.respawn_time);
     doc["name"] = toml_edit::value(listing.name.as_str());
     doc["motd"] = toml_edit::value(listing.motd.as_str());
     doc["discoverable"] = toml_edit::value(listing.discoverable);
@@ -451,7 +460,7 @@ mod tests {
     #[test]
     fn a_config_sets_every_round_setting() {
         let config = ServerConfig::parse(
-            "slots = 9\nbots_enabled = false\nfill_with_bots = true\nbot_skill = \"hard\"\nbots = 2\ntime_limit = 300\nfrag_limit = 30\nbot_only_matches = true\npre_game_length = 5\npost_game_length = 20\nbetween_rounds_length = 8",
+            "slots = 9\nbots_enabled = false\nfill_with_bots = true\nbot_skill = \"hard\"\nbots = 2\ntime_limit = 300\nfrag_limit = 30\nbot_only_matches = true\npre_game_length = 5\npost_game_length = 20\nbetween_rounds_length = 8\nrespawn_time = 6",
         )
         .unwrap();
         assert_eq!(
@@ -467,6 +476,7 @@ mod tests {
                 pre_game_length: 5.0,
                 post_game_length: 20.0,
                 between_rounds_length: 8.0,
+                respawn_time: 6.0,
             }
         );
         assert_eq!(config.bots, 2);
@@ -610,6 +620,7 @@ mod tests {
             pre_game_length: 0.1,
             post_game_length: 4.0,
             between_rounds_length: 0.0,
+            respawn_time: 2.5,
         };
         let listing = ServerListing { name: "Upstairs".into(), motd: "No \"rockets\"".into(), discoverable: false };
         let text = written_into("# mine\nbots = 2\nslots = 9\n", &settings, &listing);

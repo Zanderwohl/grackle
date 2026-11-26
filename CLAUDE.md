@@ -111,7 +111,7 @@ neither of which is baked during it (`RoundSettings::wants_bots`); and **fill em
 slots with bots**, which `fill_empty_slots` keeps true through a round as
 people come and go, with seats marked `FillsASlot`; **allow bot-only
 matches** (off by default), without which no match starts while no person is
-playing; and the **pre-game**, **post-game** and **between-rounds** lengths. **Bot skill** — Easy, Normal, Hard or Varied
+playing; the **pre-game**, **post-game** and **between-rounds** lengths; and the **respawn time** (3 s by default). **Bot skill** — Easy, Normal, Hard or Varied
 (`BotSkill`) — narrows the rolls of the traits that went with a high score over
 295 Varied rounds: aim error (by far), settle, ease, reaction, turn rate,
 tracking, airblast attempt, standoff comfort, drift and the health drive; every other trait
@@ -931,8 +931,11 @@ cannot stick). **`H`** toggles humiliation, a debug key until there are
 rounds to lose: hands up, no weapon, no firing, third person. **`G`** opens
 the taunt menu ([`src/game/taunt_menu.rs`](src/game/taunt_menu.rs)) and `G`
 again plays its first: the held weapon's own taunt, else the first in
-`assets/default/taunts.toml` (a wave, which ends by itself; `G` during a taunt
-ends it early). It works while humiliated, as in TF2. **A weapon's taunt is
+`assets/default/taunts.toml` (a wave, which ends by itself). **`Q`**
+(`Action::PlayCancel`, "Cancel") puts the menu down, which says so on its plate — the one
+exception to the UI stating what is, since the menu holds the digits. `G` or `Q` during a taunt
+ends it only if it loops (no `length`); one that plays once plays out (`Taunts::may_stop`, which
+the authority checks on `TauntRequest::Stop`). It works while humiliated, as in TF2. **A weapon's taunt is
 named by its prop** (`taunt`, a key in `taunts.toml`, picked in the Fit
 workspace's Hold panel): the prop refers to it and the taunt and its clip stay
 in `taunts.toml` and `animations/`. A taunt some weapon names is offered only
@@ -2932,10 +2935,15 @@ away" below. There is no respawn system: `give_bodies_to_whoever_needs_one`
 asks who should have a body and does not, and dying is one of the ways to be in
 that state.
 
-The wait is `RESPAWN_SECONDS`, a placeholder; wave respawns and spawn
+The wait is the Round tab's respawn time (`RoundSettings::respawn_time`); wave respawns and spawn
 protection are a gamemode's numbers. A dead player is not owed a body while
-their `RespawnTimers` entry runs, which is the absence rule with one more
-clause rather than a queue. Meanwhile the view is the **death cam**:
+their `RespawnTimers` entry runs, nor while they have the team or class picker up
+([`src/game/picking.rs`](src/game/picking.rs)): they are probably changing, so the body waits
+until both are down. Each machine works its own player's out from its pickers, counting a class
+picker that bars the way even under the team picker so the hand-over is never a frame with
+neither up, and a client sends it to the server on the team picker's ordered channel after its
+choices (`PickerUp`, kept as `LinkAtAPicker` on the link). That is the absence rule with more
+clauses rather than a queue. Meanwhile the view is the **death cam**:
 `DeathCam` starts at our eye where the body last was, once the body is gone
 *and* we have seen it `Dying` or read a `Died` naming us
 (`start_the_death_cam`, `OurLastBody`). Not on `Added<Dying>` alone: `Dying`
@@ -2952,8 +2960,8 @@ again, and cuts back in rather than swinging from the corpse.
 ([`src/game/kill_cam.rs`](src/game/kill_cam.rs),
 [documentation/kill-cam.md](documentation/kill-cam.md)): the match slows to a
 stop over a second while the view swings out over our corpse and glides to a
-framing of the killer, head to feet and never further than we died, holds a
-second, then spectates from the top of the list, a spectator camera first, until the next body, which cuts it
+framing of the killer, head to feet and never further than we died, holds two
+seconds, then spectates from the top of the list, a spectator camera first, until the next body, which cuts it
 short at any point. Until it spectates, a panel at the middle of the window
 safe zone's right edge names the killer and the weapon (`Died` carries the killing `Cause`).
 The killer is `Died`'s, the last hit; a death at our own

@@ -134,7 +134,8 @@ pub struct Taunt {
     pub weapon: TauntWeapon,
     /// A white SVG at `icons/{icon}.svg` in any pack, drawn in the taunt menu.
     pub icon: Option<String>,
-    /// Seconds until the authority ends it; `None` lasts until `G` again. `length = "clip"` is
+    /// Seconds until the authority ends it, and it cannot be stopped sooner; `None` loops until
+    /// `G` or cancel. `length = "clip"` is
     /// resolved where the table is loaded, so a client gets the authority's number.
     pub length: Option<f32>,
     /// Degrees the third-person camera swings left of the body's facing: 180 looks at its front.
@@ -153,6 +154,11 @@ impl Taunts {
 
     pub fn first(&self) -> Option<&Taunt> {
         self.0.first()
+    }
+
+    /// Only a taunt that loops may be stopped, and one whose entry is gone.
+    pub fn may_stop(&self, id: TauntId) -> bool {
+        self.get(id).is_none_or(|taunt| taunt.length.is_none())
     }
 
     pub fn by_key(&self, key: &str) -> Option<&Taunt> {
