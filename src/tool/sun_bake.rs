@@ -115,6 +115,12 @@ impl SunBake {
         self.halfbright
     }
 
+    /// Bumped whenever the light or the air changes. Read this rather than change detection:
+    /// `auto_bake_sunlight` holds the resource mutably every frame.
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
     /// Bumps the generation, so every slot drops or takes back its lightmap.
     pub fn set_halfbright(&mut self, halfbright: bool) {
         if self.halfbright != halfbright {

@@ -302,7 +302,7 @@ fn learn_weapon_taunts(
     *learned_at = Some(cache.generation());
     let learned = WeaponTaunts(
         catalog
-            .weapons
+            .weapons()
             .iter()
             .filter_map(|weapon| {
                 let model = weapon.model.as_deref()?;
@@ -748,10 +748,10 @@ pub(crate) fn grip_the_weapon(
             if !partly(cover) {
                 continue;
             }
-            for (index, bone) in skeleton.bones().iter().enumerate() {
+            for index in 0..skeleton.bones().len() {
                 if anatomy.region_of(index) == arm {
-                    let gripped = pose.joint(bone.name);
-                    pose.set(bone.name, gripped.slerp(clipped.joint(bone.name), cover));
+                    let gripped = skeleton.joint(pose, index);
+                    skeleton.set_joint(pose, index, gripped.slerp(skeleton.joint(&clipped, index), cover));
                 }
             }
         }

@@ -42,6 +42,17 @@ impl SelectionPlugin {
         state.hovered = None;
         state.hovered_point = None;
 
+        let any_drag = point_drag.is_dragging()
+            || room_drag.is_dragging()
+            || footprint_drag.is_dragging()
+            || rotate_drag.is_dragging();
+        // A drag edits the timeline every frame, so a fresh pick would rebuild every product and
+        // cut room surfaces again each frame for a highlight nobody is choosing from.
+        if any_drag {
+            state.hovered = last.as_ref().and_then(|seen| seen.hovered);
+            return;
+        }
+
         if let Some(ray) = mouse_input.world_pos {
             let key = PickCache::key(features.last_changed(), &features);
             let hovered = match &*last {
@@ -54,16 +65,11 @@ impl SelectionPlugin {
                 }
             };
             state.hovered = hovered;
-
-            let any_drag = point_drag.is_dragging()
-                || room_drag.is_dragging()
-                || footprint_drag.is_dragging()
-                || rotate_drag.is_dragging();
             // With Shift, a named point: what a tool started next measures from.
             if actions.pressed(crate::common::keybind::Action::Modify) {
                 products.refresh(&features, key);
                 state.hovered_point = products.point_under(&features, &ray, PICK_RADIUS);
-                if mouse_input.released == Some(MouseButton::Left) && !any_drag {
+                if mouse_input.released == Some(MouseButton::Left) {
                     state.point = match state.hovered_point.clone() {
                         Some((id, _)) if state.point.as_ref() == Some(&id) => None,
                         picked => picked.map(|(id, _)| id),
@@ -71,7 +77,7 @@ impl SelectionPlugin {
                 }
                 return;
             }
-            if mouse_input.released == Some(MouseButton::Left) && !any_drag {
+            if mouse_input.released == Some(MouseButton::Left) {
                 state.point = None;
                 let selection = state.hovered.map(|(id, _)| id);
                 // Not an edit, so not a change to the undo checkpoint or `map_sync`.

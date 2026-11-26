@@ -71,6 +71,35 @@ pub enum PickupWhat {
 #[derive(Component)]
 struct Restock(f32);
 
+/// Where a pickup can be taken from and how long it takes to come back, worked out once rather
+/// than every frame: a pickup's placement and model almost never change.
+#[derive(Component)]
+struct PickupReach {
+    triggers: Vec<PropShape>,
+    /// The box round every trigger; `None` while there is nothing to take.
+    reach: Option<Box3>,
+    respawn: Option<f32>,
+    /// [`PropCache::bakes`] when it was worked out, so a rebaked model is reached for again.
+    baked_at: u64,
+}
+
+impl PickupReach {
+    fn of(gives: Option<&GivesWeapon>, cache: &PropCache, prop: &WorldProp) -> PickupReach {
+        let baked = cache.get(&prop.model);
+        let respawn = match (gives, baked) {
+            (Some(gives), _) => Some(gives.respawn),
+            (None, Some(baked)) => Some(baked.pickup.respawn),
+            (None, None) => None,
+        };
+        let triggers = match respawn {
+            Some(_) => pickup_triggers(gives, baked, &prop.transform()),
+            None => Vec::new(),
+        };
+        let reach = bounding(triggers.iter());
+        PickupReach { triggers, reach, respawn, baked_at: cache.bakes() }
+    }
+}
+
 /// A pickup that gives a weapon, stood up by [`sync_weapon_pickups`] from a
 /// [`crate::editor::weapon_pickup::WeaponPickup`]. Its [`WorldProp`] draws the
 /// weapon's own model; its trigger is a fixed sphere, since a held prop has no
@@ -773,7 +802,14 @@ fn take_pickups(
     time: Res<Time>,
     cache: Res<PropCache>,
     catalog: Res<WeaponCatalog>,
-    mut pickups: Query<(Entity, &WorldProp, &mut Pickup, Option<&mut Restock>, Option<&GivesWeapon>)>,
+    mut pickups: Query<(
+        Entity,
+        Ref<WorldProp>,
+        &mut Pickup,
+        Option<&mut Restock>,
+        Option<Ref<GivesWeapon>>,
+        Option<&mut PickupReach>,
+    )>,
     mut bodies: Query<
         (
             Entity,
@@ -792,7 +828,7 @@ fn take_pickups(
     mut healed: MessageWriter<Healed>,
     mut taken: MessageWriter<PickupTaken>,
 ) {
-    for (entity, prop, mut pickup, restock, gives) in &mut pickups {
+    for (entity, prop, mut pickup, restock, gives, reach) in &mut pickups {
         if pickup.taken {
             match restock {
                 Some(mut restock) => {
@@ -808,15 +844,21 @@ fn take_pickups(
             continue;
         }
 
-        let at = prop.transform();
-        let baked = cache.get(&prop.model);
-        let respawn = match (gives, baked) {
-            (Some(gives), _) => gives.respawn,
-            (None, Some(baked)) => baked.pickup.respawn,
-            (None, None) => continue,
+        let stale = |reach: &PickupReach| {
+            reach.baked_at != cache.bakes() || prop.is_changed() || gives.as_ref().is_some_and(Ref::is_changed)
         };
-        let triggers = pickup_triggers(gives, baked, &at);
-        let Some(reach) = bounding(triggers.iter()) else { continue };
+        // A new pickup is takeable from the frame after it is stood up.
+        let Some(mut found) = reach else {
+            commands.entity(entity).insert(PickupReach::of(gives.as_deref(), &cache, &prop));
+            continue;
+        };
+        if stale(&found) {
+            *found = PickupReach::of(gives.as_deref(), &cache, &prop);
+        }
+        let found = found.into_inner();
+        let gives = gives.as_deref();
+        let (Some(respawn), Some(reach)) = (found.respawn, found.reach) else { continue };
+        let triggers = &found.triggers;
         for (body_entity, body, stance, health, armor, ammo, equipped, trigger, id, condition) in &mut bodies {
             let half = stance.half_extents();
             // Overlapping a trigger needs overlapping the box around all of them.
@@ -1531,7 +1573,9 @@ mod tests {
     fn a_new_weapon_is_drawn_and_one_already_carried_is_not() {
         let (mut catalog, equipped) = rifle();
         let launcher = with_launcher(&mut catalog);
-        catalog.weapons.iter_mut().find(|weapon| weapon.id == launcher).unwrap().deploy = 0.5;
+        let mut quick = catalog.get(launcher).unwrap().clone();
+        quick.deploy = 0.5;
+        catalog.insert(quick);
         let mut ammo = Ammo::default();
         ammo.at_mut(WeaponId::of("rifle")).reloading = 1.0;
 

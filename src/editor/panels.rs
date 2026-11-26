@@ -189,6 +189,9 @@ struct TabViewerAndResources<'a> {
     /// Whether the Features panel changed the timeline, which it holds with
     /// change detection bypassed.
     timeline_touched: bool,
+    /// Whether the Metadata panel changed the map's settings, held with change detection bypassed
+    /// as the timeline is.
+    metadata_touched: bool,
     /// A client watches the server's map, so its panels are read-only.
     spectating: bool,
     rounds: RoundsView<'a>,
@@ -240,7 +243,10 @@ impl<'a> TabViewer for TabViewerAndResources<'a> {
                 ShowPlugin::ui(ui, self.multicam_state, self.gizmo_visibility);
             }
             TabKinds::Metadata => {
+                // Compared only while the tab is drawn, which is the only time it can edit.
+                let before = self.map_metadata.clone();
                 map_metadata_panel_ui(ui, self.map_metadata, self.music);
+                self.metadata_touched |= *self.map_metadata != before;
             }
             TabKinds::Round => {
                 round_panel_ui(ui, self.round, self.listing);
@@ -387,7 +393,9 @@ impl EditorPanels {
                 .max_rect(ctx.viewport_rect()),
         );
 
-        map_metadata.sync_authors_ui_buffer_from_authors();
+        if map_metadata.authors_ui_needs_sync() {
+            map_metadata.sync_authors_ui_buffer_from_authors();
+        }
         
         let mut bake_commands = BakeCommands { auto: messages.room_bake.auto(), auto_sun: messages.sun_bake.auto(), halfbright: messages.sun_bake.halfbright(), auto_postcards: messages.postcards.auto(), ..default() };
         let mut nav_commands = messages.nav.commands();
@@ -418,7 +426,9 @@ impl EditorPanels {
             // the map on every idle frame and `map_sync`'s pre-filter never
             // filtered anything.
             editor_features: editor_features.bypass_change_detection(),
-            map_metadata: &mut *map_metadata,
+            // Bypassed for the same reason as the timeline: watchers publish rules, rebuild the
+            // manifest and resend settings on every change.
+            map_metadata: map_metadata.bypass_change_detection(),
             multicam_state: &mut *multicam_state,
             bake_commands: &mut bake_commands,
             bake_progress: &messages.bake_progress,
@@ -429,6 +439,7 @@ impl EditorPanels {
             retarget_request: &mut retarget_request,
             wizard: &mut wizard,
             timeline_touched: false,
+            metadata_touched: false,
             spectating: !net_role.is_authority(),
             rounds: messages.rounds.view(),
             music: &messages.music,
@@ -548,9 +559,13 @@ impl EditorPanels {
             .height();
 
         let timeline_touched = viewer.timeline_touched;
+        let metadata_touched = viewer.metadata_touched;
         drop(viewer);
         if timeline_touched {
             editor_features.set_changed();
+        }
+        if metadata_touched {
+            map_metadata.set_changed();
         }
 
         // `set`, not `set_if_neq`: `mode_menu` never offers the mode already in force.

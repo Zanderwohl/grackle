@@ -854,16 +854,12 @@ pub(crate) fn apply_masked_into(
                 let Some(Some(index)) = rotated else {
                     continue;
                 };
-                let name = skeleton.bones()[index].name;
-                let beneath = pose.joint(name);
-                match track.combine {
-                    Combine::Replace => {
-                        pose.set(name, quat_from_euler(angles_for(to, beneath)))
-                    }
-                    Combine::Compose => {
-                        pose.set(name, beneath * quat_from_euler(angles_onto(to)))
-                    }
-                }
+                let beneath = skeleton.joint(pose, index);
+                let rotation = match track.combine {
+                    Combine::Replace => quat_from_euler(angles_for(to, beneath)),
+                    Combine::Compose => beneath * quat_from_euler(angles_onto(to)),
+                };
+                skeleton.set_joint(pose, index, rotation);
             }
 
             Channel::Effector { chain, pole, keys } => {
@@ -905,7 +901,7 @@ pub(crate) fn apply_masked_into(
                 let rest = parent * rig_bone.rest;
                 let allowed = rest * rig_bone.limit.nearest(rest.inverse() * wanted);
                 let turned = Quat::from_rotation_arc(posed.rotation * Vec3::Y, allowed) * posed.rotation;
-                pose.set(rig_bone.name, rest.inverse() * turned);
+                skeleton.set_joint(pose, index, rest.inverse() * turned);
             }
 
             // Read by the pass it weighs; see `controller_weight`.

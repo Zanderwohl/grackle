@@ -869,7 +869,7 @@ mod tests {
         let fetch = client.world().resource::<Fetch>();
         assert_eq!(fetch.bytes_wanted, theirs.len() as u64, "the client fetched files it already had");
         let catalog = crate::common::weapon_file::load_catalog(assets, &assets.match_packs());
-        assert!(catalog.weapons.iter().any(|weapon| weapon.key == "pistol"), "the server's pistol does not load");
+        assert!(catalog.weapons().iter().any(|weapon| weapon.key == "pistol"), "the server's pistol does not load");
     }
 
     /// Fails if a file larger than a client's download window stalls.

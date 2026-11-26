@@ -123,7 +123,7 @@ struct SlotEntry {
 /// is logged.
 pub fn load_catalog(assets: &Assets, packs: &[PathBuf]) -> WeaponCatalog {
     let catalog = catalog_of(assets, packs, &read_pack_weapons(assets, packs));
-    for weapon in &catalog.weapons {
+    for weapon in catalog.weapons() {
         if let Some(icon) = weapon.icon.as_deref().filter(|icon| !icon_exists(assets, icon)) {
             warn!("{}: no pack has icons/{icon}.svg; its kills draw the skull", weapon.key);
         }
@@ -429,7 +429,7 @@ pub fn load_catalog_at_startup(assets: Res<Assets>, mut catalog: ResMut<WeaponCa
     let loaded = load_catalog(&assets, &assets.match_packs());
     info!(
         "Loaded {} weapons and {} class loadouts",
-        loaded.weapons.len(),
+        loaded.weapons().len(),
         loaded.loadouts.len()
     );
     *catalog = loaded;
@@ -457,7 +457,7 @@ mod tests {
     #[test]
     fn the_default_pack_loads() {
         let catalog = the_default_pack();
-        assert!(!catalog.weapons.is_empty(), "no weapons loaded");
+        assert!(!catalog.weapons().is_empty(), "no weapons loaded");
         assert!(
             catalog.loadout(Class::Mercenary).is_some(),
             "the class everybody plays as carries nothing"
@@ -574,7 +574,7 @@ mod tests {
         let catalog = the_default_pack();
         let loadout = catalog.loadout(Class::Mercenary).expect("no placeholder loadout");
 
-        for weapon in &catalog.weapons {
+        for weapon in catalog.weapons() {
             assert!(
                 loadout.slots.iter().any(|(_, choices)| choices.permitted.contains(&weapon.id)),
                 "{} is defined but no slot permits it, so no loadout can start with it",
@@ -631,7 +631,7 @@ mod tests {
         let files = Assets::default().stems(Path::new("assets/default"), WEAPONS_DIR, WEAPON_EXTENSION);
 
         assert_eq!(
-            catalog.weapons.len(),
+            catalog.weapons().len(),
             files.len(),
             "a weapon file is missing from the catalog, which is a collision or a parse error"
         );
@@ -675,7 +675,7 @@ mod tests {
         use crate::common::projectile::Trail;
         let catalog = the_default_pack();
         let mut trailed = vec![];
-        for weapon in &catalog.weapons {
+        for weapon in catalog.weapons() {
             for mounted in [&weapon.primary, &weapon.secondary] {
                 let WeaponAction::Projectile(spec) = &mounted.action else { continue };
                 if spec.trail != Trail::None {

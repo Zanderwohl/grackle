@@ -139,7 +139,7 @@ fn read_round_files(mut archive: ResMut<RoundArchive>, catalog: Option<Res<Weapo
     archive.stale = false;
     let known: HashMap<PathBuf, Stamp> = archive.rounds.iter().map(|round| (round.path.clone(), round.stamp)).collect();
     let names: HashMap<String, String> =
-        catalog.iter().flat_map(|catalog| catalog.weapons.iter()).map(|weapon| (weapon.key.clone(), weapon.name_key.clone())).collect();
+        catalog.iter().flat_map(|catalog| catalog.weapons().iter()).map(|weapon| (weapon.key.clone(), weapon.name_key.clone())).collect();
     archive.scan = Some(IoTaskPool::get().spawn(async move { scan(&known, &names) }));
 }
 

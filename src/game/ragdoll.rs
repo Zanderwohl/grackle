@@ -738,6 +738,7 @@ impl Ragdoll {
     pub fn pose_into(&self, skeleton: &Skeleton, pose: &mut Pose) -> Transform {
         let bones = skeleton.bones();
         let mut frames = Scratch::<Quat, BONES_ON_THE_STACK>::new(bones.len(), Quat::IDENTITY);
+        pose.lay_out_for(skeleton.layout());
         pose.reset_to_rest();
         let root = self.root_frame();
 
@@ -751,7 +752,7 @@ impl Ragdoll {
             let (rest, world, _) = self.frame(index, bone, &frames[..index], root);
             // A bone's global rotation is `parent * bone.rest * pose`; `rest`
             // here is the first two.
-            pose.set(bone.name, rest.inverse() * world);
+            skeleton.set_joint(pose, index, rest.inverse() * world);
             frames[index] = world;
         }
 

@@ -398,9 +398,9 @@ fn eye_of(center: Vec3, eye: f32) -> Vec3 {
 }
 
 fn helpers(catalog: &WeaponCatalog, weapon: WeaponId) -> (Option<WeaponId>, Option<WeaponId>) {
-    let other = catalog.weapons.iter().find(|w| w.id != weapon && w.key == "pistol").or_else(|| catalog.weapons.iter().find(|w| w.id != weapon)).map(|w| w.id);
+    let other = catalog.weapons().iter().find(|w| w.id != weapon && w.key == "pistol").or_else(|| catalog.weapons().iter().find(|w| w.id != weapon)).map(|w| w.id);
     let rocket = catalog
-        .weapons
+        .weapons()
         .iter()
         .find(|w| matches!(w.primary.action, WeaponAction::Projectile(spec) if spec.gravity_factor == 0.0))
         .map(|w| w.id);
@@ -906,7 +906,7 @@ mod tests {
     #[test]
     fn every_shipped_weapon_has_a_loop_on_the_stage() {
         let catalog = default_catalog();
-        for weapon in &catalog.weapons {
+        for weapon in catalog.weapons() {
             let (other, _) = helpers(&catalog, weapon.id);
             let beats = loop_for(weapon, other);
             assert!(!beats.is_empty(), "{} shows nothing", weapon.key);

@@ -365,7 +365,7 @@ fn look_with_the_head(
     for (player, skeleton, mut pose, stack) in &mut bodies {
         let pitch = player.pitch * look_weight(stack, clips.as_deref());
         let unturned = skeleton.anatomy().look.iter().all(|(bone, _)| {
-            pose.joint(skeleton.bones()[*bone].name) == Quat::IDENTITY
+            skeleton.joint(&pose, *bone) == Quat::IDENTITY
         });
         if pitch == 0.0 && unturned {
             continue;
@@ -400,9 +400,8 @@ pub(crate) fn feet_free(stack: Option<&ClipStack>, clips: Option<&Assets<crate::
 pub(crate) fn look(skeleton: &Skeleton, pose: &mut Pose, pitch: f32) {
     let pitch = head_pitch(pitch);
     for &(bone, share) in &skeleton.anatomy().look {
-        let joint = skeleton.bones()[bone].name;
-        let animated = pose.joint(joint);
-        pose.set(joint, animated * Quat::from_rotation_x(-pitch * share));
+        let animated = skeleton.joint(pose, bone);
+        skeleton.set_joint(pose, bone, animated * Quat::from_rotation_x(-pitch * share));
     }
 }
 
@@ -612,9 +611,10 @@ pub(crate) fn stand_where_claimed_into(
         if cover <= 0.0 {
             continue;
         }
-        for (index, bone) in skeleton.bones().iter().enumerate() {
+        for index in 0..skeleton.bones().len() {
             if anatomy.region_of(index) == region {
-                pose.set(bone.name, pose.joint(bone.name).slerp(still.joint(bone.name), cover));
+                let stood = skeleton.joint(pose, index).slerp(skeleton.joint(still, index), cover);
+                skeleton.set_joint(pose, index, stood);
             }
         }
     }

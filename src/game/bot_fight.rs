@@ -732,7 +732,7 @@ mod tests {
     }
 
     fn key(catalog: &WeaponCatalog, key: &str) -> WeaponId {
-        catalog.weapons.iter().find(|weapon| weapon.key == key).unwrap().id
+        catalog.weapons().iter().find(|weapon| weapon.key == key).unwrap().id
     }
 
     fn full(catalog: &WeaponCatalog, weapons: &[WeaponId]) -> Ammo {
@@ -1101,7 +1101,7 @@ mod tests {
     #[test]
     fn a_bot_keeps_back_as_far_as_its_weapon_allows() {
         let catalog = catalog();
-        for weapon in &catalog.weapons {
+        for weapon in catalog.weapons() {
             let Some(range) = comfortable_range(weapon, Footwork::default().comfort) else { continue };
             let key = &weapon.key;
             assert!((CLOSEST_STANDOFF..=SCOPED_FURTHEST_STANDOFF).contains(&range), "{key} keeps {range} m");
@@ -1109,7 +1109,7 @@ mod tests {
             let reach = (worth(&weapon.primary, range) + worth(&weapon.secondary, range)) > 0.0;
             assert!(reach || range == CLOSEST_STANDOFF, "{key} keeps {range} m, out of its own reach");
         }
-        let far = |comfort| catalog.weapons.iter().filter_map(|weapon| comfortable_range(weapon, comfort)).fold(0.0, f32::max);
+        let far = |comfort| catalog.weapons().iter().filter_map(|weapon| comfortable_range(weapon, comfort)).fold(0.0, f32::max);
         assert!(far(0.7) > 8.0, "nothing is fought from further than {} m", far(0.7));
         assert!(far(0.6) >= far(0.85), "a bot insisting on more damage keeps further off");
         let rifle = catalog.get(WeaponId::of("sniper_rifle")).unwrap();

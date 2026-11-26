@@ -51,17 +51,23 @@ fn keep_the_sun_on_lit_materials(
     }
 }
 
-/// `try_`: a part can be despawned later in the frame its tag was asked for, as a body is rebuilt
-/// or a projectile goes off.
-fn retag(entity: Entity, tag: Option<u32>, current: Option<&MeshTag>, commands: &mut Commands) {
-    match (tag, current.map(|current| current.value)) {
-        (Some(wanted), current) if current != Some(wanted) => {
+/// In place where the mesh already has a tag, so a body walking through changing light costs no
+/// commands. `try_`: a part can be despawned later in the frame its tag was asked for, as a body is
+/// rebuilt or a projectile goes off.
+fn retag(entity: Entity, tag: Option<u32>, current: Option<Mut<MeshTag>>, commands: &mut Commands) {
+    match (tag, current) {
+        (Some(wanted), Some(mut current)) => {
+            if current.value != wanted {
+                current.value = wanted;
+            }
+        }
+        (Some(wanted), None) => {
             commands.entity(entity).try_insert(MeshTag::new(wanted));
         }
         (None, Some(_)) => {
             commands.entity(entity).try_remove::<MeshTag>();
         }
-        _ => {}
+        (None, None) => {}
     }
 }
 
@@ -105,19 +111,20 @@ fn light_what_moves(
     sun_bake: Res<SunBake>,
     position: Res<SunPosition>,
     brightness: Res<Brightness>,
-    roots: Query<
-        (Entity, &GlobalTransform, Has<Skeleton>, Has<LocalPlayer>, Has<Watched>, Option<&SunProbe>),
+    mut roots: Query<
+        (Entity, &GlobalTransform, Has<Skeleton>, Has<LocalPlayer>, Has<Watched>, Option<Mut<SunProbe>>),
         Or<(With<Skeleton>, With<WorldProp>, With<Projectile>)>,
     >,
     arrived: Query<Entity, Or<(Added<Mesh3d>, Changed<ChildOf>)>>,
     parents: Query<&ChildOf>,
     children: Query<&Children>,
-    meshes: Query<Option<&MeshTag>, With<Mesh3d>>,
+    mut meshes: Query<Option<Mut<MeshTag>>, With<Mesh3d>>,
     viewmodel: Query<
-        (Entity, &RenderLayers, Option<&MeshTag>),
+        (Entity, &RenderLayers),
         (With<Mesh3d>, Or<(With<ViewmodelPart>, With<ViewmodelArm>)>),
     >,
     mut joined: Local<bevy::platform::collections::HashSet<Entity>>,
+    mut seen_bake: Local<Option<u64>>,
     mut commands: Commands,
 ) {
     let toward = position.toward();
@@ -125,10 +132,11 @@ fn light_what_moves(
     let shows_the_world = mode.get().shows_the_world();
     let stale = mode.is_changed()
         || open_sky.is_changed()
-        || sun_bake.is_changed()
+        || *seen_bake != Some(sun_bake.generation())
         || position.is_changed()
         || brightness.is_changed();
 
+    *seen_bake = Some(sun_bake.generation());
     joined.clear();
     for mesh in &arrived {
         let root = std::iter::once(mesh).chain(parents.iter_ancestors(mesh)).find(|entity| roots.contains(*entity));
@@ -138,9 +146,10 @@ fn light_what_moves(
     }
 
     let mut ours = None;
-    for (root, at, body, local, watched, probed) in &roots {
+    for (root, at, body, local, watched, probed) in &mut roots {
         let probe = at.translation() + Vec3::Y * if body { CHEST } else { ABOVE_ORIGIN };
-        let kept = probed.filter(|probed| !stale && probed.at.distance_squared(probe) <= REPROBE_DISTANCE * REPROBE_DISTANCE);
+        let previous = probed.as_deref().copied();
+        let kept = previous.filter(|probed| !stale && probed.at.distance_squared(probe) <= REPROBE_DISTANCE * REPROBE_DISTANCE);
         let tag = match kept {
             Some(probed) => probed.tag,
             None => shows_the_world.then(|| tag_at(probe, toward, &open_sky, &sun_bake, brightness.ambient)),
@@ -150,19 +159,26 @@ fn light_what_moves(
             ours = tag;
         }
         if kept.is_none() {
-            commands.entity(root).try_insert(SunProbe { at: probe, tag });
+            match probed {
+                Some(mut probed) => *probed = SunProbe { at: probe, tag },
+                None => {
+                    commands.entity(root).try_insert(SunProbe { at: probe, tag });
+                }
+            }
         }
-        if probed.is_some_and(|probed| probed.tag == tag) && !joined.contains(&root) {
+        if previous.is_some_and(|probed| probed.tag == tag) && !joined.contains(&root) {
             continue;
         }
         for entity in std::iter::once(root).chain(children.iter_descendants(root)) {
-            if let Ok(current) = meshes.get(entity) {
+            if let Ok(current) = meshes.get_mut(entity) {
                 retag(entity, tag, current, &mut commands);
             }
         }
     }
-    for (entity, layers, current) in &viewmodel {
-        if layers.intersects(&RenderLayers::layer(VIEWMODEL)) {
+    for (entity, layers) in &viewmodel {
+        if layers.intersects(&RenderLayers::layer(VIEWMODEL))
+            && let Ok(current) = meshes.get_mut(entity)
+        {
             retag(entity, ours, current, &mut commands);
         }
     }

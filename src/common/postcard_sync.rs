@@ -76,6 +76,8 @@ struct Press {
     decoding: Option<Batch<Option<Image>>>,
     /// What the authority printed last, as sent.
     pngs: PrintedCards,
+    /// Bumped whenever `pngs` is replaced, so sending compares a number, not megabytes.
+    pngs_generation: u64,
     /// What a client was sent last.
     received: PrintedCards,
 }
@@ -211,6 +213,7 @@ fn take_the_finished_cards(mut press: ResMut<Press>, mut printed: ResMut<Printed
         let (pngs, cards): (Vec<_>, Vec<_>) = cards.into_iter().unzip();
         if press.pngs.0 != pngs {
             press.pngs = PrintedCards(pngs);
+            press.pngs_generation += 1;
             printed.replace(cards, &mut images);
         }
     }
@@ -225,18 +228,18 @@ fn send_postcards(
     press: Res<Press>,
     server: Option<Single<&Endpoint, With<Server>>>,
     joined: Query<Entity, (With<ClientOf>, Added<Connected>)>,
-    mut sent: Local<PrintedCards>,
+    mut sent: Local<u64>,
     mut sender: crate::common::net_transport::ToClients,
 ) -> Result {
     let Some(server) = server else { return Ok(()) };
-    if press.pngs != *sent {
-        *sent = press.pngs.clone();
-        info!("Postcards changed; sending {} to everyone", sent.0.len());
-        sender.send::<_, PostcardChannel>(&*sent, &server, &NetworkTarget::All)?;
+    if press.pngs_generation != *sent {
+        *sent = press.pngs_generation;
+        info!("Postcards changed; sending {} to everyone", press.pngs.0.len());
+        sender.send::<_, PostcardChannel>(&press.pngs, &server, &NetworkTarget::All)?;
         return Ok(());
     }
     for client in &joined {
-        sender.send_to_entities::<_, PostcardChannel>(&*sent, core::iter::once(client))?;
+        sender.send_to_entities::<_, PostcardChannel>(&press.pngs, core::iter::once(client))?;
     }
     Ok(())
 }
