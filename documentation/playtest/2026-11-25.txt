@@ -7,7 +7,7 @@ d Jumping up stairs gets you stuck
 - don't allow taunt-cancel
 - Configurable respawn time
 - When respawn menu is open, don't respawn until done
-- Zoom and crouch toggle accessibility setting
+d Zoom and crouch toggle accessibility setting
 
 - Make kill shot linger longer
 - Make it clearer you're spectating
