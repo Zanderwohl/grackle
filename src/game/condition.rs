@@ -24,7 +24,7 @@ use crate::game::player::{
 #[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq, Reflect, Serialize, Deserialize)]
 #[require(ClipStack, TauntClock)]
 pub struct Condition {
-    /// `H` toggles it until there are rounds to lose.
+    /// The Humiliate action (unbound by default) toggles it until there are rounds to lose.
     pub humiliated: bool,
     /// Its hitscans and projectiles are critical hits. Set on winners in the post-game.
     pub crit_boosted: bool,

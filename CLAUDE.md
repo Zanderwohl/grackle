@@ -582,7 +582,7 @@ stand alone in tests. A test that runs a system directly calls
   `Shift+G` binding does not also taunt.
 - **Clashes are by `Context`** (everywhere, editors, map, prop,
   animation, play): `F` in Play and `F` in the prop editor are never live at
-  once, so they do not clash. The Shortcuts page marks a clash in red.
+  once, so they do not clash. The Keybinds page marks a clash in red.
 - **Escape and Enter are fixed** (`Action::FIXED`: pause, cancel, confirm):
   read from the table like any action, never rebindable, never saved, so the
   key that gives the mouse back is always the same key.
@@ -622,7 +622,7 @@ on fire and starts no afterburn flames on the body we view, ours or a watched on
 **Graphics** (the debris decal caps, also `PlayerSettings`),
 **Sound** (master, effects and music volume and mute music on LAN, also
 `PlayerSettings`),
-**Shortcuts** (`keybind/sheet.rs`: click a binding, press a key, mouse button
+**Keybinds** (`keybind/sheet.rs`: click a binding, press a key, mouse button
 or chord; a modifier let go alone is bound alone; a mouse button is bound
 only when pressed on the prompt, and a press elsewhere stops the wait; Escape
 stops it too; keys are captured from Bevy's input, not egui's) and **Developer** (the log level
@@ -846,24 +846,34 @@ time. The panel behind the health number is one, `t` the viewed body's health ov
 (`fill_the_health_bar`), glowing below 0.2.
 
 **The chat** ([`src/game/chat.rs`](src/game/chat.rs), [`src/game/chat_window.rs`](src/game/chat_window.rs))
-is egui, on **`T`**. The authority decides every line: a client sends a `SayChat` (text and an
+is egui, on **`Y`**. The authority decides every line: a client sends a `SayChat` (text and an
 `Audience`, only `All` for now) on `ChatChannel`, and the server writes a `ChatEntry` — `Said`,
-carrying the speaker's name, team and color as they stood, or `Round` (`RoundEvent`: the start,
+carrying the speaker's name, team and color as they stood, `Voice` (a `VoiceCommand` sent as a `SayVoice`, drawn as `Said` with its summary as the text), or `Round` (`RoundEvent`: the start,
 `TimeLeft { seconds }` at 5 and 1 minutes, `FragsLeft { frags }` at 2 and 1, each once per
 match; `Streak` at 3, 5, 10 and 15 kills in one life, `Standing::streak`; `MultiKill` for a
 second kill in one life within `MULTI_KILL_SECONDS` (10 s) and again for each kill past it, from
 `Standing::kill_times`, which only the authority keeps; `Won` as the post-game starts, naming
-the banner's winners; `NextRoundIn { seconds }` as the time between rounds starts; drawn in yellow) — and relays it, at most one line a second from each speaker. Every machine keeps the
+the banner's winners; `NextRoundIn { seconds }` as the time between rounds starts; drawn in yellow) — and relays it. From each speaker it takes a typed line at most once a second and a voice line three times a second, and at most ten of the two together in any five seconds (`LastSaid`); a line refused for that is answered with a `TooFast` sent to its speaker alone, which floats and fades with the latest lines but is left out of the open window's log. Every machine keeps the
 entries in `ChatLog`, which a `ChatEntry::Clear` the server sends at each pre-game empties: in
 line with the chat, since the phase comes on another channel.
 `Audience` and `ChatEntry` are matched with no catch-all arm, so a new variant (team chat, a
 whisper, another announcement) is a compile error wherever it needs an answer. The window goes
 left of the HUD's safe zone where that strip is at least 320 px wide, else above the HUD's
 readouts (`chat_zone`). Closed, the latest lines float there and fade; open, it is the round's log
-above a text field, and it holds the mouse (`MouseHeld::chat`). `T` closes it while the field does
+above a text field, and it holds the mouse (`MouseHeld::chat`). `Y` closes it while the field does
 not have the keyboard; `Escape`, `Enter` (which sends), a click outside it or the window losing
 focus close it from anywhere (a blur also opens the pause menu), and a closing click holds the mouse until it is let go, so it does
 not fire.
+
+**The voice menu** ([`src/game/voice_menu.rs`](src/game/voice_menu.rs)) is egui, on **`Z`**: the
+nine `VoiceCommand`s (Help!, Thanks!, Go!, Cheer, Jeer, Nice shot!, Push now!, Fall back!, Okay.)
+under the weapon buckets' keys `1`–`9`, in a box as wide as `chat_zone` with its bottom just above it.
+A choice sends a `SayVoice`, which the authority writes as `ChatEntry::Voice` under the chat's
+limits, with a `rand` it draws that picks the wording as `Died::rand` does
+(`VoiceCommand::said`; the menu lists the first); there are no recordings yet. `0` (`Action::PlayDismiss`), `Q` and `Z` put it down; the chat key
+puts it down and opens the chat, and `G` puts it down and opens the taunt menu. It holds no
+mouse, so it reads Play's keys and never the Menu context's choices; while up it owns the digits and `Q` (`VoiceMenu::holds_the_keys`, read by
+`choose_weapons` and the taunt menu), and it is read first in the input chain.
 
 **The viewmodel's arms are solved, not authored.** `place_the_viewmodel_arms`
 calls the same `grip_with` that puts a body's hands on a weapon, so a grip
@@ -934,7 +944,7 @@ lowest-order one, the same way the viewmodel and HUD cameras already set
 `ClearColorConfig::None`. Let each clear and every view but the top one is
 blank, with no error.
 
-Every key named in this file is a default binding; Settings → Shortcuts
+Every key named in this file is a default binding; Settings → Keybinds
 rebinds it. Debug views and cheats (`Action::is_debug`) are listed in a
 section of their own there, but clash by their context like any action.
 
@@ -956,7 +966,7 @@ Weapons are drawn by **bucket** on **`1`–`9`** and the **wheel** (see
 primary and the right its secondary — held, for anything automatic — and
 **`R`** reloads. Holding **`Tab`** swaps the HUD for a scoreboard
 ranked by points (`tab_board`, recomputed from the key every frame so it
-cannot stick). **`H`** toggles humiliation, a debug key until there are
+cannot stick). **Humiliate**, unbound by default, toggles humiliation, a debug key until there are
 rounds to lose: hands up, no weapon, no firing, third person. **`G`** opens
 the taunt menu ([`src/game/taunt_menu.rs`](src/game/taunt_menu.rs)) and `G`
 again plays its first: the held weapon's own taunt, else the first in
@@ -980,7 +990,7 @@ follows, so it should claim `weapon` and leave the arms that hold it unclaimed.
 **Nobody switches weapons while taunting** (`Condition::may_switch_weapons`):
 `select_weapons` drops the request, the selector stays shut, and a weapon
 picked up mid-taunt is carried but not drawn. **`O`** is
-suicide and **`P`** the same death blown apart through the torso (`BlownApart::Torso`) by a rocket-sized blast there, which hurts whoever is near, **`Y`** puts your spray on the surface you look at within 2 m, or moves it there (see "Decals"), 1000 damage credited to yourself, a debug key for the death cam; **Ignite self**, unbound by default, sets you alight with the flamethrower's afterburn, credited to yourself; **Headshot self**, unbound by default, kills you headless as a headshot does (`Action::Behead`); nobody
+suicide and **`P`** the same death blown apart through the torso (`BlownApart::Torso`) by a rocket-sized blast there, which hurts whoever is near, **`T`** puts your spray on the surface you look at within 2 m, or moves it there (see "Decals"), 1000 damage credited to yourself, a debug key for the death cam; **Ignite self**, unbound by default, sets you alight with the flamethrower's afterburn, credited to yourself; **Headshot self**, unbound by default, kills you headless as a headshot does (`Action::Behead`); nobody
 crouches while taunting; each taunt states what it claims, whether it
 shows the weapon, how far you can move, and how far your body (never the
 camera) can turn, and optionally a `view`: degrees left of the body's facing

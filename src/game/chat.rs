@@ -4,7 +4,7 @@
 //! own announcements, and relays each entry to the clients. The window that shows it is
 //! [`crate::game::chat_window`].
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
 use bevy::prelude::*;
 use lightyear::prelude::server::ClientOf;
@@ -23,10 +23,16 @@ use crate::common::team::Team;
 use crate::game::respawn::{HueStart, Identity, OurIdentity, Seat};
 use crate::game::rounds::RoundHistory;
 use crate::game::score::Standing;
-use crate::get;
+use crate::{get, get_random};
 
-/// Seconds between two lines from one speaker; a line sooner is dropped.
+/// Seconds between two typed lines from one speaker; a line sooner is refused.
 const SECONDS_BETWEEN_LINES: f32 = 1.0;
+/// Seconds between two voice lines from one speaker: three a second. Short of a third, so a
+/// frame's jitter does not refuse a player pressing at exactly that rate.
+const SECONDS_BETWEEN_VOICE: f32 = 0.32;
+/// At most this many lines, typed and voice together, in any [`BURST_SECONDS`] from one speaker.
+const BURST_LINES: usize = 10;
+const BURST_SECONDS: f32 = 5.0;
 
 /// Characters; the rest of a longer line is cut off by the server.
 pub const CHAT_LIMIT: usize = 200;
@@ -52,6 +58,70 @@ pub enum Audience {
 pub struct SayChat {
     pub audience: Audience,
     pub text: String,
+}
+
+/// A line picked from the voice menu ([`crate::game::voice_menu`]). Sent as itself rather than as
+/// its words, so each machine words it in its own language, and so a voice line can be played
+/// once there are recordings.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum VoiceCommand {
+    Help,
+    Thanks,
+    Go,
+    Cheer,
+    Jeer,
+    NiceShot,
+    PushNow,
+    FallBack,
+    Okay,
+}
+
+impl VoiceCommand {
+    /// In the menu's order, which is the order of its digits.
+    pub const ALL: [VoiceCommand; 9] = [
+        VoiceCommand::Help,
+        VoiceCommand::Thanks,
+        VoiceCommand::Go,
+        VoiceCommand::Cheer,
+        VoiceCommand::Jeer,
+        VoiceCommand::NiceShot,
+        VoiceCommand::PushNow,
+        VoiceCommand::FallBack,
+        VoiceCommand::Okay,
+    ];
+
+    fn key(self) -> &'static str {
+        match self {
+            VoiceCommand::Help => "voice.help",
+            VoiceCommand::Thanks => "voice.thanks",
+            VoiceCommand::Go => "voice.go",
+            VoiceCommand::Cheer => "voice.cheer",
+            VoiceCommand::Jeer => "voice.jeer",
+            VoiceCommand::NiceShot => "voice.nice_shot",
+            VoiceCommand::PushNow => "voice.push_now",
+            VoiceCommand::FallBack => "voice.fall_back",
+            VoiceCommand::Okay => "voice.okay",
+        }
+    }
+
+    /// As the menu lists it: the first wording where the lang file offers several.
+    pub fn summary(self) -> String {
+        get!(self.key())
+    }
+
+    /// As the chat shows it: `rand % len` where the lang file offers several wordings, `rand`
+    /// drawn by the authority so every machine on one language reads the same one.
+    pub fn said(self, rand: u8) -> String {
+        get_random!(self.key(), rand)
+    }
+}
+
+/// What this machine's player picked from the voice menu. The authority answers its own; a
+/// client's goes over the wire.
+#[derive(Message, Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SayVoice {
+    pub audience: Audience,
+    pub command: VoiceCommand,
 }
 
 /// As the server knew them, so a line keeps its name and color after its speaker leaves.
@@ -206,7 +276,11 @@ impl RoundEvent {
 #[derive(Message, Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub enum ChatEntry {
     Said { from: Speaker, audience: Audience, text: String },
+    /// `rand` picks the wording ([`VoiceCommand::said`]).
+    Voice { from: Speaker, audience: Audience, command: VoiceCommand, rand: u8 },
     Round(RoundEvent),
+    /// Told only to the speaker whose line was refused for coming too soon.
+    TooFast { to: PlayerId },
     /// Empties the log at a pre-game. Sent with the chat rather than read off the phase, which
     /// comes on another channel and could arrive before or after lines sent around it.
     Clear,
@@ -277,6 +351,7 @@ pub struct ChatPlugin;
 impl Plugin for ChatPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<SayChat>()
+            .add_message::<SayVoice>()
             .add_message::<ChatEntry>()
             .init_resource::<ChatLog>()
             .init_resource::<Warned>()
@@ -305,11 +380,25 @@ fn start_the_log_over(mut entries: MessageWriter<ChatEntry>) {
     entries.write(ChatEntry::Clear);
 }
 
-fn log_the_chat(mut entries: MessageReader<ChatEntry>, time: Res<Time<Real>>, mut log: ResMut<ChatLog>) {
+/// A client is sent only its own [`ChatEntry::TooFast`]; the authority writes everybody's, and
+/// keeps its own player's.
+fn log_the_chat(
+    mut entries: MessageReader<ChatEntry>,
+    time: Res<Time<Real>>,
+    role: Option<Res<NetRole>>,
+    us: Option<Res<OurIdentity>>,
+    mut log: ResMut<ChatLog>,
+) {
+    let client = role.is_some_and(|role| !role.is_authority());
     for entry in entries.read() {
         match entry {
             ChatEntry::Clear => log.lines.clear(),
-            ChatEntry::Said { .. } | ChatEntry::Round(_) => log.push(entry.clone(), time.elapsed_secs()),
+            ChatEntry::TooFast { to } => {
+                if client || us.as_deref().is_some_and(|us| us.0.id == *to) {
+                    log.push(entry.clone(), time.elapsed_secs());
+                }
+            }
+            ChatEntry::Said { .. } | ChatEntry::Voice { .. } | ChatEntry::Round(_) => log.push(entry.clone(), time.elapsed_secs()),
         }
     }
 }
@@ -326,29 +415,61 @@ fn speaker(who: &Identity, settings_name: &str, standing: Option<&Standing>, sta
     }
 }
 
-/// When each speaker's last line was heard, on [`Time<Real>`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LineKind {
+    Typed,
+    Voice,
+}
+
+/// When one speaker's lines were heard, on [`Time<Real>`].
+#[derive(Default, Debug)]
+struct Spoken {
+    typed: Option<f32>,
+    voice: Option<f32>,
+    /// Every line within the last [`BURST_SECONDS`], oldest first.
+    recent: VecDeque<f32>,
+}
+
 #[derive(Resource, Default, Debug)]
-struct LastSaid(HashMap<PlayerId, f32>);
+struct LastSaid(HashMap<PlayerId, Spoken>);
 
 impl LastSaid {
-    /// Whether `id` may speak at `now`, noting it if so.
-    fn may_speak(&mut self, id: PlayerId, now: f32) -> bool {
-        if self.0.get(&id).is_some_and(|&last| now - last < SECONDS_BETWEEN_LINES) {
+    /// Whether `id` may say a line of `kind` at `now`, noting it if so.
+    fn may_speak(&mut self, id: PlayerId, kind: LineKind, now: f32) -> bool {
+        let spoken = self.0.entry(id).or_default();
+        while spoken.recent.front().is_some_and(|&at| now - at >= BURST_SECONDS) {
+            spoken.recent.pop_front();
+        }
+        let (last, between) = match kind {
+            LineKind::Typed => (&mut spoken.typed, SECONDS_BETWEEN_LINES),
+            LineKind::Voice => (&mut spoken.voice, SECONDS_BETWEEN_VOICE),
+        };
+        if last.is_some_and(|last| now - last < between) || spoken.recent.len() >= BURST_LINES {
             return false;
         }
-        self.0.insert(id, now);
+        *last = Some(now);
+        spoken.recent.push_back(now);
         true
     }
 }
 
-/// Lines outside a round, or from somebody with no identity or speaking too soon, are dropped.
+/// What somebody said, typed or picked from the voice menu.
+enum Utterance {
+    Typed(SayChat),
+    Voice(SayVoice),
+}
+
+/// Lines outside a round or from somebody with no identity are dropped. One too soon is refused,
+/// and its speaker told ([`ChatEntry::TooFast`]).
 #[allow(clippy::too_many_arguments)]
 fn hear_what_was_said(
     mode: Res<State<AppMode>>,
     time: Res<Time<Real>>,
     mut last: ResMut<LastSaid>,
     mut ours: MessageReader<SayChat>,
+    mut our_voice: MessageReader<SayVoice>,
     mut receivers: Query<(Entity, &mut MessageReceiver<SayChat>), With<ClientOf>>,
+    mut voice_receivers: Query<(Entity, &mut MessageReceiver<SayVoice>), With<ClientOf>>,
     us: Option<Res<OurIdentity>>,
     our_settings: Option<Res<PlayerSettings>>,
     links: Query<(&Identity, Option<&ClientSettings>), With<ClientOf>>,
@@ -356,15 +477,23 @@ fn hear_what_was_said(
     start: Option<Res<HueStart>>,
     mut entries: MessageWriter<ChatEntry>,
 ) {
-    let mut said: Vec<(Option<Entity>, SayChat)> = ours.read().map(|say| (None, say.clone())).collect();
+    let mut said: Vec<(Option<Entity>, Utterance)> = ours.read().map(|say| (None, Utterance::Typed(say.clone()))).collect();
+    said.extend(our_voice.read().map(|say| (None, Utterance::Voice(*say))));
     for (link, mut receiver) in &mut receivers {
-        said.extend(receiver.receive().map(|say| (Some(link), say)));
+        said.extend(receiver.receive().map(|say| (Some(link), Utterance::Typed(say))));
+    }
+    for (link, mut receiver) in &mut voice_receivers {
+        said.extend(receiver.receive().map(|say| (Some(link), Utterance::Voice(say))));
     }
     if *mode.get() != AppMode::Play {
         return;
     }
-    for (link, say) in said {
-        let Some(text) = cleaned(&say.text) else { continue };
+    for (link, said) in said {
+        if let Utterance::Typed(say) = &said
+            && cleaned(&say.text).is_none()
+        {
+            continue;
+        }
         let (who, name) = match link {
             None => match us.as_deref() {
                 Some(us) => (us.0, our_settings.as_deref().map(|settings| settings.name.clone()).unwrap_or_default()),
@@ -375,14 +504,28 @@ fn hear_what_was_said(
                 Err(_) => continue,
             },
         };
-        if !last.may_speak(who.id, time.elapsed_secs()) {
-            debug!("{} spoke again within {SECONDS_BETWEEN_LINES} s; dropped", who.id);
+        let kind = match said {
+            Utterance::Typed(_) => LineKind::Typed,
+            Utterance::Voice(_) => LineKind::Voice,
+        };
+        if !last.may_speak(who.id, kind, time.elapsed_secs()) {
+            debug!("{} spoke too soon; refused", who.id);
+            entries.write(ChatEntry::TooFast { to: who.id });
             continue;
         }
         let standing = standings.iter().find(|standing| standing.id == who.id);
         let from = speaker(&who, &name, standing, start.as_deref());
-        info!("{} says to {:?}: {text}", from.display_name(), say.audience);
-        entries.write(ChatEntry::Said { from, audience: say.audience, text });
+        match said {
+            Utterance::Typed(say) => {
+                let Some(text) = cleaned(&say.text) else { continue };
+                info!("{} says to {:?}: {text}", from.display_name(), say.audience);
+                entries.write(ChatEntry::Said { from, audience: say.audience, text });
+            }
+            Utterance::Voice(say) => {
+                info!("{} calls to {:?}: {:?}", from.display_name(), say.audience, say.command);
+                entries.write(ChatEntry::Voice { from, audience: say.audience, command: say.command, rand: rand::random() });
+            }
+        }
     }
 }
 
@@ -433,31 +576,38 @@ pub struct ChatSyncPlugin;
 
 impl Plugin for ChatSyncPlugin {
     fn build(&self, app: &mut App) {
-        app.add_message::<SayChat>().add_message::<ChatEntry>();
+        app.add_message::<SayChat>().add_message::<SayVoice>().add_message::<ChatEntry>();
         app.add_channel::<ChatChannel>(ChannelSettings {
             mode: ChannelMode::OrderedReliable(ReliableSettings::default()),
             ..default()
         })
         .add_direction(NetworkDirection::Bidirectional);
         app.register_message::<SayChat>().add_direction(NetworkDirection::ClientToServer);
+        app.register_message::<SayVoice>().add_direction(NetworkDirection::ClientToServer);
         app.register_message::<ChatEntry>().add_direction(NetworkDirection::ServerToClient);
         app.add_systems(Update, (send_what_we_said, relay_the_chat.run_if(has_authority)));
         app.add_systems(PreUpdate, receive_the_chat.after(MessageSystems::Receive).run_if(is_remote_client));
     }
 }
 
+#[allow(clippy::type_complexity)]
 fn send_what_we_said(
     role: Res<NetRole>,
     mut ours: MessageReader<SayChat>,
-    mut clients: Query<&mut MessageSender<SayChat>, (With<Client>, With<Connected>)>,
+    mut our_voice: MessageReader<SayVoice>,
+    mut clients: Query<(&mut MessageSender<SayChat>, &mut MessageSender<SayVoice>), (With<Client>, With<Connected>)>,
 ) {
     let said: Vec<SayChat> = ours.read().cloned().collect();
+    let called: Vec<SayVoice> = our_voice.read().copied().collect();
     if role.is_authority() {
         return;
     }
-    for mut sender in &mut clients {
+    for (mut sender, mut voice) in &mut clients {
         for say in &said {
             sender.send::<ChatChannel>(say.clone());
+        }
+        for say in &called {
+            voice.send::<ChatChannel>(*say);
         }
     }
 }
@@ -465,6 +615,7 @@ fn send_what_we_said(
 fn relay_the_chat(
     mut entries: MessageReader<ChatEntry>,
     server: Option<Single<&Endpoint, With<Server>>>,
+    links: Query<(&Identity, &RemoteId), With<ClientOf>>,
     mut sender: crate::common::net_transport::ToClients,
 ) -> Result {
     let Some(server) = server else {
@@ -473,8 +624,13 @@ fn relay_the_chat(
     };
     for entry in entries.read() {
         let target = match entry {
-            ChatEntry::Said { audience: Audience::All, .. } => NetworkTarget::All,
+            ChatEntry::Said { audience: Audience::All, .. } | ChatEntry::Voice { audience: Audience::All, .. } => NetworkTarget::All,
             ChatEntry::Round(_) | ChatEntry::Clear => NetworkTarget::All,
+            // The host's own is kept here, on no link.
+            ChatEntry::TooFast { to } => match links.iter().find(|(who, _)| who.id == *to) {
+                Some((_, remote)) => NetworkTarget::Single(remote.0),
+                None => continue,
+            },
         };
         sender.send::<_, ChatChannel>(entry, &server, &target)?;
     }
@@ -545,12 +701,20 @@ mod tests {
         let ana = Speaker { id: PlayerId(7), name: "Ana".into(), team: None, color: Some(PlayerColor { hue: 40.0 }) };
         let streak = ChatEntry::Round(RoundEvent::Streak { who: ana.clone(), streak: Streak::Spree });
         let multi = ChatEntry::Round(RoundEvent::MultiKill { who: ana, multi: MultiKill::Double });
-        for entry in [said, ChatEntry::Round(RoundEvent::FragsLeft { frags: 2 }), streak, multi, ChatEntry::Clear] {
+        let voice = ChatEntry::Voice {
+            from: Speaker { id: PlayerId(3), name: String::new(), team: None, color: None },
+            audience: Audience::All,
+            command: VoiceCommand::NiceShot,
+            rand: 200,
+        };
+        for entry in [said, voice, ChatEntry::TooFast { to: PlayerId(3) }, ChatEntry::Round(RoundEvent::FragsLeft { frags: 2 }), streak, multi, ChatEntry::Clear] {
             let bytes = postcard::to_allocvec(&entry).unwrap();
             assert_eq!(postcard::from_bytes::<ChatEntry>(&bytes).unwrap(), entry);
         }
         let say = SayChat { audience: Audience::All, text: "hello".into() };
         assert_eq!(postcard::from_bytes::<SayChat>(&postcard::to_allocvec(&say).unwrap()).unwrap(), say);
+        let call = SayVoice { audience: Audience::All, command: VoiceCommand::FallBack };
+        assert_eq!(postcard::from_bytes::<SayVoice>(&postcard::to_allocvec(&call).unwrap()).unwrap(), call);
     }
 
     /// Breaks if a line from somebody on no team yet is painted in a color they would play in.
@@ -567,14 +731,57 @@ mod tests {
         assert!(speaker(&player, "Ana", None, Some(&start)).color.is_some(), "a free-for-all player lost their color");
     }
 
+    /// Fails if a voice command's summary is missing from the lang file.
     #[test]
-    fn a_speaker_says_at_most_one_line_a_second() {
+    fn every_voice_command_has_a_summary() {
+        for command in VoiceCommand::ALL {
+            let summary = command.summary();
+            assert!(!summary.starts_with('<'), "{command:?} has no summary: {summary}");
+            for rand in [0, 1, 7, 255] {
+                let said = command.said(rand);
+                assert!(!said.starts_with('<'), "{command:?} has no wording for {rand}: {said}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_speaker_types_at_most_one_line_a_second() {
+        use LineKind::Typed;
         let mut last = LastSaid::default();
         let (ana, bo) = (PlayerId(1), PlayerId(2));
-        assert!(last.may_speak(ana, 10.0));
-        assert!(!last.may_speak(ana, 10.5));
-        assert!(last.may_speak(bo, 10.5), "one speaker held back another");
-        assert!(last.may_speak(ana, 11.0));
+        assert!(last.may_speak(ana, Typed, 10.0));
+        assert!(!last.may_speak(ana, Typed, 10.5));
+        assert!(last.may_speak(bo, Typed, 10.5), "one speaker held back another");
+        assert!(last.may_speak(ana, Typed, 11.0));
+    }
+
+    /// Fails if voice lines are held to the typed rate, or a typed line holds back a voice one.
+    #[test]
+    fn a_speaker_calls_three_voice_lines_a_second_beside_typing() {
+        use LineKind::{Typed, Voice};
+        let mut last = LastSaid::default();
+        let ana = PlayerId(1);
+        assert!(last.may_speak(ana, Typed, 10.0));
+        assert!(last.may_speak(ana, Voice, 10.0), "a typed line held back a voice line");
+        assert!(!last.may_speak(ana, Voice, 10.2), "a fourth voice line a second");
+        assert!(last.may_speak(ana, Voice, 10.0 + 1.0 / 3.0));
+        assert!(last.may_speak(ana, Voice, 10.0 + 2.0 / 3.0));
+    }
+
+    /// Fails if a speaker can say more than ten lines in five seconds by mixing the two kinds.
+    #[test]
+    fn ten_lines_in_five_seconds_counts_typed_and_voice_together() {
+        use LineKind::{Typed, Voice};
+        let mut last = LastSaid::default();
+        let ana = PlayerId(1);
+        let mut said = 0;
+        for step in 0..30 {
+            let now = step as f32 / 6.0;
+            said += last.may_speak(ana, Voice, now) as usize;
+            said += last.may_speak(ana, Typed, now) as usize;
+        }
+        assert_eq!(said, BURST_LINES, "lines heard in the first five seconds");
+        assert!(last.may_speak(ana, Voice, BURST_SECONDS + 0.01), "the window never moved on");
     }
 
     #[test]

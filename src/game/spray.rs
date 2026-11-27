@@ -1,4 +1,4 @@
-//! Sprays: a picture each player puts on a wall with `T`, one at a time, lasting until the round
+//! Sprays: a picture each player puts on a wall with the spray key (`T`), one at a time, lasting until the round
 //! ends or they disconnect. See "Sprays" in `documentation/decals.md`.
 //!
 //! The picture is painted by its owner's machine ([`paint_our_spray`]) and goes to the server as a

@@ -661,6 +661,23 @@ double_kill = "{ name } got a double kill!"
 multi_kill = "{ name } got a multi-kill!"
 next_round_in = "Next round begins in { seconds } seconds."
 next_round_in_a_second = "Next round begins in 1 second."
+too_fast = "That was too soon after your last message, so it was not sent."
+
+# The voice menu's lines, as the menu lists them and as the chat shows them.
+[voice]
+title = "Voice"
+# A line of the menu: the key that sends it, then what it says.
+line = "{ key }. { line }"
+cancel = "Press '{ bind }' to cancel."
+help = "Help!"
+thanks = "Thanks!"
+go = "Go!"
+cheer = ["Yay!", "Woo hoo!", "Yeah!", "Woooo!"]
+jeer = ["Boo!", "You suck!", "KYS", "Boooo!", "Thumbs Down!", "Disapprove!", "Horrible!", "Terrible!"]
+nice_shot = "Nice shot!"
+push_now = "Push now!"
+fall_back = "Fall back!"
+okay = "Okay."
 
 [kill_cam]
 killed_by = "You were killed by { name }"
@@ -2016,7 +2033,7 @@ revert = "Revert"
 [settings.page]
 general = "General"
 graphics = "Graphics"
-shortcuts = "Shortcuts"
+shortcuts = "Keybinds"
 fonts = "Fonts"
 developer = "Developer"
 attribution = "Attribution"
@@ -2209,7 +2226,9 @@ class_picker = "Choose a class"
 taunt = "Taunt"
 spray = "Spray"
 chat = "Chat"
+voice = "Voice commands"
 play_cancel = "Cancel"
+play_dismiss = "Close the voice menu"
 pause = "Pause menu"
 choice_1 = "Menu choice 1"
 choice_2 = "Menu choice 2"

@@ -81,6 +81,7 @@ pub mod medallion;
 pub mod name_tag;
 pub mod kill_feed;
 pub mod taunt_menu;
+pub mod voice_menu;
 pub mod taunt_view;
 pub mod kill_icon;
 pub mod plate;
@@ -136,7 +137,7 @@ impl Plugin for GamePlugin {
             .add_plugins((crate::game::team_choice::TeamChoicePlugin, crate::game::team_picker::TeamPickerPlugin, crate::game::spectate::SpectatePlugin, crate::game::kill_cam::KillCamPlugin))
             .add_plugins(crate::game::damage_direction::DamageDirectionPlugin)
             .add_plugins((crate::game::name_tag::NameTagPlugin, crate::game::top_banner::TopBannerPlugin))
-            .add_plugins((crate::game::plate::PlatePlugin, crate::game::plate_bar::PlateBarPlugin, crate::game::plate_button::PlateButtonPlugin, crate::game::kill_feed::KillFeedPlugin, crate::game::taunt_menu::TauntMenuPlugin))
+            .add_plugins((crate::game::plate::PlatePlugin, crate::game::plate_bar::PlateBarPlugin, crate::game::plate_button::PlateButtonPlugin, crate::game::kill_feed::KillFeedPlugin, crate::game::taunt_menu::TauntMenuPlugin, crate::game::voice_menu::VoiceMenuPlugin))
             .add_plugins(crate::game::trigger::TriggerPlugin)
             .add_plugins(crate::game::chat::ChatPlugin)
             .init_state::<AppMode>()
@@ -223,7 +224,9 @@ impl Plugin for GamePlugin {
             .add_systems(PreUpdate, aim_the_view_at_our_body.run_if(in_state(AppMode::Play)))
             .add_systems(PreUpdate, measure_eyes.run_if(crate::common::net::has_authority))
             .add_systems(RunFixedMainLoop, (
-                // Owns `G`, and the digits while it is up, so it reads them first.
+                // Owns `Z`, and the digits and `Q` while it is up, so it reads them first.
+                crate::game::voice_menu::answer_the_voice_keys,
+                // Owns `G`, and the digits while it is up, so it reads them next.
                 crate::game::taunt_menu::answer_the_taunt_keys,
                 // A released cursor must not walk the body.
                 gather_input.run_if(pause_menu::not_paused),
@@ -1115,6 +1118,61 @@ mod tests {
         crate::common::keybind::resolve_now(app.world_mut());
         app.world_mut().run_system_once(answer_the_taunt_keys).unwrap();
         assert!(!open(&mut app), "the menu stayed up under the pause menu");
+    }
+
+    /// The voice menu as a player meets it: `Z` puts it up, a digit sends the line over it
+    /// rather than choosing a weapon, and `Q` puts it down without stopping a looping taunt.
+    #[test]
+    fn the_voice_menu_holds_the_digits_and_q() {
+        use crate::common::taunt::{TauntId, TauntRequest};
+        use crate::game::chat::{SayVoice, VoiceCommand};
+        use crate::game::taunt_menu::answer_the_taunt_keys;
+        use crate::game::voice_menu::{answer_the_voice_keys, VoiceMenu};
+        use crate::game::weapon_select::choose_weapons;
+
+        let mut app = headless(&[room(Vec3::new(-10.0, 0.0, -10.0), Vec3::new(10.0, 4.0, 10.0))]);
+        enter(&mut app);
+        tick(&mut app, 30);
+        app.world_mut().resource_mut::<crate::game::pause_menu::MouseHeld>().team_picker = false;
+        let press = |app: &mut App, key: KeyCode| -> Vec<SayVoice> {
+            app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(key);
+            crate::common::keybind::resolve_now(app.world_mut());
+            app.world_mut().run_system_once(answer_the_voice_keys).unwrap();
+            app.world_mut().run_system_once(answer_the_taunt_keys).unwrap();
+            app.world_mut().run_system_once(choose_weapons).unwrap();
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            keys.release(key);
+            keys.clear();
+            app.world_mut().resource_mut::<Messages<SayVoice>>().drain().collect()
+        };
+        let open = |app: &mut App| app.world().resource::<VoiceMenu>().is_open();
+
+        press(&mut app, KeyCode::KeyZ);
+        assert!(open(&mut app), "Z did not put the menu up");
+        let said = press(&mut app, KeyCode::Digit3);
+        assert_eq!(said.iter().map(|say| say.command).collect::<Vec<_>>(), vec![VoiceCommand::Go]);
+        assert!(!open(&mut app), "the menu stayed up after a choice");
+        assert_eq!(latch(&mut app).0.select, None, "the digit also chose a weapon");
+
+        press(&mut app, KeyCode::KeyZ);
+        assert!(press(&mut app, KeyCode::Digit0).is_empty(), "0 sent a line");
+        assert!(!open(&mut app), "0 left the menu up");
+
+        // A looping taunt, which Q would end with the voice menu down.
+        let wave = TauntId::of("wave");
+        app.world_mut().resource_mut::<crate::common::taunt::Taunts>().0.iter_mut().find(|taunt| taunt.key == "wave").expect("no wave").length = None;
+        latch(&mut app).0.taunt = Some(TauntRequest::Start(wave));
+        tick(&mut app, 1);
+        let taunting = |app: &mut App| {
+            app.world_mut().query_filtered::<&crate::game::condition::Condition, With<LocalPlayer>>().single(app.world()).unwrap().taunt
+        };
+        assert_eq!(taunting(&mut app), Some(wave), "the wave did not start");
+        press(&mut app, KeyCode::KeyZ);
+        assert!(press(&mut app, KeyCode::KeyQ).is_empty());
+        assert!(!open(&mut app), "Q left the menu up");
+        assert_ne!(latch(&mut app).0.taunt, Some(TauntRequest::Stop), "Q also asked to stop the taunt");
+        tick(&mut app, 1);
+        assert_eq!(taunting(&mut app), Some(wave), "Q ended the taunt");
     }
 
     /// Rises until it stops, and returns how far above `from` it peaked.

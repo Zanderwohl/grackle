@@ -91,32 +91,24 @@ fn dress_hats(
         if let Some(baked) = baked {
             fit = baked.hat.for_class(Some(*class));
             let meshes = baked.parts.clone();
-            // Before the parts: a carousel body is spawned without one.
-            commands.entity(body).insert_if_new(Visibility::default()).with_children(|body| {
-                for crate::prop::baked::BakedPart { mesh, material, .. } in meshes {
-                    parts.push(
-                        body.spawn((
-                            HatPart,
-                            FirstPersonHidden,
-                            // Spawned out of the eye's way: `hide_own_body` would only
-                            // catch it a frame later, a brim across the view.
-                            crate::common::render_layers::part_layers(own_layers, ours && !view.shows_own_body()),
-                            Mesh3d(mesh),
-                            MeshMaterial3d(material),
-                            Transform::IDENTITY,
-                        ))
-                        .id(),
-                    );
-                }
-            });
+            for crate::prop::baked::BakedPart { mesh, material, .. } in meshes {
+                parts.push(
+                    commands.spawn((
+                        HatPart,
+                        FirstPersonHidden,
+                        // Spawned out of the eye's way: `hide_own_body` would only
+                        // catch it a frame later, a brim across the view.
+                        crate::common::render_layers::part_layers(own_layers, ours && !view.shows_own_body()),
+                        Mesh3d(mesh),
+                        MeshMaterial3d(material),
+                        Transform::IDENTITY,
+                    ))
+                    .id(),
+                );
+            }
         }
-        commands.entity(body).insert(WornHat {
-            model: wanted,
-            class: *class,
-            cached_at: cache.generation(),
-            parts,
-            fit,
-        });
+        let worn = WornHat { model: wanted, class: *class, cached_at: cache.generation(), parts: parts.clone(), fit };
+        crate::game::body_mesh::hang_parts(&mut commands, body, parts, worn);
     }
 }
 

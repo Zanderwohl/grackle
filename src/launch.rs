@@ -137,6 +137,7 @@ pub fn run() {
         .add_plugins(crate::joining_screen::JoiningScreenPlugin)
         .add_plugins(crate::game::chat_window::ChatWindowPlugin)
         .add_plugins(crate::common::lang::LangCachePlugin)
+        .add_plugins(crate::game::voice_menu::VoiceMenuWindowPlugin)
         .add_plugins(crate::startup_screen::StartupScreenPlugin)
         .add_systems(Startup, move || {
             // Read before the log existed, so said now.

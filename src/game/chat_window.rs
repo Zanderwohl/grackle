@@ -2,7 +2,7 @@
 //! and fade; open, the round's whole log scrolls above a text field, and the mouse is free.
 //!
 //! It sits left of the HUD's safe zone where that strip is wide enough ([`chat_zone`]), else above
-//! the HUD's readouts. `T` opens it. `T` closes it again when the field does
+//! the HUD's readouts. The chat key (`Y`) opens it, and closes it again when the field does
 //! not have the keyboard, and `Escape`, `Enter` (which sends), a click outside it or the window
 //! losing focus close it from anywhere.
 //!
@@ -43,7 +43,7 @@ const CLOSED_LINES: usize = 8;
 pub struct ChatWindow {
     pub open: bool,
     draft: String,
-    /// Asked for after the field is first drawn, so the `T` that opened the window is not typed.
+    /// Asked for after the field is first drawn, so the key that opened the window is not typed.
     focus_next: bool,
     /// The click that closed the window holds the mouse until it is let go, so it does not fire.
     until_released: bool,
@@ -99,7 +99,7 @@ impl Plugin for ChatWindowPlugin {
 }
 
 /// Opened only while no other menu is up. While the field has the keyboard, no action fires, so
-/// `T` and `Escape` reach only egui, and [`show_the_chat`] answers them.
+/// the chat key and `Escape` reach only egui, and [`show_the_chat`] answers them.
 fn toggle_the_chat(
     actions: Res<Actions>,
     menu: Res<PauseMenu>,
@@ -175,6 +175,14 @@ fn line(entry: &ChatEntry, alpha: f32, width: f32) -> egui::text::LayoutJob {
             job.append(&get!("chat.said", "name", from.display_name()), 0.0, format(color32(swatch.base)));
             job.append(text, 0.0, format(white));
         }
+        ChatEntry::Voice { from, audience, command, rand } => {
+            match audience {
+                Audience::All => {}
+            }
+            job.append(&get!("chat.said", "name", from.display_name()), 0.0, format(color32(from.swatch().base)));
+            job.append(&command.said(*rand), 0.0, format(white));
+        }
+        ChatEntry::TooFast { .. } => job.append(&get!("chat.too_fast"), 0.0, format(egui::Color32::LIGHT_GRAY)),
         ChatEntry::Round(event) => job.append(&event.words(), 0.0, format(ROUND_EVENT_COLOR)),
         // Never kept in the log.
         ChatEntry::Clear => {}
@@ -253,7 +261,9 @@ fn show_the_window(ctx: &egui::Context, log: &ChatLog, chat: &mut ChatWindow, zo
                     .max_height(log_height)
                     .show(ui, |ui| {
                         let width = ui.available_width();
-                        for logged in &log.lines {
+                        // A refusal floats and fades with the latest lines but is not part of
+                        // the round's log.
+                        for logged in log.lines.iter().filter(|logged| !matches!(logged.entry, ChatEntry::TooFast { .. })) {
                             ui.label(line(&logged.entry, 1.0, width));
                         }
                     });
