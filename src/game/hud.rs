@@ -651,7 +651,7 @@ impl Readout {
         };
 
         let name = get!(weapon.name_key);
-        let Some(state) = ammo.at(weapon.id) else {
+        let Some(state) = ammo.at(weapon.id).filter(|_| weapon.uses_ammo()) else {
             return Self { health, armor, name, ..default() };
         };
         let (loaded, reserve) = match weapon.magazine.clip {
@@ -928,6 +928,22 @@ mod tests {
         let readout = Readout::of(&catalog, &Damageable::default(), None, &equipped, &ammo);
         assert_eq!(readout.loaded, state.reserve.to_string());
         assert_eq!(readout.reserve, "", "a weapon with no clip showed a second count");
+    }
+
+    #[test]
+    fn a_weapon_that_uses_no_ammo_shows_no_counts() {
+        let (mut catalog, mut equipped, ammo) = mercenary();
+        let id = equipped.held().unwrap();
+        let mut weapon = catalog.get(id).unwrap().clone();
+        weapon.primary.cost = crate::common::weapon::Cost::Free;
+        weapon.secondary.cost = crate::common::weapon::Cost::Free;
+        weapon.scoped_primary = None;
+        catalog.insert(weapon);
+        equipped.select(id);
+
+        let readout = Readout::of(&catalog, &Damageable::default(), None, &equipped, &ammo);
+        assert_eq!((readout.loaded.as_str(), readout.reserve.as_str()), ("", ""));
+        assert!(!readout.name.is_empty(), "the name went with the counts");
     }
 
     #[test]
