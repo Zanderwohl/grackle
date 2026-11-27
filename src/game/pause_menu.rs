@@ -84,11 +84,13 @@ impl Plugin for PauseMenuPlugin {
             .init_resource::<EscapeTaken>()
             .init_resource::<DisplayFont>()
             .add_message::<NetRequest>()
+            .add_message::<bevy::window::WindowFocused>()
             .add_observer(choose)
             .add_systems(
                 Update,
                 (
                     toggle_pause.after(TakeEscape).run_if(in_state(AppMode::Play)),
+                    pause_on_blur.run_if(in_state(AppMode::Play)),
                     // Chained so the menu appears the same frame. Ungated so
                     // they run on the frame leaving Play closes the menu.
                     show_or_hide.run_if(resource_changed::<PauseMenu>.or_else(resource_exists_and_changed::<NetRole>)),
@@ -234,22 +236,43 @@ fn release_held_keys(held: Res<MouseHeld>, latch: Option<ResMut<crate::game::pla
 
 /// The one writer of the cursor while playing: grabbed only while we have a
 /// body and no menu is up, so a spectator or somebody waiting to respawn has it free.
+///
+/// The OS drops a grab when the window loses focus, so regaining focus writes it again.
 fn grab_the_cursor(
     mut commands: Commands,
     held: Res<MouseHeld>,
     ours: Query<(), With<crate::game::player::LocalPlayer>>,
     window: Query<Entity, With<bevy::window::PrimaryWindow>>,
     mode: Res<State<AppMode>>,
+    mut focus: MessageReader<bevy::window::WindowFocused>,
     mut grabbed: Local<Option<bool>>,
 ) {
+    let refocused = focus.read().any(|event| event.focused && window.contains(event.window));
     if *mode.get() != AppMode::Play {
         *grabbed = None;
         return;
+    }
+    if refocused {
+        *grabbed = None;
     }
     let wanted = !held.any() && !ours.is_empty();
     if *grabbed != Some(wanted) {
         *grabbed = Some(wanted);
         crate::game::set_cursor_captured(&mut commands, &window, wanted);
+    }
+}
+
+/// Losing focus drops the OS's grab, so the menu goes up to match. Skipped while anything
+/// else already holds the mouse.
+fn pause_on_blur(
+    mut focus: MessageReader<bevy::window::WindowFocused>,
+    window: Query<(), With<bevy::window::PrimaryWindow>>,
+    held: Res<MouseHeld>,
+    mut menu: ResMut<PauseMenu>,
+) {
+    let blurred = focus.read().any(|event| !event.focused && window.contains(event.window));
+    if blurred && !held.any() {
+        menu.open = true;
     }
 }
 
@@ -516,5 +539,61 @@ mod tests {
         app.world_mut().entity_mut(body).despawn();
         app.update();
         assert_eq!(grab(&app), Some(CursorGrabMode::None), "grabbed while waiting to come back");
+    }
+
+    /// Breaks if the grab the OS dropped on losing focus is not written again on regaining it.
+    #[test]
+    fn regaining_focus_grabs_the_cursor_again() {
+        use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow, WindowFocused};
+
+        let mut app = app();
+        let window = app.world_mut().spawn((Window::default(), PrimaryWindow)).id();
+        app.world_mut().spawn(crate::game::player::LocalPlayer);
+        app.update();
+        assert_eq!(app.world().get::<CursorOptions>(window).map(|o| o.grab_mode), Some(CursorGrabMode::Locked));
+
+        // Stands in for the OS letting go: our system would not write the same grab twice.
+        // Focus comes back with the menu still shut, as when the OS refocuses on its own.
+        app.world_mut().entity_mut(window).remove::<CursorOptions>();
+        app.world_mut().write_message(WindowFocused { window, focused: true });
+        app.update();
+        assert_eq!(app.world().get::<CursorOptions>(window).map(|o| o.grab_mode), Some(CursorGrabMode::Locked));
+        app.world_mut().entity_mut(window).remove::<CursorOptions>();
+
+        app.world_mut().write_message(WindowFocused { window, focused: true });
+        app.update();
+        assert_eq!(
+            app.world().get::<CursorOptions>(window).map(|o| o.grab_mode),
+            Some(CursorGrabMode::Locked),
+            "not grabbed again on regaining focus"
+        );
+    }
+
+    /// Breaks if losing focus leaves the round running under a cursor the OS let go of, or if it
+    /// opens the menu over a picker that already holds the mouse.
+    #[test]
+    fn losing_focus_opens_the_menu() {
+        use bevy::window::{PrimaryWindow, WindowFocused};
+
+        let mut app = app();
+        let window = app.world_mut().spawn((Window::default(), PrimaryWindow)).id();
+        app.world_mut().spawn(crate::game::player::LocalPlayer);
+        app.update();
+        assert!(!app.world().resource::<PauseMenu>().open);
+
+        app.world_mut().write_message(WindowFocused { window, focused: false });
+        app.update();
+        assert!(app.world().resource::<PauseMenu>().open, "not paused on losing focus");
+
+        app.world_mut().write_message(WindowFocused { window, focused: true });
+        app.update();
+        assert!(app.world().resource::<PauseMenu>().open, "regaining focus closed the menu");
+
+        app.world_mut().resource_mut::<PauseMenu>().open = false;
+        app.world_mut().resource_mut::<MouseHeld>().team_picker = true;
+        app.update();
+        app.world_mut().write_message(WindowFocused { window, focused: false });
+        app.update();
+        assert!(!app.world().resource::<PauseMenu>().open, "paused over a picker holding the mouse");
     }
 }
