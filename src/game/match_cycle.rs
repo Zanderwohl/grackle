@@ -12,12 +12,14 @@ use crate::common::match_phase::{phase_of, shows_the_cameras, Countdown, MatchNu
 use crate::common::net::{has_authority, is_remote_client, NetRole};
 use crate::common::round_settings::RoundSettings;
 use crate::game::bot::BotSeat;
+use crate::game::chat::{ChatEntry, RoundEvent};
 use crate::game::condition::Condition;
 use crate::game::death::Dying;
 use crate::game::net_bodies::RespawnTimers;
 use crate::game::player::Player;
 use crate::game::respawn::{Identity, OurIdentity};
 use crate::game::score::Standing;
+use crate::game::top_banner::winning_sides;
 
 /// How long the post-game waits after the last loser is gone.
 pub const LAST_FRAG_GRACE: f32 = 2.0;
@@ -92,6 +94,7 @@ impl Plugin for MatchCyclePlugin {
             .init_resource::<ShotClock>()
             .init_resource::<Winners>()
             .init_resource::<Cycle>()
+            .add_message::<ChatEntry>()
             .init_resource::<RoundSettings>()
             .init_resource::<RespawnTimers>()
             .add_systems(
@@ -141,6 +144,7 @@ fn start_a_new_match(
     mut winners: ResMut<Winners>,
     mut timers: ResMut<RespawnTimers>,
     bodies: Query<Entity, With<Player>>,
+    mut chat: MessageWriter<ChatEntry>,
 ) {
     clock.0 = 0.0;
     commands.remove_resource::<crate::game::player::DeathCam>();
@@ -238,6 +242,7 @@ fn pick_the_winners(
     mut won: ResMut<Winners>,
     mut cycle: ResMut<Cycle>,
     mut next: ResMut<NextState<MatchPhase>>,
+    mut chat: MessageWriter<ChatEntry>,
 ) {
     if standings.is_empty() {
         won.0.clear();
@@ -245,6 +250,11 @@ fn pick_the_winners(
         return;
     }
     won.0 = winners(standings.iter(), rules.teams);
+    let standings: Vec<&Standing> = standings.iter().collect();
+    let sides = winning_sides(&won.0, &standings, rules.teams);
+    if !sides.is_empty() {
+        chat.write(ChatEntry::Round(RoundEvent::Won { sides }));
+    }
     cycle.post_elapsed = 0.0;
     cycle.losers_gone_for = 0.0;
     info!("Humiliation: {:?} won", won.0);
@@ -293,6 +303,7 @@ fn clear_the_field(
     mut clock: ResMut<ShotClock>,
     mut timers: ResMut<RespawnTimers>,
     bodies: Query<Entity, With<Player>>,
+    mut chat: MessageWriter<ChatEntry>,
 ) {
     clock.0 = 0.0;
     commands.remove_resource::<crate::game::player::DeathCam>();
@@ -302,6 +313,10 @@ fn clear_the_field(
     }
     info!("Between rounds");
     cycle.left = settings.between_rounds_length;
+    let seconds = cycle.left.ceil() as u32;
+    if seconds > 0 {
+        chat.write(ChatEntry::Round(RoundEvent::NextRoundIn { seconds }));
+    }
     *countdown = Countdown { phase: Some(MatchPhase::BetweenRounds), left: Some(cycle.left) };
     timers.0.clear();
     for body in &bodies {
@@ -356,6 +371,8 @@ fn advance_the_shot_clock(time: Res<Time<Real>>, mut clock: ResMut<ShotClock>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::game::chat::Winner;
+    use crate::get;
     use crate::common::player_color::PlayerColor;
     use crate::common::team::Team;
     use crate::game::respawn::Seat;
@@ -373,6 +390,8 @@ mod tests {
             damage_dealt: 0,
             damage_taken: 0,
             healing: 0,
+            streak: 0,
+            kill_times: Vec::new(),
         }
     }
 
@@ -494,6 +513,41 @@ mod tests {
         run(&mut app, 2.0);
         assert_eq!(phase(&app), MatchPhase::PreGame, "the time between rounds did not end");
         assert_eq!(app.world().resource::<MatchNumber>().0, number + 1, "not a new match");
+    }
+
+    #[derive(Resource, Default)]
+    struct Heard(Vec<RoundEvent>);
+
+    fn listen(mut entries: MessageReader<ChatEntry>, mut heard: ResMut<Heard>) {
+        heard.0.extend(entries.read().filter_map(|entry| match entry {
+            ChatEntry::Round(event) => Some(event.clone()),
+            _ => None,
+        }));
+    }
+
+    /// Breaks if the chat is not told who won as the post-game starts, or how long the wait is
+    /// as it ends.
+    #[test]
+    fn the_chat_hears_who_won_then_how_long_until_the_next_round() {
+        let settings = RoundSettings { pre_game_length: 0.0, post_game_length: 0.5, between_rounds_length: 7.5, ..default() };
+        let mut app = app(settings);
+        app.init_resource::<Heard>().add_systems(Update, listen);
+        person(&mut app, Seat::Playing(None));
+        run(&mut app, 0.5);
+        let mut named = standing(1, None, 5);
+        named.name = "Grackle".into();
+        app.world_mut().spawn(named.clone());
+        app.world_mut().spawn(standing(2, None, 1));
+        app.world_mut().resource_mut::<NextState<MatchPhase>>().set(MatchPhase::PostGame);
+        run(&mut app, 1.0);
+        assert_eq!(phase(&app), MatchPhase::BetweenRounds);
+        let heard = &app.world().resource::<Heard>().0;
+        let won = RoundEvent::Won { sides: vec![Winner::Player(named.speaker())] };
+        assert_eq!(heard.iter().filter(|event| **event == won).count(), 1, "{heard:?}");
+        let last = heard.iter().rposition(|event| matches!(event, RoundEvent::NextRoundIn { .. }));
+        assert_eq!(last.map(|at| &heard[at]), Some(&RoundEvent::NextRoundIn { seconds: 8 }), "{heard:?}");
+        assert!(heard.iter().position(|event| *event == won) < last, "the wait came before the win");
+        assert_eq!(won.words(), get!("match.wins", "winner", "Grackle"));
     }
 
     #[test]

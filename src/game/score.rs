@@ -26,6 +26,7 @@ use crate::common::swatch::Swatch;
 use crate::common::player_settings::{settings_of, ClientSettings, PlayerSettings};
 use crate::common::team::Team;
 use crate::game::body_mesh::body_look;
+use crate::game::chat::{ChatEntry, MultiKill, RoundEvent, Speaker, Streak};
 use crate::game::damage::DamageSystems;
 use crate::game::player::{Player, Viewed};
 use crate::game::respawn::{HueStart, Identity, OurIdentity};
@@ -52,7 +53,16 @@ pub struct Standing {
     pub damage_taken: u32,
     /// Given, to yourself or anybody else.
     pub healing: u32,
+    /// Other people killed since this player last died.
+    pub streak: u32,
+    /// Seconds on the fixed clock of this life's kills in the last [`MULTI_KILL_SECONDS`].
+    /// Only the authority keeps them.
+    #[serde(skip)]
+    pub kill_times: Vec<f32>,
 }
+
+/// Seconds within which kills count as one multi-kill.
+pub const MULTI_KILL_SECONDS: f32 = 10.0;
 
 /// What a round's points are made of. Every machine works them out from the
 /// replicated counts, so they are never sent.
@@ -76,6 +86,8 @@ impl Standing {
             damage_dealt: 0,
             damage_taken: 0,
             healing: 0,
+            streak: 0,
+            kill_times: Vec::new(),
         }
     }
 
@@ -118,17 +130,33 @@ impl Standing {
         body_look(self.team.as_ref(), Some(&self.color), None, None).color
     }
 
-    /// What one death does to the standings.
-    fn count(standings: &mut [Mut<Standing>], died: &Died) {
-        let Some(victim) = died.victim_id else { return };
+    pub fn speaker(&self) -> Speaker {
+        Speaker { id: self.id, name: self.name.clone(), team: self.team, color: Some(self.color) }
+    }
+
+    /// `now` is seconds on the fixed clock. Returns what the chat announces of the killer.
+    fn count(standings: &mut [Mut<Standing>], died: &Died, now: f32) -> Vec<RoundEvent> {
+        let mut feats = Vec::new();
+        let Some(victim) = died.victim_id else { return feats };
         // A body with no standing (a grid's dummy) is nobody's frag.
-        let Some(index) = standings.iter().position(|standing| standing.id == victim) else { return };
+        let Some(index) = standings.iter().position(|standing| standing.id == victim) else { return feats };
         standings[index].deaths += 1;
+        standings[index].streak = 0;
+        standings[index].kill_times.clear();
         match died.killer {
             DamageSource::Player(killer) if killer != victim => {
                 if let Some(killer) = standings.iter_mut().find(|standing| standing.id == killer) {
                     killer.frags += 1;
                     killer.kills += 1;
+                    killer.streak += 1;
+                    killer.kill_times.retain(|&at| now - at <= MULTI_KILL_SECONDS);
+                    killer.kill_times.push(now);
+                    if let Some(multi) = MultiKill::of(killer.kill_times.len() as u32) {
+                        feats.push(RoundEvent::MultiKill { who: killer.speaker(), multi });
+                    }
+                    if let Some(streak) = Streak::at(killer.streak) {
+                        feats.push(RoundEvent::Streak { who: killer.speaker(), streak });
+                    }
                 }
             }
             // Yourself, or the map.
@@ -141,6 +169,7 @@ impl Standing {
         {
             helper.assists += 1;
         }
+        feats
     }
 }
 
@@ -166,6 +195,7 @@ impl Plugin for ScorePlugin {
         // Also `DamagePlugin`'s; here too for an app without weapons.
         app.add_message::<Died>()
             .add_message::<DamageDealt>()
+            .add_message::<ChatEntry>()
             .add_message::<Healed>()
             .add_systems(Startup, crate::common::bot_names::load_bot_names)
             .add_systems(
@@ -292,13 +322,21 @@ fn keep_standings(
     }
 }
 
-fn record_frags(mut died: MessageReader<Died>, mut standings: Query<&mut Standing>) {
+fn record_frags(
+    mut died: MessageReader<Died>,
+    time: Res<Time>,
+    mut standings: Query<&mut Standing>,
+    mut chat: MessageWriter<ChatEntry>,
+) {
     if died.is_empty() {
         return;
     }
     let mut standings: Vec<Mut<Standing>> = standings.iter_mut().collect();
     for died in died.read() {
-        Standing::count(&mut standings, died);
+        for feat in Standing::count(&mut standings, died, time.elapsed_secs()) {
+            info!("{}", feat.words());
+            chat.write(ChatEntry::Round(feat));
+        }
     }
 }
 
@@ -576,6 +614,8 @@ mod tests {
             damage_dealt: 0,
             damage_taken: 0,
             healing: 0,
+            streak: 0,
+            kill_times: Vec::new(),
         }
     }
 
@@ -596,6 +636,8 @@ mod tests {
     fn after(deaths: &[Died]) -> Vec<Standing> {
         let mut world = World::new();
         world.init_resource::<Messages<Died>>();
+        world.init_resource::<Messages<ChatEntry>>();
+        world.init_resource::<Time>();
         for id in 0..3 {
             world.spawn(standing(id, 0, 0));
         }
@@ -701,6 +743,88 @@ mod tests {
         let all = [a, b, c];
         let order: Vec<u64> = ranked_by_points(&all).iter().map(|standing| standing.id.0).collect();
         assert_eq!(order, vec![2, 0, 1]);
+    }
+
+    /// The chat's announcements after each death, each at its time in seconds.
+    fn announced(deaths: &[(f32, Died)]) -> (Vec<Standing>, Vec<Vec<RoundEvent>>) {
+        let mut world = World::new();
+        world.init_resource::<Messages<Died>>();
+        world.init_resource::<Messages<ChatEntry>>();
+        world.init_resource::<Time>();
+        for id in 0..3 {
+            world.spawn(standing(id, 0, 0));
+        }
+        let mut said = Vec::new();
+        for (at, death) in deaths {
+            world.resource_mut::<Time>().advance_to(std::time::Duration::from_secs_f32(*at));
+            world.write_message(death.clone());
+            world.run_system_once(record_frags).unwrap();
+            // A one-off run's reader starts at the oldest message, so read ones must go.
+            world.resource_mut::<Messages<Died>>().clear();
+            let events: Vec<RoundEvent> = world
+                .resource_mut::<Messages<ChatEntry>>()
+                .drain()
+                .map(|entry| match entry {
+                    ChatEntry::Round(event) => event,
+                    other => panic!("{other:?} is no feat"),
+                })
+                .collect();
+            said.push(events);
+        }
+        let mut all: Vec<Standing> = world.query::<&Standing>().iter(&world).cloned().collect();
+        all.sort_by_key(|standing| standing.id);
+        (all, said)
+    }
+
+    /// Breaks if a streak outlives a death, counts a suicide, or a milestone is missed or repeated.
+    #[test]
+    fn a_streak_is_kills_in_one_life_announced_at_its_milestones() {
+        let kill = |victim| died(victim, DamageSource::Player(PlayerId(0)));
+        // A minute apart, so no two are a multi-kill.
+        let mut deaths: Vec<(f32, Died)> = (0..15).map(|n| (60.0 * n as f32, kill(1 + n % 2))).collect();
+        deaths.push((1000.0, died(0, DamageSource::Player(PlayerId(0)))));
+        deaths.extend((0..3).map(|n| (1100.0 + 60.0 * n as f32, kill(1))));
+        let (all, said) = announced(&deaths);
+        let streaks: Vec<(usize, Streak)> = said
+            .iter()
+            .enumerate()
+            .flat_map(|(n, events)| events.iter().map(move |event| (n, event)))
+            .filter_map(|(n, event)| match event {
+                RoundEvent::Streak { who, streak } if who.id == PlayerId(0) => Some((n, *streak)),
+                RoundEvent::Streak { .. } => panic!("somebody else's streak"),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            streaks,
+            vec![(2, Streak::HatTrick), (4, Streak::Spree), (9, Streak::Dominating), (14, Streak::Unstoppable), (18, Streak::HatTrick)]
+        );
+        assert_eq!(all[0].streak, 3);
+        assert_eq!(all[1].streak, 0);
+    }
+
+    /// Breaks if kills more than ten seconds apart or either side of a death are joined, or the
+    /// third in a window is not a multi-kill.
+    #[test]
+    fn kills_within_ten_seconds_are_a_double_then_a_multi_kill() {
+        let kill = |victim| died(victim, DamageSource::Player(PlayerId(0)));
+        let (_, said) = announced(&[(0.0, kill(1)), (6.0, kill(2)), (12.0, kill(1)), (14.0, kill(2)), (30.0, kill(1)), (40.5, kill(2))]);
+        let multis: Vec<Option<MultiKill>> = said
+            .iter()
+            .map(|events| {
+                events.iter().find_map(|event| match event {
+                    RoundEvent::MultiKill { multi, .. } => Some(*multi),
+                    _ => None,
+                })
+            })
+            .collect();
+        assert_eq!(multis, vec![None, Some(MultiKill::Double), Some(MultiKill::Double), Some(MultiKill::Multi), None, None]);
+
+        let (_, said) = announced(&[(0.0, kill(1)), (1.0, died(0, DamageSource::World)), (8.0, kill(2))]);
+        assert!(
+            said.iter().flatten().all(|event| !matches!(event, RoundEvent::MultiKill { .. })),
+            "kills either side of a death were a multi-kill"
+        );
     }
 
     #[test]
