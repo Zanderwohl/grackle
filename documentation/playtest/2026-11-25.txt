@@ -1,16 +1,16 @@
 d Pickups don't disappear on clients when picked up
 d Clients sometimes don't get lightmaps?
-d Jumping up stairs gets you stuck
+- Jumping up stairs gets you stuck
 - A client'sd gun didn't work (primary fire) until she died during one life
 - mouse sometimes get un-grabbed?
 - Explosion particles can be seen through the wall
-- don't allow taunt-cancel
-- Configurable respawn time
-- When respawn menu is open, don't respawn until done
+d don't allow taunt-cancel
+d Configurable respawn time
+d When respawn menu is open, don't respawn until done
 d Zoom and crouch toggle accessibility setting
 
-- Make kill shot linger longer
-- Make it clearer you're spectating
+d Make kill shot linger longer
+d Make it clearer you're spectating
 - Make it clear what the end condition is
 - Melee weapon/button (slot 3)
 d Tune down flames or reduction setting (in first person)
