@@ -107,6 +107,7 @@ pub mod class_picker;
 pub mod team_choice;
 pub mod picking;
 pub mod team_picker;
+pub mod text_outline;
 pub mod trigger;
 pub mod ragdoll;
 #[cfg(test)]

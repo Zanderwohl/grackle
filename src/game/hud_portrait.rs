@@ -1,6 +1,6 @@
 //! The HUD's portrait: the viewed body's class, in its colors and hat, idling with the weapon it
-//! holds, on a [`Medallion`] behind the health panel, painted in the complement of the HUD's color
-//! ([`Swatch::complement`]). Spectating, it is the watched body's.
+//! holds, on a [`Medallion`] behind the health panel, painted in a backdrop tone of the HUD's color
+//! ([`Swatch::backdrop`]). Spectating, it is the watched body's.
 //!
 //! A copy of the body stands far below the map on [`render_layers::HUD_PORTRAIT`], drawn by an
 //! orthographic camera into the medallion's image. The copy has only a `Class`, a [`BodyTint`]
@@ -253,7 +253,7 @@ fn show_the_portrait(
     let swatch = match *painted {
         Some((was_team, was_color, swatch)) if (was_team, was_color) == (team, color) => swatch,
         _ => {
-            let swatch = Swatch::of_body(team, color).complement();
+            let swatch = Swatch::of_body(team, color).backdrop();
             *painted = Some((team, color, swatch));
             swatch
         }
@@ -385,7 +385,7 @@ mod tests {
         app.world_mut().spawn((Player::default(), LocalPlayer, Class::Scout, Team::Red, Equipped::default()));
         app.update();
         let swatch = |entity| app.world().get::<Medallion>(entity).unwrap().swatch;
-        assert_eq!(swatch(ours), Swatch::team(Team::Red).complement());
+        assert_eq!(swatch(ours), Swatch::team(Team::Red).backdrop());
         assert_eq!(swatch(theirs), Swatch::neutral());
     }
 

@@ -31,6 +31,7 @@ use crate::common::team::Team;
 use crate::common::ui_shape::{Corner, Path, ShapeMaterial, ShapeStyle};
 use crate::common::weapon::{Ammo, Equipped, WeaponCatalog};
 use crate::game::plate_bar::PlateBar;
+use crate::game::text_outline::TextOutline;
 use crate::game::player::{Player, Viewed};
 use crate::game::viewmodel::VIEWMODEL_CAMERA_ORDER;
 use crate::get;
@@ -61,6 +62,8 @@ const HEALTH_PADDING_BOTTOM: f32 = 8.0;
 /// lowercase word's x-height and a few pixels clear.
 const LABEL_DROP: f32 = 16.0;
 const SMALL: f32 = 22.0;
+/// Logical pixels. The health number stands over the portrait's light backdrop.
+const HEALTH_OUTLINE: f32 = 3.0;
 
 /// Logical pixels, in each zone's own box.
 pub(crate) const ZONE_STROKE: f32 = 5.0;
@@ -164,11 +167,10 @@ impl HudZone {
         }
     }
 
-    /// The panel as a [`PlateBar`], filled by [`fill_the_health_bar`], in place of [`Self::panel`].
-    fn bar(self) -> impl Bundle {
+    /// The panel as a [`PlateBar`], in place of [`Self::panel`].
+    fn bar(self, swatch: Swatch) -> PlateBar {
         let corners = leaning_corners(self != HudZone::Ammo, Corner::squircle(34.0), Corner::squircle(10.0));
-        let bar = PlateBar::with_corners(Swatch::neutral(), 1.0, self != HudZone::Ammo, corners).attention_below(HEALTH_ATTENTION);
-        (HealthBar, bar, self.panel_node())
+        PlateBar::with_corners(swatch, 1.0, self != HudZone::Ammo, corners)
     }
 
     /// The readout over a panel: as wide, and centered on the panel rather
@@ -237,14 +239,27 @@ pub(crate) fn panel_style(swatch: &Swatch) -> ShapeStyle {
 /// The share of its class's health below which the health bar glows red.
 const HEALTH_ATTENTION: f32 = 0.2;
 
-/// The bar behind the health number, colored over the share of health left.
+/// In [`Swatch::blood`] whatever the team.
 #[derive(Component)]
 struct HealthBar;
 
-/// The share of its class's health the viewed body has, full with no body.
-fn fill_the_health_bar(body: Option<Single<&Damageable, Viewed>>, mut bars: Query<&mut PlateBar, With<HealthBar>>) {
-    let t = body.map_or(1.0, |health| health.health() as f32 / health.max().max(1) as f32);
-    for mut bar in &mut bars {
+/// In the HUD's color, filled to the share of the armor cap.
+#[derive(Component)]
+struct ArmorBar;
+
+/// Full with no body.
+#[allow(clippy::type_complexity)]
+fn fill_the_bars(
+    body: Option<Single<(&Damageable, Option<&Armor>), Viewed>>,
+    mut bars: Query<(&mut PlateBar, Has<ArmorBar>), Or<(With<HealthBar>, With<ArmorBar>)>>,
+) {
+    let (health, armor) = body.map_or((1.0, 1.0), |body| {
+        let (health, armor) = body.into_inner();
+        let armor = armor.map_or(0.0, |armor| armor.points() as f32 / armor.max().max(1) as f32);
+        (health.health() as f32 / health.max().max(1) as f32, armor)
+    });
+    for (mut bar, is_armor) in &mut bars {
+        let t = if is_armor { armor } else { health };
         if bar.t != t {
             bar.t = t;
         }
@@ -276,7 +291,7 @@ impl Plugin for HudPlugin {
                 (
                     spawn_the_hud,
                     toggle_safe_zone_outline,
-                    (outline_the_safe_zone, fill_in_the_readouts, dress_the_zones, fill_the_health_bar),
+                    (outline_the_safe_zone, fill_in_the_readouts, dress_the_zones, fill_the_bars),
                     paint_the_zones,
                 )
                     .chain()
@@ -454,7 +469,10 @@ fn health_readout(font: &Handle<Font>) -> impl Bundle {
             ..HudZone::Health.readout()
         },
         Pickable::IGNORE,
-        children![HudZone::Health.bar(), text(font, HudText::Health, BIG, 1.0)],
+        children![
+            (HealthBar, HudZone::Health.bar(Swatch::blood()).attention_below(HEALTH_ATTENTION), HudZone::Health.panel_node()),
+            (text(font, HudText::Health, BIG, 1.0), TextOutline { width: HEALTH_OUTLINE, color: Ink::Black.on(&Swatch::blood()) }),
+        ],
     )
 }
 
@@ -480,7 +498,7 @@ fn armor_readout(font: &Handle<Font>) -> impl Bundle {
         },
         Pickable::IGNORE,
         children![
-            HudZone::Armor.panel(),
+            (ArmorBar, HudZone::Armor.bar(Swatch::neutral()), HudZone::Armor.panel_node()),
             text(font, HudText::Armor, MEDIUM, 1.0),
             (
                 Node {
@@ -561,8 +579,8 @@ fn dress_the_zones(
 fn paint_the_zones(
     ours: Option<Single<(Option<&Team>, Option<&PlayerColor>), (Viewed, With<Player>)>>,
     zones: Query<&MaterialNode<ShapeMaterial>, With<HudZone>>,
-    mut bars: Query<&mut PlateBar, With<HealthBar>>,
-    mut texts: Query<&mut TextColor, With<HudText>>,
+    mut bars: Query<&mut PlateBar, With<ArmorBar>>,
+    mut texts: Query<(&mut TextColor, Option<&HudText>), Or<(With<HudText>, With<ArmorLabel>)>>,
     materials: Option<ResMut<Assets<ShapeMaterial>>>,
 ) {
     let swatch = ours.map_or_else(Swatch::neutral, |ours| {
@@ -585,8 +603,9 @@ fn paint_the_zones(
         }
     }
 
-    let ink = swatch.text();
-    for mut color in &mut texts {
+    let (ink, on_blood) = (swatch.text(), Swatch::blood().text());
+    for (mut color, kind) in &mut texts {
+        let ink = if kind == Some(&HudText::Health) { on_blood } else { ink };
         let wanted = ink.with_alpha(color.0.alpha());
         if color.0 != wanted {
             color.0 = wanted;
@@ -869,12 +888,32 @@ mod tests {
         health.apply(150);
         world.spawn((Damageable::with_health(100), Player::default()));
         let ours = world.spawn((LocalPlayer, health)).id();
-        world.run_system_once(fill_the_health_bar).unwrap();
+        world.run_system_once(fill_the_bars).unwrap();
         assert_eq!(world.get::<PlateBar>(bar).unwrap().t, 0.25);
 
         world.despawn(ours);
-        world.run_system_once(fill_the_health_bar).unwrap();
+        world.run_system_once(fill_the_bars).unwrap();
         assert_eq!(world.get::<PlateBar>(bar).unwrap().t, 1.0);
+    }
+
+    /// Breaks if the armor bar is not the share of the armor cap, or the team's color reaches health.
+    #[test]
+    fn the_armor_bar_is_the_share_of_the_cap_and_health_stays_blood() {
+        use bevy::ecs::system::RunSystemOnce;
+
+        let mut world = World::new();
+        let health_bar = world.spawn((HealthBar, PlateBar::new(Swatch::blood(), 1.0))).id();
+        let armor_bar = world.spawn((ArmorBar, PlateBar::new(Swatch::neutral(), 1.0))).id();
+        let mut armor = Armor::default();
+        armor.add(armor.max() / 4);
+        let share = armor.points() as f32 / armor.max() as f32;
+        world.spawn((LocalPlayer, Player::default(), Team::Blue, Damageable::with_health(100), armor));
+        world.run_system_once(fill_the_bars).unwrap();
+        world.run_system_once(paint_the_zones).unwrap();
+        let bar = |world: &World, entity| *world.get::<PlateBar>(entity).unwrap();
+        assert_eq!(bar(&world, armor_bar).t, share);
+        assert_eq!(bar(&world, armor_bar).swatch, Swatch::team(Team::Blue));
+        assert_eq!(bar(&world, health_bar).swatch, Swatch::blood());
     }
 
     #[test]

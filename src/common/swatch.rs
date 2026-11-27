@@ -23,6 +23,12 @@ const COOL_HUE: f32 = 275.0;
 /// and given back by [`in_gamut`] wherever a hue cannot hold it.
 const PLAYER_LIGHTNESS: f32 = 0.62;
 const PLAYER_CHROMA: f32 = 0.17;
+/// For [`Swatch::backdrop`]. The OKLab distance gives the teams' and players' backdrops about 3:1
+/// WCAG contrast with their bases; the slope is chroma lost per unit of lightness moved.
+const BACKDROP_DISTANCE: f32 = 0.32;
+const BACKDROP_SLOPE: f32 = 0.25;
+const BACKDROP_LIGHTEST: f32 = 0.97;
+const BACKDROP_DARKEST: f32 = 0.15;
 /// An outline's lightness in [`Ink::Dark`], whatever the base's.
 const DARK_INK_LIGHTNESS: f32 = 0.24;
 
@@ -106,11 +112,28 @@ impl Swatch {
         }
     }
 
-    /// The base's hue turned 180° in OKLCH, lightness and chroma kept, so it reads as bright. A hue
-    /// that cannot hold the chroma in sRGB loses only chroma.
-    pub fn complement(&self) -> Self {
+    /// The same hue, grayer and lighter, [`BACKDROP_DISTANCE`] from the base in OKLab so every pair
+    /// looks as far apart. A base too light to get that far, as yellow and neutral are, goes darker
+    /// instead, since white beside it has little contrast.
+    pub fn backdrop(&self) -> Self {
         let base = Oklcha::from(self.base);
-        Self::from_oklch(base.lightness, base.chroma, (base.hue + 180.0).rem_euclid(360.0))
+        // `d` is the OKLab distance before the gamut takes any chroma.
+        let at = |d: f32, lighter: bool| {
+            let room = if lighter { BACKDROP_LIGHTEST - base.lightness } else { base.lightness - BACKDROP_DARKEST };
+            let lightness_moved = (d / (1.0 + BACKDROP_SLOPE * BACKDROP_SLOPE).sqrt()).min(room).max(0.0);
+            let chroma_moved = (d * d - lightness_moved * lightness_moved).max(0.0).sqrt();
+            let lightness = if lighter { base.lightness + lightness_moved } else { base.lightness - lightness_moved };
+            Oklcha::lch(lightness, (base.chroma - chroma_moved).max(0.0), base.hue)
+        };
+        let lighter = distance(in_gamut(at(1.0, true)), self.base) >= BACKDROP_DISTANCE;
+        // Bisected on the distance after the gamut, which is what is seen.
+        let (mut low, mut high) = (0.0, 1.0);
+        for _ in 0..24 {
+            let mid = (low + high) * 0.5;
+            if distance(in_gamut(at(mid, lighter)), self.base) < BACKDROP_DISTANCE { low = mid } else { high = mid }
+        }
+        let backdrop = Oklcha::from(in_gamut(at(high, lighter)));
+        Self::from_oklch(backdrop.lightness, backdrop.chroma, base.hue)
     }
 
     /// The same hue and chroma, `by` lighter in OKLCH lightness (darker when negative).
@@ -164,6 +187,12 @@ fn lean(from: f32, to: f32, amount: f32) -> f32 {
     (from + delta * amount).rem_euclid(360.0)
 }
 
+/// Euclidean distance in OKLab.
+fn distance(a: Color, b: Color) -> f32 {
+    let (a, b) = (Oklaba::from(a), Oklaba::from(b));
+    Vec3::new(a.lightness - b.lightness, a.a - b.a, a.b - b.b).length()
+}
+
 /// Lose chroma until the color fits in sRGB, keeping lightness and hue.
 /// Clamping channels instead would shift the hue of a saturated yellow.
 fn in_gamut(color: Oklcha) -> Color {
@@ -190,17 +219,25 @@ mod tests {
         Oklcha::from(c).lightness
     }
 
-    /// Breaks if a complement is not opposite in hue, changes lightness, or does not turn back.
+    /// Breaks if a backdrop turns its hue, is not grayer, is not the same distance from its base as
+    /// the others, or does not go darker for yellow and neutral.
     #[test]
-    fn a_complement_is_opposite_in_hue_and_as_light() {
-        let hue = |c: Color| Oklcha::from(c).hue;
-        let apart = |a: f32, b: f32| ((a - b + 540.0).rem_euclid(360.0) - 180.0).abs();
-        let players = (0..8).map(|i| Swatch::player(PlayerColor::nth(0.0, i)));
-        for swatch in [Team::Red, Team::Blue, Team::Yellow, Team::Green].map(Swatch::team).into_iter().chain(players) {
-            let complement = swatch.complement();
-            assert!((lightness(complement.base) - lightness(swatch.base)).abs() < 1e-3, "{swatch:?} changed lightness");
-            assert!((apart(hue(complement.base), hue(swatch.base)) - 180.0).abs() < 0.5, "{swatch:?} is not opposite");
-            assert!(apart(hue(complement.complement().base), hue(swatch.base)) < 0.5, "{swatch:?} does not turn back");
+    fn every_backdrop_is_as_far_from_its_base() {
+        let players = (0..12).map(|i| Swatch::player(PlayerColor::nth(0.0, i)));
+        for swatch in Team::ALL.map(Swatch::team).into_iter().chain(players).chain([Swatch::neutral()]) {
+            let (base, backdrop) = (Oklcha::from(swatch.base), Oklcha::from(swatch.backdrop().base));
+            assert!((distance(swatch.backdrop().base, swatch.base) - BACKDROP_DISTANCE).abs() < 2e-3, "{swatch:?}");
+            assert!(backdrop.chroma < base.chroma, "{swatch:?} is not grayer");
+            if backdrop.chroma > 0.01 {
+                let turned = (backdrop.hue - base.hue + 540.0).rem_euclid(360.0) - 180.0;
+                assert!(turned.abs() < 1.0, "{swatch:?} turned {turned} degrees");
+            }
+        }
+        for team in [Team::Red, Team::Blue, Team::Green] {
+            assert!(lightness(Swatch::team(team).backdrop().base) > lightness(Swatch::team(team).base), "{team:?}");
+        }
+        for swatch in [Swatch::team(Team::Yellow), Swatch::neutral()] {
+            assert!(lightness(swatch.backdrop().base) < lightness(swatch.base), "{swatch:?}");
         }
     }
 
