@@ -842,8 +842,12 @@ hides one that is off screen. Name tags and the watched and killer banners are p
 chroma over the rest, the colored panel drawn whole inside a node that clips it, so `t` moves only
 the clip. Below its `attention_below`, a `#FF3333` glow pulses under it: the outline stroked 5 px
 past the edge at 20% opacity and 1 Hz at the threshold, to 30 px, 40% and 3 Hz at empty, on real
-time. The panel behind the health number is one, `t` the viewed body's health over its class's
-(`fill_the_health_bar`), glowing below 0.2.
+time. The panel behind the health number is one, always in `Swatch::blood` (the kill cam's red)
+whatever the team, `t` the viewed body's health over its class's, glowing below 0.2; the armor
+panel is another, in the HUD's color, `t` the armor over its cap (`fill_the_bars`). The HUD
+portrait's medallion is `Swatch::backdrop`: the same hue, grayer and lighter (darker for yellow and
+neutral, which white barely contrasts with), a fixed OKLab distance from the base, so every team's
+and player's pair looks as far apart.
 
 **The chat** ([`src/game/chat.rs`](src/game/chat.rs), [`src/game/chat_window.rs`](src/game/chat_window.rs))
 is egui, on **`Y`**. The authority decides every line: a client sends a `SayChat` (text and an
