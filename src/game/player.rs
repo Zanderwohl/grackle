@@ -1316,6 +1316,7 @@ mod tests {
             at: Vec3::ZERO,
             cause: Default::default(),
             killer_health: None,
+            rand: 0,
         }
     }
 

@@ -722,6 +722,7 @@ mod tests {
             at: Vec3::new(0.0, 1.0, 0.0),
             cause: Cause::of(rocket, How::Splash),
             killer_health: None,
+            rand: 0,
         });
         app.update();
 
@@ -764,6 +765,7 @@ mod tests {
                 at: Vec3::Y,
                 cause: Cause::of(None, How::Kill),
                 killer_health: None,
+                rand: 0,
             });
             app.update();
             // With no pre-game or time between rounds, the next match starts at once.

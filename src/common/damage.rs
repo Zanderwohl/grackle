@@ -419,6 +419,9 @@ pub struct Died {
     /// The killer's health as the victim died, from their living body, else their dying one;
     /// `None` when they have no body.
     pub killer_health: Option<HealthLeft>,
+    /// Picks the kill feed's wording where the lang file offers several, as `rand % len`, drawn
+    /// by the authority so every machine on one language reads the same line.
+    pub rand: u8,
 }
 
 /// A body's health and its pool's size, at some moment.
@@ -497,6 +500,7 @@ mod tests {
             at: Vec3::ZERO,
             cause: Default::default(),
             killer_health: None,
+            rand: 0,
         };
         death.map_entities(&mut Shift);
         assert_eq!(death.victim, Entity::from_raw_u32(107).unwrap());

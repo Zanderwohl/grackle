@@ -203,6 +203,7 @@ pub fn announce_the_dead(
             at: placed.map(|placed| placed.translation()).unwrap_or_default(),
             cause: log.cause(),
             killer_health,
+            rand: rand::random(),
         });
 
         commands.entity(entity).insert(Dying);

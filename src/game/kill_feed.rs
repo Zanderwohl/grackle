@@ -3,8 +3,8 @@
 //! victim", the icon being what killed ([`kill_icon::icon_for`]). A body that killed itself or was
 //! killed by the map with somebody's help reads "assist finished off [icon] victim", and without
 //! help "[icon] victim died", or "[icon] victim exploded" for the explode key, all in the neutral
-//! cream. Those three are arrays in the lang file, one picked per line by a seed drawn as the line
-//! is made.
+//! cream. Every key may be an array in the lang file; [`Died::rand`], drawn by the authority, picks
+//! the entry, so every machine on one language reads the same line.
 //!
 //! A line naming us as killer, assist or victim is up for [`OUR_LIFETIME`] and any other for
 //! [`LIFETIME`]. The latest [`OURS_SHOWN`] of ours are always kept, and the rest of the slots go to
@@ -226,7 +226,7 @@ fn list_the_dead(
     // A client spectating since it joined has no body to know itself by, and no line is its own.
     let us = our_id(body.map(|body| **body), identity.as_deref(), last.as_deref(), death_cam.as_deref());
     for died in deaths.read() {
-        if let Some((words, swatch)) = line_for(died, &feed.known, catalog.as_deref(), rand::random()) {
+        if let Some((words, swatch)) = line_for(died, &feed.known, catalog.as_deref(), died.rand.into()) {
             feed.push(words, swatch, names(died, us));
         }
     }
@@ -352,7 +352,7 @@ mod tests {
     }
 
     fn died(victim: u64, killer: DamageSource, assist: Option<DamageSource>) -> Died {
-        Died { victim: Entity::PLACEHOLDER, victim_name: None, victim_id: Some(PlayerId(victim)), killer, assist, at: Vec3::ZERO, cause: Default::default(), killer_health: None }
+        Died { victim: Entity::PLACEHOLDER, victim_name: None, victim_id: Some(PlayerId(victim)), killer, assist, at: Vec3::ZERO, cause: Default::default(), killer_health: None, rand: 0 }
     }
 
     fn lines(deaths: &[Died]) -> Vec<Option<(Words, Swatch)>> {

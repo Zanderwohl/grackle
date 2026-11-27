@@ -829,7 +829,8 @@ slots go to the latest of the rest, so ours are bumped less. It is built from th
 machine gets, so spectators and every mode see it. "Killer [icon] victim" or "killer + assist [icon] victim" is
 painted in the killer's color; "assist finished off [icon] victim" (killed by themself or the map, with help),
 "[icon] victim died" and, from the explode key (`How::Exploded`), "[icon] victim exploded" are cream. Those three
-are arrays of wordings in the lang file, one picked per line by a seed drawn when the line is made. The icon is what killed ([`src/game/kill_icon.rs`](src/game/kill_icon.rs)): a
+are arrays of wordings in the lang file, and any line's key may be: `Died::rand`, a `u8` the authority draws, picks
+one as `rand % len`, so every machine on one language reads the same line. The icon is what killed ([`src/game/kill_icon.rs`](src/game/kill_icon.rs)): a
 weapon's `icon` in `weapons/{key}.toml`, a white SVG under `icons/` rasterized at runtime, else the flame for
 afterburn, the explosion for splash, `kill_headshot` for a headshot and the skull for the map, a suicide or a weapon with none. Each line is a **`Plate`** ([`src/game/plate.rs`](src/game/plate.rs)):
 a node with `PlateText` children, given its leaning panel after layout, repainted when its size
