@@ -40,6 +40,10 @@ fixed_overstep = "Fixed overstep"
 uptime = "Uptime"
 resolution = "Resolution"
 scale_factor = "Scale factor"
+lang_cache = "String cache"
+lang_hit_rate = "String hit rate"
+lang_churn = "String misses, rotations"
+per_second = "{ misses }/s, { rotations }/s"
 
 [debug.movement]
 title = "Camera Movement"

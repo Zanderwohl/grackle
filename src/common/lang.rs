@@ -1,8 +1,9 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 use std::sync::{LazyLock, RwLock};
 use bevy::platform::collections::HashMap;
-use bevy::prelude::{error, warn};
+use bevy::prelude::{debug, error, warn};
 use regex::{Captures, Regex};
 
 /// The default pack's lang directory: the reference for the parity tests and
@@ -66,13 +67,177 @@ static TEMPLATE_REGEX: LazyLock<Regex> =
 ///
 /// Only written while holding the `LANG` read lock, and cleared by
 /// [`change_lang`] under the write lock, so a fill that began before a
-/// language switch cannot store a stale result after it.
-static CACHE: LazyLock<RwLock<HashMap<String, String>>> =
-    LazyLock::new(|| RwLock::new(HashMap::new()));
+/// language switch cannot store a stale result after it. A promotion out of
+/// the old generation (see [`Cache`]) writes without `LANG`, but only moves an
+/// entry still present, so it cannot bring back one a clear removed.
+static CACHE: LazyLock<RwLock<Cache>> = LazyLock::new(|| RwLock::new(Cache::default()));
 
 /// The key space is unbounded (arguments are ids, counts, error strings), so
-/// the cache is cleared wholesale when it reaches this size.
+/// the cache holds at most this many entries, half in each generation.
 const CACHE_LIMIT: usize = 1024;
+const GENERATION_SIZE: usize = CACHE_LIMIT / 2;
+
+/// Two generations, an approximate LRU: entries go into `young`; when it is full, `old` is
+/// dropped and `young` becomes `old`; a hit in `old` moves the entry back into `young`. A string
+/// asked for every frame survives a rotation, and one filled with a one-off argument is gone
+/// within two.
+#[derive(Default)]
+struct Cache {
+    young: HashMap<String, String>,
+    old: HashMap<String, String>,
+}
+
+impl Cache {
+    /// Without promoting.
+    #[cfg(test)]
+    fn get(&self, key: &str) -> Option<&String> {
+        self.young.get(key).or_else(|| self.old.get(key))
+    }
+
+    fn insert(&mut self, key: String, value: String) {
+        if self.young.len() >= GENERATION_SIZE && !self.young.contains_key(&key) {
+            let dropped = std::mem::replace(&mut self.old, std::mem::take(&mut self.young));
+            STATS.rotations.fetch_add(1, Relaxed);
+            STATS.dropped.fetch_add(dropped.len() as u64, Relaxed);
+        }
+        self.old.remove(&key);
+        self.young.insert(key, value);
+    }
+
+    fn promote(&mut self, key: &str) {
+        if let Some((key, value)) = self.old.remove_entry(key) {
+            STATS.promotions.fetch_add(1, Relaxed);
+            self.insert(key, value);
+        }
+    }
+
+    fn clear(&mut self) {
+        self.young.clear();
+        self.old.clear();
+        STATS.flushes.fetch_add(1, Relaxed);
+    }
+
+    fn len(&self) -> usize {
+        self.young.len() + self.old.len()
+    }
+}
+
+#[derive(Default)]
+struct Counters {
+    hits: AtomicU64,
+    misses: AtomicU64,
+    promotions: AtomicU64,
+    rotations: AtomicU64,
+    dropped: AtomicU64,
+    flushes: AtomicU64,
+}
+
+static STATS: Counters = Counters {
+    hits: AtomicU64::new(0),
+    misses: AtomicU64::new(0),
+    promotions: AtomicU64::new(0),
+    rotations: AtomicU64::new(0),
+    dropped: AtomicU64::new(0),
+    flushes: AtomicU64::new(0),
+};
+
+/// Counts since the process started; a hit in the old generation counts as a hit and a
+/// promotion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct CacheStats {
+    pub hits: u64,
+    pub misses: u64,
+    pub promotions: u64,
+    /// Times the young generation filled and the old one was dropped.
+    pub rotations: u64,
+    /// Entries dropped by rotations; a flush's are not counted.
+    pub dropped: u64,
+    /// Language changes, remerges and [`flush_cache`] calls.
+    pub flushes: u64,
+    pub entries: usize,
+    pub capacity: usize,
+}
+
+impl CacheStats {
+    /// `None` before the first lookup.
+    pub fn hit_rate(&self) -> Option<f64> {
+        let total = self.hits + self.misses;
+        (total > 0).then(|| self.hits as f64 / total as f64)
+    }
+}
+
+pub fn cache_stats() -> CacheStats {
+    CacheStats {
+        hits: STATS.hits.load(Relaxed),
+        misses: STATS.misses.load(Relaxed),
+        promotions: STATS.promotions.load(Relaxed),
+        rotations: STATS.rotations.load(Relaxed),
+        dropped: STATS.dropped.load(Relaxed),
+        flushes: STATS.flushes.load(Relaxed),
+        entries: CACHE.read().map_or(0, |cache| cache.len()),
+        capacity: CACHE_LIMIT,
+    }
+}
+
+/// For a change of context that replaces most of the strings asked for, such as a change of
+/// mode, so the old context's strings do not hold the cache.
+pub fn flush_cache() {
+    // `LANG` first, as everywhere: a fill holding it may be about to store.
+    let _lang = LANG.read();
+    if let Ok(mut cache) = CACHE.write() {
+        cache.clear();
+    }
+    debug!("lang cache flushed: {:?}", cache_stats());
+}
+
+/// Takes and drops `CACHE`'s locks, so the caller must not hold `CACHE`.
+fn cached(key: &str) -> Option<String> {
+    let cache = CACHE.read().ok()?;
+    if let Some(value) = cache.young.get(key) {
+        STATS.hits.fetch_add(1, Relaxed);
+        return Some(value.clone());
+    }
+    let in_old = cache.old.get(key).cloned();
+    drop(cache);
+    match in_old {
+        Some(value) => {
+            STATS.hits.fetch_add(1, Relaxed);
+            if let Ok(mut cache) = CACHE.write() {
+                cache.promote(key);
+            }
+            Some(value)
+        }
+        None => {
+            STATS.misses.fetch_add(1, Relaxed);
+            None
+        }
+    }
+}
+
+/// Call while holding the `LANG` read lock; see [`CACHE`].
+fn store(key: String, value: String) {
+    if let Ok(mut cache) = CACHE.write() {
+        cache.insert(key, value);
+    }
+}
+
+/// Clears the cache whenever `AppMode` changes.
+pub struct LangCachePlugin;
+
+impl bevy::app::Plugin for LangCachePlugin {
+    fn build(&self, app: &mut bevy::app::App) {
+        app.add_systems(bevy::app::Update, flush_on_mode_change);
+    }
+}
+
+fn flush_on_mode_change(
+    mut transitions: bevy::ecs::message::MessageReader<bevy::state::state::StateTransitionEvent<crate::common::app_mode::AppMode>>,
+) {
+    let changed = transitions.read().fold(false, |changed, transition| changed || transition.exited != transition.entered);
+    if changed {
+        flush_cache();
+    }
+}
 
 static GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
@@ -328,7 +493,7 @@ pub fn get_infallible(keys: &[&str]) -> String {
 /// Cached because the panels ask for every label on every frame.
 pub fn get_parsed(keys: &str) -> String {
     // Lock ordering: see `fill_template`.
-    if let Some(cached) = CACHE.read().ok().and_then(|cache| cache.get(keys).cloned()) {
+    if let Some(cached) = cached(keys) {
         return cached;
     }
 
@@ -339,12 +504,7 @@ pub fn get_parsed(keys: &str) -> String {
         .map(str::to_string)
         .unwrap_or_else(|| format!("<{}>", full_path(&path)));
 
-    if let Ok(mut cache) = CACHE.write() {
-        if cache.len() >= CACHE_LIMIT {
-            cache.clear();
-        }
-        cache.insert(keys.to_string(), product.clone());
-    }
+    store(keys.to_string(), product.clone());
 
     product
 }
@@ -397,7 +557,7 @@ pub fn get_template(keys: &[&str], pairs: &[(&str, &str)]) -> String {
 pub fn get_template_parsed(key: &str, pairs: &[(&str, &str)]) -> String {
     let cache_key = template_cache_key(key, pairs);
     // Lock ordering: see `fill_template`.
-    if let Some(cached) = CACHE.read().ok().and_then(|cache| cache.get(&cache_key).cloned()) {
+    if let Some(cached) = cached(&cache_key) {
         return cached;
     }
     let keys = key.split('.').collect::<Vec<&str>>();
@@ -419,17 +579,12 @@ pub fn get_random_parsed(key: &str, seed: u64, pairs: &[(&str, &str)]) -> String
     let lang = LANG.read().unwrap();
     let index = index_of(&lang, &keys, seed);
     let cache_key = template_cache_key(&format!("{key}#{index}"), pairs);
-    if let Some(cached) = CACHE.read().ok().and_then(|cache| cache.get(&cache_key).cloned()) {
+    if let Some(cached) = cached(&cache_key) {
         return cached;
     }
     let product = fill_in_nth(&lang, &keys, index, pairs)
         .unwrap_or_else(|_| format!("<{}; {:?}>", full_path(&keys), pairs));
-    if let Ok(mut cache) = CACHE.write() {
-        if cache.len() >= CACHE_LIMIT {
-            cache.clear();
-        }
-        cache.insert(cache_key, product.clone());
-    }
+    store(cache_key, product.clone());
     product
 }
 
@@ -484,7 +639,7 @@ fn fill_template(keys: &[&str], pairs: &[(&str, &str)]) -> Result<String, String
     let cache_key = template_pair_path(keys, pairs);
     // Dropped before taking `LANG`: every other path takes `LANG` first, and
     // the reverse order can deadlock against `change_lang`.
-    if let Some(cached) = CACHE.read().ok().and_then(|cache| cache.get(&cache_key).cloned()) {
+    if let Some(cached) = cached(&cache_key) {
         return Ok(cached);
     }
     fill_and_store(cache_key, keys, pairs)
@@ -495,12 +650,7 @@ fn fill_and_store(cache_key: String, keys: &[&str], pairs: &[(&str, &str)]) -> R
     let lang = LANG.read().unwrap();
     let product = fill_in(&lang, keys, pairs)?;
 
-    if let Ok(mut cache) = CACHE.write() {
-        if cache.len() >= CACHE_LIMIT {
-            cache.clear();
-        }
-        cache.insert(cache_key, product.clone());
-    }
+    store(cache_key, product.clone());
 
     Ok(product)
 }
@@ -662,6 +812,60 @@ mod tests {
         }
         assert!(CACHE.read().unwrap().len() <= CACHE_LIMIT,
             "cache grew to {}", CACHE.read().unwrap().len());
+    }
+
+    /// Fails if a string asked for between one-off fills is dropped by a rotation, which is the
+    /// churn the old clear-everything rule had.
+    #[test]
+    fn a_string_asked_for_often_survives_rotations() {
+        let _guard = switching_language();
+        let hot = "viewport.free";
+        let before = cache_stats();
+        for i in 0..CACHE_LIMIT * 3 {
+            if i % 64 == 0 {
+                get_parsed(hot);
+            }
+            get_template(&["editor", "title_special"], &[("game", &format!("once {i}"))]);
+        }
+        let after = cache_stats();
+        assert!(after.rotations >= before.rotations + 5, "{before:?} -> {after:?}");
+        assert!(CACHE.read().unwrap().get(hot).is_some(), "the hot string was dropped");
+        assert!(after.promotions > before.promotions, "{before:?} -> {after:?}");
+    }
+
+    #[test]
+    fn a_hit_and_a_miss_are_counted() {
+        let _guard = switching_language();
+        let before = cache_stats();
+        get_parsed("viewport.free");
+        get_parsed("viewport.free");
+        let after = cache_stats();
+        assert!(after.misses > before.misses, "{before:?} -> {after:?}");
+        assert!(after.hits > before.hits, "{before:?} -> {after:?}");
+    }
+
+    #[test]
+    fn a_flush_empties_both_generations() {
+        let _guard = switching_language();
+        for i in 0..GENERATION_SIZE + 10 {
+            get_template(&["editor", "title_special"], &[("game", &i.to_string())]);
+        }
+        assert!(!CACHE.read().unwrap().old.is_empty());
+        let before = cache_stats().flushes;
+        flush_cache();
+        assert_eq!(CACHE.read().unwrap().len(), 0);
+        assert!(cache_stats().flushes > before);
+    }
+
+    /// Fails if a promotion can put back an entry a flush removed, which after a language
+    /// change would be a string in the old language.
+    #[test]
+    fn a_promotion_after_a_flush_brings_nothing_back() {
+        let mut cache = Cache::default();
+        cache.old.insert("k".into(), "v".into());
+        cache.clear();
+        cache.promote("k");
+        assert_eq!(cache.len(), 0);
     }
 
     fn keys(value: &toml::Value, prefix: &str, into: &mut BTreeSet<String>) {

@@ -4344,6 +4344,14 @@ seed; it never draws a number itself. The caller draws one seed (any integer)
 per line or widget and keeps it, so an immediate-mode UI shows the same entry
 every frame.
 
+**Lookups and filled templates are cached**, 1024 entries in two generations: a full young
+generation becomes the old one and the old one is dropped, and a hit in the old one moves the
+entry back, so a string asked for every frame survives. A language change, a remerge, every
+`AppMode` transition (`LangCachePlugin`) and `lang::flush_cache()` empty it. `F3` shows its size,
+hit rate, and misses and rotations per second (`lang::cache_stats`); rotations that keep climbing
+on one screen mean that screen's strings do not fit. A string whose arguments change all the time
+belongs in `fill_uncached`.
+
 Files live at `assets/<pack>/lang/<code>.toml`. Loading merges two layers: every
 pack's `en-US` first as a base, then the chosen language on top, each walking
 packs lowest-priority-first. So **an incomplete translation degrades to English

@@ -52,10 +52,14 @@ fn perf_ui(
     fixed: Res<Time<Fixed>>,
     real: Res<Time<Real>>,
     window: Query<&Window, With<PrimaryWindow>>,
+    mut lang_rates: Local<LangRates>,
 ) {
     let ctx = contexts.ctx_mut();
     if ctx.is_err() { warn!("perf::perf_ui: no egui context: {}", ctx.unwrap_err()); return; }
     let ctx = ctx.unwrap();
+
+    let lang = crate::common::lang::cache_stats();
+    lang_rates.update(lang, real.elapsed_secs_f64());
 
     let smoothed = |key: &bevy::diagnostic::DiagnosticPath| {
         diagnostics.get(key).and_then(|d| d.smoothed())
@@ -117,6 +121,21 @@ fn perf_ui(
                         format!("{:.0} s", real.elapsed_secs_f64()),
                     );
 
+                    row(get!("debug.perf.lang_cache"), format!("{} / {}", lang.entries, lang.capacity));
+                    row(
+                        get!("debug.perf.lang_hit_rate"),
+                        match lang.hit_rate() {
+                            Some(rate) => format!("{:.2}%", rate * 100.0),
+                            None => "—".to_owned(),
+                        },
+                    );
+                    row(
+                        get!("debug.perf.lang_churn"),
+                        get!("debug.perf.per_second",
+                            "misses", format!("{:.0}", lang_rates.misses),
+                            "rotations", format!("{:.1}", lang_rates.rotations)),
+                    );
+
                     if let Ok(window) = window.single() {
                         row(
                             get!("debug.perf.resolution"),
@@ -129,6 +148,29 @@ fn perf_ui(
                     }
                 });
         });
+}
+
+/// The string cache's misses and rotations per second, over the last whole second.
+#[derive(Default)]
+struct LangRates {
+    since: Option<(f64, crate::common::lang::CacheStats)>,
+    misses: f64,
+    rotations: f64,
+}
+
+impl LangRates {
+    fn update(&mut self, now: crate::common::lang::CacheStats, seconds: f64) {
+        let Some((then, before)) = self.since else {
+            self.since = Some((seconds, now));
+            return;
+        };
+        let elapsed = seconds - then;
+        if elapsed >= 1.0 {
+            self.misses = (now.misses - before.misses) as f64 / elapsed;
+            self.rotations = (now.rotations - before.rotations) as f64 / elapsed;
+            self.since = Some((seconds, now));
+        }
+    }
 }
 
 #[derive(States, Debug, Clone, PartialEq, Eq, Hash, Default)]
