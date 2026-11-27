@@ -415,6 +415,27 @@ pub struct Died {
     pub at: Vec3,
     /// What dealt the killing hit.
     pub cause: Cause,
+    /// The killer's health as the victim died, from their living body, else their dying one;
+    /// `None` when they have no body.
+    pub killer_health: Option<HealthLeft>,
+}
+
+/// A body's health and its pool's size, at some moment.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HealthLeft {
+    pub health: u32,
+    pub max: u32,
+}
+
+impl HealthLeft {
+    pub fn of(pool: &Damageable) -> Self {
+        Self { health: pool.health(), max: pool.max() }
+    }
+
+    /// 0 to 1; an empty pool is empty.
+    pub fn share(&self) -> f32 {
+        self.health as f32 / self.max.max(1) as f32
+    }
 }
 
 #[cfg(test)]
@@ -474,6 +495,7 @@ mod tests {
             assist: None,
             at: Vec3::ZERO,
             cause: Default::default(),
+            killer_health: None,
         };
         death.map_entities(&mut Shift);
         assert_eq!(death.victim, Entity::from_raw_u32(107).unwrap());

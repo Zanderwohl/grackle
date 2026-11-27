@@ -812,7 +812,8 @@ color as wide as the name, centered under their feet on screen or over their
 head when there is no room below. While `F8` is on, every bot's tag is up, its
 goal on a second line — spectating too, which is why the HUD goes up with the
 round rather than with a body: without one its crosshair and readouts hide. Each stays up half a second after the
-crosshair leaves, so several can be up at once.
+crosshair leaves, so several can be up at once. While the kill cam replays, our killer has none: the
+kill cam's banner names them there.
 
 The **kill feed** ([`src/game/kill_feed.rs`](src/game/kill_feed.rs)) is up to five recent deaths
 at the top right of the window safe zone, in the order they happened, oldest at the top. A line is up
@@ -829,7 +830,7 @@ or `swatch` changes, its text black or white by `Swatch::text`. Its lines and pa
 until the panel is laid out; the plate's own `Visibility` is its owner's, which is how a name tag
 hides one that is off screen. Name tags and the watched and killer banners are plates too. A **`PlateBar`**
 ([`src/game/plate_bar.rs`](src/game/plate_bar.rs)) is a plate's panel as a bar: its swatch over
-`t` of its width from the end its `BarDirection` fills from, and the swatch at a fifth of its
+`t` of its width (or height, `BottomToTop`) from the end its `BarDirection` fills from, and the swatch at a fifth of its
 chroma over the rest, the colored panel drawn whole inside a node that clips it, so `t` moves only
 the clip. Below its `attention_below`, a `#FF3333` glow pulses under it: the outline stroked 5 px
 past the edge at 20% opacity and 1 Hz at the threshold, to 30 px, 40% and 3 Hz at empty, on real
@@ -2967,8 +2968,10 @@ again, and cuts back in rather than swinging from the corpse.
 stop over a second while the view swings out over our corpse and glides to a
 framing of the killer, head to feet and never further than we died, holds two
 seconds, then spectates from the top of the list, a spectator camera first, until the next body, which cuts it
-short at any point. Until it spectates, a panel at the middle of the window
-safe zone's right edge names the killer and the weapon (`Died` carries the killing `Cause`).
+short at any point. Until it spectates, a panel over or under the killer, whichever has more room,
+names the killer ("the late" once they have died since, by a `Died` or their body going) and the weapon (`Died` carries the killing
+`Cause`), with a blood-red square `PlateBar` under its left end filling bottom to top with the health they had as we died
+(`Died::killer_health`).
 The killer is `Died`'s, the last hit; a death at our own
 hand or the map's keeps the orbit. Somebody who hurt a body inside the window
 before it killed itself is its assist (`DamageLog::assist` passes over the

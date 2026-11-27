@@ -1,9 +1,9 @@
 //! A [`Plate`](crate::game::plate::Plate)'s leaning panel as a bar: the panel in its swatch over
-//! [`PlateBar::t`] of its width, from the side its [`BarDirection`] fills from, and the same panel
-//! at a fifth of the swatch's chroma over the rest.
+//! [`PlateBar::t`] of its width (or height), from the side its [`BarDirection`] fills from, and
+//! the same panel at a fifth of the swatch's chroma over the rest.
 //!
-//! The colored panel is drawn whole over the muted one, inside a node as wide as its share that
-//! clips it, so the divide is a vertical line and the shape never changes with `t`. The panels
+//! The colored panel is drawn whole over the muted one, inside a node as wide (or tall) as its
+//! share that clips it, so the divide is a straight line and the shape never changes with `t`. The panels
 //! are made after layout, once the bar's size is known, and remade when its size, swatch or
 //! corners change; `t` only moves the clip.
 //!
@@ -50,13 +50,56 @@ pub enum BarDirection {
     LeftToRight,
     /// Colored on the right, emptying from the left.
     RightToLeft,
+    /// Colored at the bottom, emptying from the top.
+    BottomToTop,
+}
+
+impl BarDirection {
+    fn vertical(self) -> bool {
+        self == Self::BottomToTop
+    }
+
+    /// Left, right, top and bottom of the clip, and of the colored panel inside it.
+    fn edges(self) -> [Val; 4] {
+        let (zero, auto) = (Val::Px(0.0), Val::Auto);
+        match self {
+            Self::LeftToRight => [zero, auto, zero, auto],
+            Self::RightToLeft => [auto, zero, zero, auto],
+            Self::BottomToTop => [zero, auto, auto, zero],
+        }
+    }
+
+    /// Width and height of a clip showing `share` of the bar.
+    fn clip_size(self, share: f32) -> (Val, Val) {
+        let (part, whole) = (Val::Percent(share * 100.0), Val::Percent(100.0));
+        if self.vertical() { (whole, part) } else { (part, whole) }
+    }
+
+    /// Width and height of the colored panel in a bar of `size`: the bar's own length in pixels
+    /// along the way it fills, not the clip's share of it.
+    fn full_size(self, size: Vec2) -> (Val, Val) {
+        let whole = Val::Percent(100.0);
+        if self.vertical() { (whole, Val::Px(size.y)) } else { (Val::Px(size.x), whole) }
+    }
+}
+
+/// Writes `edges` and a size onto `node` where they differ.
+fn place(node: &mut Mut<Node>, [left, right, top, bottom]: [Val; 4], (width, height): (Val, Val)) {
+    if node.left != left || node.right != right || node.top != top || node.bottom != bottom || node.width != width || node.height != height {
+        node.left = left;
+        node.right = right;
+        node.top = top;
+        node.bottom = bottom;
+        node.width = width;
+        node.height = height;
+    }
 }
 
 #[derive(Component, Debug, Clone, Copy, PartialEq)]
 #[require(Node, Pickable = Pickable::IGNORE)]
 pub struct PlateBar {
     pub swatch: Swatch,
-    /// The share of the width drawn in the swatch, 0 to 1.
+    /// The share of the length drawn in the swatch, 0 to 1.
     pub t: f32,
     pub direction: BarDirection,
     /// Below this `t` the attention glow is up. Zero never shows it.
@@ -146,17 +189,13 @@ fn whole() -> Node {
     }
 }
 
-/// Left and right of the clip, and of the colored panel inside it, for each way of filling.
-fn anchored(direction: BarDirection) -> (Val, Val) {
-    match direction {
-        BarDirection::LeftToRight => (Val::Px(0.0), Val::Auto),
-        BarDirection::RightToLeft => (Val::Auto, Val::Px(0.0)),
-    }
+fn anchored(direction: BarDirection, (width, height): (Val, Val)) -> Node {
+    let [left, right, top, bottom] = direction.edges();
+    Node { left, right, top, bottom, width, height, ..whole() }
 }
 
 fn clip(share: f32, direction: BarDirection) -> Node {
-    let (left, right) = anchored(direction);
-    Node { left, right, width: Val::Percent(share * 100.0), overflow: Overflow::clip(), ..whole() }
+    Node { overflow: Overflow::clip(), ..anchored(direction, direction.clip_size(share)) }
 }
 
 fn glow_node() -> Node {
@@ -171,21 +210,16 @@ fn move_the_divides(
     mut fulls: Query<&mut Node, With<FullPanel>>,
 ) {
     for (bar, children) in &bars {
-        let width = Val::Percent(bar.share() * 100.0);
-        let (left, right) = anchored(bar.direction);
+        let edges = bar.direction.edges();
+        let clip_size = bar.direction.clip_size(bar.share());
         for &child in children {
             let Ok((mut node, inside)) = clips.get_mut(child) else { continue };
-            if node.width != width || node.left != left || node.right != right {
-                node.width = width;
-                node.left = left;
-                node.right = right;
-            }
+            place(&mut node, edges, clip_size);
+            // Sized from the size last painted; a bar not yet painted has no panel to move.
+            let Some((size, ..)) = bar.drawn else { continue };
             for &panel in inside.into_iter().flatten() {
-                if let Ok(mut node) = fulls.get_mut(panel)
-                    && (node.left != left || node.right != right)
-                {
-                    node.left = left;
-                    node.right = right;
+                if let Ok(mut node) = fulls.get_mut(panel) {
+                    place(&mut node, edges, bar.direction.full_size(size));
                 }
             }
         }
@@ -221,8 +255,7 @@ fn paint_the_bars(
                 for stale in [glow, empty, clipping].into_iter().flatten() {
                     commands.entity(stale).despawn();
                 }
-                let (left, right) = anchored(bar.direction);
-                let full = commands.spawn((FullPanel, Node { left, right, width: Val::Px(size.x), ..whole() }, Pickable::IGNORE)).id();
+                let full = commands.spawn((FullPanel, anchored(bar.direction, bar.direction.full_size(size)), Pickable::IGNORE)).id();
                 let clipping = commands.spawn((FullClip, clip(bar.share(), bar.direction), Pickable::IGNORE)).add_child(full).id();
                 let empty = commands.spawn((EmptyPanel, whole(), Pickable::IGNORE)).id();
                 let glow = commands.spawn((AttentionGlow::default(), glow_node(), Pickable::IGNORE, Visibility::Hidden)).id();
@@ -232,12 +265,8 @@ fn paint_the_bars(
             }
         };
 
-        // The colored panel is the bar's width in pixels, not the clip's share of it.
-        let wide = Val::Px(size.x);
-        if let Ok(mut node) = fulls.get_mut(full)
-            && node.width != wide
-        {
-            node.width = wide;
+        if let Ok(mut node) = fulls.get_mut(full) {
+            place(&mut node, bar.direction.edges(), bar.direction.full_size(size));
         }
 
         // Within half a pixel the panels already drawn still fit; layout's sizes jitter by fractions.
@@ -362,6 +391,24 @@ mod tests {
         let full = world.query_filtered::<&Node, With<FullPanel>>().single(&world).unwrap().clone();
         assert_eq!((clipping.left, clipping.right, clipping.width), (Val::Auto, Val::Px(0.0), Val::Percent(50.0)));
         assert_eq!((full.left, full.right), (Val::Auto, Val::Px(0.0)));
+    }
+
+    /// Breaks if a bar turned to fill bottom to top does not, before it is painted again, keep its
+    /// clip and colored panel at the bottom, the clip as tall as its share and the colored panel as
+    /// tall as the bar.
+    #[test]
+    fn a_bar_filling_bottom_to_top_is_colored_at_the_bottom() {
+        let mut world = World::new();
+        let bar = a_bar(&mut world, 0.5);
+        world.run_system_once(paint_the_bars).unwrap();
+        let mut turned = world.get::<PlateBar>(bar).unwrap().toward(BarDirection::BottomToTop);
+        turned.t = 0.25;
+        world.entity_mut(bar).insert(turned);
+        world.run_system_once(move_the_divides).unwrap();
+        let clipping = world.query_filtered::<&Node, With<FullClip>>().single(&world).unwrap().clone();
+        let full = world.query_filtered::<&Node, With<FullPanel>>().single(&world).unwrap().clone();
+        assert_eq!((clipping.top, clipping.bottom, clipping.width, clipping.height), (Val::Auto, Val::Px(0.0), Val::Percent(100.0), Val::Percent(25.0)));
+        assert_eq!((full.top, full.bottom, full.width, full.height), (Val::Auto, Val::Px(0.0), Val::Percent(100.0), Val::Px(48.0)));
     }
 
     /// Breaks if the glow is not off at or above the threshold, or does not run from its least at

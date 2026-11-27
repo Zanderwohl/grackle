@@ -76,6 +76,11 @@ impl Swatch {
         Self::from_oklch(0.55, 0.21, 27.0)
     }
 
+    /// Health: blood, darker than Red's so it does not read as a team.
+    pub fn blood() -> Self {
+        Self::from_oklch(0.42, 0.17, 25.0)
+    }
+
     /// Before a body has a team: a cream that reads against any map.
     pub fn neutral() -> Self {
         Self::from_oklch(0.88, 0.035, 85.0)

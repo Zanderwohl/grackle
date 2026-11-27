@@ -1315,6 +1315,7 @@ mod tests {
             assist: None,
             at: Vec3::ZERO,
             cause: Default::default(),
+            killer_health: None,
         }
     }
 

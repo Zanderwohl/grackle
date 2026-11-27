@@ -721,6 +721,7 @@ mod tests {
             assist: Some(DamageSource::Player(PlayerId(3))),
             at: Vec3::new(0.0, 1.0, 0.0),
             cause: Cause::of(rocket, How::Splash),
+            killer_health: None,
         });
         app.update();
 
@@ -762,6 +763,7 @@ mod tests {
                 assist: None,
                 at: Vec3::Y,
                 cause: Cause::of(None, How::Kill),
+                killer_health: None,
             });
             app.update();
             // With no pre-game or time between rounds, the next match starts at once.
