@@ -475,8 +475,8 @@ mod tests {
         assert_eq!(catalog.health_of(Class::Heavy), 300);
     }
 
-    /// Fails when a `WeaponAction` variant is carried by nothing the
-    /// placeholder class has.
+    /// Fails when a `WeaponAction` variant with behavior is carried by nothing
+    /// the placeholder class has. The stubs (heal beam, invulnerable) are left out.
     #[test]
     fn the_placeholder_class_carries_one_of_everything() {
         let catalog = the_default_pack();
@@ -520,14 +520,7 @@ mod tests {
                 reflect_speed: 1.0,
                 extinguish: false,
             }),
-            WeaponAction::HealBeam(crate::common::weapon::HealBeamSpec {
-                range: 0.0,
-                heal_per_second: 0,
-            }),
-            WeaponAction::Invulnerable(crate::common::weapon::InvulnSpec {
-                duration: 0.0,
-                cooldown: 0.0,
-            }),
+            WeaponAction::Melee(crate::common::weapon::MeleeSpec::default()),
             WeaponAction::Scope(crate::common::weapon::ScopeSpec::default()),
         ];
         for action in wanted {
@@ -558,7 +551,7 @@ mod tests {
     #[test]
     fn a_modes_loadout_carries_only_what_it_names() {
         let catalog = the_default_pack();
-        let only = [WeaponId::of("medi_wrench"), WeaponId::of("nothing_called_this")];
+        let only = [WeaponId::of("stop_sign"), WeaponId::of("nothing_called_this")];
         let (equipped, ammo) = catalog.starting_equipment(Class::Mercenary, Some(&only));
 
         assert_eq!(equipped.carried(), [only[0]]);
@@ -568,13 +561,16 @@ mod tests {
 
     /// Fails if a shipped weapon is permitted in no slot, so no mode's
     /// loadout can start a body with it. A pickup can still hand one out, but
-    /// only on a map that places it.
+    /// only on a map that places it. A weapon whose actions are all stubs is
+    /// excused, since there is nothing yet to carry it for.
     #[test]
     fn every_shipped_weapon_is_on_a_digit() {
         let catalog = the_default_pack();
         let loadout = catalog.loadout(Class::Mercenary).expect("no placeholder loadout");
 
-        for weapon in catalog.weapons() {
+        let does_something =
+            |action: &WeaponAction| action.is_implemented() && !matches!(action, WeaponAction::None);
+        for weapon in catalog.weapons().iter().filter(|weapon| does_something(&weapon.primary.action) || does_something(&weapon.secondary.action)) {
             assert!(
                 loadout.slots.iter().any(|(_, choices)| choices.permitted.contains(&weapon.id)),
                 "{} is defined but no slot permits it, so no loadout can start with it",

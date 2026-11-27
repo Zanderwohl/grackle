@@ -33,6 +33,10 @@ pub const PORTRAIT_SIZE: f32 = 150.0;
 /// The share of the disk kept above the cut, which the health panel hides.
 pub const PORTRAIT_KEPT: f32 = 0.8;
 const IMAGE_SCALE: f32 = 2.0;
+/// Logical pixels the image runs past the disk on the left, the right and the top, so a weapon
+/// held up beside the head is drawn whole rather than cut at the disk's box. Not below, where the
+/// health panel hides the cut. The body is framed against the disk as if this were zero.
+const OVERHANG: f32 = 60.0;
 /// Meters of the body shown top to bottom, at every class's scale alike.
 const VIEW_HEIGHT: f32 = 1.05;
 /// Above the highest bone, for the crown and a hat's brim.
@@ -83,14 +87,24 @@ pub fn image_size() -> Vec2 {
     Vec2::new(PORTRAIT_SIZE, cut_height(medallion_box(PORTRAIT_SIZE), PORTRAIT_KEPT))
 }
 
+/// Logical pixels: [`image_size`] with the [`OVERHANG`] round it.
+fn canvas_size() -> Vec2 {
+    image_size() + Vec2::new(2.0 * OVERHANG, OVERHANG)
+}
+
+/// Meters of the body per logical pixel of the image.
+fn meters_per_pixel() -> f32 {
+    VIEW_HEIGHT / image_size().y
+}
+
 pub fn portrait_image() -> impl Bundle {
-    let size = image_size();
+    let size = canvas_size();
     (
         HudPortraitImage,
         Node {
             position_type: PositionType::Absolute,
-            left: Val::Px(0.0),
-            top: Val::Px(0.0),
+            left: Val::Px(-OVERHANG),
+            top: Val::Px(-OVERHANG),
             width: Val::Px(size.x),
             height: Val::Px(size.y),
             ..default()
@@ -121,10 +135,10 @@ fn stand_the_studio(mut commands: Commands, mut portrait: ResMut<HudPortrait>, i
         portrait.lights.push(light);
     }
 
-    let logical = image_size();
+    let logical = canvas_size();
     let pixels = (logical * IMAGE_SCALE).as_uvec2();
     let image = images.add(Image::new_target_texture(pixels.x, pixels.y, TextureFormat::Rgba8UnormSrgb, None));
-    let view = Vec2::new(VIEW_HEIGHT * logical.x / logical.y, VIEW_HEIGHT);
+    let view = logical * meters_per_pixel();
     // The same view settings as the class picker's portraits, whose pipelines are warmed up.
     let camera = commands
         .spawn((
@@ -212,8 +226,9 @@ fn sit_for_the_portrait(
     painted.set_if_neq(tint);
 }
 
-/// Where the camera stands for `class` turned by `turned`: level with the middle of the view,
-/// whose top is [`HEAD_ROOM`] over the highest bone, across from the middle of what it shows.
+/// Where the camera stands for `class` turned by `turned`: level with the middle of the disk's
+/// view, whose top is [`HEAD_ROOM`] over the highest bone, across from the middle of what it
+/// shows, and raised by half the [`OVERHANG`], which runs only above it.
 fn eye(builds: &ClassBuilds, class: Class, turned: Quat) -> Vec3 {
     let bones = builds.rig_for(class).posed_bones(&Pose::rest(), &Transform::from_rotation(turned));
     let points: Vec<Vec3> = bones.iter().flat_map(|bone| [bone.head, bone.tail]).collect();
@@ -223,7 +238,8 @@ fn eye(builds: &ClassBuilds, class: Class, turned: Quat) -> Vec3 {
     let shown = points.iter().filter(|p| p.y >= bottom);
     let (low, high) = shown.fold((f32::INFINITY, f32::NEG_INFINITY), |(low, high), p| (low.min(p.x), high.max(p.x)));
     let across = if low.is_finite() { (low + high) * 0.5 } else { 0.0 };
-    STUDIO + Vec3::new(across, top - VIEW_HEIGHT * 0.5, -CAMERA_DISTANCE)
+    let raised = OVERHANG * 0.5 * meters_per_pixel();
+    STUDIO + Vec3::new(across, top - VIEW_HEIGHT * 0.5 + raised, -CAMERA_DISTANCE)
 }
 
 #[allow(clippy::type_complexity)]

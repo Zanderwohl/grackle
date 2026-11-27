@@ -52,6 +52,7 @@ pub mod flame;
 pub mod flinch;
 pub mod forward_camera;
 pub mod hitscan;
+pub mod melee;
 pub mod nav;
 pub mod nav_derived;
 pub mod nav_field;

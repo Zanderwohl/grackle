@@ -245,6 +245,44 @@ impl Default for AirblastSpec {
     }
 }
 
+/// A swing that hits the nearest body within reach of the eye, as soon as it is fired.
+#[derive(Clone, Copy, Debug, PartialEq, Reflect, Serialize, Deserialize)]
+#[reflect(Default)]
+pub struct MeleeSpec {
+    /// Meters from the eye.
+    #[reflect(@Unit::Meters)]
+    pub range: f32,
+    pub damage: u32,
+    /// Meters across the swing at full range, so a hit need not be dead on the crosshair.
+    #[serde(default = "MeleeSpec::default_width")]
+    #[reflect(@Unit::Meters)]
+    pub width: f32,
+    /// Meters per second of corpse shove, per point of damage.
+    #[serde(default = "MeleeSpec::default_shove")]
+    #[reflect(@Unit::MetersPerSecondPerDamage)]
+    pub shove_per_damage: f32,
+    /// Thrown at the body, away from the swing, only by the hit that kills it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kill_shove: Option<KillShoveSpec>,
+}
+
+impl MeleeSpec {
+    fn default_width() -> f32 {
+        0.6
+    }
+
+    fn default_shove() -> f32 {
+        0.1
+    }
+}
+
+/// What the weapon editor starts a new one from.
+impl Default for MeleeSpec {
+    fn default() -> Self {
+        Self { range: 2.0, damage: 35, width: Self::default_width(), shove_per_damage: Self::default_shove(), kill_shove: None }
+    }
+}
+
 fn one() -> f32 {
     1.0
 }
@@ -347,6 +385,7 @@ pub enum WeaponAction {
     Projectile(ProjectileSpec),
     Flame(FlameSpec),
     Airblast(AirblastSpec),
+    Melee(MeleeSpec),
     HealBeam(HealBeamSpec),
     Invulnerable(InvulnSpec),
     Scope(ScopeSpec),
@@ -364,6 +403,7 @@ impl WeaponAction {
                 | WeaponAction::Projectile(_)
                 | WeaponAction::Flame(_)
                 | WeaponAction::Airblast(_)
+                | WeaponAction::Melee(_)
                 | WeaponAction::Scope(_)
                 | WeaponAction::None
         )

@@ -374,6 +374,10 @@ fn worth_aimed(mounted: &Mounted, distance: f32, aim_falloff: f32) -> f32 {
             }
             damage as f32 * spec.scale_at(distance) / interval + afterburn_damage as f32 / afterburn_interval_s.max(1e-3)
         }
+        WeaponAction::Melee(spec) => match distance <= spec.range {
+            true => spec.damage as f32 / interval,
+            false => 0.0,
+        },
         _ => 0.0,
     }
 }
@@ -406,8 +410,9 @@ pub fn weapon_worth(weapon: &Weapon, distance: f32) -> (bool, f32) {
 /// A carried weapon against a body `distance` away: its better button and what that is worth,
 /// nothing with no ammo at all, and less while its clip is empty by the reload it needs first.
 fn armed(weapon: WeaponId, ammo: &Ammo, catalog: &WeaponCatalog, distance: f32) -> Option<(WeaponId, bool, f32)> {
-    let state = ammo.at(weapon).filter(|state| state.clip + state.reserve > 0)?;
     let spec = catalog.get(weapon)?;
+    let free = [spec.primary.cost, spec.secondary.cost].iter().all(|cost| matches!(cost, crate::common::weapon::Cost::Free));
+    let state = ammo.at(weapon).filter(|state| free || state.clip + state.reserve > 0)?;
     let (alt, value) = weapon_worth(spec, distance);
     let reload = if spec.magazine.clip.is_some() && state.clip == 0 { spec.magazine.first_reload.unwrap_or(spec.magazine.reload) } else { 0.0 };
     Some((weapon, alt, value / (1.0 + reload / EMPTY_CLIP_SECONDS))).filter(|(.., value)| *value > 0.0)

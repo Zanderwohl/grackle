@@ -289,6 +289,13 @@ pub const SEEDS: &[Seed] = &[
 /// Humanoid clips generated key by key rather than sampled from a pose, by file name.
 pub const WRITTEN: &[(&str, fn() -> Clip)] = &[(super::pistol_twirl::TAUNT_TWIRL, super::pistol_twirl::clip)];
 
+/// The raptor's clips written key by key, each by its name under the raptor's clips, from the
+/// shipped raptor rig.
+pub fn raptor_written() -> Vec<(&'static str, Clip)> {
+    let skeleton = crate::common::class::ClassBuilds::shipped().rig_for(crate::common::class::Class::Raptor);
+    super::raptor_seed::FLINCHES.iter().map(|name| (*name, super::raptor_seed::flinch(name, &skeleton))).collect()
+}
+
 const RAPTOR: &str = "raptor";
 
 /// A raptor state's seed, looping, from [`super::raptor_seed::pose`].

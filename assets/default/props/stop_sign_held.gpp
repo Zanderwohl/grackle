@@ -460,3 +460,413 @@ at = [
     0.0,
 ]
 yaw = 0.0
+
+
+[animations.clips.recoil]
+name_key = "anim.clips.recoil"
+length = 0.5
+clock = "seconds"
+looping = false
+note = "The stop sign's swing in third person: tipped back for 0.05 s, chopped down to just past level by 0.12 s, settled and held there until 0.3 s, and brought back up by 0.5 s, the shot interval."
+blend_in = 0.03
+blend_out = 0.12
+
+[[animations.clips.recoil.tracks]]
+combine = "compose"
+space = "carry"
+unit = "meters"
+enabled = true
+
+[animations.clips.recoil.tracks.channel]
+channel = "weapon_rotation"
+
+[[animations.clips.recoil.tracks.channel.keys]]
+at = 0.0
+to = [
+    0.0,
+    "free",
+    "free",
+]
+ease = "quadratic_out"
+
+[[animations.clips.recoil.tracks.channel.keys]]
+at = 0.05
+to = [
+    0.25,
+    "free",
+    "free",
+]
+ease = "quadratic_in"
+
+[[animations.clips.recoil.tracks.channel.keys]]
+at = 0.12
+to = [
+    -1.45,
+    "free",
+    "free",
+]
+ease = "quadratic_out"
+
+[[animations.clips.recoil.tracks.channel.keys]]
+at = 0.16
+to = [
+    -1.35,
+    "free",
+    "free",
+]
+ease = "linear"
+
+[[animations.clips.recoil.tracks.channel.keys]]
+at = 0.3
+to = [
+    -1.35,
+    "free",
+    "free",
+]
+ease = "quadratic_in_out"
+
+[[animations.clips.recoil.tracks.channel.keys]]
+at = 0.5
+to = [
+    0.0,
+    "free",
+    "free",
+]
+ease = "linear"
+
+[[animations.clips.recoil.tracks]]
+combine = "compose"
+space = "carry"
+unit = "arm_lengths"
+enabled = true
+
+[animations.clips.recoil.tracks.channel]
+channel = "weapon"
+
+[[animations.clips.recoil.tracks.channel.keys]]
+at = 0.0
+to = [
+    "free",
+    0.0,
+    0.0,
+]
+ease = "quadratic_out"
+
+[[animations.clips.recoil.tracks.channel.keys]]
+at = 0.05
+to = [
+    "free",
+    0.08,
+    0.05,
+]
+ease = "quadratic_in"
+
+[[animations.clips.recoil.tracks.channel.keys]]
+at = 0.12
+to = [
+    "free",
+    -0.07,
+    -0.14,
+]
+ease = "quadratic_out"
+
+[[animations.clips.recoil.tracks.channel.keys]]
+at = 0.16
+to = [
+    "free",
+    -0.06,
+    -0.12,
+]
+ease = "linear"
+
+[[animations.clips.recoil.tracks.channel.keys]]
+at = 0.3
+to = [
+    "free",
+    -0.06,
+    -0.12,
+]
+ease = "quadratic_in_out"
+
+[[animations.clips.recoil.tracks.channel.keys]]
+at = 0.5
+to = [
+    "free",
+    0.0,
+    0.0,
+]
+ease = "linear"
+
+[animations.clips."recoil@raptor"]
+name_key = "anim.clips.recoil"
+length = 0.5
+clock = "seconds"
+looping = false
+note = "The raptor's swing: the same chop and hold with the hand moved half as far, since its arms are short."
+blend_in = 0.03
+blend_out = 0.12
+
+[[animations.clips."recoil@raptor".tracks]]
+combine = "compose"
+space = "carry"
+unit = "meters"
+enabled = true
+
+[animations.clips."recoil@raptor".tracks.channel]
+channel = "weapon_rotation"
+
+[[animations.clips."recoil@raptor".tracks.channel.keys]]
+at = 0.0
+to = [
+    0.0,
+    "free",
+    "free",
+]
+ease = "quadratic_out"
+
+[[animations.clips."recoil@raptor".tracks.channel.keys]]
+at = 0.05
+to = [
+    0.25,
+    "free",
+    "free",
+]
+ease = "quadratic_in"
+
+[[animations.clips."recoil@raptor".tracks.channel.keys]]
+at = 0.12
+to = [
+    -1.45,
+    "free",
+    "free",
+]
+ease = "quadratic_out"
+
+[[animations.clips."recoil@raptor".tracks.channel.keys]]
+at = 0.16
+to = [
+    -1.35,
+    "free",
+    "free",
+]
+ease = "linear"
+
+[[animations.clips."recoil@raptor".tracks.channel.keys]]
+at = 0.3
+to = [
+    -1.35,
+    "free",
+    "free",
+]
+ease = "quadratic_in_out"
+
+[[animations.clips."recoil@raptor".tracks.channel.keys]]
+at = 0.5
+to = [
+    0.0,
+    "free",
+    "free",
+]
+ease = "linear"
+
+[[animations.clips."recoil@raptor".tracks]]
+combine = "compose"
+space = "carry"
+unit = "arm_lengths"
+enabled = true
+
+[animations.clips."recoil@raptor".tracks.channel]
+channel = "weapon"
+
+[[animations.clips."recoil@raptor".tracks.channel.keys]]
+at = 0.0
+to = [
+    "free",
+    0.0,
+    0.0,
+]
+ease = "quadratic_out"
+
+[[animations.clips."recoil@raptor".tracks.channel.keys]]
+at = 0.05
+to = [
+    "free",
+    0.04,
+    0.025,
+]
+ease = "quadratic_in"
+
+[[animations.clips."recoil@raptor".tracks.channel.keys]]
+at = 0.12
+to = [
+    "free",
+    -0.035,
+    -0.07,
+]
+ease = "quadratic_out"
+
+[[animations.clips."recoil@raptor".tracks.channel.keys]]
+at = 0.16
+to = [
+    "free",
+    -0.03,
+    -0.06,
+]
+ease = "linear"
+
+[[animations.clips."recoil@raptor".tracks.channel.keys]]
+at = 0.3
+to = [
+    "free",
+    -0.03,
+    -0.06,
+]
+ease = "quadratic_in_out"
+
+[[animations.clips."recoil@raptor".tracks.channel.keys]]
+at = 0.5
+to = [
+    "free",
+    0.0,
+    0.0,
+]
+ease = "linear"
+
+
+[animations.clips.fire]
+name_key = "anim.clips.fire"
+length = 0.5
+clock = "seconds"
+looping = false
+note = "The stop sign's swing in first person: tipped back for 0.05 s, then chopped down so the face of the sign is on the crosshair from 0.12 s to 0.3 s, whatever the window's shape, and brought back by 0.5 s. The hold is a point in eye space; the ends are the framing, so they move with it. The turn is from the framing's own, so a change to its rotation needs the turn worked out again."
+blend_in = 0.03
+blend_out = 0.12
+
+[[animations.clips.fire.tracks]]
+combine = "replace"
+space = "carry"
+unit = "meters"
+enabled = true
+
+[animations.clips.fire.tracks.channel]
+channel = "weapon"
+
+[[animations.clips.fire.tracks.channel.keys]]
+at = 0.0
+to = [
+    0.0,
+    0.0,
+    0.0,
+]
+ease = "quadratic_out"
+
+[[animations.clips.fire.tracks.channel.keys]]
+at = 0.05
+to = [
+    0.0,
+    0.03,
+    0.02,
+]
+ease = "quadratic_in"
+
+[[animations.clips.fire.tracks.channel.keys]]
+at = 0.12
+to = [
+    0.2,
+    -0.335,
+    -0.33,
+]
+ease = "quadratic_out"
+space = "eye"
+
+[[animations.clips.fire.tracks.channel.keys]]
+at = 0.16
+to = [
+    0.215,
+    -0.3225,
+    -0.3456,
+]
+ease = "linear"
+space = "eye"
+
+[[animations.clips.fire.tracks.channel.keys]]
+at = 0.3
+to = [
+    0.215,
+    -0.3225,
+    -0.3456,
+]
+ease = "quadratic_in_out"
+space = "eye"
+
+[[animations.clips.fire.tracks.channel.keys]]
+at = 0.5
+to = [
+    0.0,
+    0.0,
+    0.0,
+]
+ease = "linear"
+
+[[animations.clips.fire.tracks]]
+combine = "compose"
+space = "carry"
+unit = "meters"
+enabled = true
+
+[animations.clips.fire.tracks.channel]
+channel = "weapon_rotation"
+
+[[animations.clips.fire.tracks.channel.keys]]
+at = 0.0
+to = [
+    0.0,
+    0.0,
+    0.0,
+]
+ease = "quadratic_out"
+
+[[animations.clips.fire.tracks.channel.keys]]
+at = 0.05
+to = [
+    0.25,
+    0.0,
+    0.0,
+]
+ease = "quadratic_in"
+
+[[animations.clips.fire.tracks.channel.keys]]
+at = 0.12
+to = [
+    -1.2096,
+    -0.3656,
+    0.3884,
+]
+ease = "quadratic_out"
+
+[[animations.clips.fire.tracks.channel.keys]]
+at = 0.16
+to = [
+    -1.0965,
+    -0.2661,
+    0.2973,
+]
+ease = "linear"
+
+[[animations.clips.fire.tracks.channel.keys]]
+at = 0.3
+to = [
+    -1.0965,
+    -0.2661,
+    0.2973,
+]
+ease = "quadratic_in_out"
+
+[[animations.clips.fire.tracks.channel.keys]]
+at = 0.5
+to = [
+    0.0,
+    0.0,
+    0.0,
+]
+ease = "linear"

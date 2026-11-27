@@ -18,7 +18,7 @@
 [arena]
 teams = false
 classes = ["mercenary", "scout", "raptor"]
-loadout = ["pistol"]
+loadout = ["pistol", "stop_sign"]
 frag_limit = 20
 self_damage = 0.5
 

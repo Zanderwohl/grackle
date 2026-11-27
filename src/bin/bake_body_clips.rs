@@ -16,7 +16,7 @@ use clap::Parser;
 
 use grackle::common::clip_file::{rig_clips_dir, CLIPS_DIR, CLIP_EXTENSION};
 use grackle::common::skeleton::clip::StateAnimation;
-use grackle::common::skeleton::seed::{bake, Seed, SEEDS, WRITTEN};
+use grackle::common::skeleton::seed::{bake, raptor_written, Seed, SEEDS, WRITTEN};
 
 #[derive(Parser)]
 #[command(about = "Seed a pack's body animations from the built-in pose functions")]
@@ -42,13 +42,21 @@ enum Outcome {
 fn main() {
     let args = Args::parse();
 
-    let written: Vec<(&str, StateAnimation)> = WRITTEN
+    // `raptor/flinch_back` names one of the raptor's.
+    let written: Vec<(String, StateAnimation)> = WRITTEN
         .iter()
+        .map(|(name, clip)| (name.to_string(), clip()))
+        .chain(raptor_written().into_iter().map(|(name, clip)| (format!("raptor/{name}"), clip)))
         .filter(|(name, _)| args.states.is_empty() || args.states.iter().any(|wanted| wanted == name))
-        .map(|(name, clip)| (*name, StateAnimation::Single(clip())))
+        .map(|(name, clip)| (name, StateAnimation::Single(clip)))
+        .collect();
+    let written_names: Vec<String> = WRITTEN
+        .iter()
+        .map(|(name, _)| name.to_string())
+        .chain(grackle::common::skeleton::raptor_seed::FLINCHES.iter().map(|name| format!("raptor/{name}")))
         .collect();
     let states: Vec<String> =
-        args.states.iter().filter(|wanted| !WRITTEN.iter().any(|(name, _)| name == wanted)).cloned().collect();
+        args.states.iter().filter(|wanted| !written_names.contains(wanted)).cloned().collect();
 
     let chosen: Vec<Seed> = if args.states.is_empty() {
         SEEDS.to_vec()
@@ -67,7 +75,7 @@ fn main() {
                         SEEDS
                             .iter()
                             .map(|seed| seed.file_name())
-                            .chain(WRITTEN.iter().map(|(name, _)| *name))
+                            .chain(written_names.iter().map(String::as_str))
                             .collect::<Vec<_>>()
                             .join(", "),
                     );
@@ -83,9 +91,12 @@ fn main() {
             grackle::common::skeleton::rig::HUMANOID => args.pack.join(CLIPS_DIR),
             rig => args.pack.join(rig_clips_dir(rig)),
         };
-        (directory, seed.file_name(), bake(seed))
+        (directory, seed.file_name().to_string(), bake(seed))
     });
-    let written = written.into_iter().map(|(name, clip)| (args.pack.join(CLIPS_DIR), name, clip));
+    let written = written.into_iter().map(|(name, clip)| match name.split_once('/') {
+        Some((rig, name)) => (args.pack.join(rig_clips_dir(rig)), name.to_string(), clip),
+        None => (args.pack.join(CLIPS_DIR), name, clip),
+    });
 
     let mut kept = 0;
     for (directory, name, clip) in seeded.chain(written) {

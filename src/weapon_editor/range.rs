@@ -181,6 +181,7 @@ pub fn beats_for(button: Button, mounted: &Mounted) -> Vec<Beat> {
             }
             beats
         }
+        WeaponAction::Melee(spec) => vec![shoot((spec.range * 0.75).max(0.5), false)],
         WeaponAction::Scope(spec) => [false, true]
             .map(|head| Beat {
                 kind: BeatKind::Scoped { button, distance: SCOPED_DISTANCE, raise: spec.raise, head },

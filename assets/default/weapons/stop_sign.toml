@@ -1,7 +1,10 @@
+# A melee weapon: a swing every half second while the button is held, for 35
+# within 2 m. No ammo. A `semi` cadence would swing once per press instead.
+
 name_key = "weapon.names.stop_sign"
 bucket = 3
 deploy = 0.5
-magazine = { reserve = 40, reload = 1.0, reload_one_at_a_time = false }
-primary = { action = { kind = "none"}, cadence = { kind = "semi", interval = 1.0 }, cost = { kind = "ammo", rounds = 1 } }
+magazine = { reserve = 0, reload = 0.0 }
+primary = { action = { kind = "melee", range = 2.0, damage = 35, kill_shove = { speed = 9.0, lift = 3.0, radius = 1.2 } }, cadence = { kind = "automatic", interval = 0.5 }, cost = { kind = "free" } }
 secondary = { action = { kind = "none" }, cadence = { kind = "semi", interval = 0.0 }, cost = { kind = "free" } }
 model = "stop_sign_held"

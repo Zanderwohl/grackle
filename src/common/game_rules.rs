@@ -278,12 +278,13 @@ mod tests {
 
     /// Breaks if the arena's Scout or Raptor would spawn with nothing in hand.
     #[test]
-    fn every_arena_class_starts_with_the_pistol() {
+    fn every_arena_class_starts_with_the_pistol_and_the_stop_sign() {
         let catalog = default_catalog();
         let arena = Modes::shipped().of(GameMode::Arena);
         for class in arena.allowed_classes() {
             let (equipped, _) = catalog.starting_equipment(class, arena.loadout.as_deref());
-            assert_eq!(equipped.carried(), &[WeaponId::of("pistol")], "{class:?}");
+            assert_eq!(equipped.carried(), &[WeaponId::of("pistol"), WeaponId::of("stop_sign")], "{class:?}");
+            assert_eq!(equipped.held(), Some(WeaponId::of("pistol")), "{class:?}");
         }
     }
 
