@@ -850,7 +850,10 @@ is egui, on **`T`**. The authority decides every line: a client sends a `SayChat
 `Audience`, only `All` for now) on `ChatChannel`, and the server writes a `ChatEntry` — `Said`,
 carrying the speaker's name, team and color as they stood, or `Round` (`RoundEvent`: the start,
 `TimeLeft { seconds }` at 5 and 1 minutes, `FragsLeft { frags }` at 2 and 1, each once per
-match) — and relays it, at most one line a second from each speaker. Every machine keeps the
+match; `Streak` at 3, 5, 10 and 15 kills in one life, `Standing::streak`; `MultiKill` for a
+second kill in one life within `MULTI_KILL_SECONDS` (10 s) and again for each kill past it, from
+`Standing::kill_times`, which only the authority keeps; `Won` as the post-game starts, naming
+the banner's winners; `NextRoundIn { seconds }` as the time between rounds starts; drawn in yellow) — and relays it, at most one line a second from each speaker. Every machine keeps the
 entries in `ChatLog`, which a `ChatEntry::Clear` the server sends at each pre-game empties: in
 line with the chat, since the phase comes on another channel.
 `Audience` and `ChatEntry` are matched with no catch-all arm, so a new variant (team chat, a

@@ -20,7 +20,7 @@ use crate::common::player_settings::{ClientSettings, PlayerSettings};
 use crate::common::round_settings::RoundSettings;
 use crate::common::swatch::Swatch;
 use crate::common::team::Team;
-use crate::game::respawn::{HueStart, Identity, OurIdentity};
+use crate::game::respawn::{HueStart, Identity, OurIdentity, Seat};
 use crate::game::rounds::RoundHistory;
 use crate::game::score::Standing;
 use crate::get;
@@ -77,30 +77,128 @@ impl Speaker {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub enum RoundEvent {
     Started,
     TimeLeft { seconds: u32 },
     /// How far the leader is from the frag limit.
     FragsLeft { frags: u32 },
+    Streak { who: Speaker, streak: Streak },
+    /// Two or more kills within [`crate::game::score::MULTI_KILL_SECONDS`].
+    MultiKill { who: Speaker, multi: MultiKill },
+    /// Several sides is a tie.
+    Won { sides: Vec<Winner> },
+    NextRoundIn { seconds: u32 },
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub enum Winner {
+    Team(Team),
+    Player(Speaker),
+}
+
+impl Winner {
+    pub fn name(&self) -> String {
+        match self {
+            Winner::Team(team) => team.name(),
+            Winner::Player(who) => who.display_name(),
+        }
+    }
+
+    pub fn swatch(&self) -> Swatch {
+        match self {
+            Winner::Team(team) => Swatch::team(*team),
+            Winner::Player(who) => who.swatch(),
+        }
+    }
+
+    pub fn words(sides: &[Winner]) -> Option<String> {
+        match sides {
+            [] => None,
+            [side] => Some(get!("match.wins", "winner", side.name())),
+            several => {
+                let names: Vec<String> = several.iter().map(Winner::name).collect();
+                Some(get!("match.tie", "winners", names.join(&get!("match.and"))))
+            }
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Streak {
+    HatTrick,
+    Spree,
+    Dominating,
+    Unstoppable,
+}
+
+impl Streak {
+    pub fn at(kills: u32) -> Option<Self> {
+        match kills {
+            3 => Some(Streak::HatTrick),
+            5 => Some(Streak::Spree),
+            10 => Some(Streak::Dominating),
+            15 => Some(Streak::Unstoppable),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MultiKill {
+    Double,
+    /// Each kill past the second is announced again.
+    Multi,
+}
+
+impl MultiKill {
+    /// `kills` within the window, this one included.
+    pub fn of(kills: u32) -> Option<Self> {
+        match kills {
+            0 | 1 => None,
+            2 => Some(MultiKill::Double),
+            _ => Some(MultiKill::Multi),
+        }
+    }
 }
 
 impl RoundEvent {
     pub fn words(&self) -> String {
-        match *self {
+        match self {
             RoundEvent::Started => get!("chat.round_started"),
-            RoundEvent::TimeLeft { seconds } if seconds % 60 == 0 => match seconds / 60 {
+            &RoundEvent::TimeLeft { seconds } if seconds % 60 == 0 => match seconds / 60 {
                 1 => get!("chat.one_minute_left"),
                 minutes => get!("chat.minutes_left", "minutes", minutes),
             },
-            RoundEvent::TimeLeft { seconds } => match seconds {
+            &RoundEvent::TimeLeft { seconds } => match seconds {
                 1 => get!("chat.one_second_left"),
                 seconds => get!("chat.seconds_left", "seconds", seconds),
             },
-            RoundEvent::FragsLeft { frags } => match frags {
+            &RoundEvent::FragsLeft { frags } => match frags {
                 1 => get!("chat.one_frag_left"),
                 frags => get!("chat.frags_left", "frags", frags),
             },
+            RoundEvent::Streak { who, streak } => {
+                let name = who.display_name();
+                match streak {
+                    Streak::HatTrick => get!("chat.hat_trick", "name", name),
+                    Streak::Spree => get!("chat.spree", "name", name),
+                    Streak::Dominating => get!("chat.dominating", "name", name),
+                    Streak::Unstoppable => get!("chat.unstoppable", "name", name),
+                }
+            }
+            RoundEvent::Won { sides } => Winner::words(sides).unwrap_or_default(),
+            &RoundEvent::NextRoundIn { seconds } => match seconds {
+                1 => get!("chat.next_round_in_a_second"),
+                seconds => get!("chat.next_round_in", "seconds", seconds),
+            },
+            RoundEvent::MultiKill { who, multi } => {
+                let name = who.display_name();
+                match multi {
+                    MultiKill::Double => get!("chat.double_kill", "name", name),
+                    MultiKill::Multi => get!("chat.multi_kill", "name", name),
+                }
+            }
         }
     }
 }
@@ -216,8 +314,12 @@ fn log_the_chat(mut entries: MessageReader<ChatEntry>, time: Res<Time<Real>>, mu
     }
 }
 
-/// Their standing's name and colors while they play, else their own name and their identity's color.
+/// Their standing's name and colors while they play, else their own name and their identity's
+/// color. A spectator or somebody still choosing is unassigned, so has no color.
 fn speaker(who: &Identity, settings_name: &str, standing: Option<&Standing>, start: Option<&HueStart>) -> Speaker {
+    if matches!(who.seat, Seat::Spectating | Seat::Choosing) {
+        return Speaker { id: who.id, name: settings_name.to_owned(), team: None, color: None };
+    }
     match standing {
         Some(standing) => Speaker { id: who.id, name: standing.name.clone(), team: standing.team, color: Some(standing.color) },
         None => Speaker { id: who.id, name: settings_name.to_owned(), team: who.team(), color: start.map(|start| who.color(start)) },
@@ -425,6 +527,11 @@ mod tests {
         assert_eq!(RoundEvent::TimeLeft { seconds: 30 }.words(), get!("chat.seconds_left", "seconds", 30));
         assert_eq!(RoundEvent::FragsLeft { frags: 2 }.words(), get!("chat.frags_left", "frags", 2));
         assert_eq!(RoundEvent::FragsLeft { frags: 1 }.words(), get!("chat.one_frag_left"));
+        assert_eq!(RoundEvent::NextRoundIn { seconds: 1 }.words(), get!("chat.next_round_in_a_second"));
+        assert_eq!(RoundEvent::NextRoundIn { seconds: 15 }.words(), get!("chat.next_round_in", "seconds", 15));
+        let tie = RoundEvent::Won { sides: vec![Winner::Team(Team::Red), Winner::Team(Team::Blue)] };
+        let names = format!("{}{}{}", Team::Red.name(), get!("match.and"), Team::Blue.name());
+        assert_eq!(tie.words(), get!("match.tie", "winners", names));
     }
 
     /// Fails if an entry stops surviving postcard, which Lightyear sends it with.
@@ -435,12 +542,29 @@ mod tests {
             audience: Audience::All,
             text: "gg".into(),
         };
-        for entry in [said, ChatEntry::Round(RoundEvent::FragsLeft { frags: 2 }), ChatEntry::Clear] {
+        let ana = Speaker { id: PlayerId(7), name: "Ana".into(), team: None, color: Some(PlayerColor { hue: 40.0 }) };
+        let streak = ChatEntry::Round(RoundEvent::Streak { who: ana.clone(), streak: Streak::Spree });
+        let multi = ChatEntry::Round(RoundEvent::MultiKill { who: ana, multi: MultiKill::Double });
+        for entry in [said, ChatEntry::Round(RoundEvent::FragsLeft { frags: 2 }), streak, multi, ChatEntry::Clear] {
             let bytes = postcard::to_allocvec(&entry).unwrap();
             assert_eq!(postcard::from_bytes::<ChatEntry>(&bytes).unwrap(), entry);
         }
         let say = SayChat { audience: Audience::All, text: "hello".into() };
         assert_eq!(postcard::from_bytes::<SayChat>(&postcard::to_allocvec(&say).unwrap()).unwrap(), say);
+    }
+
+    /// Breaks if a line from somebody on no team yet is painted in a color they would play in.
+    #[test]
+    fn a_spectator_or_chooser_speaks_in_the_unassigned_cream() {
+        let start = HueStart(0.25);
+        let watcher = Identity { id: PlayerId(2), seat: Seat::Spectating, color: 1, class: None };
+        let from = speaker(&watcher, "Ana", None, Some(&start));
+        assert_eq!((from.team, from.color), (None, None));
+        assert_eq!(from.swatch(), Swatch::neutral());
+        let chooser = Identity { seat: Seat::Choosing, ..watcher };
+        assert_eq!(speaker(&chooser, "Ana", None, Some(&start)).swatch(), Swatch::neutral());
+        let player = Identity { seat: Seat::Playing(None), ..watcher };
+        assert!(speaker(&player, "Ana", None, Some(&start)).color.is_some(), "a free-for-all player lost their color");
     }
 
     #[test]

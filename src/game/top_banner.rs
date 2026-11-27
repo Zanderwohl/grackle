@@ -13,6 +13,7 @@ use crate::common::match_phase::{phase_of, MatchPhase};
 use crate::common::player_color::PlayerColor;
 use crate::common::swatch::Swatch;
 use crate::common::team::Team;
+use crate::game::chat::{Speaker, Winner};
 use crate::game::death::Dying;
 use crate::game::hud::{SafeZone, MARGIN_Y};
 use crate::game::match_cycle::{winners, Winners};
@@ -63,39 +64,31 @@ pub struct Words {
 }
 
 /// One entry per winning team, or per winner on no team.
-fn winning_sides(won: &[PlayerId], standings: &[&Standing], teams: bool) -> Vec<(String, Swatch)> {
-    let mut sides: Vec<(Option<Team>, PlayerId)> = Vec::new();
+pub fn winning_sides(won: &[PlayerId], standings: &[&Standing], teams: bool) -> Vec<Winner> {
+    let mut sides: Vec<Winner> = Vec::new();
     for &id in won {
         let standing = standings.iter().find(|standing| standing.id == id);
-        let team = standing.and_then(|standing| standing.team).filter(|_| teams);
-        if team.is_some() && sides.iter().any(|(already, _)| *already == team) {
-            continue;
+        match standing.and_then(|standing| standing.team).filter(|_| teams) {
+            Some(team) if sides.contains(&Winner::Team(team)) => {}
+            Some(team) => sides.push(Winner::Team(team)),
+            None => sides.push(Winner::Player(match standing {
+                Some(standing) => standing.speaker(),
+                None => Speaker { id, name: String::new(), team: None, color: None },
+            })),
         }
-        sides.push((team, id));
     }
     sides
-        .into_iter()
-        .map(|(team, id)| match team {
-            Some(team) => (team.name(), Swatch::team(team)),
-            None => match standings.iter().find(|standing| standing.id == id) {
-                Some(standing) => (standing.display_name(), standing.hud_swatch()),
-                None => (get!("scoreboard.player", "id", id.0), Swatch::neutral()),
-            },
-        })
-        .collect()
 }
 
 /// "{winner} wins!" in its color, or "{a} and {b} tie!" in neither's.
 pub fn win_words(won: &[PlayerId], standings: &[&Standing], teams: bool) -> Option<Words> {
     let sides = winning_sides(won, standings, teams);
-    match sides.as_slice() {
-        [] => None,
-        [(name, swatch)] => Some(Words { text: get!("match.wins", "winner", name), swatch: *swatch }),
-        several => {
-            let names: Vec<&str> = several.iter().map(|(name, _)| name.as_str()).collect();
-            Some(Words { text: get!("match.tie", "winners", names.join(&get!("match.and"))), swatch: Swatch::neutral() })
-        }
-    }
+    let text = Winner::words(&sides)?;
+    let swatch = match sides.as_slice() {
+        [side] => side.swatch(),
+        _ => Swatch::neutral(),
+    };
+    Some(Words { text, swatch })
 }
 
 fn put_up_the_banner(
@@ -282,6 +275,8 @@ mod tests {
             damage_dealt: 0,
             damage_taken: 0,
             healing: 0,
+            streak: 0,
+            kill_times: Vec::new(),
         }
     }
 

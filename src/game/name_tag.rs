@@ -871,6 +871,8 @@ mod tests {
             damage_dealt: 0,
             damage_taken: 0,
             healing: 0,
+            streak: 0,
+            kill_times: Vec::new(),
         };
         use bevy::ecs::system::RunSystemOnce;
         let mut world = World::new();

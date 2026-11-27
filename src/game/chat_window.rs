@@ -148,6 +148,9 @@ fn close_on_leaving_play(mut chat: ResMut<ChatWindow>) {
     *chat = ChatWindow::default();
 }
 
+/// Brighter than Yellow team's color, so an announcement is not read as a Yellow player's name.
+const ROUND_EVENT_COLOR: egui::Color32 = egui::Color32::from_rgb(255, 221, 64);
+
 fn color32(color: Color) -> egui::Color32 {
     let [r, g, b, _] = color.to_srgba().to_u8_array();
     egui::Color32::from_rgb(r, g, b)
@@ -172,7 +175,7 @@ fn line(entry: &ChatEntry, alpha: f32, width: f32) -> egui::text::LayoutJob {
             job.append(&get!("chat.said", "name", from.display_name()), 0.0, format(color32(swatch.base)));
             job.append(text, 0.0, format(white));
         }
-        ChatEntry::Round(event) => job.append(&event.words(), 0.0, format(white)),
+        ChatEntry::Round(event) => job.append(&event.words(), 0.0, format(ROUND_EVENT_COLOR)),
         // Never kept in the log.
         ChatEntry::Clear => {}
     }
