@@ -669,15 +669,15 @@ title = "Voice"
 # A line of the menu: the key that sends it, then what it says.
 line = "{ key }. { line }"
 cancel = "Press '{ bind }' to cancel."
-help = "Help!"
-thanks = "Thanks!"
-go = "Go!"
+help = ["Help!", "Help me!"]
+thanks = ["Thanks!", "Tahnk you!"]
+go = ["Go!", "Go! Go!", "Go! Go! Go!", "Goooo!"]
 cheer = ["Yay!", "Woo hoo!", "Yeah!", "Woooo!"]
 jeer = ["Boo!", "You suck!", "KYS", "Boooo!", "Thumbs Down!", "Disapprove!", "Horrible!", "Terrible!"]
 nice_shot = "Nice shot!"
 push_now = "Push now!"
 fall_back = "Fall back!"
-okay = "Okay."
+okay = ["Okay.", "Alright."]
 
 [kill_cam]
 killed_by = "You were killed by { name }"
