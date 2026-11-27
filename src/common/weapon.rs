@@ -532,6 +532,14 @@ pub struct Weapon {
 }
 
 impl Weapon {
+    /// Whether any button draws rounds.
+    pub fn uses_ammo(&self) -> bool {
+        [Some(self.primary), Some(self.secondary), self.scoped_primary]
+            .into_iter()
+            .flatten()
+            .any(|mounted| matches!(mounted.cost, Cost::Ammo { .. }))
+    }
+
     pub fn scope(&self) -> Option<ScopeSpec> {
         [self.primary, self.secondary].into_iter().find_map(|mounted| match mounted.action {
             WeaponAction::Scope(scope) => Some(scope),
