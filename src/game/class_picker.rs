@@ -177,7 +177,8 @@ fn escape_closes_the_picker(
     mut picker: ResMut<ClassPicker>,
     mut taken: ResMut<EscapeTaken>,
 ) {
-    let menu_open = menu.is_some_and(|menu| menu.open);
+    // The chat over it takes the Escape.
+    let menu_open = menu.is_some_and(|menu| menu.open) || held.chat;
     if actions.just_pressed(Action::Pause) && !menu_open && held.class_picker && picker.closable(&seats, &classes) {
         *picker = ClassPicker::default();
         taken.0 = true;

@@ -179,6 +179,7 @@ actions! {
     ClassPicker => "class_picker", Play, false, false;
     Taunt => "taunt", Play, false, false;
     Spray => "spray", Play, false, false;
+    Chat => "chat", Play, false, false;
     PlayCancel => "play_cancel", Play, false, false;
     Pause => "pause", Play, false, false;
 

@@ -44,7 +44,7 @@ const CROSSHAIR_THICKNESS: f32 = 2.0;
 
 pub const HUD_CAMERA_ORDER: isize = VIEWMODEL_CAMERA_ORDER + 1;
 
-const SAFE_ZONE_ASPECT: f32 = 4.0 / 3.0;
+pub(crate) const SAFE_ZONE_ASPECT: f32 = 4.0 / 3.0;
 /// Logical pixels in from the safe zone's edges.
 pub(crate) const MARGIN_X: f32 = 24.0;
 pub(crate) const MARGIN_Y: f32 = 20.0;

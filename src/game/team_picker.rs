@@ -93,10 +93,12 @@ fn escape_closes_the_picker(
     actions: Res<crate::common::keybind::Actions>,
     menu: Option<Res<PauseMenu>>,
     offer: Res<TeamOptions>,
+    held: Res<MouseHeld>,
     mut picker: ResMut<TeamPicker>,
     mut taken: ResMut<EscapeTaken>,
 ) {
-    let menu_open = menu.is_some_and(|menu| menu.open);
+    // The chat over it takes the Escape.
+    let menu_open = menu.is_some_and(|menu| menu.open) || held.chat;
     if actions.just_pressed(crate::common::keybind::Action::Pause) && !menu_open && picker.closable(&offer) {
         *picker = TeamPicker::default();
         taken.0 = true;
