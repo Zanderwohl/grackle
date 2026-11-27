@@ -429,7 +429,7 @@ mod tests {
     }
 
     fn death(victim: u64, killer: DamageSource) -> Died {
-        Died { victim: Entity::PLACEHOLDER, victim_name: None, victim_id: Some(PlayerId(victim)), killer, assist: None, at: Vec3::ZERO, cause: Default::default(), killer_health: None }
+        Died { victim: Entity::PLACEHOLDER, victim_name: None, victim_id: Some(PlayerId(victim)), killer, assist: None, at: Vec3::ZERO, cause: Default::default(), killer_health: None, rand: 0 }
     }
 
     /// Breaks if a kill by somebody else does not run the replay through to spectating their
