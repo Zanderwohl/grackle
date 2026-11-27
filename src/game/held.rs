@@ -417,27 +417,24 @@ fn dress_held_weapons(
                         class.map(|class| Class::key(*class)).as_deref(),
                     );
                     rig = baked.rig.clone();
-                    // Before the parts: a carousel body is spawned without one.
-                    commands.entity(body).insert_if_new(Visibility::default()).with_children(|body| {
-                        for part in parts {
-                            let mut spawning = body.spawn((
-                                    HeldPart,
-                                    // Spawned already hidden: `show_held_weapons`
-                                    // only catches it a frame later, which
-                                    // flashes the weapon across your view.
-                                    held_visibility(ours, *view, condition.copied(), taunts.as_deref(), own_layers),
-                                    Mesh3d(part.mesh),
-                                    MeshMaterial3d(part.material),
-                                    // Overwritten by `place_held_weapons`
-                                    // before it is drawn.
-                                    Transform::IDENTITY,
-                                ));
-                            if let Some(bone) = part.bone {
-                                spawning.insert(OnPropBone(bone));
-                            }
-                            spawned.push(spawning.id());
+                    for part in parts {
+                        let mut spawning = commands.spawn((
+                                HeldPart,
+                                // Spawned already hidden: `show_held_weapons`
+                                // only catches it a frame later, which
+                                // flashes the weapon across your view.
+                                held_visibility(ours, *view, condition.copied(), taunts.as_deref(), own_layers),
+                                Mesh3d(part.mesh),
+                                MeshMaterial3d(part.material),
+                                // Overwritten by `place_held_weapons`
+                                // before it is drawn.
+                                Transform::IDENTITY,
+                            ));
+                        if let Some(bone) = part.bone {
+                            spawning.insert(OnPropBone(bone));
                         }
-                    });
+                        spawned.push(spawning.id());
+                    }
                 }
                 let cached_at = cache.generation();
                 replace_parts(
@@ -471,12 +468,8 @@ fn replace_parts(
             commands.entity(*part).despawn();
         }
     }
-    commands
-        .entity(body)
-        .insert((
-            HeldModel { weapon, resolved, parts, hold, viewmodel, muzzle, clips, rig, cached_at, class },
-            WeaponInHand::default(),
-        ));
+    let model = HeldModel { weapon, resolved, parts: parts.clone(), hold, viewmodel, muzzle, clips, rig, cached_at, class };
+    crate::game::body_mesh::hang_parts(commands, body, parts, (model, WeaponInHand::default()));
 }
 
 /// Put the weapon where the hold says it goes, composing onto the animator and

@@ -113,6 +113,7 @@ pub fn choose_weapons(
     mut wheel: MessageReader<MouseWheel>,
     paused: Option<Res<MouseHeld>>,
     taunt_menu: Option<Res<crate::game::taunt_menu::TauntMenu>>,
+    voice_menu: Option<Res<crate::game::voice_menu::VoiceMenu>>,
     catalog: Res<WeaponCatalog>,
     ours: Option<Single<(Entity, &Equipped, Option<&crate::game::condition::Condition>), With<LocalPlayer>>>,
     mut selection: ResMut<WeaponSelection>,
@@ -157,8 +158,9 @@ pub fn choose_weapons(
         };
     }
 
-    // The taunt menu's while it is up.
-    let pressed: Vec<u8> = match taunt_menu.is_some_and(|menu| menu.holds_the_digits()) {
+    // The taunt or voice menu's while it is up.
+    let held = taunt_menu.is_some_and(|menu| menu.holds_the_digits()) || voice_menu.is_some_and(|menu| menu.holds_the_keys());
+    let pressed: Vec<u8> = match held {
         true => Vec::new(),
         false => (1..=BUCKETS).zip(DIGITS).filter(|(_, action)| actions.just_pressed(*action)).map(|(b, _)| b).collect(),
     };

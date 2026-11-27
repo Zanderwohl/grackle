@@ -131,13 +131,15 @@ fn answer(
 pub fn answer_the_taunt_keys(
     actions: Res<Actions>,
     held: Option<Res<MouseHeld>>,
+    voice: Option<Res<crate::game::voice_menu::VoiceMenu>>,
     taunts: Option<Res<Taunts>>,
     weapons: Option<Res<WeaponTaunts>>,
     ours: Option<Single<(Entity, &Condition, Option<&Skeleton>, Option<&Equipped>), With<LocalPlayer>>>,
     mut menu: ResMut<TauntMenu>,
     mut latch: ResMut<InputLatch>,
 ) {
-    let held = held.is_some_and(|held| held.any());
+    // The voice menu's keys while it is up, and putting it up puts this one down.
+    let held = held.is_some_and(|held| held.any()) || voice.is_some_and(|voice| voice.holds_the_keys());
     let Some((body, condition, rig, equipped)) = ours.filter(|_| !held).map(|ours| ours.into_inner()) else {
         menu.set_if_neq(TauntMenu::default());
         return;

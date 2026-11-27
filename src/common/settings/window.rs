@@ -832,7 +832,7 @@ mod tests {
     }
 
     /// Fails if the page is drawn on a layer egui does not look for under the pointer, where no
-    /// scroll area takes the wheel and the Shortcuts page cannot be scrolled.
+    /// scroll area takes the wheel and the Keybinds page cannot be scrolled.
     #[test]
     fn the_full_screen_page_is_the_layer_under_the_pointer() {
         let ctx = egui::Context::default();
@@ -906,7 +906,7 @@ mod tests {
         assert_eq!(now.player.as_deref().unwrap().name, "Ada");
     }
 
-    /// Fails if the Shortcuts page leaves out an action, so it cannot be rebound.
+    /// Fails if the Keybinds page leaves out an action, so it cannot be rebound.
     #[test]
     fn the_shortcuts_page_lists_every_action() {
         let ctx = egui::Context::default();
