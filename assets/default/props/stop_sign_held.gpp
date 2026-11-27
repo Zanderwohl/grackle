@@ -1,0 +1,462 @@
+name_key = "prop.untitled"
+next_id = 10
+
+[[features]]
+id = 0
+name = "Prism"
+enabled = true
+
+[features.op]
+feature = "primitive"
+
+[features.op.shape]
+kind = "prism"
+sides = 8
+radius = 0.02
+height = 1.0
+
+[features.op.placement]
+origin = [
+    0.0,
+    0.3056149,
+    0.0,
+]
+rotation = [
+    0.0,
+    0.0,
+    0.0,
+]
+
+[features.op.surface]
+style = "metal"
+tint = [
+    0.42,
+    0.43999997,
+    0.47,
+]
+
+[[features]]
+id = 1
+name = "Sketch"
+enabled = true
+
+[features.op]
+feature = "sketch"
+
+[features.op.on]
+origin = "xy"
+
+[features.op.sketch]
+next_id = 24
+
+[[features.op.sketch.points]]
+id = 3
+at = [
+    -0.0,
+    0.9,
+]
+
+[[features.op.sketch.points]]
+id = 4
+at = [
+    -0.0,
+    1.1,
+]
+
+[[features.op.sketch.points]]
+id = 6
+at = [
+    -0.19999999,
+    0.9,
+]
+
+[[features.op.sketch.points]]
+id = 8
+at = [
+    -0.19999999,
+    1.0,
+]
+
+[[features.op.sketch.points]]
+id = 10
+at = [
+    -0.099999994,
+    1.1,
+]
+
+[[features.op.sketch.points]]
+id = 14
+at = [
+    -0.0,
+    1.11,
+]
+
+[[features.op.sketch.points]]
+id = 16
+at = [
+    -0.105,
+    1.11,
+]
+
+[[features.op.sketch.points]]
+id = 18
+at = [
+    -0.21,
+    1.005,
+]
+
+[[features.op.sketch.points]]
+id = 20
+at = [
+    -0.21,
+    0.9,
+]
+
+[[features.op.sketch.entities]]
+kind = "line"
+id = 5
+a = 3
+b = 4
+construction = false
+
+[[features.op.sketch.entities]]
+kind = "line"
+id = 7
+a = 3
+b = 6
+construction = false
+
+[[features.op.sketch.entities]]
+kind = "line"
+id = 9
+a = 6
+b = 8
+construction = false
+
+[[features.op.sketch.entities]]
+kind = "line"
+id = 11
+a = 4
+b = 10
+construction = false
+
+[[features.op.sketch.entities]]
+kind = "line"
+id = 12
+a = 10
+b = 8
+construction = false
+
+[[features.op.sketch.entities]]
+kind = "line"
+id = 15
+a = 4
+b = 14
+construction = false
+
+[[features.op.sketch.entities]]
+kind = "line"
+id = 17
+a = 14
+b = 16
+construction = false
+
+[[features.op.sketch.entities]]
+kind = "line"
+id = 19
+a = 16
+b = 18
+construction = false
+
+[[features.op.sketch.entities]]
+kind = "line"
+id = 21
+a = 18
+b = 20
+construction = false
+
+[[features.op.sketch.entities]]
+kind = "line"
+id = 22
+a = 20
+b = 6
+construction = false
+
+[[features.op.sketch.regions]]
+id = 13
+hint = [
+    -0.099999994,
+    0.95,
+]
+
+[[features.op.sketch.regions.bounds]]
+entity = 5
+side = "left"
+
+[[features.op.sketch.regions.bounds]]
+entity = 7
+side = "right"
+
+[[features.op.sketch.regions.bounds]]
+entity = 9
+side = "right"
+
+[[features.op.sketch.regions.bounds]]
+entity = 11
+side = "left"
+
+[[features.op.sketch.regions.bounds]]
+entity = 12
+side = "left"
+
+[[features.op.sketch.regions]]
+id = 23
+hint = [
+    -0.054999996,
+    1.105,
+]
+
+[[features.op.sketch.regions.bounds]]
+entity = 9
+side = "left"
+
+[[features.op.sketch.regions.bounds]]
+entity = 11
+side = "right"
+
+[[features.op.sketch.regions.bounds]]
+entity = 12
+side = "right"
+
+[[features.op.sketch.regions.bounds]]
+entity = 15
+side = "left"
+
+[[features.op.sketch.regions.bounds]]
+entity = 17
+side = "left"
+
+[[features.op.sketch.regions.bounds]]
+entity = 19
+side = "left"
+
+[[features.op.sketch.regions.bounds]]
+entity = 21
+side = "left"
+
+[[features.op.sketch.regions.bounds]]
+entity = 22
+side = "left"
+
+[[features]]
+id = 2
+name = "Extrude"
+enabled = true
+
+[features.op]
+feature = "extrude"
+taper = 0.0
+op = "new_body"
+
+[features.op.end]
+kind = "distance"
+distance = -0.02
+
+[features.op.profile]
+from = "regions"
+sketch = 1
+regions = [13]
+
+[features.op.surface]
+style = "metal"
+tint = [
+    1.0,
+    0.18568182,
+    0.18568182,
+]
+
+[[features]]
+id = 7
+name = "Extrude"
+enabled = true
+
+[features.op]
+feature = "extrude"
+taper = 0.0
+op = "new_body"
+
+[features.op.end]
+kind = "distance"
+distance = -0.02
+
+[features.op.profile]
+from = "regions"
+sketch = 1
+regions = [23]
+
+[features.op.surface]
+style = "metal"
+tint = [
+    1.0,
+    1.0,
+    1.0,
+]
+
+[[features]]
+id = 3
+name = "Plane"
+enabled = true
+
+[features.op]
+feature = "plane"
+
+[features.op.def]
+kind = "through"
+
+[[features.op.def.through]]
+ref = "face"
+
+[features.op.def.through.face.element]
+face = 6
+
+[features.op.def.through.face.source]
+feature = 2
+
+[[features]]
+id = 4
+name = "Mirror"
+enabled = true
+
+[features.op]
+feature = "mirror"
+offset = 0.0
+keep_original = true
+targets = [
+    2,
+    7,
+]
+
+[features.op.about]
+feature = 3
+
+[[features]]
+id = 5
+name = "Plane"
+enabled = true
+
+[features.op]
+feature = "plane"
+
+[features.op.def]
+kind = "through"
+
+[[features.op.def.through]]
+ref = "face"
+
+[features.op.def.through.face.element]
+face = 2
+
+[features.op.def.through.face.source]
+feature = 2
+
+[[features]]
+id = 8
+name = "Plane"
+enabled = true
+
+[features.op]
+feature = "plane"
+
+[features.op.def]
+kind = "through"
+
+[[features.op.def.through]]
+ref = "face"
+
+[features.op.def.through.face.element]
+face = 2
+
+[features.op.def.through.face.source]
+feature = 2
+
+[[features.op.def.through.face.source.copies]]
+by = 4
+index = 1
+
+[[features]]
+id = 9
+name = "Mirror"
+enabled = true
+
+[features.op]
+feature = "mirror"
+offset = 0.0
+keep_original = true
+
+[[features.op.targets]]
+feature = 4
+index = 0
+of = 2
+
+[[features.op.targets]]
+feature = 4
+index = 1
+of = 2
+
+[features.op.about]
+feature = 8
+
+[hold]
+grip = [
+    0.016,
+    -0.008,
+    0.059,
+]
+grip_rotation = [
+    -1.5358897,
+    0.9773844,
+    -1.2217305,
+]
+support = [
+    0.0,
+    0.0,
+    -0.07,
+]
+support_rotation = [
+    -1.374,
+    0.3441,
+    -1.2572,
+]
+two_handed = false
+carry = [
+    0.55,
+    -0.23,
+    -0.66,
+]
+carry_rotation = [
+    0.0,
+    0.0,
+    0.0,
+]
+
+[viewmodel]
+across = [
+    1.1,
+    -1.0,
+]
+depth = 0.58
+rotation = [
+    0.0,
+    0.0,
+    0.4537856,
+]
+
+[stand_in]
+shown = true
+class = "mercenary"
+at = [
+    0.6,
+    -1.0,
+    0.0,
+]
+yaw = 0.0

@@ -607,6 +607,7 @@ flamethrower = "Flamethrower"
 medi_wrench = "Medi-Wrench"
 pistol = "Pistol"
 shotgun = "Shotgun"
+stop_sign = "Stop Sign"
 
 [weapon.slots]
 primary = "Primary"

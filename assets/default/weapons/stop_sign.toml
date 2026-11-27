@@ -1,0 +1,7 @@
+name_key = "weapon.names.stop_sign"
+bucket = 3
+deploy = 0.5
+magazine = { reserve = 40, reload = 1.0, reload_one_at_a_time = false }
+primary = { action = { kind = "none"}, cadence = { kind = "semi", interval = 1.0 }, cost = { kind = "ammo", rounds = 1 } }
+secondary = { action = { kind = "none" }, cadence = { kind = "semi", interval = 0.0 }, cost = { kind = "free" } }
+model = "stop_sign_held"

@@ -37,7 +37,7 @@ permitted = ["rocket_launcher", "pistol"]
 default = "rocket_launcher"
 
 [loadouts.mercenary.melee]
-permitted = ["medi_wrench"]
+permitted = ["stop_sign"]
 
 [loadouts.mercenary.utility]
 permitted = ["flamethrower"]
@@ -60,6 +60,9 @@ picker_taunt = "spar"
 permitted = ["pistol", "rocket_launcher"]
 default = "pistol"
 
+[loadouts.raptor.melee]
+permitted = ["stop_sign"]
+
 [loadouts.scout]
 health = 125
 picker_taunt = "spar"
@@ -68,8 +71,9 @@ picker_taunt = "spar"
 permitted = ["pistol"]
 default = "pistol"
 
-# Health only, as TF2's classes have it; none carries anything yet. The Civilian,
-# which TF2 has no class for, takes the Soldier's.
+[loadouts.scout.melee]
+permitted = ["stop_sign"]
+
 [loadouts.soldier]
 health = 200
 
