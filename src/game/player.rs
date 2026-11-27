@@ -80,6 +80,9 @@ pub const STEP_HEIGHT: f32 = 0.45;
 const LAUNCH_SPEED: f32 = 0.25;
 /// Seconds of no ground friction after a knockback.
 const KNOCKBACK_SLIDE: f32 = 0.2;
+/// Meters per second: rising no faster than this onto a walkable floor lands on it. Source's
+/// `NON_JUMP_VELOCITY`, 140 units, so a jump into a slope still slides up it.
+const LANDING_RISE: f32 = 3.56;
 /// How far below its feet a body looks for a floor after each step. Has to
 /// clear the collision skin, which is where a step leaves a body standing.
 const GROUND_PROBE: f32 = 0.02;
@@ -1111,9 +1114,10 @@ pub fn step(
     player.against_wall = walled(&touched);
     // Settled onto a floor found within the probe, so a body that ended a
     // fall just short of one does not stand on air.
-    // Walking up a slope rises too; only a jump, or still going up after
-    // one, leaves the ground.
-    let rising = jumped || (player.ground.is_none() && player.velocity.y > 0.0);
+    // A slope met in the air clips the move to run up it; counted as rising, the body would never
+    // probe and would creep up the slope at air speed.
+    let landed = touched.iter().any(|n| n.y >= WALKABLE) && player.velocity.y <= LANDING_RISE;
+    let rising = jumped || (player.ground.is_none() && player.velocity.y > 0.0 && !landed);
     let ground = (!rising).then(|| world.ground(position, half, GROUND_PROBE, WALKABLE)).flatten();
     if let Some((resting, floor)) = ground {
         position = resting;
@@ -1394,6 +1398,38 @@ mod tests {
         assert_eq!(world.get::<Player>(body).unwrap(), &mover.player);
         assert_eq!(world.get::<PhysicsBody>(body).unwrap(), &mover.body);
         assert!(mover.body.current.distance(start) > 1.0, "the body never went anywhere");
+    }
+
+    /// Breaks if a body meeting a slope in the air is counted as rising, and so creeps up it.
+    #[test]
+    fn a_jump_onto_a_ramp_lands_on_it_at_speed() {
+        let mut collision = open_room();
+        let rise = 5.0 * 30f32.to_radians().tan();
+        let (a, b) = (Vec3::new(0.0, 0.0, -5.0), Vec3::new(0.0, 0.0, 5.0));
+        let (c, d) = (Vec3::new(5.0, rise, 5.0), Vec3::new(5.0, rise, -5.0));
+        collision.add_hulls([crate::game::collision::Hull::triangle(a, b, c), crate::game::collision::Hull::triangle(a, c, d)]);
+        let rules = MovementRules::default();
+        let start = Mover { player: Player { ground: Some(Vec3::Y), ..default() }, body: PhysicsBody::at(body_center_from_feet(Vec3::new(-3.0, 0.0, 0.0))), stance: Stance::Standing };
+        // Jumped from the floor, meeting the slope falling and rising; and jumped from the slope.
+        for jump_at in [16, 26, 45] {
+            let mut mover = start.clone();
+            let (mut landed, mut checked) = (None, false);
+            for tick in 0..jump_at + 64 {
+                let input = PlayerInput { movement: Vec2::Y, jump: tick == jump_at, yaw: -std::f32::consts::FRAC_PI_2, sprint: true, ..default() };
+                step(&mut mover, Vec3::ZERO, &input, &Condition::default(), None, &collision, &rules, TICK);
+                if tick > jump_at && landed.is_none() && mover.player.on_ground() {
+                    landed = Some(tick);
+                }
+                if landed.is_some_and(|at| tick == at + 16) {
+                    let v = mover.player.velocity;
+                    assert!(mover.player.on_ground(), "jumped at tick {jump_at}, left the slope again");
+                    assert!(Vec2::new(v.x, v.z).length() > 5.0, "jumped at tick {jump_at}, creeping at {v}");
+                    checked = true;
+                }
+            }
+            assert!(landed.is_some(), "jumped at tick {jump_at} and never landed: {mover:?}");
+            assert!(checked, "jumped at tick {jump_at}, landed too late to check: {landed:?}");
+        }
     }
 
     #[test]
