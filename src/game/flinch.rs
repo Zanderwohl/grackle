@@ -233,8 +233,7 @@ mod tests {
         }
     }
 
-    /// The raptor's own flinches move its head the way each is named, and let go by the end. Its
-    /// bones' rest frames are turned every which way, so a sign is easier to get backwards there.
+    /// Breaks if a raptor flinch moves its head the wrong way, or does not let go by its end.
     #[test]
     fn every_raptor_flinch_moves_the_head_the_way_it_is_named() {
         let rig = crate::common::class::ClassBuilds::shipped().rig_for(crate::common::class::Class::Raptor);

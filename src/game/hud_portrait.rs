@@ -33,9 +33,8 @@ pub const PORTRAIT_SIZE: f32 = 150.0;
 /// The share of the disk kept above the cut, which the health panel hides.
 pub const PORTRAIT_KEPT: f32 = 0.8;
 const IMAGE_SCALE: f32 = 2.0;
-/// Logical pixels the image runs past the disk on the left, the right and the top, so a weapon
-/// held up beside the head is drawn whole rather than cut at the disk's box. Not below, where the
-/// health panel hides the cut. The body is framed against the disk as if this were zero.
+/// Logical pixels the image runs past the disk on the left, the right and the top, so a weapon held
+/// beside the head is not cut off. The body is framed against the disk alone.
 const OVERHANG: f32 = 60.0;
 /// Meters of the body shown top to bottom, at every class's scale alike.
 const VIEW_HEIGHT: f32 = 1.05;
@@ -87,7 +86,6 @@ pub fn image_size() -> Vec2 {
     Vec2::new(PORTRAIT_SIZE, cut_height(medallion_box(PORTRAIT_SIZE), PORTRAIT_KEPT))
 }
 
-/// Logical pixels: [`image_size`] with the [`OVERHANG`] round it.
 fn canvas_size() -> Vec2 {
     image_size() + Vec2::new(2.0 * OVERHANG, OVERHANG)
 }
@@ -226,9 +224,8 @@ fn sit_for_the_portrait(
     painted.set_if_neq(tint);
 }
 
-/// Where the camera stands for `class` turned by `turned`: level with the middle of the disk's
-/// view, whose top is [`HEAD_ROOM`] over the highest bone, across from the middle of what it
-/// shows, and raised by half the [`OVERHANG`], which runs only above it.
+/// Level with the middle of the disk's view, whose top is [`HEAD_ROOM`] over the highest bone,
+/// raised by half the [`OVERHANG`], which runs only above it.
 fn eye(builds: &ClassBuilds, class: Class, turned: Quat) -> Vec3 {
     let bones = builds.rig_for(class).posed_bones(&Pose::rest(), &Transform::from_rotation(turned));
     let points: Vec<Vec3> = bones.iter().flat_map(|bone| [bone.head, bone.tail]).collect();

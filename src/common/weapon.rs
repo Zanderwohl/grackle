@@ -245,7 +245,7 @@ impl Default for AirblastSpec {
     }
 }
 
-/// A swing that hits the nearest body within reach of the eye, as soon as it is fired.
+/// See [`crate::game::melee`].
 #[derive(Clone, Copy, Debug, PartialEq, Reflect, Serialize, Deserialize)]
 #[reflect(Default)]
 pub struct MeleeSpec {

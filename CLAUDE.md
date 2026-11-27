@@ -3113,15 +3113,18 @@ and a `Magazine` for the whole thing. Adding a *weapon* is a row in a file;
 adding a *kind* of weapon is a variant and a system that answers for it.
 
 **A melee swing hits on the tick it is fired** ([`src/game/melee.rs`](src/game/melee.rs),
-`MeleeSpec`): the first of five rays from the eye, the middle one first, spread `width` across at
-its `range`, that reaches a body short of a wall, for `damage` (`How::Melee`), its `kill_shove` throwing a body it kills away
+`MeleeSpec`): the nearest body it may hurt that any of five rays from the eye reaches short of a
+wall, spread `width` across at its `range`, for `damage` (`How::Melee`); a teammate in the way is
+swung through, its `kill_shove` throwing a body it kills away
 from the swing, level. It has no wind-up
 and no delay. What a swing looks like is the held prop's `recoil` and `fire` clips, started by
 `start_recoil` as any shot's kick: the stop sign's chop down to level in 0.07 s, held there until
-0.3 s and brought back by its 0.5 s interval; in first person the hold is keyed in eye space so the
-sign's face is on the crosshair at any aspect (`the_stop_signs_chop_lands_on_the_crosshair`). Its
+0.3 s and brought back by its 0.5 s interval; in first person the hold's place and turn are keyed in eye
+space (a `Replace` rotation track's keys may name spaces of their own, as a point's do) so the
+sign's face is on the crosshair at any aspect or framing (`the_stop_signs_chop_lands_on_the_crosshair`). Its
 `automatic` cadence swings again while the button is held, a `semi` one once per press; with `recoil@raptor` moving the raptor's hand half as far. A weapon whose costs are
-all free is armed for a bot whatever its ammo, so a bot with only a stop sign swings it within reach.
+all free is armed for a bot whatever its ammo, and no standoff is past where its weapon reaches, so a
+bot with only a stop sign closes to 2 m and swings it.
 
 Damage over distance is two optional lines, `ramp_up` and `falloff`
 (`DistanceScale`), on a hitscan, a projectile or a flame, flat past their ends;

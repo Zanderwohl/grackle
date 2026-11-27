@@ -738,7 +738,7 @@ name_key = "anim.clips.fire"
 length = 0.5
 clock = "seconds"
 looping = false
-note = "The stop sign's swing in first person: tipped back for 0.05 s, then chopped down so the face of the sign is on the crosshair from 0.12 s to 0.3 s, whatever the window's shape, and brought back by 0.5 s. The hold is a point in eye space; the ends are the framing, so they move with it. The turn is from the framing's own, so a change to its rotation needs the turn worked out again."
+note = "The stop sign's swing in first person: tipped back for 0.05 s, then chopped down so the face of the sign is on the crosshair from 0.12 s to 0.3 s, whatever the window's shape, and brought back by 0.5 s. The hold is a place and a turn in eye space; the ends are the framing, so they move with it."
 blend_in = 0.03
 blend_out = 0.12
 
@@ -809,7 +809,7 @@ to = [
 ease = "linear"
 
 [[animations.clips.fire.tracks]]
-combine = "compose"
+combine = "replace"
 space = "carry"
 unit = "meters"
 enabled = true
@@ -838,29 +838,32 @@ ease = "quadratic_in"
 [[animations.clips.fire.tracks.channel.keys]]
 at = 0.12
 to = [
-    -1.2096,
-    -0.3656,
-    0.3884,
+    -0.94,
+    -0.85,
+    0.99,
 ]
 ease = "quadratic_out"
+space = "eye"
 
 [[animations.clips.fire.tracks.channel.keys]]
 at = 0.16
 to = [
-    -1.0965,
-    -0.2661,
-    0.2973,
+    -0.8434,
+    -0.8464,
+    0.9867,
 ]
 ease = "linear"
+space = "eye"
 
 [[animations.clips.fire.tracks.channel.keys]]
 at = 0.3
 to = [
-    -1.0965,
-    -0.2661,
-    0.2973,
+    -0.8434,
+    -0.8464,
+    0.9867,
 ]
 ease = "quadratic_in_out"
+space = "eye"
 
 [[animations.clips.fire.tracks.channel.keys]]
 at = 0.5

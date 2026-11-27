@@ -245,7 +245,6 @@ pub enum How {
     #[default]
     Other,
     Hitscan,
-    /// A melee swing.
     Melee,
     /// A projectile's own body, before its blast.
     Direct,

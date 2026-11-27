@@ -43,9 +43,10 @@ quarter second and out over the next second.
 The weapon editor (Mode → Weapon) writes these files in place with
 `toml_edit`, so comments survive a save.
 
-A `melee` action hits the nearest body within `range` meters of the eye, on
-the tick it is fired: five rays, the middle one first, spread `width` meters
-across at full range (absent is 0.6). It deals `damage`, three times that on a
+A `melee` action hits the nearest body it may hurt within `range` meters of
+the eye, on the tick it is fired, across five rays spread `width` meters
+across at full range (absent is 0.6); a teammate in the way is swung through.
+It deals `damage`, three times that on a
 crit, and is stopped by walls. `kill_shove`, as on a hitscan, throws a body it
 kills away from the swing, level with the floor plus its `lift`. What the swing looks like is the model's own
 `recoil` clip on the body and `fire` clip in first person.

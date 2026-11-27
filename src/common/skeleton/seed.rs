@@ -289,10 +289,10 @@ pub const SEEDS: &[Seed] = &[
 /// Humanoid clips generated key by key rather than sampled from a pose, by file name.
 pub const WRITTEN: &[(&str, fn() -> Clip)] = &[(super::pistol_twirl::TAUNT_TWIRL, super::pistol_twirl::clip)];
 
-/// The raptor's clips written key by key, each by its name under the raptor's clips, from the
-/// shipped raptor rig.
-pub fn raptor_written() -> Vec<(&'static str, Clip)> {
-    let skeleton = crate::common::class::ClassBuilds::shipped().rig_for(crate::common::class::Class::Raptor);
+/// The raptor's clips written key by key, from the raptor rig `packs` build (the last pack wins).
+pub fn raptor_written(packs: &[std::path::PathBuf]) -> Vec<(&'static str, Clip)> {
+    let builds = crate::common::class_file::load_builds(&crate::common::assets::Assets::default(), packs);
+    let skeleton = builds.rig_for(crate::common::class::Class::Raptor);
     super::raptor_seed::FLINCHES.iter().map(|name| (*name, super::raptor_seed::flinch(name, &skeleton))).collect()
 }
 
@@ -702,6 +702,18 @@ mod tests {
     }
 
     /// A seeded clip must not show in the Problems panel.
+    /// Breaks if a shipped raptor flinch differs from what `raptor_seed::flinch` writes now.
+    #[test]
+    fn every_shipped_raptor_clip_is_what_is_written() {
+        let packs = [std::path::PathBuf::from("assets/default")];
+        for (name, mut fresh) in raptor_written(&packs) {
+            let shipped = crate::common::clip_file::load_named_clip(&Default::default(), &packs, &format!("raptor/{name}"))
+                .unwrap_or_else(|| panic!("no raptor/{name}; run `cargo run --bin bake_body_clips raptor/{name}`"));
+            fresh.normalize();
+            assert!(shipped == fresh, "raptor/{name} differs from a fresh bake; run `cargo run --bin bake_body_clips raptor/{name}`");
+        }
+    }
+
     #[test]
     fn every_seed_bakes_a_clip_with_no_problems() {
         for seed in SEEDS {

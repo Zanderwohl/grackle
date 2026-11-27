@@ -208,9 +208,11 @@ pub fn comfortable_range(weapon: &Weapon, comfort: f32) -> Option<f32> {
     if best <= 0.0 {
         return None;
     }
-    let furthest = distances.filter(|distance| worth_at(*distance) >= comfort * best).last()?;
+    let furthest = distances.clone().filter(|distance| worth_at(*distance) >= comfort * best).last()?;
     let furthest_allowed = if scoped(weapon).is_some() { SCOPED_FURTHEST_STANDOFF } else { FURTHEST_STANDOFF };
-    Some(furthest.clamp(CLOSEST_STANDOFF, furthest_allowed))
+    // Never past where it reaches, so a melee weapon's standoff can be under `CLOSEST_STANDOFF`.
+    let reach = distances.filter(|distance| worth_at(*distance) > 0.0).last()?;
+    Some(furthest.clamp(CLOSEST_STANDOFF, furthest_allowed).min(reach))
 }
 
 /// How a bot meets a projectile coming at it with an airblast in hand, rolled per seat inside its
@@ -1101,6 +1103,11 @@ mod tests {
         assert!((reversed - footwork.reversal).abs() < 0.05, "reversed {reversed}");
     }
 
+    fn reach_further(weapon: &Weapon, range: f32) -> bool {
+        let further = range + RANGE_STEP;
+        worth(&weapon.primary, further) + worth(&weapon.secondary, further) > 0.0
+    }
+
     /// Breaks if every weapon's standoff is point blank, which walks a bot onto its target, or a
     /// standoff lies past where its weapon reaches.
     #[test]
@@ -1109,10 +1116,11 @@ mod tests {
         for weapon in catalog.weapons() {
             let Some(range) = comfortable_range(weapon, Footwork::default().comfort) else { continue };
             let key = &weapon.key;
-            assert!((CLOSEST_STANDOFF..=SCOPED_FURTHEST_STANDOFF).contains(&range), "{key} keeps {range} m");
+            assert!(range > 0.0 && range <= SCOPED_FURTHEST_STANDOFF, "{key} keeps {range} m");
             assert!(range <= FURTHEST_STANDOFF || scoped(weapon).is_some(), "{key} keeps {range} m without a scope");
             let reach = (worth(&weapon.primary, range) + worth(&weapon.secondary, range)) > 0.0;
-            assert!(reach || range == CLOSEST_STANDOFF, "{key} keeps {range} m, out of its own reach");
+            assert!(reach, "{key} keeps {range} m, out of its own reach");
+            assert!(range >= CLOSEST_STANDOFF || !reach_further(weapon, range), "{key} closes to {range} m with reach to spare");
         }
         let far = |comfort| catalog.weapons().iter().filter_map(|weapon| comfortable_range(weapon, comfort)).fold(0.0, f32::max);
         assert!(far(0.7) > 8.0, "nothing is fought from further than {} m", far(0.7));

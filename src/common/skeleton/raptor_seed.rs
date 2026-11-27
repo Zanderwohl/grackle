@@ -482,8 +482,8 @@ fn flinch_posture(name: &str) -> Posture {
     }
 }
 
-/// A flinch as composed rotations, so it sits on whatever the body is doing: each turn carried
-/// into its bone's rest frame as [`Turn::onto`] does, out to the peak and eased back to nothing.
+/// Composed, so it sits on whatever the body is doing. Each turn is carried into its bone's rest
+/// frame as [`Turn::onto`] does.
 pub fn flinch(name: &str, skeleton: &Skeleton) -> super::clip::Clip {
     use super::clip::{Channel, Clip, Clock, Combine, Key, Space, Track, Unit};
     use super::Interpolation;

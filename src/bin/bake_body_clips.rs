@@ -33,6 +33,15 @@ struct Args {
     pack: PathBuf,
 }
 
+/// The default pack, then `pack` over it, so a pack's own rig files are the ones written against.
+fn rig_packs(pack: &std::path::Path) -> Vec<PathBuf> {
+    let default = PathBuf::from("assets/default");
+    match pack == default.as_path() {
+        true => vec![default],
+        false => vec![default, pack.to_path_buf()],
+    }
+}
+
 enum Outcome {
     Written,
     Unchanged,
@@ -46,7 +55,7 @@ fn main() {
     let written: Vec<(String, StateAnimation)> = WRITTEN
         .iter()
         .map(|(name, clip)| (name.to_string(), clip()))
-        .chain(raptor_written().into_iter().map(|(name, clip)| (format!("raptor/{name}"), clip)))
+        .chain(raptor_written(&rig_packs(&args.pack)).into_iter().map(|(name, clip)| (format!("raptor/{name}"), clip)))
         .filter(|(name, _)| args.states.is_empty() || args.states.iter().any(|wanted| wanted == name))
         .map(|(name, clip)| (name, StateAnimation::Single(clip)))
         .collect();
