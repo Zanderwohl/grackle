@@ -1,4 +1,4 @@
-//! The Shortcuts page of the Settings window.
+//! The Keybinds page of the Settings window.
 //!
 //! A click on a chord waits, and the next press replaces it. Keys come from
 //! Bevy's input, not egui's. A mouse button is bound only when pressed on the

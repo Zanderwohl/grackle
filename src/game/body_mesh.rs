@@ -212,38 +212,50 @@ fn build_body_meshes(
         let handles = cache.handles(skeleton, &mut meshes);
 
         let mut parts = Vec::with_capacity(handles.len());
-        commands.entity(body).with_children(|body| {
-            for (index, handle) in handles.iter().enumerate() {
-                let mut part = body.spawn((
-                        BoneMesh(index),
-                        FirstPersonHidden,
-                        Mesh3d(handle.clone()),
-                        MeshMaterial3d(material.clone()),
-                        // A part per bone keeps parts in bone order; a piece hides the ones it lacks.
-                        match corpse.is_none_or(|corpse| corpse.keeps(index)) {
-                            true => Visibility::Inherited,
-                            false => Visibility::Hidden,
-                        },
-                        // Overwritten by `pose_body_meshes` before it is drawn.
-                        Transform::from_translation(
-                            skeleton.bones()[index].head,
-                        ),
-                    ));
-                // From the first frame, or the kill cam's replay records them on the world.
-                if let Some(layers) = layers {
-                    part.insert(layers.clone());
-                }
-                parts.push(part.id());
+        for (index, handle) in handles.iter().enumerate() {
+            let mut part = commands.spawn((
+                    BoneMesh(index),
+                    FirstPersonHidden,
+                    Mesh3d(handle.clone()),
+                    MeshMaterial3d(material.clone()),
+                    // A part per bone keeps parts in bone order; a piece hides the ones it lacks.
+                    match corpse.is_none_or(|corpse| corpse.keeps(index)) {
+                        true => Visibility::Inherited,
+                        false => Visibility::Hidden,
+                    },
+                    // Overwritten by `pose_body_meshes` before it is drawn.
+                    Transform::from_translation(
+                        skeleton.bones()[index].head,
+                    ),
+                ));
+            // From the first frame, or the kill cam's replay records them on the world.
+            if let Some(layers) = layers {
+                part.insert(layers.clone());
             }
-        });
-
-        commands
-            .entity(body)
-            // Grid cells and spawn-point previews are spawned without one, and
-            // their parts would have nothing to inherit.
-            .insert_if_new(Visibility::default())
-            .insert(BodyMesh { parts });
+            parts.push(part.id());
+        }
+        hang_parts(&mut commands, body, parts.clone(), BodyMesh { parts });
     }
+}
+
+/// Hangs `parts`, already spawned, off `body` and inserts `then` on it, giving it a `Visibility`
+/// if it has none (grid cells and spawn-point previews are spawned without one, and their parts
+/// would have nothing to inherit). If `body` is gone by the time the command runs, the parts are
+/// despawned instead: a system with no order against the dressing one, such as the class
+/// picker's taking its portraits down, may despawn a body in the frame it is dressed.
+pub fn hang_parts(commands: &mut Commands, body: Entity, parts: Vec<Entity>, then: impl Bundle) {
+    commands.queue(move |world: &mut World| match world.get_entity_mut(body) {
+        Ok(mut body) => {
+            body.insert_if_new(Visibility::default()).add_children(&parts).insert(then);
+        }
+        Err(_) => {
+            for part in parts {
+                if let Ok(part) = world.get_entity_mut(part) {
+                    part.despawn();
+                }
+            }
+        }
+    });
 }
 
 /// Swap the material when a body catches fire or goes out, rather than letting
@@ -462,6 +474,19 @@ mod tests {
 
         let mesh = app.world().get::<BodyMesh>(body).expect("nothing was built");
         assert_eq!(mesh.parts.len(), bones);
+    }
+
+    /// The class picker's portraits as they were when Play started: a body despawned by a system
+    /// whose commands are applied before `build_body_meshes`'s in the frame it is dressed.
+    /// Inserting on it panicked the app; it must leave no parts behind either.
+    #[test]
+    fn a_body_despawned_as_it_is_dressed_leaves_nothing() {
+        let mut app = app();
+        let skeleton = humanoid(crate::common::class::ClassBuilds::shipped().of(Class::Heavy));
+        let body = app.world_mut().spawn((skeleton, Pose::rest(), Transform::IDENTITY)).id();
+        app.add_systems(Update, (move |mut commands: Commands| commands.entity(body).try_despawn()).before_ignore_deferred(build_body_meshes));
+        app.update();
+        assert_eq!(app.world_mut().query::<&BoneMesh>().iter(app.world()).count(), 0, "parts outlived their body");
     }
 
     /// Fails if a piece of a body draws bones it does not have.

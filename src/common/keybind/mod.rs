@@ -95,7 +95,7 @@ macro_rules! actions {
         pub enum Action { $($variant),* }
 
         impl Action {
-            /// Every action, in the order the Shortcuts page lists them.
+            /// Every action, in the order the Keybinds page lists them.
             pub const ALL: &'static [Action] = &[$(Action::$variant),*];
 
             /// Its name in `shortcuts.toml` and under `keybind.action` in
@@ -114,7 +114,7 @@ macro_rules! actions {
                 match self { $(Action::$variant => $exact),* }
             }
 
-            /// A debug view or cheat, listed apart on the Shortcuts page. It
+            /// A debug view or cheat, listed apart on the Keybinds page. It
             /// still clashes by its [`Context`].
             pub fn is_debug(self) -> bool {
                 match self { $(Action::$variant => $debug),* }
@@ -180,7 +180,9 @@ actions! {
     Taunt => "taunt", Play, false, false;
     Spray => "spray", Play, false, false;
     Chat => "chat", Play, false, false;
+    Voice => "voice", Play, false, false;
     PlayCancel => "play_cancel", Play, false, false;
+    PlayDismiss => "play_dismiss", Play, false, false;
     Pause => "pause", Play, false, false;
 
     Choice1 => "choice_1", Menu, false, false;
@@ -599,7 +601,7 @@ mod tests {
         assert!(!Context::Play.overlaps(Context::MapEditor));
     }
 
-    /// Fails if an action has no name, so the Shortcuts page shows its key.
+    /// Fails if an action has no name, so the Keybinds page shows its key.
     #[test]
     fn every_action_and_context_has_a_name() {
         let Ok(text) = std::fs::read_to_string("assets/default/lang/en-US.toml") else { return };
