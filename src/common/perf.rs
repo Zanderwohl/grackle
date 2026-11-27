@@ -52,10 +52,14 @@ fn perf_ui(
     fixed: Res<Time<Fixed>>,
     real: Res<Time<Real>>,
     window: Query<&Window, With<PrimaryWindow>>,
+    mut lang_rates: Local<LangRates>,
 ) {
     let ctx = contexts.ctx_mut();
     if ctx.is_err() { warn!("perf::perf_ui: no egui context: {}", ctx.unwrap_err()); return; }
     let ctx = ctx.unwrap();
+
+    let lang = crate::common::lang::cache_stats();
+    lang_rates.update(lang, real.elapsed_secs_f64());
 
     let smoothed = |key: &bevy::diagnostic::DiagnosticPath| {
         diagnostics.get(key).and_then(|d| d.smoothed())
@@ -117,6 +121,21 @@ fn perf_ui(
                         format!("{:.0} s", real.elapsed_secs_f64()),
                     );
 
+                    row(get!("debug.perf.lang_cache"), format!("{} / {}", lang.entries, lang.capacity));
+                    row(
+                        get!("debug.perf.lang_hit_rate"),
+                        match lang_rates.hit_rate {
+                            Some(rate) => format!("{:.2}%", rate * 100.0),
+                            None => "—".to_owned(),
+                        },
+                    );
+                    row(
+                        get!("debug.perf.lang_churn"),
+                        get!("debug.perf.per_second",
+                            "misses", format!("{:.0}", lang_rates.misses),
+                            "rotations", format!("{:.1}", lang_rates.rotations)),
+                    );
+
                     if let Ok(window) = window.single() {
                         row(
                             get!("debug.perf.resolution"),
@@ -129,6 +148,39 @@ fn perf_ui(
                     }
                 });
         });
+}
+
+/// The string cache's hit rate, misses and rotations over the last whole second.
+#[derive(Default)]
+struct LangRates {
+    since: Option<(f64, crate::common::lang::CacheStats)>,
+    last_seen: f64,
+    hit_rate: Option<f64>,
+    misses: f64,
+    rotations: f64,
+}
+
+impl LangRates {
+    /// Longer than any frame, so a gap this long means the overlay was closed.
+    const GAP_SECONDS: f64 = 0.5;
+
+    fn update(&mut self, now: crate::common::lang::CacheStats, seconds: f64) {
+        let reopened = seconds - self.last_seen > Self::GAP_SECONDS;
+        self.last_seen = seconds;
+        let Some((then, before)) = self.since.filter(|_| !reopened) else {
+            *self = Self { since: Some((seconds, now)), last_seen: seconds, ..default() };
+            return;
+        };
+        let elapsed = seconds - then;
+        if elapsed >= 1.0 {
+            let hits = now.hits - before.hits;
+            let misses = now.misses - before.misses;
+            self.hit_rate = (hits + misses > 0).then(|| hits as f64 / (hits + misses) as f64);
+            self.misses = misses as f64 / elapsed;
+            self.rotations = (now.rotations - before.rotations) as f64 / elapsed;
+            self.since = Some((seconds, now));
+        }
+    }
 }
 
 #[derive(States, Debug, Clone, PartialEq, Eq, Hash, Default)]
