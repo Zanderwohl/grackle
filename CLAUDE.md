@@ -765,7 +765,7 @@ since the slant depends on the row's height), so their slanted sides meet,
 with square corners where they do. Rows only: stacked plates' slanted sides
 would not line up at one width.
 
-Three things there are easy to get wrong and none of them errors:
+Four things there are easy to get wrong and none of them errors:
 
 - **`gather_input` is gated on `not_paused`, but `gather_aim` is not.** A
   `MessageReader` has its own cursor, so a frame the system does not run is a
@@ -786,6 +786,10 @@ Three things there are easy to get wrong and none of them errors:
   it. Change detection counts a resource's insertion as a change, so a
   `resource_changed` system that sets the cursor unconditionally grabs it
   inside the editor on the first frame of the process.
+- **Focus is part of the grab.** The OS drops a grab when the window loses
+  focus, so `pause_on_blur` opens the menu then (unless something already
+  holds the mouse), and `grab_the_cursor` writes the grab again on regaining
+  focus, since it otherwise writes only when what it wants changes.
 
 The **HUD camera** carries `IsDefaultUiCamera`: the window has eight cameras
 in it and Bevy UI otherwise picks one by ambiguity rules rather than by being
