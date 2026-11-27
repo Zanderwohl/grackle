@@ -245,6 +245,7 @@ pub enum How {
     #[default]
     Other,
     Hitscan,
+    Melee,
     /// A projectile's own body, before its blast.
     Direct,
     Splash,

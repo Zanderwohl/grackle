@@ -308,7 +308,10 @@ corpse and the mesh cache remember. Another rig's state clips are
 `animations/<rig>/<state>.gpa`; without one a state stands in rest. The
 raptor's, its taunt included, are written by `bake_body_clips` from
 [`raptor_seed`](src/common/skeleton/raptor_seed.rs), the one place besides
-its rig file that names its bones; a `Seed` names its rig. The
+its rig file that names its bones; a `Seed` names its rig. Its flinches are
+`animations/raptor/flinch_*.gpa`, written by `raptor_seed::flinch` through `bake_body_clips` as
+turns about the body's axes composed onto each bone; a flinch plays a rig's own copy before the
+shared one (`FlinchClips`), whose keys name the humanoid's bones. The
 animation editor lists every rig on disk, each with its states, and previews
 a rig's clip on that rig (`FigureRig`).
 
@@ -2793,7 +2796,7 @@ it chose (`ClassOptions`) on the team picker's channel.
   `picker_taunt` (in `loadouts.toml`, beside `hat`; absent is the wave) while the
   pointer is over its button, put straight on its `ClipStack` and taken off with
   no fade when the pointer leaves (`taunt_while_hovered`).
-- The Mercenary, the Scout and the Raptor start with the pistol; every other
+- The Mercenary, the Scout and the Raptor start with the pistol, and in arena the stop sign too; every other
   class has no loadout yet and spawns carrying nothing, so no bot rolls one
   while an armed class is allowed.
 
@@ -3102,11 +3105,26 @@ the one writer of health. Invisible in a round except on `F6`.
 
 **An action is what one mouse button does; a weapon is a pair of them.**
 `WeaponAction` ([`src/common/weapon.rs`](src/common/weapon.rs)) is a hitscan, a
-projectile, a cone of flame, an airblast, `None`, or one of three stubs — heal
-beam, invuln, scope — that have their real specs and no behavior yet. A
+projectile, a cone of flame, an airblast, a melee swing, `None`, or one of
+three stubs — heal beam, invuln, scope — that have their real specs and no
+behavior yet. A
 `Weapon` mounts one on each button, with a `Cadence` and a `Cost` per button
 and a `Magazine` for the whole thing. Adding a *weapon* is a row in a file;
 adding a *kind* of weapon is a variant and a system that answers for it.
+
+**A melee swing hits on the tick it is fired** ([`src/game/melee.rs`](src/game/melee.rs),
+`MeleeSpec`): the nearest body it may hurt that any of five rays from the eye reaches short of a
+wall, spread `width` across at its `range`, for `damage` (`How::Melee`); a teammate in the way is
+swung through, its `kill_shove` throwing a body it kills away
+from the swing, level. It has no wind-up
+and no delay. What a swing looks like is the held prop's `recoil` and `fire` clips, started by
+`start_recoil` as any shot's kick: the stop sign's chop down to level in 0.07 s, held there until
+0.3 s and brought back by its 0.5 s interval; in first person the hold's place and turn are keyed in eye
+space (a `Replace` rotation track's keys may name spaces of their own, as a point's do) so the
+sign's face is on the crosshair at any aspect or framing (`the_stop_signs_chop_lands_on_the_crosshair`). Its
+`automatic` cadence swings again while the button is held, a `semi` one once per press; with `recoil@raptor` moving the raptor's hand half as far. A weapon whose costs are
+all free is armed for a bot whatever its ammo, and no standoff is past where its weapon reaches, so a
+bot with only a stop sign closes to 2 m and swings it.
 
 Damage over distance is two optional lines, `ramp_up` and `falloff`
 (`DistanceScale`), on a hitscan, a projectile or a flame, flat past their ends;

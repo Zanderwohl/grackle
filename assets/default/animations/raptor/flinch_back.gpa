@@ -1,0 +1,227 @@
+name_key = "anim.clips.flinch_back"
+length = 0.5
+clock = "seconds"
+looping = false
+note = "Written by `raptor_seed::flinch`: composed onto whatever the body is doing, on the flinch layer, which claims nothing. The front is thrown away from the hit by 0.07 s and eased back by 0.5 s, the tail swinging against it, each bone a little behind the one before. Spine, neck, head and tail only, so the feet stay planted."
+
+[[tracks]]
+combine = "compose"
+space = "body"
+unit = "meters"
+enabled = true
+
+[tracks.channel]
+channel = "rotation"
+bone = "spine"
+
+[[tracks.channel.keys]]
+at = 0.0
+to = [
+    -0.0,
+    0.0,
+    0.0,
+]
+ease = "quadratic_out"
+
+[[tracks.channel.keys]]
+at = 0.07
+to = [
+    0.1800001,
+    0.0,
+    0.0,
+]
+ease = "cubic_in_out"
+
+[[tracks.channel.keys]]
+at = 0.5
+to = [
+    -0.0,
+    0.0,
+    0.0,
+]
+ease = "linear"
+
+[[tracks]]
+combine = "compose"
+space = "body"
+unit = "meters"
+enabled = true
+
+[tracks.channel]
+channel = "rotation"
+bone = "neck"
+
+[[tracks.channel.keys]]
+at = 0.0
+to = [
+    -0.0,
+    0.0,
+    0.0,
+]
+ease = "quadratic_out"
+
+[[tracks.channel.keys]]
+at = 0.08
+to = [
+    -0.20000023,
+    0.0,
+    0.0,
+]
+ease = "cubic_in_out"
+
+[[tracks.channel.keys]]
+at = 0.5
+to = [
+    -0.0,
+    0.0,
+    0.0,
+]
+ease = "linear"
+
+[[tracks]]
+combine = "compose"
+space = "body"
+unit = "meters"
+enabled = true
+
+[tracks.channel]
+channel = "rotation"
+bone = "head"
+
+[[tracks.channel.keys]]
+at = 0.0
+to = [
+    -0.0,
+    0.0,
+    0.0,
+]
+ease = "quadratic_out"
+
+[[tracks.channel.keys]]
+at = 0.09
+to = [
+    0.12000011,
+    0.0,
+    0.0,
+]
+ease = "cubic_in_out"
+
+[[tracks.channel.keys]]
+at = 0.5
+to = [
+    -0.0,
+    0.0,
+    0.0,
+]
+ease = "linear"
+
+[[tracks]]
+combine = "compose"
+space = "body"
+unit = "meters"
+enabled = true
+
+[tracks.channel]
+channel = "rotation"
+bone = "tail.1"
+
+[[tracks.channel.keys]]
+at = 0.0
+to = [
+    -0.0,
+    0.0,
+    0.0,
+]
+ease = "quadratic_out"
+
+[[tracks.channel.keys]]
+at = 0.120000005
+to = [
+    -0.08000005,
+    0.0,
+    0.0,
+]
+ease = "cubic_in_out"
+
+[[tracks.channel.keys]]
+at = 0.5
+to = [
+    -0.0,
+    0.0,
+    0.0,
+]
+ease = "linear"
+
+[[tracks]]
+combine = "compose"
+space = "body"
+unit = "meters"
+enabled = true
+
+[tracks.channel]
+channel = "rotation"
+bone = "tail.2"
+
+[[tracks.channel.keys]]
+at = 0.0
+to = [
+    -0.0,
+    0.0,
+    0.0,
+]
+ease = "quadratic_out"
+
+[[tracks.channel.keys]]
+at = 0.17
+to = [
+    -0.10000012,
+    0.0,
+    0.0,
+]
+ease = "cubic_in_out"
+
+[[tracks.channel.keys]]
+at = 0.5
+to = [
+    -0.0,
+    0.0,
+    0.0,
+]
+ease = "linear"
+
+[[tracks]]
+combine = "compose"
+space = "body"
+unit = "meters"
+enabled = true
+
+[tracks.channel]
+channel = "rotation"
+bone = "tail.3"
+
+[[tracks.channel.keys]]
+at = 0.0
+to = [
+    -0.0,
+    0.0,
+    0.0,
+]
+ease = "quadratic_out"
+
+[[tracks.channel.keys]]
+at = 0.22
+to = [
+    -0.1200001,
+    0.0,
+    0.0,
+]
+ease = "cubic_in_out"
+
+[[tracks.channel.keys]]
+at = 0.5
+to = [
+    -0.0,
+    0.0,
+    0.0,
+]
+ease = "linear"

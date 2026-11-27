@@ -127,7 +127,7 @@ impl Plugin for WeaponPlugin {
         app
             // Damage plus the two things that read it.
             .add_plugins((DamagePlugin, ExplosionPlugin))
-            .add_plugins((HitscanPlugin, ProjectilePlugin, FlamePlugin, AirblastPlugin))
+            .add_plugins((HitscanPlugin, ProjectilePlugin, FlamePlugin, AirblastPlugin, crate::game::melee::MeleePlugin))
             .add_message::<WeaponActionFired>()
             // Before every weapon and its damage. Switch, then reload, then
             // fire, so a reload finishing this tick feeds this tick's shot.

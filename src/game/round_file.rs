@@ -653,6 +653,7 @@ fn how_name(how: How) -> String {
     match how {
         How::Other => get!("editor.rounds.how.other"),
         How::Hitscan => get!("editor.rounds.how.hitscan"),
+        How::Melee => get!("editor.rounds.how.melee"),
         How::Direct => get!("editor.rounds.how.direct"),
         How::Splash => get!("editor.rounds.how.splash"),
         How::Flame => get!("editor.rounds.how.flame"),

@@ -441,6 +441,95 @@ fn pedal_legs(skeleton: &Skeleton, pose: &mut Pose, turn: f32, pedal: Pedal) {
     }
 }
 
+/// The flinches, by the names [`crate::game::flinch`] plays, under the raptor's clips.
+pub const FLINCHES: [&str; 4] = ["flinch_back", "flinch_forward", "flinch_left", "flinch_right"];
+/// Seconds: the jolt peaks at `FLINCH_PEAK` and lets go by `FLINCH_LENGTH`; each tail bone peaks
+/// `FLINCH_TAIL_LAG` after the one before, so the tail follows through.
+const FLINCH_LENGTH: f32 = 0.5;
+const FLINCH_PEAK: f32 = 0.07;
+const FLINCH_TAIL_LAG: f32 = 0.05;
+
+/// The jolt at its peak, as turns about the body's axes: the front thrown away from the hit and
+/// the tail swung against it.
+fn flinch_posture(name: &str) -> Posture {
+    let side = |sign: f32| Posture {
+        spine: Turn { roll: 0.12 * sign, yaw: 0.06 * sign, ..default() },
+        neck: Turn { yaw: 0.22 * sign, roll: 0.05 * sign, ..default() },
+        head: Turn { yaw: 0.12 * sign, ..default() },
+        tail: [0.1, 0.14, 0.18].map(|swing| Turn::of_tail(swing * sign, 0.0)),
+        ..default()
+    };
+    match name {
+        // Hit from in front: the front rears up and back, the tail dips to balance it.
+        "flinch_back" => Posture {
+            spine: Turn { pitch: 0.18, ..default() },
+            neck: Turn { pitch: 0.2, ..default() },
+            head: Turn { pitch: -0.12, ..default() },
+            tail: [0.08, 0.1, 0.12].map(|lift| Turn::of_tail(0.0, -lift)),
+            ..default()
+        },
+        // Hit from behind: the front pitches down and the tail is flung up.
+        "flinch_forward" => Posture {
+            spine: Turn { pitch: -0.15, ..default() },
+            neck: Turn { pitch: -0.18, ..default() },
+            head: Turn { pitch: 0.1, ..default() },
+            tail: [0.12, 0.16, 0.2].map(|lift| Turn::of_tail(0.0, lift)),
+            ..default()
+        },
+        // Pushed to its own left: the neck and head thrown left, the tail to the right.
+        "flinch_left" => side(1.0),
+        _ => side(-1.0),
+    }
+}
+
+/// Composed, so it sits on whatever the body is doing. Each turn is carried into its bone's rest
+/// frame as [`Turn::onto`] does.
+pub fn flinch(name: &str, skeleton: &Skeleton) -> super::clip::Clip {
+    use super::clip::{Channel, Clip, Clock, Combine, Key, Space, Track, Unit};
+    use super::Interpolation;
+    let peak = flinch_posture(name);
+    let bones: Vec<(&str, Turn, f32)> = [(SPINE, peak.spine, 0.0), (NECK, peak.neck, 0.01), (HEAD, peak.head, 0.02)]
+        .into_iter()
+        .chain(TAIL.into_iter().zip(peak.tail).enumerate().map(|(at, (bone, turn))| (bone, turn, FLINCH_TAIL_LAG * (at + 1) as f32)))
+        .collect();
+    let tracks = bones
+        .into_iter()
+        .filter_map(|(bone, turn, lag)| {
+            let index = skeleton.index_of(bone)?;
+            let frame = skeleton.posed_bone(&Pose::rest(), &Transform::IDENTITY, index).rotation;
+            let local = |turn: Turn| crate::common::rotation::euler_from_quat(frame.inverse() * turn.quat() * frame).to_array();
+            let still = Turn::default();
+            let keys = vec![
+                Key::all(0.0, local(still), Interpolation::QuadraticOut),
+                Key::all(FLINCH_PEAK + lag, local(turn), Interpolation::CubicInOut),
+                Key::all(FLINCH_LENGTH, local(still), Interpolation::Linear),
+            ];
+            Some(Track {
+                combine: Combine::Compose,
+                space: Space::Body,
+                unit: Unit::Meters,
+                enabled: true,
+                timing: Default::default(),
+                channel: Channel::Rotation { bone: bone.into(), keys },
+            })
+        })
+        .collect();
+    Clip {
+        name_key: format!("anim.clips.{name}"),
+        length: FLINCH_LENGTH,
+        clock: Clock::Seconds,
+        looping: false,
+        blend_in: None,
+        blend_out: None,
+        note: "Written by `raptor_seed::flinch`: composed onto whatever the body is doing, on the \
+               flinch layer, which claims nothing. The front is thrown away from the hit by 0.07 s \
+               and eased back by 0.5 s, the tail swinging against it, each bone a little behind \
+               the one before. Spine, neck, head and tail only, so the feet stay planted."
+            .into(),
+        tracks,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

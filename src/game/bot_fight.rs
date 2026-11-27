@@ -208,9 +208,11 @@ pub fn comfortable_range(weapon: &Weapon, comfort: f32) -> Option<f32> {
     if best <= 0.0 {
         return None;
     }
-    let furthest = distances.filter(|distance| worth_at(*distance) >= comfort * best).last()?;
+    let furthest = distances.clone().filter(|distance| worth_at(*distance) >= comfort * best).last()?;
     let furthest_allowed = if scoped(weapon).is_some() { SCOPED_FURTHEST_STANDOFF } else { FURTHEST_STANDOFF };
-    Some(furthest.clamp(CLOSEST_STANDOFF, furthest_allowed))
+    // Never past where it reaches, so a melee weapon's standoff can be under `CLOSEST_STANDOFF`.
+    let reach = distances.filter(|distance| worth_at(*distance) > 0.0).last()?;
+    Some(furthest.clamp(CLOSEST_STANDOFF, furthest_allowed).min(reach))
 }
 
 /// How a bot meets a projectile coming at it with an airblast in hand, rolled per seat inside its
@@ -374,6 +376,10 @@ fn worth_aimed(mounted: &Mounted, distance: f32, aim_falloff: f32) -> f32 {
             }
             damage as f32 * spec.scale_at(distance) / interval + afterburn_damage as f32 / afterburn_interval_s.max(1e-3)
         }
+        WeaponAction::Melee(spec) => match distance <= spec.range {
+            true => spec.damage as f32 / interval,
+            false => 0.0,
+        },
         _ => 0.0,
     }
 }
@@ -406,8 +412,9 @@ pub fn weapon_worth(weapon: &Weapon, distance: f32) -> (bool, f32) {
 /// A carried weapon against a body `distance` away: its better button and what that is worth,
 /// nothing with no ammo at all, and less while its clip is empty by the reload it needs first.
 fn armed(weapon: WeaponId, ammo: &Ammo, catalog: &WeaponCatalog, distance: f32) -> Option<(WeaponId, bool, f32)> {
-    let state = ammo.at(weapon).filter(|state| state.clip + state.reserve > 0)?;
     let spec = catalog.get(weapon)?;
+    let free = [spec.primary.cost, spec.secondary.cost].iter().all(|cost| matches!(cost, crate::common::weapon::Cost::Free));
+    let state = ammo.at(weapon).filter(|state| free || state.clip + state.reserve > 0)?;
     let (alt, value) = weapon_worth(spec, distance);
     let reload = if spec.magazine.clip.is_some() && state.clip == 0 { spec.magazine.first_reload.unwrap_or(spec.magazine.reload) } else { 0.0 };
     Some((weapon, alt, value / (1.0 + reload / EMPTY_CLIP_SECONDS))).filter(|(.., value)| *value > 0.0)
@@ -1096,6 +1103,11 @@ mod tests {
         assert!((reversed - footwork.reversal).abs() < 0.05, "reversed {reversed}");
     }
 
+    fn reach_further(weapon: &Weapon, range: f32) -> bool {
+        let further = range + RANGE_STEP;
+        worth(&weapon.primary, further) + worth(&weapon.secondary, further) > 0.0
+    }
+
     /// Breaks if every weapon's standoff is point blank, which walks a bot onto its target, or a
     /// standoff lies past where its weapon reaches.
     #[test]
@@ -1104,10 +1116,11 @@ mod tests {
         for weapon in catalog.weapons() {
             let Some(range) = comfortable_range(weapon, Footwork::default().comfort) else { continue };
             let key = &weapon.key;
-            assert!((CLOSEST_STANDOFF..=SCOPED_FURTHEST_STANDOFF).contains(&range), "{key} keeps {range} m");
+            assert!(range > 0.0 && range <= SCOPED_FURTHEST_STANDOFF, "{key} keeps {range} m");
             assert!(range <= FURTHEST_STANDOFF || scoped(weapon).is_some(), "{key} keeps {range} m without a scope");
             let reach = (worth(&weapon.primary, range) + worth(&weapon.secondary, range)) > 0.0;
-            assert!(reach || range == CLOSEST_STANDOFF, "{key} keeps {range} m, out of its own reach");
+            assert!(reach, "{key} keeps {range} m, out of its own reach");
+            assert!(range >= CLOSEST_STANDOFF || !reach_further(weapon, range), "{key} closes to {range} m with reach to spare");
         }
         let far = |comfort| catalog.weapons().iter().filter_map(|weapon| comfortable_range(weapon, comfort)).fold(0.0, f32::max);
         assert!(far(0.7) > 8.0, "nothing is fought from further than {} m", far(0.7));

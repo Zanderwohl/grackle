@@ -50,13 +50,23 @@ impl Push {
     }
 }
 
-/// A missing clip is a direction with no flinch.
+/// A missing clip is a direction with no flinch. A rig file's own clips, under its folder of
+/// `animations/`, come before the shared ones, which name the humanoid's bones.
 #[derive(Resource, Default)]
-pub struct FlinchClips([Option<Handle<Clip>>; 4]);
+pub struct FlinchClips {
+    shared: [Option<Handle<Clip>>; 4],
+    rigs: std::collections::HashMap<String, [Option<Handle<Clip>>; 4]>,
+}
 
 impl FlinchClips {
-    fn of(&self, push: Push) -> Option<&Handle<Clip>> {
-        self.0[Push::ALL.iter().position(|each| *each == push).unwrap_or(0)].as_ref()
+    #[cfg(test)]
+    fn shared(shared: [Option<Handle<Clip>>; 4]) -> Self {
+        Self { shared, rigs: default() }
+    }
+
+    fn of(&self, rig: &str, push: Push) -> Option<&Handle<Clip>> {
+        let index = Push::ALL.iter().position(|each| *each == push).unwrap_or(0);
+        self.rigs.get(rig).and_then(|own| own[index].as_ref()).or(self.shared[index].as_ref())
     }
 }
 
@@ -67,6 +77,11 @@ impl Plugin for FlinchPlugin {
         app.init_resource::<FlinchClips>()
             .init_resource::<crate::common::clip_file::NamedClips>()
             .add_systems(Startup, load_flinch_clips)
+            // A client is sent the server's builds, and with them perhaps rigs it had not read.
+            .add_systems(
+                Update,
+                load_flinch_clips.run_if(resource_exists_and_changed::<crate::common::class::ClassBuilds>),
+            )
             .add_systems(
                 Update,
                 (start_flinches, end_flinches)
@@ -79,12 +94,15 @@ impl Plugin for FlinchPlugin {
 
 fn load_flinch_clips(
     packs: Res<PackAssets>,
+    builds: Option<Res<crate::common::class::ClassBuilds>>,
     mut clips: ResMut<Assets<Clip>>,
     mut named: ResMut<crate::common::clip_file::NamedClips>,
     mut loaded: ResMut<FlinchClips>,
 ) {
-    for (index, push) in Push::ALL.into_iter().enumerate() {
-        loaded.0[index] = named.load(&packs, &mut clips, push.clip_name());
+    loaded.shared = Push::ALL.map(|push| named.load(&packs, &mut clips, push.clip_name()));
+    for rig in builds.iter().flat_map(|builds| builds.rigs.keys()) {
+        let own = Push::ALL.map(|push| named.load(&packs, &mut clips, &format!("{rig}/{}", push.clip_name())));
+        loaded.rigs.insert(rig.clone(), own);
     }
 }
 
@@ -114,10 +132,10 @@ fn start_flinches(
     clips: Res<FlinchClips>,
     assets: Res<Assets<Clip>>,
     attackers: Query<(Entity, &PlayerId, &GlobalTransform)>,
-    mut bodies: Query<(&GlobalTransform, &mut ClipStack)>,
+    mut bodies: Query<(&GlobalTransform, &mut ClipStack, Option<&crate::common::skeleton::Skeleton>)>,
 ) {
     for hit in hits.read() {
-        let Ok((placed, mut stack)) = bodies.get_mut(hit.target) else { continue };
+        let Ok((placed, mut stack, skeleton)) = bodies.get_mut(hit.target) else { continue };
         let at = placed.translation();
         let from = match hit.source {
             DamageSource::Player(id) => attackers
@@ -129,7 +147,8 @@ fn start_flinches(
         .unwrap_or(hit.point);
         let travel = placed.rotation().inverse() * (at - from);
 
-        let Some(clip) = clips.of(Push::of(travel)) else { continue };
+        let rig = skeleton.map_or(crate::common::skeleton::rig::HUMANOID, |skeleton| skeleton.build().kind());
+        let Some(clip) = clips.of(rig, Push::of(travel)) else { continue };
         let left = stack
             .0
             .iter()
@@ -214,6 +233,35 @@ mod tests {
         }
     }
 
+    /// Breaks if a raptor flinch moves its head the wrong way, or does not let go by its end.
+    #[test]
+    fn every_raptor_flinch_moves_the_head_the_way_it_is_named() {
+        let rig = crate::common::class::ClassBuilds::shipped().rig_for(crate::common::class::Class::Raptor);
+        let ground = |_: Vec3| 0.0;
+        let frames = Frames::standing(Transform::IDENTITY, Transform::IDENTITY, &ground);
+        let head = |pose: &Pose| rig.posed_bones(pose, &Transform::IDENTITY)[rig.index_of("head").unwrap()].tail;
+        let rest = head(&Pose::rest());
+        let packs = [std::path::PathBuf::from("assets/default")];
+        for (push, wanted) in [
+            (Push::Back, Vec3::Z),
+            (Push::Forward, Vec3::NEG_Z),
+            (Push::Left, Vec3::NEG_X),
+            (Push::Right, Vec3::X),
+        ] {
+            let name = format!("raptor/{}", push.clip_name());
+            let clip = crate::common::clip_file::load_named_clip(&Default::default(), &packs, &name)
+                .unwrap_or_else(|| panic!("no {name}"));
+            let at = |time| {
+                let mut pose = Pose::rest();
+                apply(&clip, time, &rig, &mut pose, &frames, None);
+                head(&pose)
+            };
+            let moved = (at(0.08) - rest).with_y(0.0);
+            assert!(moved.dot(wanted) > 0.03, "{push:?} moved the head {moved}");
+            assert!((at(clip.length) - rest).length() < 1e-4, "{push:?} did not let go");
+        }
+    }
+
     /// A second hit restarts the flinch; it ends with its clip.
     #[test]
     fn a_hit_starts_a_flinch_and_it_runs_out() {
@@ -223,7 +271,7 @@ mod tests {
         let mut assets = Assets::<Clip>::default();
         let clip = assets.add(Clip { length: 0.4, ..default() });
         world.insert_resource(assets);
-        world.insert_resource(FlinchClips([Some(clip.clone()), Some(clip.clone()), Some(clip.clone()), Some(clip)]));
+        world.insert_resource(FlinchClips::shared([Some(clip.clone()), Some(clip.clone()), Some(clip.clone()), Some(clip)]));
         let body = world.spawn((GlobalTransform::IDENTITY, ClipStack::default())).id();
         let hit = |world: &mut World| {
             world.write_message(DamageDealt {
@@ -262,7 +310,7 @@ mod tests {
         let mut assets = Assets::<Clip>::default();
         let clip = assets.add(Clip { length: 0.4, ..default() });
         world.insert_resource(assets);
-        world.insert_resource(FlinchClips([Some(clip.clone()), Some(clip.clone()), Some(clip.clone()), Some(clip)]));
+        world.insert_resource(FlinchClips::shared([Some(clip.clone()), Some(clip.clone()), Some(clip.clone()), Some(clip)]));
         let body = world.spawn((GlobalTransform::IDENTITY, ClipStack::default())).id();
         let hit = |world: &mut World, amount: u32| {
             world.write_message(DamageDealt {
@@ -304,7 +352,7 @@ mod tests {
             crate::common::clip_file::load_named_clip(&Default::default(), &packs, "flinch_back").unwrap(),
         );
         world.insert_resource(assets);
-        world.insert_resource(FlinchClips([Some(back), None, None, None]));
+        world.insert_resource(FlinchClips::shared([Some(back), None, None, None]));
         let body = world
             .spawn((
                 humanoid(crate::common::class::ClassBuilds::shipped().of(crate::common::class::Class::Heavy)),

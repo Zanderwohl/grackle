@@ -685,6 +685,31 @@ mod tests {
         }
     }
 
+    /// Breaks if the stop sign's face is not on the crosshair at the bottom of its first-person
+    /// chop, so the swing does not look as if it connects, at any aspect or framing roll.
+    #[test]
+    fn the_stop_signs_chop_lands_on_the_crosshair() {
+        let doc = document::parse(include_str!("../../assets/default/props/stop_sign_held.gpp")).unwrap();
+        // The octagon's middle, in the prop's frame.
+        let face = Vec3::new(0.0, 0.9, -0.01);
+        let skeleton = crate::common::class::ClassBuilds::shipped().rig_for(Class::Mercenary);
+        let mut clips = Assets::<Clip>::default();
+        let fire = clips.add(doc.animations.clips["fire"].clone());
+        let mut rolled = doc.viewmodel.clone();
+        rolled.rotation[2] = 0.2;
+        for (viewmodel, aspect) in [&doc.viewmodel, &rolled].into_iter().flat_map(|viewmodel| [4.0 / 3.0, 16.0 / 9.0, 21.0 / 9.0].map(|aspect| (viewmodel, aspect))) {
+            let framed = viewmodel.transform(VIEWMODEL_FOV, aspect);
+            let stack = ClipStack(vec![crate::common::skeleton::play::Playing::new(
+                crate::common::skeleton::play::Layer::Weapon,
+                fire.clone(),
+                0.22,
+            )]);
+            let drawn = played(framed, &stack, &skeleton, &clips).transform_point(face);
+            let off = Vec2::new(drawn.x, drawn.y) / -drawn.z;
+            assert!(drawn.z < -0.2 && off.length() < 0.05, "at {aspect}: the face is drawn at {drawn:?}");
+        }
+    }
+
     /// A humanoid still stands by its eye: its arms reach from there.
     #[test]
     fn a_humanoid_stands_by_its_eye() {

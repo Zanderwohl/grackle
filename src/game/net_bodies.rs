@@ -597,7 +597,7 @@ mod tests {
     fn without_teams_a_body_has_no_side_but_a_color_and_the_modes_loadout() {
         let mut world = World::new();
         a_map(&mut world);
-        let wrench = crate::common::weapon::WeaponId::of("medi_wrench");
+        let wrench = crate::common::weapon::WeaponId::of("stop_sign");
         world.insert_resource(GameRules(ModeRules { teams: false, classes: vec![crate::common::class::Class::Mercenary], loadout: Some(vec![wrench]), ..default() }));
         sit_down(&mut world, Seat::Playing(None));
 

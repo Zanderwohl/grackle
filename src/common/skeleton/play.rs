@@ -946,6 +946,33 @@ pub(crate) fn apply_masked_into(
                     continue;
                 };
                 match track.combine {
+                    // Keys in spaces of their own are turned between in world space, as a point's are.
+                    Combine::Replace if keys.iter().any(|key| key.space.is_some()) => {
+                        let beneath = placed.rotation;
+                        let turned = |key: &Key| {
+                            let frame = frames.of_on(key.space.unwrap_or(track.space), skeleton, pose)?;
+                            Some(frame.rotation * quat_from_euler(angles_for(key.to, frame.rotation.inverse() * beneath)))
+                        };
+                        let blend = |from: Option<Quat>, to: Option<Quat>, ease: Interpolation, along: f32| match (from, to) {
+                            (Some(from), Some(to)) => Some(from.slerp(to, ease.ease(along))),
+                            (from, to) => if ease.ease(along) >= 1.0 { to } else { from },
+                        };
+                        let sampled = sample_at(
+                            keys,
+                            time,
+                            length,
+                            looping,
+                            |key| key.at,
+                            turned,
+                            |key| key.ease,
+                            blend,
+                            // No spline through turns: eased straight between the two either side.
+                            |[_, from, to, _], _, along| blend(from, to, Interpolation::Linear, along),
+                        );
+                        if let Some(Some(turn)) = sampled {
+                            placed.rotation = turn;
+                        }
+                    }
                     // In the track's own space; free axes keep the hold's.
                     Combine::Replace => {
                         if let Some(frame) = frames.of_on(track.space, skeleton, pose) {
