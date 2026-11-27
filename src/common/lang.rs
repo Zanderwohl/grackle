@@ -67,9 +67,8 @@ static TEMPLATE_REGEX: LazyLock<Regex> =
 ///
 /// Only written while holding the `LANG` read lock, and cleared by
 /// [`change_lang`] under the write lock, so a fill that began before a
-/// language switch cannot store a stale result after it. A promotion out of
-/// the old generation (see [`Cache`]) writes without `LANG`, but only moves an
-/// entry still present, so it cannot bring back one a clear removed.
+/// language switch cannot store a stale result after it. A promotion writes
+/// without `LANG`, but only moves an entry still present.
 static CACHE: LazyLock<RwLock<Cache>> = LazyLock::new(|| RwLock::new(Cache::default()));
 
 /// The key space is unbounded (arguments are ids, counts, error strings), so
@@ -77,10 +76,8 @@ static CACHE: LazyLock<RwLock<Cache>> = LazyLock::new(|| RwLock::new(Cache::defa
 const CACHE_LIMIT: usize = 1024;
 const GENERATION_SIZE: usize = CACHE_LIMIT / 2;
 
-/// Two generations, an approximate LRU: entries go into `young`; when it is full, `old` is
-/// dropped and `young` becomes `old`; a hit in `old` moves the entry back into `young`. A string
-/// asked for every frame survives a rotation, and one filled with a one-off argument is gone
-/// within two.
+/// An approximate LRU: a full `young` replaces `old`, and a hit in `old` moves the entry back
+/// into `young`.
 #[derive(Default)]
 struct Cache {
     young: HashMap<String, String>,
@@ -104,11 +101,11 @@ impl Cache {
         self.young.insert(key, value);
     }
 
-    fn promote(&mut self, key: &str) {
-        if let Some((key, value)) = self.old.remove_entry(key) {
-            STATS.promotions.fetch_add(1, Relaxed);
-            self.insert(key, value);
-        }
+    fn promote(&mut self, key: &str) -> Option<String> {
+        let (key, value) = self.old.remove_entry(key)?;
+        STATS.promotions.fetch_add(1, Relaxed);
+        self.insert(key, value.clone());
+        Some(value)
     }
 
     fn clear(&mut self) {
@@ -141,8 +138,7 @@ static STATS: Counters = Counters {
     flushes: AtomicU64::new(0),
 };
 
-/// Counts since the process started; a hit in the old generation counts as a hit and a
-/// promotion.
+/// Since the process started. A hit in the old generation is also a promotion.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct CacheStats {
     pub hits: u64,
@@ -158,14 +154,6 @@ pub struct CacheStats {
     pub capacity: usize,
 }
 
-impl CacheStats {
-    /// `None` before the first lookup.
-    pub fn hit_rate(&self) -> Option<f64> {
-        let total = self.hits + self.misses;
-        (total > 0).then(|| self.hits as f64 / total as f64)
-    }
-}
-
 pub fn cache_stats() -> CacheStats {
     CacheStats {
         hits: STATS.hits.load(Relaxed),
@@ -179,8 +167,7 @@ pub fn cache_stats() -> CacheStats {
     }
 }
 
-/// For a change of context that replaces most of the strings asked for, such as a change of
-/// mode, so the old context's strings do not hold the cache.
+/// For a change of context that replaces most of the strings asked for.
 pub fn flush_cache() {
     // `LANG` first, as everywhere: a fill holding it may be about to store.
     let _lang = LANG.read();
@@ -197,21 +184,15 @@ fn cached(key: &str) -> Option<String> {
         STATS.hits.fetch_add(1, Relaxed);
         return Some(value.clone());
     }
-    let in_old = cache.old.get(key).cloned();
+    let in_old = cache.old.contains_key(key);
     drop(cache);
-    match in_old {
-        Some(value) => {
-            STATS.hits.fetch_add(1, Relaxed);
-            if let Ok(mut cache) = CACHE.write() {
-                cache.promote(key);
-            }
-            Some(value)
-        }
-        None => {
-            STATS.misses.fetch_add(1, Relaxed);
-            None
-        }
-    }
+    // Taken under the write lock, so a clear between the locks cannot return an old string.
+    let promoted = in_old.then(|| CACHE.write().ok()?.promote(key)).flatten();
+    match promoted {
+        Some(_) => STATS.hits.fetch_add(1, Relaxed),
+        None => STATS.misses.fetch_add(1, Relaxed),
+    };
+    promoted
 }
 
 /// Call while holding the `LANG` read lock; see [`CACHE`].
@@ -221,21 +202,15 @@ fn store(key: String, value: String) {
     }
 }
 
-/// Clears the cache whenever `AppMode` changes.
+/// Flushes on leaving any `AppMode`, before the next mode's `OnEnter` systems cache their strings.
 pub struct LangCachePlugin;
 
 impl bevy::app::Plugin for LangCachePlugin {
     fn build(&self, app: &mut bevy::app::App) {
-        app.add_systems(bevy::app::Update, flush_on_mode_change);
-    }
-}
-
-fn flush_on_mode_change(
-    mut transitions: bevy::ecs::message::MessageReader<bevy::state::state::StateTransitionEvent<crate::common::app_mode::AppMode>>,
-) {
-    let changed = transitions.read().fold(false, |changed, transition| changed || transition.exited != transition.entered);
-    if changed {
-        flush_cache();
+        use strum::IntoEnumIterator;
+        for mode in crate::common::app_mode::AppMode::iter() {
+            app.add_systems(bevy::state::state::OnExit(mode), flush_cache);
+        }
     }
 }
 
@@ -814,25 +789,27 @@ mod tests {
             "cache grew to {}", CACHE.read().unwrap().len());
     }
 
-    /// Fails if a string asked for between one-off fills is dropped by a rotation, which is the
-    /// churn the old clear-everything rule had.
+    /// Fails if a string asked for between one-off fills is dropped by a rotation. Local, since
+    /// other tests fill the shared cache in parallel.
     #[test]
     fn a_string_asked_for_often_survives_rotations() {
-        let _guard = switching_language();
-        let hot = "viewport.free";
-        let before = cache_stats();
+        let mut cache = Cache::default();
+        let hot = "hot".to_string();
+        cache.insert(hot.clone(), "value".into());
+        let mut promotions = 0;
         for i in 0..CACHE_LIMIT * 3 {
-            if i % 64 == 0 {
-                get_parsed(hot);
+            if i % 64 == 0 && !cache.young.contains_key(&hot) {
+                assert!(cache.promote(&hot).is_some(), "the hot string was dropped before {i}");
+                promotions += 1;
             }
-            get_template(&["editor", "title_special"], &[("game", &format!("once {i}"))]);
+            cache.insert(format!("once {i}"), String::new());
         }
-        let after = cache_stats();
-        assert!(after.rotations >= before.rotations + 5, "{before:?} -> {after:?}");
-        assert!(CACHE.read().unwrap().get(hot).is_some(), "the hot string was dropped");
-        assert!(after.promotions > before.promotions, "{before:?} -> {after:?}");
+        assert!(cache.get(&hot).is_some(), "the hot string was dropped");
+        assert!(promotions >= 5, "promoted {promotions} times");
+        assert!(cache.len() <= CACHE_LIMIT);
     }
 
+    /// Counters only rise, so other tests running in parallel cannot fail this.
     #[test]
     fn a_hit_and_a_miss_are_counted() {
         let _guard = switching_language();
@@ -845,15 +822,15 @@ mod tests {
     }
 
     #[test]
-    fn a_flush_empties_both_generations() {
-        let _guard = switching_language();
+    fn a_clear_empties_both_generations() {
+        let mut cache = Cache::default();
         for i in 0..GENERATION_SIZE + 10 {
-            get_template(&["editor", "title_special"], &[("game", &i.to_string())]);
+            cache.insert(i.to_string(), String::new());
         }
-        assert!(!CACHE.read().unwrap().old.is_empty());
+        assert!(!cache.old.is_empty());
         let before = cache_stats().flushes;
-        flush_cache();
-        assert_eq!(CACHE.read().unwrap().len(), 0);
+        cache.clear();
+        assert_eq!(cache.len(), 0);
         assert!(cache_stats().flushes > before);
     }
 
@@ -864,7 +841,7 @@ mod tests {
         let mut cache = Cache::default();
         cache.old.insert("k".into(), "v".into());
         cache.clear();
-        cache.promote("k");
+        assert_eq!(cache.promote("k"), None);
         assert_eq!(cache.len(), 0);
     }
 

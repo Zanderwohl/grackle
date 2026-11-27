@@ -124,7 +124,7 @@ fn perf_ui(
                     row(get!("debug.perf.lang_cache"), format!("{} / {}", lang.entries, lang.capacity));
                     row(
                         get!("debug.perf.lang_hit_rate"),
-                        match lang.hit_rate() {
+                        match lang_rates.hit_rate {
                             Some(rate) => format!("{:.2}%", rate * 100.0),
                             None => "—".to_owned(),
                         },
@@ -150,23 +150,33 @@ fn perf_ui(
         });
 }
 
-/// The string cache's misses and rotations per second, over the last whole second.
+/// The string cache's hit rate, misses and rotations over the last whole second.
 #[derive(Default)]
 struct LangRates {
     since: Option<(f64, crate::common::lang::CacheStats)>,
+    last_seen: f64,
+    hit_rate: Option<f64>,
     misses: f64,
     rotations: f64,
 }
 
 impl LangRates {
+    /// Longer than any frame, so a gap this long means the overlay was closed.
+    const GAP_SECONDS: f64 = 0.5;
+
     fn update(&mut self, now: crate::common::lang::CacheStats, seconds: f64) {
-        let Some((then, before)) = self.since else {
-            self.since = Some((seconds, now));
+        let reopened = seconds - self.last_seen > Self::GAP_SECONDS;
+        self.last_seen = seconds;
+        let Some((then, before)) = self.since.filter(|_| !reopened) else {
+            *self = Self { since: Some((seconds, now)), last_seen: seconds, ..default() };
             return;
         };
         let elapsed = seconds - then;
         if elapsed >= 1.0 {
-            self.misses = (now.misses - before.misses) as f64 / elapsed;
+            let hits = now.hits - before.hits;
+            let misses = now.misses - before.misses;
+            self.hit_rate = (hits + misses > 0).then(|| hits as f64 / (hits + misses) as f64);
+            self.misses = misses as f64 / elapsed;
             self.rotations = (now.rotations - before.rotations) as f64 / elapsed;
             self.since = Some((seconds, now));
         }

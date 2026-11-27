@@ -4347,8 +4347,8 @@ every frame.
 **Lookups and filled templates are cached**, 1024 entries in two generations: a full young
 generation becomes the old one and the old one is dropped, and a hit in the old one moves the
 entry back, so a string asked for every frame survives. A language change, a remerge, every
-`AppMode` transition (`LangCachePlugin`) and `lang::flush_cache()` empty it. `F3` shows its size,
-hit rate, and misses and rotations per second (`lang::cache_stats`); rotations that keep climbing
+`AppMode` exit (`LangCachePlugin`, before the next mode's `OnEnter`) and `lang::flush_cache()` empty it. `F3` shows its size,
+hit rate, misses and rotations over the last second (`lang::cache_stats`); rotations that keep climbing
 on one screen mean that screen's strings do not fit. A string whose arguments change all the time
 belongs in `fill_uncached`.
 
