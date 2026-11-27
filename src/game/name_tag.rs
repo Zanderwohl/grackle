@@ -13,8 +13,10 @@
 //! While `F8` is on, a spectator watching a bot has its name and goal on the same panel at the
 //! bottom middle of the [`SafeZone`].
 //!
-//! Until a [`KillCam`] hands over to spectating, the same panel at the middle of the right edge
-//! of the [`WindowSafeZone`] says who killed us and with what, in their color.
+//! Until a [`KillCam`] hands over to spectating, the same panel says who killed us and with what,
+//! in their color, over the killer's head or under their feet, whichever has more room. A square
+//! [`PlateBar`] to its left, twice as tall and reaching under it, fills from the bottom in
+//! blood red with the share of health they had left as we died, the number over it.
 
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
@@ -33,8 +35,11 @@ use crate::game::bot_think::{BotThought, Candidate, Want};
 use crate::game::kill_cam::KillCam;
 use crate::game::collision::CollisionWorld;
 use crate::game::death::Dying;
-use crate::game::hud::{SafeZone, WindowSafeZone, MARGIN_Y, WINDOW_MARGIN};
+use crate::game::hud::{hud_text, lean_across, SafeZone, LEAN, WindowSafeZone, MARGIN_Y, WINDOW_MARGIN, ZONE_DROP, ZONE_STROKE};
+use crate::game::kill_cam::FRAME_FILL;
+use crate::game::replay::Replay;
 use crate::game::plate::{plate, plate_node, plate_text, Plate};
+use crate::game::plate_bar::{BarDirection, PlateBar};
 use crate::game::player::{LocalPlayer, PhysicsBody, Player, PlayerCamera, Viewed, Watched};
 use crate::game::score::Standing;
 use crate::get;
@@ -47,6 +52,14 @@ const LINGER: f32 = 0.5;
 const GAP: f32 = 6.0;
 const TEXT: f32 = 20.0;
 const GOAL_TEXT: f32 = 14.0;
+/// The health square's side, in the killer plate's heights.
+const HEALTH_SQUARE: f32 = 2.0;
+/// Logical pixels the health square's panel reaches under the killer plate's.
+const UNDERLAP: f32 = 20.0;
+/// A digit's advance, in ems: about what a proportional font gives its figures.
+const DIGIT_EM: f32 = 0.6;
+/// Of the panel's inside, what the three digits may fill.
+const DIGITS_FILL: f32 = 0.85;
 
 pub struct NameTagPlugin;
 
@@ -100,30 +113,44 @@ struct WatchedPlate {
     words: Words,
 }
 
-/// The center-right panel naming who killed us.
+/// The row naming who killed us, beside their health.
 #[derive(Component)]
 struct KillerBanner;
 
 #[derive(Component, Default)]
 struct KillerPlate {
     words: Words,
-    /// The killer's name, weapon and language the lines were built for.
-    built_for: Option<(String, Option<WeaponId>, u64)>,
+    /// The killer's name, weapon, whether they had died since, and language the lines were built for.
+    built_for: Option<(String, Option<WeaponId>, bool, u64)>,
     killed_by: String,
     using: Option<String>,
+    /// The number in the health square.
+    health_written: Option<u32>,
 }
 
+/// The square showing the killer's health, right of the [`KillerPlate`].
+#[derive(Component)]
+struct KillerHealth;
+
+/// Padded to the part of the square's fill the plate leaves uncovered; the number is centered in it.
+#[derive(Component)]
+struct KillerHealthInside;
+
+#[derive(Component)]
+struct KillerHealthText;
+
 impl KillerPlate {
-    fn refresh(&mut self, killer: PlayerId, weapon: Option<WeaponId>, standings: &Query<&Standing>, catalog: Option<&WeaponCatalog>) {
+    fn refresh(&mut self, killer: PlayerId, weapon: Option<WeaponId>, late: bool, standings: &Query<&Standing>, catalog: Option<&WeaponCatalog>) {
         self.words.refresh_name(killer, standings);
         let generation = crate::common::lang::generation();
-        if self.built_for.as_ref().is_some_and(|(name, built_weapon, built_generation)| {
-            *name == self.words.name && *built_weapon == weapon && *built_generation == generation
+        if self.built_for.as_ref().is_some_and(|(name, built_weapon, built_late, built_generation)| {
+            *name == self.words.name && *built_weapon == weapon && *built_late == late && *built_generation == generation
         }) {
             return;
         }
-        let key = (self.words.name.clone(), weapon, generation);
-        self.killed_by = get!("kill_cam.killed_by", "name", self.words.name);
+        let key = (self.words.name.clone(), weapon, late, generation);
+        let line = if late { "kill_cam.killed_by_the_late" } else { "kill_cam.killed_by" };
+        self.killed_by = get!(line, "name", self.words.name);
         self.using = weapon
             .and_then(|weapon| catalog?.get(weapon))
             .map(|weapon| get!("kill_cam.using", "weapon", get!(weapon.name_key)));
@@ -224,20 +251,78 @@ fn watched_banner(font: &Handle<Font>) -> impl Bundle {
 fn killer_banner(font: &Handle<Font>) -> impl Bundle {
     (
         KillerBanner,
-        Node {
-            position_type: PositionType::Absolute,
-            top: Val::Px(0.0),
-            bottom: Val::Px(0.0),
-            right: Val::Px(0.0),
-            flex_direction: FlexDirection::Column,
-            justify_content: JustifyContent::Center,
-            ..default()
-        },
+        Node { position_type: PositionType::Absolute, flex_direction: FlexDirection::Row, align_items: AlignItems::Center, ..default() },
         Visibility::Hidden,
         Pickable::IGNORE,
         Name::new("Killer banner"),
-        children![(KillerPlate::default(), plate(Swatch::neutral()), plate_lines(font))],
+        children![
+            (
+                KillerHealth,
+                PlateBar::new(Swatch::blood(), 1.0).toward(BarDirection::BottomToTop),
+                // Its right margin is `underlap`'s, once the plate's size is known.
+                Node { width: Val::Px(0.0), height: Val::Px(0.0), ..default() },
+                children![(
+                    KillerHealthInside,
+                    // Its padding is `inside_the_square`'s, once the side is known.
+                    Node {
+                        position_type: PositionType::Absolute,
+                        width: Val::Percent(100.0),
+                        height: Val::Percent(100.0),
+                        justify_content: JustifyContent::Center,
+                        align_items: AlignItems::Center,
+                        ..default()
+                    },
+                    Pickable::IGNORE,
+                    children![(
+                        KillerHealthText,
+                        hud_text(font, String::new(), TEXT, Color::WHITE),
+                        TextLayout { justify: bevy::text::Justify::Center, linebreak: bevy::text::LineBreak::NoWrap },
+                    )],
+                )],
+            ),
+            // Over the square, which reaches under it.
+            (KillerPlate::default(), plate(Swatch::neutral()), ZIndex(1), plate_lines(font)),
+        ],
     )
+}
+
+/// How far a plate `plate_height` tall, centered right of the health square of `side`, is pulled
+/// left over it, so their panels overlap by [`UNDERLAP`]. Both slanted sides lean by [`LEAN`] per
+/// pixel of height, so the overlap is the same all down the plate; it is measured at the plate's
+/// top, where the square's right side is that far left of its top corner and the plate's left
+/// side its whole lean right of its bottom corner.
+fn underlap(plate_height: f32, side: f32) -> f32 {
+    // The square's box ends its stroke and drop in from its right; the plate's starts its stroke
+    // in from its left.
+    let boxes = 2.0 * ZONE_STROKE + ZONE_DROP.x;
+    let plate_below_square_top = ((side - plate_height) * 0.5).max(0.0);
+    UNDERLAP + boxes + LEAN * plate_below_square_top + lean_across(plate_height)
+}
+
+/// The font size at which three digits fill a square of `side` logical pixels across, inside its
+/// stroke, drop, lean and the part the plate covers, or its height, whichever is less.
+fn digits_font_size(side: f32) -> f32 {
+    let inside = inside_the_square(side);
+    let wide = side - inside.left - inside.right;
+    let tall = side - inside.top - inside.bottom;
+    (DIGITS_FILL * wide / (3.0 * DIGIT_EM)).min(DIGITS_FILL * tall).max(1.0)
+}
+
+/// Logical pixels from each side of the square's box, of `side`, to the inner shape: the fill
+/// inside the stroke, which is drawn centered on the outline, less the part the plate covers. The
+/// sides lean, so across it is the width at mid-height, half the lean off each side.
+fn inside_the_square(side: f32) -> Inset {
+    let border = 1.5 * ZONE_STROKE;
+    let lean = 0.5 * lean_across(side);
+    Inset { left: border + lean, right: border + ZONE_DROP.x + lean + UNDERLAP, top: border, bottom: border + ZONE_DROP.y }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Inset {
+    left: f32,
+    right: f32,
+    top: f32,
+    bottom: f32,
 }
 
 /// What a tag or a banner writes into its lines; [`Plate`] paints the panel and inks them.
@@ -325,11 +410,14 @@ type People = (With<Player>, Without<Dying>, Without<Watched>, Without<LocalPlay
 
 /// Puts a tag up for the body under the crosshair, and for every bot while
 /// they are shown, keeps it up while it stays there, and takes down any left
-/// unseen too long or whose body went.
+/// unseen too long or whose body went. While the kill cam replays, our killer has none: the
+/// killer banner names them where a tag would hang.
 #[allow(clippy::too_many_arguments)]
 fn tag_whoever_is_aimed_at(
     mut commands: Commands,
     time: Res<Time>,
+    kill_cam: Option<Res<KillCam>>,
+    replay: Option<Res<Replay>>,
     font: Res<DisplayFont>,
     show: Res<ShowBots>,
     bots: Query<Entity, With<BotOf>>,
@@ -355,16 +443,18 @@ fn tag_whoever_is_aimed_at(
     let others = targets.iter().filter(|(entity, _)| !viewed.contains(*entity)).map(|(entity, boxes)| (entity, *boxes));
     let aimed = trace(&ray, range, others).map(|hit| hit.target).filter(|body| people.contains(*body));
 
+    let killer = kill_cam.filter(|_| replay.is_some()).map(|kill_cam| kill_cam.killer);
+    let taggable = |body: Entity| people.get(body).is_ok_and(|(id, ..)| Some(*id) != killer);
     let shown = |body: Entity| show.0 && bots.contains(body);
     for (tag, mut name_tag) in &mut tags {
         let aimed_at = aimed == Some(name_tag.body);
         let stays = name_tag.age(aimed_at, time.delta_secs()) || shown(name_tag.body);
-        if !stays || !people.contains(name_tag.body) {
+        if !stays || !taggable(name_tag.body) {
             commands.entity(tag).despawn();
         }
     }
-    let mut wanted: Vec<Entity> = if show.0 { bots.iter().filter(|body| people.contains(*body)).collect() } else { Vec::new() };
-    wanted.extend(aimed);
+    let mut wanted: Vec<Entity> = if show.0 { bots.iter().filter(|body| taggable(*body)).collect() } else { Vec::new() };
+    wanted.extend(aimed.filter(|body| taggable(*body)));
     wanted.sort();
     wanted.dedup();
     for body in wanted {
@@ -456,20 +546,47 @@ fn name_whoever_is_watched(
     visibility.set_if_neq(if ready { Visibility::Inherited } else { Visibility::Hidden });
 }
 
-#[allow(clippy::too_many_arguments)]
+/// Top left of the killer banner, of `size`, in a zone of `zone`: centered on the killer, under
+/// their feet or over their head, whichever leaves more of the zone between them and its edge.
+/// With only one of the two on screen, by that one alone; with neither, where the kill cam frames
+/// them.
+fn killer_placement(feet: Option<Vec2>, head: Option<Vec2>, size: Vec2, zone: Vec2) -> Vec2 {
+    let framed = || {
+        let middle = zone * 0.5;
+        (middle + Vec2::Y * zone.y * FRAME_FILL * 0.5, middle - Vec2::Y * zone.y * FRAME_FILL * 0.5)
+    };
+    let (feet, head) = match (feet, head) {
+        (Some(feet), Some(head)) => (feet, head),
+        (Some(one), None) | (None, Some(one)) => (one, one),
+        (None, None) => framed(),
+    };
+    let top = match zone.y - feet.y >= head.y {
+        true => feet.y + GAP,
+        false => head.y - GAP - size.y,
+    };
+    let corner = Vec2::new((feet.x + head.x) * 0.5 - size.x * 0.5, top);
+    corner.clamp(Vec2::ZERO, (zone - size).max(Vec2::ZERO))
+}
+
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn name_our_killer(
     font: Res<DisplayFont>,
-    zone: Option<Single<Entity, With<WindowSafeZone>>>,
+    zone: Option<Single<(Entity, &ComputedNode), With<WindowSafeZone>>>,
+    camera: Option<Single<(&Camera, &GlobalTransform), With<PlayerCamera>>>,
     kill_cam: Option<Res<KillCam>>,
     catalog: Option<Res<WeaponCatalog>>,
     standings: Query<&Standing>,
-    mut banners: Query<(&mut Visibility, &Children), With<KillerBanner>>,
+    mut banners: Query<(&mut Visibility, &mut Node, &ComputedNode, &Children), (With<KillerBanner>, Without<KillerHealth>, Without<NameTagGoal>)>,
     mut plate: Query<(&mut KillerPlate, &mut Plate, &ComputedNode, &Children)>,
+    mut squares: Query<(&mut PlateBar, &mut Node, &ComputedNode, &Children), (With<KillerHealth>, Without<KillerBanner>, Without<NameTagGoal>)>,
+    mut holders: Query<(&Children, &mut Node), (With<KillerHealthInside>, Without<KillerHealth>, Without<KillerBanner>, Without<NameTagGoal>)>,
+    mut numbers: Query<(&mut Text, &mut TextFont, &mut TextColor, &mut Visibility), (With<KillerHealthText>, Without<NameTagText>, Without<NameTagGoal>, Without<KillerBanner>)>,
     mut plates: Plates,
 ) {
     let Some(zone) = zone else { return };
-    let Some((mut visibility, children)) = banners.iter_mut().next() else {
-        plates.commands.entity(*zone).with_child(killer_banner(&font.0));
+    let (zone, zone_node) = zone.into_inner();
+    let Some((mut visibility, mut node, banner_node, children)) = banners.iter_mut().next() else {
+        plates.commands.entity(zone).with_child(killer_banner(&font.0));
         return;
     };
     // Spectating, the bottom banner names whoever is watched.
@@ -477,15 +594,83 @@ fn name_our_killer(
         visibility.set_if_neq(Visibility::Hidden);
         return;
     };
-    let Some((mut drawn, mut shape, computed, lines)) = children.first().and_then(|inner| plate.get_mut(*inner).ok()) else { return };
+    let Some((mut drawn, mut shape, computed, lines)) = children.get(1).and_then(|inner| plate.get_mut(*inner).ok()) else { return };
     let size = computed.size() * computed.inverse_scale_factor();
     let standing = standings.iter().find(|standing| standing.id == kill_cam.killer);
     let swatch = standing.map_or_else(Swatch::neutral, Standing::hud_swatch);
     let plate = &mut *drawn;
-    plate.refresh(kill_cam.killer, kill_cam.weapon, &standings, catalog.as_deref());
-    let ready = plates.fill(&mut shape, lines, &plate.killed_by, plate.using.as_deref(), swatch, size);
+    plate.refresh(kill_cam.killer, kill_cam.weapon, kill_cam.late, &standings, catalog.as_deref());
+    let mut ready = plates.fill(&mut shape, lines, &plate.killed_by, plate.using.as_deref(), swatch, size);
+
+    if let Some((mut bar, mut square, laid_out, inside)) = children.first().and_then(|square| squares.get_mut(*square).ok()) {
+        let side = (size.y * HEALTH_SQUARE).round();
+        let health = kill_cam.health;
+        let (width, height) = match health {
+            Some(_) => (Val::Px(side), Val::Px(side)),
+            None => (Val::Px(0.0), Val::Px(0.0)),
+        };
+        let margin = Val::Px(-underlap(size.y, side).round());
+        if square.width != width || square.height != height || square.margin.right != margin {
+            square.width = width;
+            square.height = height;
+            square.margin.right = margin;
+        }
+        let display = if health.is_some() { Display::Flex } else { Display::None };
+        if square.display != display {
+            square.display = display;
+        }
+        if let Some(health) = health {
+            let t = health.share();
+            if bar.t != t {
+                bar.t = t;
+            }
+            let laid = laid_out.size() * laid_out.inverse_scale_factor();
+            ready &= side > 0.0 && (laid - Vec2::splat(side)).abs().max_element() <= 0.5;
+            let inset = inside_the_square(side);
+            let padding = UiRect {
+                left: Val::Px(inset.left),
+                right: Val::Px(inset.right),
+                top: Val::Px(inset.top),
+                bottom: Val::Px(inset.bottom),
+            };
+            let mut number = None;
+            for &holder in inside {
+                let Ok((texts, mut node)) = holders.get_mut(holder) else { continue };
+                if node.padding != padding {
+                    node.padding = padding;
+                }
+                number = number.or(texts.iter().find(|text| numbers.contains(*text)));
+            }
+            if let Some((mut text, mut font, mut ink, mut shown)) = number.and_then(|text| numbers.get_mut(text).ok()) {
+                if plate.health_written != Some(health.health) {
+                    plate.health_written = Some(health.health);
+                    text.0 = health.health.to_string();
+                }
+                let font_size = bevy::text::FontSize::Px(digits_font_size(side));
+                if font.font_size != font_size {
+                    font.font_size = font_size;
+                }
+                ink.set_if_neq(TextColor(bar.swatch.text()));
+                shown.set_if_neq(Visibility::Inherited);
+            }
+        }
+    }
+
+    let row = banner_node.size() * banner_node.inverse_scale_factor();
+    let area = zone_node.size() * zone_node.inverse_scale_factor();
+    let on_screen = |point: Vec3| {
+        let (camera, eye) = camera.as_deref()?;
+        camera.world_to_viewport(eye, point).ok().map(|at| at - Vec2::splat(WINDOW_MARGIN))
+    };
+    let (feet, head) = kill_cam.killer_drawn().map_or((None, None), |(feet, height)| (on_screen(feet), on_screen(feet + Vec3::Y * height)));
+    let corner = killer_placement(feet, head, row, area);
+    if node.left != Val::Px(corner.x) || node.top != Val::Px(corner.y) {
+        node.left = Val::Px(corner.x);
+        node.top = Val::Px(corner.y);
+    }
     visibility.set_if_neq(if ready { Visibility::Inherited } else { Visibility::Hidden });
 }
+
 
 #[cfg(test)]
 mod tests {
@@ -512,6 +697,80 @@ mod tests {
         assert_eq!(corner, Vec2::ZERO);
         let corner = placement(Some(Vec2::new(795.0, 100.0)), None, SIZE, ZONE).unwrap();
         assert_eq!(corner.x, ZONE.x - SIZE.x);
+    }
+
+    /// Breaks if the banner does not hang under the feet when there is more room below, over the
+    /// head when there is more above, centered on the killer, or with no killer on screen does not
+    /// stand where the kill cam frames them.
+    #[test]
+    fn the_killer_banner_takes_the_roomier_side_of_the_killer() {
+        let under = killer_placement(Some(Vec2::new(400.0, 250.0)), Some(Vec2::new(400.0, 150.0)), SIZE, ZONE);
+        assert_eq!(under, Vec2::new(340.0, 250.0 + GAP));
+        let over = killer_placement(Some(Vec2::new(400.0, 450.0)), Some(Vec2::new(400.0, 350.0)), SIZE, ZONE);
+        assert_eq!(over, Vec2::new(340.0, 350.0 - GAP - SIZE.y));
+        let one = killer_placement(None, Some(Vec2::new(400.0, 350.0)), SIZE, ZONE);
+        assert_eq!(one, Vec2::new(340.0, 350.0 - GAP - SIZE.y), "one point on screen was not used");
+        let framed = killer_placement(None, None, SIZE, ZONE);
+        assert_eq!(framed, Vec2::new(340.0, 300.0 + 300.0 * FRAME_FILL + GAP));
+    }
+
+    /// Breaks if the square's panel does not reach [`UNDERLAP`] under the plate's at the plate's
+    /// top and bottom alike.
+    #[test]
+    fn the_health_square_underlaps_the_plate_all_down_its_side() {
+        let (plate, side) = (52.0_f32, 156.0_f32);
+        let pulled = underlap(plate, side);
+        // In the square's box: the square's right edge and the plate's left edge at a height.
+        let plate_top = (side - plate) * 0.5 + ZONE_STROKE;
+        let plate_bottom = (side - plate) * 0.5 + plate - ZONE_STROKE - ZONE_DROP.y;
+        let square_right = |y: f32| side - ZONE_STROKE - ZONE_DROP.x - LEAN * (y - ZONE_STROKE);
+        let plate_left = |y: f32| side - pulled + ZONE_STROKE + LEAN * (plate_bottom - y);
+        for y in [plate_top, plate_bottom] {
+            let overlap = square_right(y) - plate_left(y);
+            assert!((overlap - UNDERLAP).abs() < 1e-3, "at {y}: {overlap}");
+        }
+    }
+
+    /// Breaks if three digits at the chosen size are wider than the square's fill inside its
+    /// stroke, or nowhere near filling it.
+    #[test]
+    fn three_digits_fill_the_health_square() {
+        for side in [100.0, 150.0, 200.0] {
+            let digits = 3.0 * DIGIT_EM * digits_font_size(side);
+            // The fill inside the stroke at mid-height, less what the plate covers.
+            let inside = side - 3.0 * ZONE_STROKE - ZONE_DROP.x - lean_across(side) - UNDERLAP;
+            assert!(digits <= inside && digits >= 0.7 * inside, "side {side}: {digits} of {inside}");
+        }
+    }
+
+    /// Breaks if the killer keeps a name tag while the kill cam replays, or anybody else loses one.
+    #[test]
+    fn the_killer_has_no_name_tag_while_the_kill_cam_replays() {
+        use bevy::ecs::system::RunSystemOnce;
+        let mut world = World::new();
+        world.init_resource::<Time>();
+        world.init_resource::<DisplayFont>();
+        world.init_resource::<CollisionWorld>();
+        world.insert_resource(ShowBots(true));
+        world.spawn(WindowSafeZone);
+        world.spawn((PlayerCamera, GlobalTransform::default()));
+        let bot = |world: &mut World, id: u64| world.spawn((Player::default(), PlayerId(id), GlobalTransform::default(), Hitboxes::default(), BotOf(Entity::PLACEHOLDER))).id();
+        let (killer, other) = (bot(&mut world, 7), bot(&mut world, 8));
+        let tagged = |world: &mut World| -> Vec<Entity> {
+            world.run_system_once(tag_whoever_is_aimed_at).unwrap();
+            world.flush();
+            world.query::<&NameTag>().iter(world).map(|tag| tag.body).collect()
+        };
+        assert_eq!(tagged(&mut world).len(), 2);
+
+        world.insert_resource(KillCam::new(PlayerId(7), None, 0.0, Vec3::ZERO));
+        world.insert_resource(Replay { view: 0.0, frozen: false, speed: 1.0 });
+        assert_eq!(tagged(&mut world), vec![other], "the killer kept a tag in the replay");
+
+        world.remove_resource::<Replay>();
+        let mut after = tagged(&mut world);
+        after.sort();
+        assert_eq!(after, { let mut both = vec![killer, other]; both.sort(); both }, "the killer had no tag once the replay ended");
     }
 
     #[test]
@@ -555,7 +814,7 @@ mod tests {
         use bevy::ecs::system::RunSystemOnce;
         let mut world = World::new();
         world.init_resource::<DisplayFont>();
-        world.spawn(WindowSafeZone);
+        world.spawn((WindowSafeZone, ComputedNode::default()));
         world.insert_resource(KillCam::new(PlayerId(7), None, 0.0, Vec3::ZERO));
         world.run_system_once(name_our_killer).unwrap();
         world.run_system_once(name_our_killer).unwrap();
@@ -570,6 +829,32 @@ mod tests {
         world.run_system_once(name_our_killer).unwrap();
         let mut banners = world.query_filtered::<&Visibility, With<KillerBanner>>();
         assert_eq!(banners.single(&world).unwrap(), &Visibility::Hidden);
+    }
+
+    /// Breaks if a killer who died after us is not called late, or the health square does not
+    /// show their health as a number and a share filling from the bottom.
+    #[test]
+    fn the_killer_banner_calls_a_dead_killer_late_and_shows_their_health() {
+        use crate::common::damage::HealthLeft;
+        use bevy::ecs::system::RunSystemOnce;
+        let mut world = World::new();
+        world.init_resource::<DisplayFont>();
+        world.spawn((WindowSafeZone, ComputedNode::default()));
+        let mut cam = KillCam::new(PlayerId(7), None, 0.0, Vec3::ZERO);
+        cam.health = Some(HealthLeft { health: 45, max: 180 });
+        cam.late = true;
+        world.insert_resource(cam);
+        world.run_system_once(name_our_killer).unwrap();
+        world.run_system_once(name_our_killer).unwrap();
+
+        let late = get!("kill_cam.killed_by_the_late", "name", get!("scoreboard.player", "id", 7));
+        let mut lines = world.query_filtered::<&Text, With<NameTagText>>();
+        assert!(lines.iter(&world).any(|text| text.0 == late), "not called late");
+        let mut numbers = world.query_filtered::<&Text, With<KillerHealthText>>();
+        assert_eq!(numbers.single(&world).unwrap().0, "45");
+        let mut bars = world.query_filtered::<&PlateBar, With<KillerHealth>>();
+        let bar = bars.single(&world).unwrap();
+        assert_eq!((bar.t, bar.direction), (0.25, BarDirection::BottomToTop));
     }
 
     #[test]

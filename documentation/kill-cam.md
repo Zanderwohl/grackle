@@ -52,9 +52,17 @@ All times are real seconds from the moment the kill cam starts.
 
 - `Died` carries the killing hit's `Cause` (the `DamageLog` keeps the latest), so the kill cam
   knows the weapon as well as the killer.
-- Until the kill cam hands over to spectating, a leaning panel at the middle of the right edge of the
-  `WindowSafeZone` says "You were killed by {name}" and, when a weapon fired, "Using {weapon}",
-  in the killer's color (`name_our_killer` in [`src/game/name_tag.rs`](../src/game/name_tag.rs)).
+- Until the kill cam hands over to spectating, a leaning panel says "You were killed by {name}"
+  ("by the late {name}" once a `Died` names the killer in or after the frame ours is read, or
+  their body is gone) and, when a weapon fired,
+  "Using {weapon}", in the killer's color (`name_our_killer` in
+  [`src/game/name_tag.rs`](../src/game/name_tag.rs)). It is centered on the killer as drawn in the
+  replay (`KillCam::killer_drawn`, recorded live as the corpse is), under their feet or over their
+  head, whichever side has more of the `WindowSafeZone`; with them off screen, where the framing
+  will put them. A blood-red square `PlateBar` twice as tall reaches 20 px under its left
+  side, filling from the bottom with the killer's health as we died (`Died::killer_health`, read by `announce_the_dead`
+  off the killer's body), the number centered on the part the plate leaves uncovered, at the size three digits fill. While the replay runs the killer has
+  no name tag, so only the banner names them.
 
 ## Framing the killer
 
@@ -128,4 +136,4 @@ records drawn `GlobalTransform`s and puts old ones back for the render.
 - [x] Respawn cuts the kill cam short at any phase
 - [x] Tests: framing, the rate curve, replay restore leaves live transforms untouched, respawn cut
 - [x] Watched in a round against bots: the swing, the glide, ghosts of rockets, the hand-off
-- [x] Killer and weapon on a panel at the right middle of the window safe zone
+- [x] Killer and weapon on a panel over or under the killer, with their health in a square beside it

@@ -10,7 +10,7 @@
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::common::damage::{Cause, Damage, DamageDealt, DamageLog, DamageSource, Damageable, Died, Explosion, How, Kill, PlayerId};
+use crate::common::damage::{Cause, Damage, DamageDealt, DamageLog, DamageSource, Damageable, Died, Explosion, HealthLeft, How, Kill, PlayerId};
 use crate::common::skeleton::{AnimationClock, Pose, Skeleton};
 use crate::game::skeleton::{skeleton_root, SkeletonRoot};
 use crate::game::player::Inputs;
@@ -175,6 +175,8 @@ pub fn announce_the_dead(
         ),
         Without<Dying>,
     >,
+    // Dying included: two who kill each other in one tick each see the other at nothing.
+    people: Query<(&PlayerId, &Damageable, Has<Dying>), With<crate::game::player::Player>>,
 ) {
     let now = clock.seconds();
     for (entity, health, log, name, id, placed) in &bodies {
@@ -182,14 +184,25 @@ pub fn announce_the_dead(
             continue;
         }
 
+        let killer = log.killer().unwrap_or(DamageSource::World);
+        let killer_health = match killer {
+            // A body given in the tick the last one died stands beside it; the living one is theirs.
+            DamageSource::Player(killer) => people
+                .iter()
+                .filter(|(id, ..)| **id == killer)
+                .min_by_key(|(.., dying)| *dying)
+                .map(|(_, pool, _)| HealthLeft::of(pool)),
+            _ => None,
+        };
         died.write(Died {
             victim: entity,
             victim_name: name.map(|name| name.to_string()),
             victim_id: id.copied(),
-            killer: log.killer().unwrap_or(DamageSource::World),
+            killer,
             assist: log.assist(now, id.copied()),
             at: placed.map(|placed| placed.translation()).unwrap_or_default(),
             cause: log.cause(),
+            killer_health,
         });
 
         commands.entity(entity).insert(Dying);
@@ -311,6 +324,28 @@ mod tests {
 
         let record = deaths(&mut world);
         assert_eq!((record[0].killer, record[0].cause), (SHOOTER, rocket));
+    }
+
+    /// Breaks if a death does not carry its killer's health as it stood, or names health for a
+    /// killer with no body.
+    #[test]
+    fn a_death_carries_the_killers_health() {
+        let mut world = a_world();
+        let mut killer = Damageable::with_health(150);
+        killer.apply(40);
+        world.spawn((crate::game::player::Player::default(), PlayerId(1), killer));
+        let victim = world.spawn((Damageable::with_health(100), DamageLog::default(), PlayerId(9))).id();
+        world.get_mut::<Damageable>(victim).unwrap().apply(100);
+        land(&mut world, victim, SHOOTER);
+        resolve(&mut world);
+        assert_eq!(deaths(&mut world)[0].killer_health, Some(HealthLeft { health: 110, max: 150 }));
+
+        let mut world = a_world();
+        let victim = world.spawn((Damageable::with_health(100), DamageLog::default(), PlayerId(9))).id();
+        world.get_mut::<Damageable>(victim).unwrap().apply(100);
+        land(&mut world, victim, HELPER);
+        resolve(&mut world);
+        assert_eq!(deaths(&mut world)[0].killer_health, None);
     }
 
     #[test]

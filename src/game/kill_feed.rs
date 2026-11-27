@@ -352,7 +352,7 @@ mod tests {
     }
 
     fn died(victim: u64, killer: DamageSource, assist: Option<DamageSource>) -> Died {
-        Died { victim: Entity::PLACEHOLDER, victim_name: None, victim_id: Some(PlayerId(victim)), killer, assist, at: Vec3::ZERO, cause: Default::default() }
+        Died { victim: Entity::PLACEHOLDER, victim_name: None, victim_id: Some(PlayerId(victim)), killer, assist, at: Vec3::ZERO, cause: Default::default(), killer_health: None }
     }
 
     fn lines(deaths: &[Died]) -> Vec<Option<(Words, Swatch)>> {

@@ -176,6 +176,7 @@ night = "Nacht"
 
 [kill_cam]
 killed_by = "Du wurdest von { name } getötet"
+killed_by_the_late = "Du wurdest vom verstorbenen { name } getötet"
 using = "Mit { weapon }"
 
 [kill_feed]

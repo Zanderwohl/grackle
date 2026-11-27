@@ -8,7 +8,7 @@ use bevy::prelude::*;
 
 use crate::common::app_mode::AppMode;
 use crate::common::class::Stance;
-use crate::common::damage::{DamageSource, Died, PlayerId};
+use crate::common::damage::{DamageSource, Died, HealthLeft, PlayerId};
 use crate::common::weapon::WeaponId;
 use crate::game::collision::CollisionWorld;
 use crate::game::death::Dying;
@@ -39,6 +39,10 @@ pub struct OurKiller {
     pub killer: PlayerId,
     /// What they killed us with; `None` for a kill nothing fired.
     pub weapon: Option<WeaponId>,
+    /// Theirs as we died.
+    pub health: Option<HealthLeft>,
+    /// They have died since.
+    pub late: bool,
     /// Seconds of `Time`, when it was read.
     pub at: f64,
 }
@@ -62,6 +66,10 @@ struct Glide {
 pub struct KillCam {
     pub killer: PlayerId,
     pub weapon: Option<WeaponId>,
+    /// The killer's as we died.
+    pub health: Option<HealthLeft>,
+    /// The killer has died since we did.
+    pub late: bool,
     /// Seconds of `Time`.
     started: f64,
     /// Real seconds since it started.
@@ -71,11 +79,24 @@ pub struct KillCam {
     died_at: Vec3,
     /// Our corpse's pelvis as it was drawn live, so the death cam's pivot can follow the replay.
     corpse: VecDeque<(f64, Vec3)>,
+    /// The killer's feet and height as drawn live, so the banner can follow them in the replay.
+    killer_drawn: VecDeque<(f64, Vec3, f32)>,
 }
 
 impl KillCam {
     pub fn new(killer: PlayerId, weapon: Option<WeaponId>, started: f64, died_at: Vec3) -> Self {
-        Self { killer, weapon, started, elapsed: 0.0, glide: None, died_at, corpse: VecDeque::new() }
+        Self {
+            killer,
+            weapon,
+            health: None,
+            late: false,
+            started,
+            elapsed: 0.0,
+            glide: None,
+            died_at,
+            corpse: VecDeque::new(),
+            killer_drawn: VecDeque::new(),
+        }
     }
 
     pub fn phase(&self) -> Phase {
@@ -131,6 +152,19 @@ impl KillCam {
         let t = ((view - at) / (next_at - at)).clamp(0.0, 1.0) as f32;
         Some(pelvis.lerp(next, t))
     }
+
+    /// The killer's feet and height where they are drawn now; `None` if they were never seen.
+    pub fn killer_drawn(&self) -> Option<(Vec3, f32)> {
+        let view = self.view();
+        let after = self.killer_drawn.partition_point(|(at, ..)| *at <= view);
+        let (at, feet, height) = match after {
+            0 => return self.killer_drawn.front().map(|&(_, feet, height)| (feet, height)),
+            after => self.killer_drawn[after - 1],
+        };
+        let Some(&(next_at, next_feet, next_height)) = self.killer_drawn.get(after) else { return Some((feet, height)) };
+        let t = ((view - at) / (next_at - at)).clamp(0.0, 1.0) as f32;
+        Some((feet.lerp(next_feet, t), height + (next_height - height) * t))
+    }
 }
 
 /// Seconds of match time seen after `elapsed` real seconds.
@@ -172,10 +206,14 @@ pub(crate) fn our_id(ours: Option<PlayerId>, identity: Option<&OurIdentity>, las
     ours.or(identity.map(|identity| identity.0.id)).or(last.and_then(|last| last.whose())).or(death_cam.and_then(|cam| cam.whose))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn learn_our_killer(
     mut commands: Commands,
     time: Res<Time>,
     mut deaths: MessageReader<Died>,
+    known: Option<Res<OurKiller>>,
+    kill_cam: Option<ResMut<KillCam>>,
+    living: Query<&PlayerId, (With<Player>, Without<Dying>)>,
     ours: Option<Single<&PlayerId, With<LocalPlayer>>>,
     identity: Option<Res<OurIdentity>>,
     last: Option<Res<OurLastBody>>,
@@ -185,15 +223,31 @@ fn learn_our_killer(
         deaths.clear();
         return;
     };
+    let mut learned = known.as_deref().copied();
+    // Relayed deaths may come in any order, so a death of the killer read in the same frame as
+    // ours counts as after it.
+    let mut others = Vec::new();
     for death in deaths.read() {
         if death.victim_id != Some(us) {
+            others.extend(death.victim_id);
             continue;
         }
         if let DamageSource::Player(killer) = death.killer
             && killer != us
         {
-            commands.insert_resource(OurKiller { killer, weapon: death.cause.weapon, at: time.elapsed_secs_f64() });
+            // A killer with no living body died before their death reached us, or with us.
+            let late = !living.iter().any(|id| *id == killer);
+            learned = Some(OurKiller { killer, weapon: death.cause.weapon, health: death.killer_health, late, at: time.elapsed_secs_f64() });
         }
+    }
+    if let Some(learned) = learned.as_mut().filter(|learned| others.contains(&learned.killer)) {
+        learned.late = true;
+    }
+    if let Some(mut kill_cam) = kill_cam.filter(|kill_cam| !kill_cam.late && others.contains(&kill_cam.killer)) {
+        kill_cam.late = true;
+    }
+    if let Some(learned) = learned.filter(|learned| Some(learned) != known.as_deref()) {
+        commands.insert_resource(learned);
     }
 }
 
@@ -231,7 +285,10 @@ fn run_the_kill_cam(
         let dead = death_cam.as_ref().is_some_and(|cam| cam.whose.is_some());
         if let Some(killer) = killer.filter(|killer| dead && now - killer.at <= KILL_CAM_GRACE as f64) {
             let died_at = death_cam.as_ref().map_or(Vec3::ZERO, |cam| cam.pivot);
-            commands.insert_resource(KillCam::new(killer.killer, killer.weapon, now, died_at));
+            let mut kill_cam = KillCam::new(killer.killer, killer.weapon, now, died_at);
+            kill_cam.health = killer.health;
+            kill_cam.late = killer.late;
+            commands.insert_resource(kill_cam);
             commands.insert_resource(Replay { view: now, frozen: false, speed: 1.0 });
             commands.remove_resource::<OurKiller>();
         }
@@ -246,6 +303,17 @@ fn run_the_kill_cam(
         && let Some((corpse, _)) = corpses.iter().filter(|(_, of)| of.0 == whose).min_by(|(a, _), (b, _)| a.age().total_cmp(&b.age()))
     {
         kill_cam.corpse.push_back((now, corpse.pelvis()));
+    }
+    let killer_body = bodies.iter().find(|(id, ..)| **id == kill_cam.killer);
+    // Seen and now gone: dead, though the `Died` saying so was lost.
+    if killer_body.is_none() && !kill_cam.killer_drawn.is_empty() && !kill_cam.late {
+        kill_cam.late = true;
+    }
+    if !kill_cam.frozen()
+        && let Some((_, placed, stance)) = killer_body
+    {
+        let feet = placed.translation - Vec3::Y * stance.height() * 0.5;
+        kill_cam.killer_drawn.push_back((now, feet, stance.height()));
     }
 
     // At the glide's start the live match is where the replay will stop, half a second on.
@@ -361,7 +429,7 @@ mod tests {
     }
 
     fn death(victim: u64, killer: DamageSource) -> Died {
-        Died { victim: Entity::PLACEHOLDER, victim_name: None, victim_id: Some(PlayerId(victim)), killer, assist: None, at: Vec3::ZERO, cause: Default::default() }
+        Died { victim: Entity::PLACEHOLDER, victim_name: None, victim_id: Some(PlayerId(victim)), killer, assist: None, at: Vec3::ZERO, cause: Default::default(), killer_health: None }
     }
 
     /// Breaks if a kill by somebody else does not run the replay through to spectating their
@@ -405,6 +473,65 @@ mod tests {
         world.spawn(LocalPlayer);
         tick(&mut world, 0.1);
         assert!(!world.contains_resource::<KillCam>(), "outlived the respawn");
+    }
+
+    /// Breaks if the kill cam does not carry the killer's health from our death, or does not learn
+    /// that they died after us, whether before or after it started.
+    #[test]
+    fn the_kill_cam_learns_the_killers_health_and_later_death() {
+        let mut world = World::new();
+        world.init_resource::<Messages<Died>>();
+        world.init_resource::<Time>();
+        world.init_resource::<CollisionWorld>();
+        world.init_resource::<SpectatorView>();
+        let learn = world.register_system(learn_our_killer);
+        let run = world.register_system(run_the_kill_cam);
+        let tick = |world: &mut World| {
+            world.resource_mut::<Time>().advance_by(std::time::Duration::from_secs_f32(0.1));
+            world.run_system(learn).unwrap();
+            world.run_system(run).unwrap();
+        };
+        world.insert_resource(DeathCam { pivot: Vec3::ZERO, whose: Some(PlayerId(5)) });
+        let killer = world.spawn((Player::default(), PlayerId(7), Transform::default(), Stance::Standing)).id();
+        world.spawn((Player::default(), PlayerId(8)));
+        let health = HealthLeft { health: 30, max: 125 };
+        world.write_message(Died { killer_health: Some(health), ..death(5, DamageSource::Player(PlayerId(7))) });
+        tick(&mut world);
+        let cam = world.resource::<KillCam>();
+        assert_eq!((cam.health, cam.late), (Some(health), false));
+
+        world.write_message(death(6, DamageSource::Player(PlayerId(7))));
+        tick(&mut world);
+        assert!(!world.resource::<KillCam>().late, "somebody else's death made the killer late");
+        world.write_message(death(7, DamageSource::World));
+        tick(&mut world);
+        assert!(world.resource::<KillCam>().late);
+
+        // Their death read before ours in one frame, as a relay may deliver them.
+        world.remove_resource::<KillCam>();
+        world.remove_resource::<Replay>();
+        world.write_message(death(8, DamageSource::World));
+        world.write_message(death(5, DamageSource::Player(PlayerId(8))));
+        tick(&mut world);
+        assert!(world.resource::<KillCam>().late, "a killer dead in the frame we died was not late");
+
+        // Their `Died` lost: seen, then gone.
+        world.remove_resource::<KillCam>();
+        world.remove_resource::<Replay>();
+        world.write_message(death(5, DamageSource::Player(PlayerId(7))));
+        tick(&mut world);
+        assert!(!world.resource::<KillCam>().late);
+        tick(&mut world);
+        world.despawn(killer);
+        tick(&mut world);
+        assert!(world.resource::<KillCam>().late, "a killer whose body went was not late");
+
+        // Killed by somebody with no living body.
+        world.remove_resource::<KillCam>();
+        world.remove_resource::<Replay>();
+        world.write_message(death(5, DamageSource::Player(PlayerId(9))));
+        tick(&mut world);
+        assert!(world.resource::<KillCam>().late, "a killer with no body was not late");
     }
 
     /// Breaks if spectating after the kill cam starts on a body while a spectator camera stands.
