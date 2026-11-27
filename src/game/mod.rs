@@ -23,6 +23,8 @@ use crate::tool::bakes::BakeSystems;
 use crate::tool::room::{Block, MapVolumes, Room, VolumeOrder};
 
 pub mod body_mesh;
+pub mod chat;
+pub mod chat_window;
 pub mod bot;
 pub mod match_cycle;
 pub mod match_banner;
@@ -136,6 +138,7 @@ impl Plugin for GamePlugin {
             .add_plugins((crate::game::name_tag::NameTagPlugin, crate::game::top_banner::TopBannerPlugin))
             .add_plugins((crate::game::plate::PlatePlugin, crate::game::plate_bar::PlateBarPlugin, crate::game::plate_button::PlateButtonPlugin, crate::game::kill_feed::KillFeedPlugin, crate::game::taunt_menu::TauntMenuPlugin))
             .add_plugins(crate::game::trigger::TriggerPlugin)
+            .add_plugins(crate::game::chat::ChatPlugin)
             .init_state::<AppMode>()
             .init_resource::<StartInPlay>()
 

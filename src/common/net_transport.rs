@@ -129,6 +129,7 @@ impl Plugin for NetTransportPlugin {
             .add_plugins(crate::game::spray::SpraySyncPlugin)
             .add_plugins(crate::common::postcard_sync::PostcardSyncPlugin)
             .add_plugins(crate::game::soundtrack::SoundtrackSyncPlugin)
+            .add_plugins(crate::game::chat::ChatSyncPlugin)
             // Prediction is gated on this resource existing, so it stays: a
             // host now may be a client after the next menu click.
             .insert_resource(PredictionManager::default())

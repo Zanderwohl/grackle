@@ -639,6 +639,17 @@ over = "{ want } { score } over { other } { against }"
 [spray]
 nameless = "Player"
 
+[chat]
+# A player's line: `{ name }` is drawn in their color.
+said = "{ name }: "
+round_started = "The round has started."
+one_minute_left = "1 minute left."
+minutes_left = "{ minutes } minutes left."
+one_second_left = "1 second left."
+seconds_left = "{ seconds } seconds left."
+one_frag_left = "1 frag left."
+frags_left = "{ frags } frags left."
+
 [kill_cam]
 killed_by = "You were killed by { name }"
 killed_by_the_late = "You were killed by the late { name }"
@@ -2185,6 +2196,7 @@ team_picker = "Choose a team"
 class_picker = "Choose a class"
 taunt = "Taunt"
 spray = "Spray"
+chat = "Chat"
 play_cancel = "Cancel"
 pause = "Pause menu"
 choice_1 = "Menu choice 1"

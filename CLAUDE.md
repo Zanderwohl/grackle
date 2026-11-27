@@ -845,6 +845,23 @@ past the edge at 20% opacity and 1 Hz at the threshold, to 30 px, 40% and 3 Hz a
 time. The panel behind the health number is one, `t` the viewed body's health over its class's
 (`fill_the_health_bar`), glowing below 0.2.
 
+**The chat** ([`src/game/chat.rs`](src/game/chat.rs), [`src/game/chat_window.rs`](src/game/chat_window.rs))
+is egui, on **`T`**. The authority decides every line: a client sends a `SayChat` (text and an
+`Audience`, only `All` for now) on `ChatChannel`, and the server writes a `ChatEntry` — `Said`,
+carrying the speaker's name, team and color as they stood, or `Round` (`RoundEvent`: the start,
+`TimeLeft { seconds }` at 5 and 1 minutes, `FragsLeft { frags }` at 2 and 1, each once per
+match) — and relays it, at most one line a second from each speaker. Every machine keeps the
+entries in `ChatLog`, which a `ChatEntry::Clear` the server sends at each pre-game empties: in
+line with the chat, since the phase comes on another channel.
+`Audience` and `ChatEntry` are matched with no catch-all arm, so a new variant (team chat, a
+whisper, another announcement) is a compile error wherever it needs an answer. The window goes
+left of the HUD's safe zone where that strip is at least 320 px wide, else above the HUD's
+readouts (`chat_zone`). Closed, the latest lines float there and fade; open, it is the round's log
+above a text field, and it holds the mouse (`MouseHeld::chat`). `T` closes it while the field does
+not have the keyboard; `Escape`, `Enter` (which sends), a click outside it or the window losing
+focus close it from anywhere (a blur also opens the pause menu), and a closing click holds the mouse until it is let go, so it does
+not fire.
+
 **The viewmodel's arms are solved, not authored.** `place_the_viewmodel_arms`
 calls the same `grip_with` that puts a body's hands on a weapon, so a grip
 tuned in the prop editor is the grip first person uses and there is no second
@@ -960,7 +977,7 @@ follows, so it should claim `weapon` and leave the arms that hold it unclaimed.
 **Nobody switches weapons while taunting** (`Condition::may_switch_weapons`):
 `select_weapons` drops the request, the selector stays shut, and a weapon
 picked up mid-taunt is carried but not drawn. **`O`** is
-suicide and **`P`** the same death blown apart through the torso (`BlownApart::Torso`) by a rocket-sized blast there, which hurts whoever is near, **`T`** puts your spray on the surface you look at within 2 m, or moves it there (see "Decals"), 1000 damage credited to yourself, a debug key for the death cam; **Ignite self**, unbound by default, sets you alight with the flamethrower's afterburn, credited to yourself; **Headshot self**, unbound by default, kills you headless as a headshot does (`Action::Behead`); nobody
+suicide and **`P`** the same death blown apart through the torso (`BlownApart::Torso`) by a rocket-sized blast there, which hurts whoever is near, **`Y`** puts your spray on the surface you look at within 2 m, or moves it there (see "Decals"), 1000 damage credited to yourself, a debug key for the death cam; **Ignite self**, unbound by default, sets you alight with the flamethrower's afterburn, credited to yourself; **Headshot self**, unbound by default, kills you headless as a headshot does (`Action::Behead`); nobody
 crouches while taunting; each taunt states what it claims, whether it
 shows the weapon, how far you can move, and how far your body (never the
 camera) can turn, and optionally a `view`: degrees left of the body's facing
@@ -2051,7 +2068,7 @@ the lasting decals on it and drops the transient ones.
   (`light_decals`, as `attach_lightmaps` does walls).
 - **Sprays** ([`src/game/spray.rs`](src/game/spray.rs)): a client paints a 512×512 picture (a
   disk in its HUD color, its name in black, "Player" when blank) and sends it as a PNG; the server
-  numbers each link's owner (`SprayOwner`, the host is 0) and relays every picture. `T` places a
+  numbers each link's owner (`SprayOwner`, the host is 0) and relays every picture. `Y` places a
   replicated `SprayAt` on the authority; on a server it is `SprayedBy` its link, so a
   disconnect despawns it. There is no way to pick another picture yet.
 - **Their pipelines are compiled at startup** (`warm_up_decals`), drawn for a few frames by the
